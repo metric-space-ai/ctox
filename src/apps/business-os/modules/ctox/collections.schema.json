@@ -425,6 +425,53 @@
       "type": "object",
       "version": 0
     },
+    "business_workspace_branding": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "custom": {
+          "type": "boolean"
+        },
+        "dark": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "light": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "module_accents": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "light",
+        "dark",
+        "module_accents",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "ctox_bug_reports": {
       "additionalProperties": true,
       "primaryKey": "id",

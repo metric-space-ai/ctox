@@ -24,6 +24,7 @@ impl BusinessOsRole {
 #[allow(dead_code)]
 pub enum BusinessOsPermission {
     WorkspaceManage,
+    WorkspaceBrandingManage,
     UsersManage,
     RolesManage,
     RuntimeManage,
@@ -55,8 +56,9 @@ pub enum BusinessOsPermission {
     SupportAgentApply,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 30] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 31] = [
     BusinessOsPermission::WorkspaceManage,
+    BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
     BusinessOsPermission::RolesManage,
     BusinessOsPermission::RuntimeManage,
@@ -96,6 +98,7 @@ impl BusinessOsPermission {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceManage => "workspace.manage",
+            Self::WorkspaceBrandingManage => "workspace.branding.manage",
             Self::UsersManage => "users.manage",
             Self::RolesManage => "roles.manage",
             Self::RuntimeManage => "runtime.manage",
@@ -311,7 +314,8 @@ pub fn evaluate(
 ) -> PolicyDecision {
     let allowed = match permission {
         BusinessOsPermission::WorkspaceManage => actor.role == BusinessOsRole::Chef,
-        BusinessOsPermission::UsersManage
+        BusinessOsPermission::WorkspaceBrandingManage
+        | BusinessOsPermission::UsersManage
         | BusinessOsPermission::RolesManage
         | BusinessOsPermission::RuntimeManage
         | BusinessOsPermission::IntegrationsManage

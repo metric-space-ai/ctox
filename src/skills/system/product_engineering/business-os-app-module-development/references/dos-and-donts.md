@@ -37,7 +37,10 @@
   business workflow content; use modals for occasional detail work.
 - Style the app with Business OS theme tokens such as `--bg`, `--surface`,
   `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`, and verify the
-  result in both light and dark theme.
+  result in light, dark, and one custom-brand fixture.
+- Treat standalone vanilla apps as portable only when storage and automation
+  already sit behind `mount(ctx)`, `ctx.db.collection(...)`, and
+  `ctx.commandBus.dispatch(...)`.
 - Use unique function names in `index.js`; do not shadow a top-level render or
   helper function with a nested function of the same name.
 - Include a visible create flow for the primary record type, especially in the
@@ -106,6 +109,10 @@
   them. Every pane must have a real repeated workflow use.
 - Do not hard-code a dark-only app surface, force `color-scheme`, or ship CSS
   that becomes unreadable when the shell switches between light and dark theme.
+- Do not define Business OS tokens on `:root`, `html`, or `body`; workspace
+  branding owns those token values.
+- Do not port standalone package-manager setup, auth, HTTP APIs, localStorage
+  persistence, or app-owned sync into Business OS.
 - Do not claim a visible Create/New/Add button works until it has been clicked
   in the real Business OS shell.
 - Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or

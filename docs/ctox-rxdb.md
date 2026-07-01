@@ -76,6 +76,10 @@ Verbatim:
 is `runtime/business-os-rxdb.sqlite3`; the README sentence is a boundary-level
 simplification, not a path spec.)
 
+Workspace branding (`business_workspace_branding`) is treated as Business OS
+collection data under the same boundary: update through the Business OS command
+path, replicate through CTOX DB/WebRTC, never through HTTP.
+
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed
 mode that well-known file must keep `httpDataProxy:false` and
@@ -247,9 +251,14 @@ cross-process JS↔Rust tests) and `examples/v15_scale_wire_loop.rs`, `tools/`
   reports it, so "process alive but not replicating" is observable.
 
 The same file hosts the background projection loops (commands, notes, desktop
-file index, channel state, users, runtime settings, module catalog, ticket
-state, knowledge tables, business-record projections) that write core daemon
-state into the RxDB store for replication.
+file index, channel state, users, runtime settings, workspace branding, module
+catalog, ticket state, knowledge tables, business-record projections) that
+write core daemon state into the RxDB store for replication.
+
+Workspace corporate design lives in the singleton
+`business_workspace_branding/workspace-branding` document. Admin updates go
+through `ctox.business_os.branding.update`; the native store validates allowed
+semantic tokens and projects the result over CTOX DB/WebRTC.
 
 ### 4.3 Persistence map
 

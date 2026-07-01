@@ -86,6 +86,8 @@ static BUSINESS_USERS_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("business_users");
 static RUNTIME_SETTINGS_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("runtime_settings");
+static WORKSPACE_BRANDING_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("workspace_branding");
 static MODULE_CATALOG_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("module_catalog");
 static TICKET_STATE_LOOP_METRICS: NativePeerLoopMetrics =
@@ -721,6 +723,7 @@ fn native_peer_performance_snapshot() -> Value {
             "channel_state": CHANNEL_STATE_LOOP_METRICS.snapshot(),
             "business_users": BUSINESS_USERS_LOOP_METRICS.snapshot(),
             "runtime_settings": RUNTIME_SETTINGS_LOOP_METRICS.snapshot(),
+            "workspace_branding": WORKSPACE_BRANDING_LOOP_METRICS.snapshot(),
             "module_catalog": MODULE_CATALOG_LOOP_METRICS.snapshot(),
             "ticket_state": TICKET_STATE_LOOP_METRICS.snapshot(),
             "knowledge_tables": KNOWLEDGE_TABLES_LOOP_METRICS.snapshot(),
@@ -763,6 +766,7 @@ struct NativePeer {
     _channel_state_sync: tokio::task::JoinHandle<()>,
     _business_users_sync: tokio::task::JoinHandle<()>,
     _runtime_settings_sync: tokio::task::JoinHandle<()>,
+    _workspace_branding_sync: tokio::task::JoinHandle<()>,
     _module_catalog_sync: tokio::task::JoinHandle<()>,
     _ticket_state_sync: tokio::task::JoinHandle<()>,
     _knowledge_tables_sync: tokio::task::JoinHandle<()>,
@@ -786,6 +790,7 @@ impl NativePeer {
         self._channel_state_sync.abort();
         self._business_users_sync.abort();
         self._runtime_settings_sync.abort();
+        self._workspace_branding_sync.abort();
         self._module_catalog_sync.abort();
         self._ticket_state_sync.abort();
         self._knowledge_tables_sync.abort();
@@ -2272,6 +2277,11 @@ async fn run_native_peer(
         Arc::clone(&database),
         Arc::clone(&database_write_lock),
     ));
+    let workspace_branding_sync = tokio::spawn(sync_workspace_branding_background_loop(
+        root.clone(),
+        Arc::clone(&database),
+        Arc::clone(&database_write_lock),
+    ));
     let module_catalog_sync = tokio::spawn(sync_module_catalog_background_loop(
         root.clone(),
         Arc::clone(&database),
@@ -2324,6 +2334,7 @@ async fn run_native_peer(
         _channel_state_sync: channel_state_sync,
         _business_users_sync: business_users_sync,
         _runtime_settings_sync: runtime_settings_sync,
+        _workspace_branding_sync: workspace_branding_sync,
         _module_catalog_sync: module_catalog_sync,
         _ticket_state_sync: ticket_state_sync,
         _knowledge_tables_sync: knowledge_tables_sync,
@@ -3341,6 +3352,45 @@ async fn sync_runtime_settings_background_loop(
     }
 }
 
+async fn sync_workspace_branding_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
+    let mut last_projection_stamp: Option<store::WorkspaceBrandingProjectionStamp> = None;
+    let mut consecutive_idle_rounds = 0u32;
+    loop {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            let projection_stamp = workspace_branding_projection_stamp(&root).await?;
+            if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+                return Ok(0);
+            }
+
+            let _guard = database_write_lock.lock().await;
+            let synced = sync_workspace_branding_with_database(&root, &database).await?;
+            last_projection_stamp = Some(projection_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(
+            &WORKSPACE_BRANDING_LOOP_METRICS,
+            &result,
+            started.elapsed(),
+        );
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb workspace branding sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            RUNTIME_SETTINGS_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
+    }
+}
+
 async fn sync_module_catalog_background_loop(
     root: PathBuf,
     database: Arc<RxDatabase>,
@@ -4142,6 +4192,9 @@ async fn accept_pending_business_command(
     }
     if command_type == "ctox.runtime_settings.save" {
         sync_runtime_settings_with_database(&root, database).await?;
+    }
+    if command_type == "ctox.business_os.branding.update" {
+        sync_workspace_branding_with_database(&root, database).await?;
     }
     if command_type.starts_with("ctox.ticket.") {
         sync_ticket_state_with_database(&root, database).await?;
@@ -5855,6 +5908,59 @@ async fn runtime_settings_projection_stamp(
     tokio::task::spawn_blocking(move || store::runtime_settings_projection_stamp(&root_for_stamp))
         .await
         .context("join native runtime settings projection stamp")
+}
+
+async fn sync_workspace_branding_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let root = root.to_path_buf();
+    let mut document =
+        tokio::task::spawn_blocking(move || store::workspace_branding_for_rxdb(&root))
+            .await
+            .context("join native workspace branding projection load")??;
+    if let Some(object) = document.as_object_mut() {
+        object.remove("_rev");
+        object.remove("_meta");
+        object.insert("_deleted".to_string(), Value::Bool(false));
+        object.insert("is_deleted".to_string(), Value::Bool(false));
+    }
+
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    let workspace_branding = database
+        .collection("business_workspace_branding")
+        .context("business_workspace_branding collection is not registered")?;
+    let changed = incremental_upsert_projection_if_changed(
+        &workspace_branding,
+        document,
+        "workspace branding",
+    )
+    .await?;
+    Ok(usize::from(changed))
+}
+
+async fn sync_workspace_branding_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<store::WorkspaceBrandingProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let projection_stamp = workspace_branding_projection_stamp(root).await?;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_workspace_branding_with_database(root, database).await?;
+    *last_projection_stamp = Some(projection_stamp);
+    Ok(synced)
+}
+
+async fn workspace_branding_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<store::WorkspaceBrandingProjectionStamp> {
+    let root_for_stamp = root.to_path_buf();
+    tokio::task::spawn_blocking(move || store::workspace_branding_projection_stamp(&root_for_stamp))
+        .await
+        .context("join native workspace branding projection stamp")
 }
 
 async fn sync_module_catalog_with_database(
@@ -11496,6 +11602,7 @@ fn business_record_projection_collections() -> Vec<String> {
             !matches!(
                 name.as_str(),
                 "browser_frames"
+                    | "business_workspace_branding"
                     | "business_module_catalog"
                     | "ctox_runtime_settings"
                     | "desktop_files"

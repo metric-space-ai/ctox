@@ -32,6 +32,22 @@ function baseTemplate(overrides = {}) {
     users: [{ id: 'owner', display_name: 'Owner User', role: 'chef', active: true }],
     canManageUsers: true,
     activity: { events: [], loading: false, loaded: false, error: '' },
+    branding: {
+      loading: false,
+      document: {
+        id: 'workspace-branding',
+        name: 'Acme Corporate',
+        custom: true,
+        light: { bg: '#ffffff', text: '#111827' },
+        dark: { bg: '#030712', text: '#f9fafb' },
+        module_accents: {},
+        updated_at_ms: 123,
+      },
+      jsonText: '{\n  "name": "Acme Corporate"\n}',
+      error: '',
+      canManage: true,
+    },
+    mcp: { loading: false, issuing: false, info: null, tokenIssue: null, error: '', copied: '' },
     editingModuleId: '',
     governance: {
       founders: {
@@ -55,6 +71,31 @@ test('settings user tab renders business-facing role labels', () => {
   assert.doesNotMatch(html, />Chef<\/option>/);
   assert.doesNotMatch(html, /User Management/);
   assert.doesNotMatch(html, /Founder Review/);
+});
+
+test('settings appearance tab renders admin branding controls', () => {
+  const html = baseTemplate({ tab: 'appearance' });
+  assert.match(html, /data-settings-tab="appearance"/);
+  assert.match(html, /Corporate Design/);
+  assert.match(html, /data-branding-json/);
+  assert.match(html, /data-branding-save/);
+  assert.match(html, /data-branding-reset/);
+  assert.match(html, /Acme Corporate/);
+});
+
+test('settings appearance tab hides when branding permission is absent', () => {
+  const html = baseTemplate({
+    tab: 'runtime',
+    branding: {
+      loading: false,
+      document: null,
+      jsonText: '',
+      error: '',
+      canManage: false,
+    },
+  });
+  assert.doesNotMatch(html, /data-settings-tab="appearance"/);
+  assert.doesNotMatch(html, /data-branding-save/);
 });
 
 test('settings user form keeps owner transfer owner-only', () => {

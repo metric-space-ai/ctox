@@ -12,7 +12,13 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260623-role-session';
+} from './shared/permissions.js?v=20260701-branding-v1';
+import {
+  applyWorkspaceBranding,
+  brandingForPreferencePayload,
+  WORKSPACE_BRANDING_COLLECTION,
+  WORKSPACE_BRANDING_DOCUMENT_ID,
+} from './shared/branding.js?v=20260701-branding-v1';
 import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js';
 import {
   buildLifecyclePermissionView,
@@ -36,7 +42,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260701-account-edit-v4-6a3b7843';
+const APP_BUILD = '20260701-branding-v2-0c50394c';
 
 ensureShellStylesheets();
 
@@ -201,6 +207,8 @@ const state = {
   catalogRefreshRunning: false,
   catalogRefreshQueued: false,
   moduleCatalogFingerprint: '',
+  workspaceBranding: null,
+  workspaceBrandingSubscription: null,
   moduleAllowlist: [],
   shellCatalogMergedIds: new Set(),
   moduleIconSvgCache: new Map(),
@@ -1036,6 +1044,7 @@ async function openBusinessDataPlane(syncConfig) {
       config: syncConfig,
     });
     startShellCtoxHealthMonitor();
+    startWorkspaceBrandingMonitor();
 
     if (state.catalogSubscription) {
       try { state.catalogSubscription.unsubscribe(); } catch (e) {}
@@ -1117,6 +1126,11 @@ async function repairBusinessDataPlane(syncConfig) {
     try { state.catalogSubscription.unsubscribe(); } catch (e) {}
     state.catalogSubscription = null;
   }
+  if (state.workspaceBrandingSubscription) {
+    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (e) {}
+    state.workspaceBrandingSubscription = null;
+  }
+  state.workspaceBranding = applyWorkspaceBranding(null);
   try { await state.sync?.stop?.(); } catch (error) { console.warn('[business-os] sync stop before cache reset failed', error); }
   try { await state.db?.close?.(); } catch (error) { console.warn('[business-os] db close before cache reset failed', error); }
   state.db = null;
@@ -3230,6 +3244,7 @@ function postCurrentPreferencesToModule() {
   const detail = {
     theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
     language: document.documentElement.lang === 'en' ? 'en' : 'de',
+    branding: brandingForPreferencePayload(state.workspaceBranding),
   };
   window.dispatchEvent(new CustomEvent('ctox-business-os-preferences', { detail }));
   window.postMessage({ type: 'ctox-business-os-language', lang: detail.language }, '*');
@@ -4248,6 +4263,7 @@ const SETTINGS_DB_COLLECTIONS = [
   'channel_pairing_state',
   'communication_accounts',
   'ctox_runtime_settings',
+  WORKSPACE_BRANDING_COLLECTION,
 ];
 
 const BUSINESS_CHAT_DB_COLLECTIONS = [
@@ -4299,6 +4315,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
   ]),
   ctox: Object.freeze([
     'business_commands',
+    WORKSPACE_BRANDING_COLLECTION,
     'ctox_bug_reports',
     'ctox_queue_tasks',
     'ctox_runtime_settings',
@@ -6519,6 +6536,26 @@ function startShellCtoxHealthMonitor() {
   state.ctoxHealthTimer = window.setInterval(refreshShellCtoxHealth, CTOX_HEALTH_POLL_MS);
 }
 
+function startWorkspaceBrandingMonitor() {
+  if (state.workspaceBrandingSubscription) {
+    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
+    state.workspaceBrandingSubscription = null;
+  }
+  state.workspaceBranding = applyWorkspaceBranding(null);
+  const coll = state.db?.collection?.(WORKSPACE_BRANDING_COLLECTION);
+  if (!coll?.findOne) return;
+  state.sync?.startCollection?.(WORKSPACE_BRANDING_COLLECTION)?.catch?.((error) => {
+    console.debug('[business-os] workspace branding sync start skipped:', error?.message || error);
+  });
+  state.workspaceBrandingSubscription = coll
+    .findOne(WORKSPACE_BRANDING_DOCUMENT_ID)
+    .$
+    .subscribe((doc) => {
+      state.workspaceBranding = applyWorkspaceBranding(doc?.toJSON?.() || null);
+      postCurrentPreferencesToModule();
+    });
+}
+
 async function refreshShellCtoxHealth() {
   try {
     const status = await loadShellCtoxHealth();
@@ -8027,6 +8064,11 @@ async function resetLocalRxDbBeforeStartupRetry(error) {
   try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
   try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
   try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
+  if (state.workspaceBrandingSubscription) {
+    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
+    state.workspaceBrandingSubscription = null;
+  }
+  state.workspaceBranding = applyWorkspaceBranding(null);
   state.sync = null;
   state.db = null;
   try {

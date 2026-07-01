@@ -78,6 +78,27 @@ new `index.js`.
   light-only palette for the root work surface, and do not rely on white text on
   fixed dark backgrounds. Status colors may use domain-specific accents only
   when normal surfaces/text still come from Business OS tokens.
+- Do not define Business OS tokens on `:root`, `html`, or `body` in app CSS.
+  Workspace admins can customize both light and dark token values. Apps consume
+  tokens; the shell owns the palette. See `design-guide.md`.
+- Before delivery, visually check light, dark, and one custom-brand fixture.
+
+## Workflow Ergonomics
+
+- Build the common path as the shortest interaction, not as a generic CRUD form.
+- For booking, scheduling, shift, parking, availability, capacity planning, or
+  other date/slot domains, include a calendar or date-strip view. The visible
+  slot card/row should provide one-click claim/release/book actions for the
+  normal case.
+- Use forms, modals, or drawers for optional details, setup, admin changes, and
+  exceptional edits. Do not make a normal user open a modal just to claim or
+  release a visible slot.
+- Do not add a generic "Report to CTOX", "An CTOX melden", queue, AI, or
+  command-bus button as a default app affordance. Add visible automation only
+  when the user requested it or the domain workflow clearly needs it.
+- If an automation action is visible, it must dispatch a real command, show
+  failure/success honestly, and expose a trackable `task_id`/`command_id` result
+  when the command creates one.
 
 ## Workflow Ergonomics
 
@@ -136,6 +157,18 @@ new `index.js`.
   ISO date strings in `*_date` fields or declare numeric millisecond fields as
   `*_date_ms`. Do not put `Date.parse(...)` numbers into fields declared as
   `string`, and do not return `null` for fields declared only as `number`.
+
+## Standalone Portability
+
+- A standalone vanilla app can be a good starting point when it already exports
+  `mount(ctx)` and keeps storage/automation behind the Business OS context.
+- Standalone previews may use the mock context and token CSS under
+  `assets/standalone/`, but production Business OS modules must receive the real
+  shell-provided `ctx`.
+- Do not port package-manager setup, standalone auth, HTTP APIs, localStorage
+  persistence, or app-owned sync into Business OS. Replace those boundaries with
+  `ctx.db.collection(...)` and `ctx.commandBus.dispatch(...)`.
+- See `standalone-porting.md` before converting a standalone app.
 
 ## Automation
 

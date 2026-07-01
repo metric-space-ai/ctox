@@ -126,6 +126,24 @@ export const collections = {
     required: ['id', 'runtime', 'auth', 'diagnostics', 'updated_at_ms'],
     additionalProperties: true
   },
+  business_workspace_branding: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      ok: { type: 'boolean' },
+      custom: { type: 'boolean' },
+      name: { type: 'string' },
+      light: { type: 'object', additionalProperties: true },
+      dark: { type: 'object', additionalProperties: true },
+      module_accents: { type: 'object', additionalProperties: true },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+    },
+    required: ['id', 'name', 'light', 'dark', 'module_accents', 'updated_at_ms'],
+    additionalProperties: true
+  },
   business_module_catalog: {
     version: 0,
     primaryKey: 'id',

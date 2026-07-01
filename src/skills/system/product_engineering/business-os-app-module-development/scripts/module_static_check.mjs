@@ -687,6 +687,12 @@ function collectThemeTokenFailures(indexCss) {
   if (/\bcolor-scheme\s*:/.test(css)) {
     messages.push('index.css must not force color-scheme; inherit the Business OS light/dark theme from the shell');
   }
+  if (/(?:^|})\s*(?::root|html)\s*(?:\[[^\]]+\])?\s*\{[^}]*--(?:bg|surface|surface-2|line|text|text-strong|muted|accent|accent-soft|accent-foreground|danger|warning|success|focus-ring)\s*:/is.test(css)) {
+    messages.push('index.css must not redefine root Business OS design tokens; consume shell-provided tokens so workspace branding can override them');
+  }
+  if (/(?:^|})\s*(?:html|body)\s*(?:\[[^\]]+\])?\s*\{[^}]*\bbackground(?:-color)?\s*:\s*(?:#[0-9a-f]{3,8}|rgb[a]?\(|hsl[a]?\(|oklch\(|oklab\()/is.test(css)) {
+    messages.push('index.css must not hard-code root page surfaces on html/body; use module containers with var(--bg), var(--surface), or var(--surface-2)');
+  }
   if (!/\bvar\s*\(\s*--(?:bg|surface|surface-2)\b/.test(css)) {
     messages.push('index.css must use Business OS surface tokens such as var(--bg), var(--surface), or var(--surface-2) so light and dark themes render correctly');
   }

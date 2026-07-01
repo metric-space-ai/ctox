@@ -38,11 +38,13 @@ Use this before claiming a Business OS app is done.
 - The UI has no decorative panes or dead controls.
 - Any left/right column inside the app contains real workflow content and is not
   an empty copy of shell context/topics.
-- `index.css` uses Business OS light/dark theme tokens for surfaces, borders,
-  and text, and does not force `color-scheme`.
+- `index.css` uses Business OS theme tokens for surfaces, borders, and text,
+  does not force `color-scheme`, and does not define root Business OS tokens.
 - The app was visually checked in light and dark theme at desktop and narrow
   viewport sizes; text, buttons, cards, dialogs, and bottom actions remain
   readable and do not overlap.
+- The app was visually checked against one custom-brand fixture, proving it
+  consumes shell tokens instead of hard-coded root palettes.
 - Every record row/card/tree node exposes `data-context-record-id`/`-record-type`/`-label` (or at least a `data-*-id`) so a right-click hands the agent the record.
 - Browser proof right-clicks a record and confirms the "Chat to CTOX" popover opens showing that record (its label/id), proving the agent receives the click target.
 - The empty state lets the user create at least one primary business record.
@@ -61,6 +63,8 @@ Use this before claiming a Business OS app is done.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.
 - `ctox business-os app smoke <module-id> --installed` passes.
+- If the app began standalone, the port removed app-owned persistence/sync and
+  production code now uses shell-provided `ctx.db` and `ctx.commandBus`.
 - No service lifecycle command was used during the app build:
   no `ctox stop/start/upgrade`, `launchctl`, `systemctl`, bootout, disable, or
   daemon restart.

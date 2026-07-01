@@ -59,6 +59,7 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   business_module_reports: '440b04e33e1040e556c62741d7c4289422b6d0d01203c74e5aee391d5f050ed1',
   business_module_source_files: 'fa9cdeda3530f04bd84b926cb8ffae650c8f5886efac079daee0d01315737551',
   business_users: 'da6d1a192bc21ad59baf2680d8b80faa471a4883457a8d0ad5a533a1afefba42',
+  business_workspace_branding: 'a53d4f3e84454928bfeb239c22820b305cec6c657bb6d7340f68594f20baae22',
   calendar_availability_rules: 'be220a21b86c15d22627f8685e0a90849a485baaa2b07b7133364107ffde661a',
   calendar_booking_holds: '1add78cb8f30596fd320eafcd798f54e06cd09451097398d87f56b6dcea6bde4',
   calendar_booking_pages: 'cab127f6ea856a86f4b9f9e6b241f14490107ebea9673a99e1049cac2fcb9290',

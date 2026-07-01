@@ -1,6 +1,16 @@
 import { showBusinessConfirm } from './dialogs.js';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260623-role-session';
-import { canModifyBusinessModule } from './permissions.js?v=20260623-role-session';
+import {
+  BusinessOsPermissions,
+  canModifyBusinessModule,
+  canUseBusinessPermission,
+} from './permissions.js?v=20260701-branding-v1';
+import {
+  brandingExportJson,
+  normalizeBrandingImportPayload,
+  WORKSPACE_BRANDING_COLLECTION,
+  WORKSPACE_BRANDING_DOCUMENT_ID,
+} from './branding.js?v=20260701-branding-v1';
 import {
   assignableRolesForActor,
   normalizeRole,
@@ -33,6 +43,12 @@ export async function openReactSettings({
   const user = session?.user || {};
   const role = resolveRole(session);
   const isAdmin = roleCanManage(role);
+  const canManageBranding = canUseBusinessPermission({
+    session,
+    governance,
+    permission: BusinessOsPermissions.WorkspaceBrandingManage,
+    scopeType: 'workspace',
+  });
   const settingsState = {
     tab: initialTab || 'runtime',
     commandStatus: '',
@@ -47,9 +63,18 @@ export async function openReactSettings({
       loaded: false,
       error: '',
     },
+    branding: {
+      loading: false,
+      document: null,
+      jsonText: '',
+      error: '',
+      canManage: canManageBranding,
+    },
     mcp: {
       loading: false,
+      issuing: false,
       info: null,
+      tokenIssue: null,
       error: '',
       copied: '',
     },
@@ -86,6 +111,11 @@ export async function openReactSettings({
   const ensureRuntimeCollections = async () => {
     await Promise.allSettled([
       sync?.startCollection?.('ctox_runtime_settings'),
+    ]);
+  };
+  const ensureBrandingCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.(WORKSPACE_BRANDING_COLLECTION),
     ]);
   };
   const ensureModuleCatalogCollections = async () => {
@@ -153,6 +183,31 @@ export async function openReactSettings({
     render();
   };
 
+  const refreshBranding = async () => {
+    if (!settingsState.branding.canManage) return;
+    settingsState.branding = { ...settingsState.branding, loading: true, error: '' };
+    render();
+    try {
+      await ensureBrandingCollections();
+      const document = await loadWorkspaceBranding({ db });
+      settingsState.branding = {
+        ...settingsState.branding,
+        loading: false,
+        document,
+        jsonText: brandingExportJson(document),
+        error: '',
+      };
+      settingsState.commandStatus = '';
+    } catch (error) {
+      settingsState.branding = {
+        ...settingsState.branding,
+        loading: false,
+        error: String(error?.message || error),
+      };
+    }
+    render();
+  };
+
   const refreshActivity = async () => {
     if (!isAdmin) return;
     settingsState.activity = {
@@ -190,8 +245,10 @@ export async function openReactSettings({
     render();
     try {
       settingsState.mcp = {
+        ...settingsState.mcp,
         loading: false,
         info: await loadMcpConnectInfo(),
+        tokenIssue: null,
         error: '',
         copied: '',
       };
@@ -204,6 +261,76 @@ export async function openReactSettings({
     }
     render();
   };
+  const issueManagedMcpClientToken = async () => {
+    if (!isAdmin) return;
+    settingsState.mcp = {
+      ...settingsState.mcp,
+      issuing: true,
+      error: '',
+      copied: '',
+    };
+    render();
+    try {
+      const payload = await createManagedMcpClientToken();
+      settingsState.mcp = {
+        ...settingsState.mcp,
+        issuing: false,
+        info: {
+          ...(settingsState.mcp.info || {}),
+          managed: payload.managed || settingsState.mcp.info?.managed || null,
+        },
+        tokenIssue: payload,
+        error: '',
+        copied: '',
+      };
+    } catch (error) {
+      settingsState.mcp = {
+        ...settingsState.mcp,
+        issuing: false,
+        error: String(error?.message || error),
+      };
+    }
+    render();
+  };
+  const activateSettingsTab = (nextTab) => {
+    if (!nextTab || settingsState.tab === nextTab) return;
+    // Leaving the channels tab? Cancel any in-flight QR polling.
+    if (settingsState.tab === 'channels' && nextTab !== 'channels') {
+      if (settingsState.channels?.qrPoll) {
+        clearInterval(settingsState.channels.qrPoll);
+        settingsState.channels.qrPoll = null;
+      }
+    }
+    settingsState.tab = nextTab;
+    settingsState.commandStatus = '';
+    render();
+    if (settingsState.tab === 'runtime' && !settingsState.runtimeSettings) {
+      refreshRuntimeSettings();
+    }
+    if (settingsState.tab === 'appearance' && settingsState.branding.canManage && !settingsState.branding.document) {
+      refreshBranding();
+    }
+    if (settingsState.tab === 'admin' && settingsState.templates === null) {
+      refreshManagedModules();
+    }
+    if (settingsState.tab === 'channels') {
+      ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
+      startChannelAccountsSub();
+    }
+    if (settingsState.tab === 'activity' && isAdmin && !settingsState.activity.loaded) {
+      refreshActivity();
+    }
+    if (settingsState.tab === 'mcp' && isAdmin && !settingsState.mcp.info && !settingsState.mcp.loading) {
+      refreshMcpConnectInfo();
+    }
+  };
+  body.addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-settings-tab]');
+    if (!button || !body.contains(button)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activateSettingsTab(button.dataset.settingsTab || '');
+  });
   const revokeModuleSupportDownloadUrl = (moduleId) => {
     const status = settingsState.moduleSupportStatus?.[moduleId];
     if (status?.downloadUrl && globalThis.URL?.revokeObjectURL) {
@@ -238,6 +365,7 @@ export async function openReactSettings({
       users: settingsState.users,
       canManageUsers: settingsState.canManageUsers,
       activity: settingsState.activity,
+      branding: settingsState.branding,
       editingModuleId: settingsState.editingModuleId,
       moduleWhyDiagnostics: settingsState.moduleWhyDiagnostics,
       moduleWhyStatus: settingsState.moduleWhyStatus,
@@ -258,36 +386,6 @@ export async function openReactSettings({
       onClose?.();
     });
     body.querySelector('[data-open-account-settings]')?.addEventListener('click', onAccount);
-    body.querySelectorAll('[data-settings-tab]').forEach((button) => {
-      button.addEventListener('click', () => {
-        // Leaving the channels tab? Cancel any in-flight QR polling.
-        if (settingsState.tab === 'channels' && button.dataset.settingsTab !== 'channels') {
-          if (settingsState.channels?.qrPoll) {
-            clearInterval(settingsState.channels.qrPoll);
-            settingsState.channels.qrPoll = null;
-          }
-        }
-        settingsState.tab = button.dataset.settingsTab;
-        settingsState.commandStatus = '';
-        render();
-        if (settingsState.tab === 'runtime' && !settingsState.runtimeSettings) {
-          refreshRuntimeSettings();
-        }
-        if (settingsState.tab === 'admin' && settingsState.templates === null) {
-          refreshManagedModules();
-        }
-        if (settingsState.tab === 'channels') {
-          ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
-          startChannelAccountsSub();
-        }
-        if (settingsState.tab === 'activity' && isAdmin && !settingsState.activity.loaded) {
-          refreshActivity();
-        }
-        if (settingsState.tab === 'mcp' && isAdmin && !settingsState.mcp.info && !settingsState.mcp.loading) {
-          refreshMcpConnectInfo();
-        }
-      });
-    });
     wireChannelHandlers(body, settingsState, render, {
       commandBus,
       db,
@@ -333,11 +431,58 @@ export async function openReactSettings({
       render();
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
+    body.querySelector('[data-branding-refresh]')?.addEventListener('click', refreshBranding);
+    body.querySelector('[data-branding-save]')?.addEventListener('click', async () => {
+      const input = body.querySelector('[data-branding-json]');
+      const raw = input?.value || '';
+      settingsState.commandStatus = 'Corporate Design wird gespeichert...';
+      settingsState.branding = { ...settingsState.branding, error: '' };
+      render();
+      try {
+        const payload = normalizeBrandingImportPayload(raw);
+        settingsState.branding.document = await saveWorkspaceBranding(
+          payload,
+          { commandBus, db, session, sync },
+        );
+        settingsState.branding.jsonText = brandingExportJson(settingsState.branding.document);
+        settingsState.commandStatus = 'Corporate Design gespeichert.';
+      } catch (error) {
+        settingsState.branding = {
+          ...settingsState.branding,
+          error: String(error?.message || error),
+        };
+        settingsState.commandStatus = String(error?.message || error);
+      }
+      render();
+    });
+    body.querySelector('[data-branding-reset]')?.addEventListener('click', async () => {
+      const confirmed = await showBusinessConfirm('Corporate Design auf CTOX Default zuruecksetzen?', {
+        title: 'Design zuruecksetzen',
+        confirmLabel: 'Zuruecksetzen',
+      });
+      if (!confirmed) return;
+      settingsState.commandStatus = 'Corporate Design wird zurueckgesetzt...';
+      render();
+      try {
+        settingsState.branding.document = await resetWorkspaceBranding({ commandBus, db, session, sync });
+        settingsState.branding.jsonText = brandingExportJson(settingsState.branding.document);
+        settingsState.branding.error = '';
+        settingsState.commandStatus = 'Corporate Design zurueckgesetzt.';
+      } catch (error) {
+        settingsState.branding = {
+          ...settingsState.branding,
+          error: String(error?.message || error),
+        };
+        settingsState.commandStatus = String(error?.message || error);
+      }
+      render();
+    });
     body.querySelector('[data-activity-refresh]')?.addEventListener('click', refreshActivity);
     body.querySelector('[data-mcp-refresh]')?.addEventListener('click', refreshMcpConnectInfo);
+    body.querySelector('[data-mcp-issue-managed]')?.addEventListener('click', issueManagedMcpClientToken);
     body.querySelectorAll('[data-mcp-copy]').forEach((button) => {
       button.addEventListener('click', async () => {
-        const value = mcpCopyValue(button.dataset.mcpCopy, settingsState.mcp.info);
+        const value = mcpCopyValue(button.dataset.mcpCopy, settingsState.mcp.info, settingsState.mcp.tokenIssue);
         if (!value) return;
         try {
           await navigator.clipboard?.writeText?.(value);
@@ -631,6 +776,9 @@ export async function openReactSettings({
     ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
     startChannelAccountsSub();
   }
+  if (settingsState.tab === 'appearance' && settingsState.branding.canManage) {
+    refreshBranding();
+  }
   refreshUsers();
   if (settingsState.tab === 'admin' && canOpenModuleAdmin({
     modules: settingsState.modules.length ? settingsState.modules : modules,
@@ -665,6 +813,7 @@ function settingsTemplate({
   users,
   canManageUsers,
   activity,
+  branding,
   editingModuleId,
   moduleWhyDiagnostics,
   moduleWhyStatus,
@@ -693,6 +842,7 @@ function settingsTemplate({
       ${tabButton('runtime', 'Runtime', tab)}
       ${tabButton('channels', 'Channels', tab)}
       ${tabButton('sync', 'Sync', tab)}
+      ${branding?.canManage ? tabButton('appearance', 'Design', tab) : ''}
       ${isAdmin ? tabButton('mcp', 'MCP', tab) : ''}
       ${tabButton('users', 'Nutzer', tab)}
       ${isAdmin ? tabButton('activity', 'Aktivität', tab) : ''}
@@ -703,6 +853,7 @@ function settingsTemplate({
       ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth) : ''}
       ${tab === 'channels' ? channelsPanel(channels) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
+      ${tab === 'appearance' && branding?.canManage ? appearancePanel(branding) : ''}
       ${tab === 'mcp' && isAdmin ? mcpPanel(mcp) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
       ${tab === 'activity' && isAdmin ? activityPanel(activity) : ''}
@@ -883,12 +1034,47 @@ function syncPanel(syncConfig, isAdmin) {
   `;
 }
 
+function appearancePanel(branding = {}) {
+  const document = branding.document || {};
+  const isCustom = document.custom === true;
+  const jsonText = branding.jsonText || brandingExportJson(document);
+  return `
+    <section class="settings-section">
+      <header>
+        <h3>Corporate Design</h3>
+        <span>${escapeHtml(branding.loading ? 'Branding wird gelesen.' : (isCustom ? document.name || 'Workspace Branding' : 'CTOX Default'))}</span>
+      </header>
+      <dl class="settings-kv">
+        ${kv('Aktiv', isCustom ? 'Custom Branding' : 'CTOX Default')}
+        ${kv('Name', document.name || 'CTOX Default')}
+        ${kv('Light Tokens', String(Object.keys(document.light || {}).length))}
+        ${kv('Dark Tokens', String(Object.keys(document.dark || {}).length))}
+      </dl>
+      <div class="settings-grid is-one">
+        <label><span>Branding JSON</span><textarea data-branding-json rows="14" spellcheck="false">${escapeHtml(jsonText)}</textarea></label>
+      </div>
+      <div class="runtime-actions">
+        <button class="text-button settings-primary" type="button" data-branding-save ${branding.loading ? 'disabled' : ''}>Branding importieren</button>
+        <button class="text-button" type="button" data-branding-refresh ${branding.loading ? 'disabled' : ''}>Neu laden</button>
+        <button class="text-button" type="button" data-branding-reset ${branding.loading ? 'disabled' : ''}>CTOX Default</button>
+      </div>
+      ${branding.error ? `<p class="settings-note">${escapeHtml(branding.error)}</p>` : ''}
+    </section>
+  `;
+}
+
 function mcpPanel(mcp = {}) {
   const info = mcp.info || null;
   const codexConfig = info ? JSON.stringify(info.codex || {}, null, 2) : '';
   const claudeConfig = info ? JSON.stringify(info.claude || {}, null, 2) : '';
   const managed = info?.managed || null;
+  const tokenIssue = mcp.tokenIssue || null;
+  const managedCodexConfig = tokenIssue ? JSON.stringify(tokenIssue.codex || {}, null, 2) : '';
+  const managedClaudeConfig = tokenIssue ? JSON.stringify(tokenIssue.claude || {}, null, 2) : '';
   const copied = mcp.copied || '';
+  const managedStatus = managed?.status || 'nicht geladen';
+  const managedReady = managedStatus === 'ready';
+  const effectiveStatus = mcpEffectiveStatus(info, mcp.error);
   return `
     <section class="settings-section">
       <header>
@@ -896,24 +1082,43 @@ function mcpPanel(mcp = {}) {
         <span>${escapeHtml(mcp.loading ? 'Verbindung wird gelesen.' : mcpStatusLabel(info, mcp.error))}</span>
       </header>
       <dl class="settings-kv">
-        ${kv('Status', mcp.error ? 'Fehler' : (info?.status || 'Noch nicht geladen'))}
+        ${kv('Status', effectiveStatus)}
         ${kv('Modus', info?.mode || '-')}
         ${kv('Server', info?.server_name || '-')}
         ${kv('Lokaler Endpoint', info?.endpoint || '-')}
         ${kv('Managed Endpoint', managed?.endpoint || '-')}
-        ${kv('Managed Status', managed?.status || 'nicht geladen')}
+        ${kv('Managed Status', managedStatus)}
+        ${kv('Aktive Managed Tokens', managed?.active_token_count ?? '-')}
         ${kv('Instanz', managed?.instance_alias || info?.managed_instance_id || '-')}
-        ${kv('Secret', info?.secret ? `${info.secret.scope}/${info.secret.name}` : 'business_os/mcp_inbound_auth_token')}
+        ${kv('Lokales Secret', info?.secret ? `${info.secret.scope}/${info.secret.name}` : 'business_os/mcp_inbound_auth_token')}
       </dl>
       <div class="runtime-actions">
         <button class="text-button settings-primary" type="button" data-mcp-refresh ${mcp.loading ? 'disabled' : ''}>MCP Status laden</button>
-        ${info ? `<button class="text-button" type="button" data-mcp-copy="endpoint">Lokalen Endpoint kopieren</button>` : ''}
         ${info ? `<button class="text-button" type="button" data-mcp-copy="managedEndpoint">Managed Endpoint kopieren</button>` : ''}
-        ${info ? `<button class="text-button" type="button" data-mcp-copy="token">Lokalen Token kopieren</button>` : ''}
+        ${info ? `<button class="text-button" type="button" data-mcp-issue-managed ${mcp.issuing ? 'disabled' : ''}>${escapeHtml(mcp.issuing ? 'Token wird erstellt...' : 'Agent Token erstellen')}</button>` : ''}
       </div>
       ${mcp.error ? `<p class="settings-note">${escapeHtml(mcp.error)}</p>` : ''}
       ${copied ? `<p class="settings-note">${escapeHtml(copied === 'failed' ? 'Kopieren fehlgeschlagen.' : 'In die Zwischenablage kopiert.')}</p>` : ''}
+      ${managed && !managedReady ? `<p class="settings-note">Managed MCP ist ${escapeHtml(managedStatus)}. Ein neuer Agent Token aktiviert die ctox.dev MCP-Konfiguration fuer diese Instanz.</p>` : ''}
     </section>
+    ${tokenIssue ? `
+      <section class="settings-section">
+        <header><h3>Managed Agent Config</h3><span>Bearer wird nur jetzt angezeigt.</span></header>
+        <div class="settings-grid is-one">
+          <label><span>Managed Bearer Token</span><input type="password" readonly value="${escapeAttr(tokenIssue.token || '')}" /></label>
+          <label><span>Managed MCP Endpoint</span><input readonly value="${escapeAttr(tokenIssue.endpoint || managed?.endpoint || '')}" /></label>
+          <label><span>Codex JSON</span><textarea readonly rows="8">${escapeHtml(managedCodexConfig)}</textarea></label>
+          <label><span>Claude JSON</span><textarea readonly rows="8">${escapeHtml(managedClaudeConfig)}</textarea></label>
+        </div>
+        <div class="runtime-actions">
+          <button class="text-button settings-primary" type="button" data-mcp-copy="managedCodex">Codex Config kopieren</button>
+          <button class="text-button" type="button" data-mcp-copy="managedClaude">Claude Config kopieren</button>
+          <button class="text-button" type="button" data-mcp-copy="managedAuthHeader">Authorization Header kopieren</button>
+          <button class="text-button" type="button" data-mcp-copy="managedToken">Bearer Token kopieren</button>
+        </div>
+        <p class="settings-note">Diesen Bearer jetzt in den Coding Agent eintragen. Nach dem Schliessen bleibt nur der Hash im Audit, nicht der Token selbst.</p>
+      </section>
+    ` : ''}
     ${info ? `
       <section class="settings-section">
         <header><h3>Lokale Codex / Claude Config</h3><span>Nur fuer Agenten mit Zugriff auf 127.0.0.1 dieser Instanz.</span></header>
@@ -927,20 +1132,30 @@ function mcpPanel(mcp = {}) {
           <button class="text-button" type="button" data-mcp-copy="claude">Claude Config kopieren</button>
           <button class="text-button" type="button" data-mcp-copy="authHeader">Authorization Header kopieren</button>
         </div>
-        <p class="settings-note">Dieser lokale Token ist nicht der mcp.ctox.dev Web-Auth-Token. Fuer beliebige Coding Agents muss Managed MCP in ctox.dev verbunden werden.</p>
+        <p class="settings-note">Dieser lokale Token ist nicht der mcp.ctox.dev Bearer. Fuer beliebige Coding Agents oben einen Managed Agent Token erstellen.</p>
       </section>
     ` : ''}
   `;
 }
 
+function mcpEffectiveStatus(info, error) {
+  if (error) return 'Fehler';
+  if (!info) return 'Noch nicht geladen';
+  if (info.managed?.status === 'ready') return 'Managed bereit';
+  if (info.status === 'local_ready_managed_not_connected') return 'Lokal bereit; Managed Web Auth fehlt';
+  if (info.status === 'ready') return 'Bereit';
+  return String(info.status || 'Status unbekannt');
+}
+
 function mcpStatusLabel(info, error) {
   if (error) return 'Nicht verbunden.';
   if (!info) return 'Noch nicht geladen.';
+  if (info.managed?.status === 'ready') return 'Managed MCP bereit fuer externe Coding Agents.';
   if (info.status === 'local_ready_managed_not_connected') return 'Lokal bereit; Managed Web Auth fehlt.';
   return info.status === 'ready' ? 'Bereit fuer externe MCP Clients.' : String(info.status || 'Status unbekannt.');
 }
 
-function mcpCopyValue(kind, info) {
+function mcpCopyValue(kind, info, tokenIssue = null) {
   if (!info) return '';
   if (kind === 'endpoint') return info.endpoint || '';
   if (kind === 'managedEndpoint') return info.managed?.endpoint || '';
@@ -948,6 +1163,10 @@ function mcpCopyValue(kind, info) {
   if (kind === 'authHeader') return info.authorization_header || (info.token ? `Bearer ${info.token}` : '');
   if (kind === 'codex') return JSON.stringify(info.codex || {}, null, 2);
   if (kind === 'claude') return JSON.stringify(info.claude || {}, null, 2);
+  if (kind === 'managedToken') return tokenIssue?.token || '';
+  if (kind === 'managedAuthHeader') return tokenIssue?.authorization_header || (tokenIssue?.token ? `Bearer ${tokenIssue.token}` : '');
+  if (kind === 'managedCodex') return JSON.stringify(tokenIssue?.codex || {}, null, 2);
+  if (kind === 'managedClaude') return JSON.stringify(tokenIssue?.claude || {}, null, 2);
   return '';
 }
 
@@ -2279,6 +2498,86 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
   throw lastError || new Error('Runtime-Status wurde nicht synchronisiert.');
 }
 
+async function loadWorkspaceBranding({ db } = {}) {
+  const coll = db?.collection?.(WORKSPACE_BRANDING_COLLECTION);
+  if (!coll) throw new Error('business_workspace_branding collection is required for workspace branding');
+  const doc = await coll.findOne(WORKSPACE_BRANDING_DOCUMENT_ID).exec();
+  const data = doc?.toJSON?.();
+  if (!data) {
+    return {
+      id: WORKSPACE_BRANDING_DOCUMENT_ID,
+      name: 'CTOX Default',
+      custom: false,
+      light: {},
+      dark: {},
+      module_accents: {},
+      updated_at_ms: 0,
+    };
+  }
+  return data;
+}
+
+async function saveWorkspaceBranding(payload, { commandBus, db, session, sync } = {}) {
+  const previousBranding = await loadWorkspaceBranding({ db }).catch(() => null);
+  await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_os.branding.update',
+    moduleId: 'ctox',
+    recordId: WORKSPACE_BRANDING_DOCUMENT_ID,
+    payload,
+    source: 'business-os-settings',
+  });
+  return waitForWorkspaceBrandingProjection(db, {
+    previousUpdatedAtMs: Number(previousBranding?.updated_at_ms || 0),
+    expectCustom: true,
+  });
+}
+
+async function resetWorkspaceBranding({ commandBus, db, session, sync } = {}) {
+  const previousBranding = await loadWorkspaceBranding({ db }).catch(() => null);
+  await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_os.branding.update',
+    moduleId: 'ctox',
+    recordId: WORKSPACE_BRANDING_DOCUMENT_ID,
+    payload: { reset: true },
+    source: 'business-os-settings',
+  });
+  return waitForWorkspaceBrandingProjection(db, {
+    previousUpdatedAtMs: Number(previousBranding?.updated_at_ms || 0),
+    expectCustom: false,
+  });
+}
+
+async function waitForWorkspaceBrandingProjection(db, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 10000);
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const branding = await loadWorkspaceBranding({ db });
+      const updatedAt = Number(branding?.updated_at_ms || 0);
+      if (
+        branding?.custom === options.expectCustom
+        && (updatedAt > Number(options.previousUpdatedAtMs || 0) || options.expectCustom === false)
+      ) {
+        return branding;
+      }
+      lastError = new Error('Corporate Design wurde noch nicht aktualisiert.');
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(300);
+  }
+  throw lastError || new Error('Corporate Design wurde nicht synchronisiert.');
+}
+
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
   const command = await dispatchModuleCommand({
     commandBus,
@@ -2398,6 +2697,35 @@ async function loadMcpConnectInfo() {
   }
   if (!payload?.ok) {
     throw new Error(payload?.message || payload?.error || 'MCP Status konnte nicht geladen werden.');
+  }
+  return payload;
+}
+
+async function createManagedMcpClientToken() {
+  const response = await fetch('/api/business-os/mcp/client-token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+    body: JSON.stringify({
+      label: 'Business OS Coding Agent',
+      expiresInDays: 90,
+    }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || text || `Managed MCP Token konnte nicht erstellt werden (${response.status}).`);
+  }
+  if (!payload?.ok || !payload?.token) {
+    throw new Error(payload?.message || payload?.error || 'Managed MCP Token konnte nicht erstellt werden.');
   }
   return payload;
 }

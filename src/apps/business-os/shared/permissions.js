@@ -2,6 +2,7 @@ import { normalizeRole, roleCanManage } from './roles.js';
 
 export const BusinessOsPermissions = Object.freeze({
   WorkspaceManage: 'workspace.manage',
+  WorkspaceBrandingManage: 'workspace.branding.manage',
   UsersManage: 'users.manage',
   RolesManage: 'roles.manage',
   RuntimeManage: 'runtime.manage',

@@ -29,9 +29,13 @@ This file is a resource index. Use the linked contracts and checklists as the wo
 ## Resource Index
 
 - `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract, agent right-click context.
+- `references/design-guide.md`: Business OS token contract, custom branding rules, UX patterns, and anti-patterns.
+- `references/standalone-porting.md`: how to keep standalone vanilla apps portable into Business OS with `mount(ctx)` and mock context boundaries.
 - `references/dos-and-donts.md`: short rules for correct Business OS app implementation.
 - `references/green-checklist.md`: finalization checklist before a task can be considered done.
 - `references/architecture-translation.md`: mapping from familiar web app patterns to CTOX Business OS app patterns.
+- `assets/standalone/business-os-tokens.css`: lightweight default token CSS for standalone previews only.
+- `assets/standalone/mock-business-os-context.mjs`: lightweight mock `ctx` for standalone demos/tests before porting.
 
 ## Required Agent Context (Right-Click)
 
@@ -85,7 +89,11 @@ records so the agent knows what was clicked.
   light/dark theme state from the shell through tokens such as `--bg`,
   `--surface`, `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`.
   Do not force `color-scheme`, hard-code a dark-only palette, or declare an app
-  finished before checking both light and dark themes.
+  finished before checking light, dark, and one custom-brand fixture. Load
+  `references/design-guide.md` for exact token/custom-branding rules.
+- If the user provides or requests a standalone vanilla app first, keep the app
+  portable through `mount(ctx)`, `ctx.db.collection(...)`, and
+  `ctx.commandBus.dispatch(...)`; load `references/standalone-porting.md`.
 
 ## Validation
 

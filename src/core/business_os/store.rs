@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -312,6 +312,11 @@ pub(crate) struct LocalMarkdownNotesSourceStamp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeSettingsProjectionStamp {
     cache: RuntimeSettingsCacheStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorkspaceBrandingProjectionStamp {
+    store: BusinessOsSqliteStoreStamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -741,6 +746,20 @@ pub struct RuntimeSettingsRequest {
     pub max_run_secs: Option<u64>,
     #[serde(default)]
     pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceBrandingUpdateRequest {
+    #[serde(default)]
+    pub reset: bool,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub light: Value,
+    #[serde(default)]
+    pub dark: Value,
+    #[serde(default)]
+    pub module_accents: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3984,6 +4003,592 @@ fn configured_business_users_projection_hash() -> String {
         }
     }
     format!("{:x}", hasher.finalize())
+}
+
+const WORKSPACE_BRANDING_ID: &str = "workspace-branding";
+const WORKSPACE_BRANDING_TOKENS: &[&str] = &[
+    "bg",
+    "surface",
+    "surface_2",
+    "line",
+    "text",
+    "text_strong",
+    "muted",
+    "accent",
+    "accent_soft",
+    "accent_foreground",
+    "danger",
+    "warning",
+    "success",
+    "focus_ring",
+];
+
+pub fn workspace_branding_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let row = conn
+        .query_row(
+            "SELECT name, light_json, dark_json, module_accents_json, updated_at_ms
+             FROM business_workspace_branding
+             WHERE id = ?1",
+            params![WORKSPACE_BRANDING_ID],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((name, light_json, dark_json, module_accents_json, updated_at_ms)) = row else {
+        return Ok(default_workspace_branding_projection());
+    };
+    Ok(serde_json::json!({
+        "id": WORKSPACE_BRANDING_ID,
+        "ok": true,
+        "custom": true,
+        "name": name,
+        "light": serde_json::from_str::<Value>(&light_json).unwrap_or_else(|_| serde_json::json!({})),
+        "dark": serde_json::from_str::<Value>(&dark_json).unwrap_or_else(|_| serde_json::json!({})),
+        "module_accents": serde_json::from_str::<Value>(&module_accents_json).unwrap_or_else(|_| serde_json::json!({})),
+        "updated_at_ms": updated_at_ms,
+        "is_deleted": false
+    }))
+}
+
+pub(crate) fn workspace_branding_projection_stamp(root: &Path) -> WorkspaceBrandingProjectionStamp {
+    WorkspaceBrandingProjectionStamp {
+        store: business_os_sqlite_store_stamp(&root.join("runtime").join(STORE_FILE)),
+    }
+}
+
+pub fn save_workspace_branding_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: WorkspaceBrandingUpdateRequest,
+) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let observed_at_ms = now_ms() as i64;
+    if request.reset {
+        conn.execute(
+            "DELETE FROM business_workspace_branding WHERE id = ?1",
+            params![WORKSPACE_BRANDING_ID],
+        )?;
+        record_workspace_branding_change_event(
+            &conn,
+            session,
+            serde_json::json!({
+                "action": "reset",
+                "updated_at_ms": observed_at_ms
+            }),
+            observed_at_ms,
+        )?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "kind": "workspace_branding",
+            "action": "reset",
+            "branding": default_workspace_branding_projection()
+        }));
+    }
+
+    let normalized = normalize_workspace_branding_request(request)?;
+    let name = normalized
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Workspace Branding")
+        .to_owned();
+    let light = normalized
+        .get("light")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let dark = normalized
+        .get("dark")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let module_accents = normalized
+        .get("module_accents")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    conn.execute(
+        "INSERT INTO business_workspace_branding
+             (id, name, light_json, dark_json, module_accents_json, updated_by, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             light_json = excluded.light_json,
+             dark_json = excluded.dark_json,
+             module_accents_json = excluded.module_accents_json,
+             updated_by = excluded.updated_by,
+             updated_at_ms = excluded.updated_at_ms",
+        params![
+            WORKSPACE_BRANDING_ID,
+            name,
+            serde_json::to_string(&light)?,
+            serde_json::to_string(&dark)?,
+            serde_json::to_string(&module_accents)?,
+            session
+                .user
+                .as_ref()
+                .map(|user| user.id.as_str())
+                .unwrap_or(""),
+            observed_at_ms,
+        ],
+    )?;
+    record_workspace_branding_change_event(&conn, session, normalized, observed_at_ms)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "kind": "workspace_branding",
+        "action": "updated",
+        "branding": workspace_branding_for_rxdb(root)?
+    }))
+}
+
+fn default_workspace_branding_projection() -> Value {
+    serde_json::json!({
+        "id": WORKSPACE_BRANDING_ID,
+        "ok": true,
+        "custom": false,
+        "name": "CTOX Default",
+        "light": {},
+        "dark": {},
+        "module_accents": {},
+        "updated_at_ms": 0,
+        "is_deleted": false
+    })
+}
+
+fn normalize_workspace_branding_request(
+    request: WorkspaceBrandingUpdateRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        request.light.is_object(),
+        "branding light object is required"
+    );
+    anyhow::ensure!(request.dark.is_object(), "branding dark object is required");
+    let name = clean_workspace_branding_name(&request.name);
+    let light = normalize_workspace_branding_tokens("light", &request.light)?;
+    let dark = normalize_workspace_branding_tokens("dark", &request.dark)?;
+    let module_accents = normalize_workspace_branding_module_accents(&request.module_accents)?;
+    validate_workspace_branding_contrast("light", &light)?;
+    validate_workspace_branding_contrast("dark", &dark)?;
+    Ok(serde_json::json!({
+        "name": if name.is_empty() { "Workspace Branding" } else { name.as_str() },
+        "light": light,
+        "dark": dark,
+        "module_accents": module_accents
+    }))
+}
+
+fn normalize_workspace_branding_tokens(theme: &str, value: &Value) -> anyhow::Result<Value> {
+    let object = value
+        .as_object()
+        .with_context(|| format!("branding {theme} tokens must be an object"))?;
+    let mut out = serde_json::Map::new();
+    for (key, raw) in object {
+        anyhow::ensure!(
+            WORKSPACE_BRANDING_TOKENS.contains(&key.as_str()),
+            "unsupported branding token `{key}`"
+        );
+        let Some(text) = raw
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            anyhow::bail!("branding token `{key}` must be a non-empty string");
+        };
+        anyhow::ensure!(
+            is_safe_workspace_branding_color(text),
+            "branding token `{key}` contains an unsupported color value"
+        );
+        out.insert(key.clone(), Value::String(text.to_owned()));
+    }
+    Ok(Value::Object(out))
+}
+
+fn normalize_workspace_branding_module_accents(value: &Value) -> anyhow::Result<Value> {
+    if value.is_null() {
+        return Ok(serde_json::json!({}));
+    }
+    let object = value
+        .as_object()
+        .context("branding module_accents must be an object")?;
+    let mut out = serde_json::Map::new();
+    for (module_id, raw) in object {
+        let id = safe_workspace_branding_module_id(module_id);
+        anyhow::ensure!(!id.is_empty(), "branding module accent id is invalid");
+        let Some(text) = raw
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            anyhow::bail!("module accent `{module_id}` must be a non-empty string");
+        };
+        anyhow::ensure!(
+            is_safe_workspace_branding_color(text),
+            "module accent `{module_id}` contains an unsupported color value"
+        );
+        out.insert(id, Value::String(text.to_owned()));
+    }
+    Ok(Value::Object(out))
+}
+
+fn validate_workspace_branding_contrast(theme: &str, tokens: &Value) -> anyhow::Result<()> {
+    let merged = workspace_branding_tokens_with_defaults(theme, tokens);
+    let surface = workspace_branding_color(&merged, "surface")?;
+    for (token, min_ratio) in [
+        ("text", 4.5),
+        ("text_strong", 4.5),
+        ("muted", 3.0),
+        ("accent", 3.0),
+        ("danger", 3.0),
+        ("warning", 2.4),
+        ("success", 3.0),
+    ] {
+        let color = workspace_branding_color(&merged, token)?;
+        let ratio = contrast_ratio(color, surface);
+        anyhow::ensure!(
+            ratio >= min_ratio,
+            "branding {theme} token `{token}` has insufficient contrast against `surface` ({ratio:.2}:1)"
+        );
+    }
+    if let Some(accent_foreground) = merged.get("accent_foreground").and_then(Value::as_str) {
+        let foreground = parse_workspace_branding_color(accent_foreground)
+            .with_context(|| "branding accent_foreground is not parseable for contrast")?;
+        let accent = workspace_branding_color(&merged, "accent")?;
+        let ratio = contrast_ratio(foreground, accent);
+        anyhow::ensure!(
+            ratio >= 3.0,
+            "branding {theme} token `accent_foreground` has insufficient contrast against `accent` ({ratio:.2}:1)"
+        );
+    }
+    Ok(())
+}
+
+fn workspace_branding_tokens_with_defaults(
+    theme: &str,
+    tokens: &Value,
+) -> serde_json::Map<String, Value> {
+    let mut merged = serde_json::Map::new();
+    let defaults: &[(&str, &str)] = if theme == "dark" {
+        &[
+            ("surface", "#11161b"),
+            ("text", "#e7ecf2"),
+            ("text_strong", "#ffffff"),
+            ("muted", "#a3afbd"),
+            ("accent", "#6cb8aa"),
+            ("danger", "#e06b60"),
+            ("warning", "#f59e0b"),
+            ("success", "#10b981"),
+        ]
+    } else {
+        &[
+            ("surface", "oklch(0.987 0.005 235)"),
+            ("text", "oklch(0.22 0.015 235)"),
+            ("text_strong", "oklch(0.14 0.018 235)"),
+            ("muted", "oklch(0.48 0.015 235)"),
+            ("accent", "oklch(0.48 0.115 215)"),
+            ("danger", "oklch(0.56 0.13 28)"),
+            ("warning", "#b45309"),
+            ("success", "#047857"),
+        ]
+    };
+    for (key, value) in defaults {
+        merged.insert((*key).to_owned(), Value::String((*value).to_owned()));
+    }
+    if let Some(object) = tokens.as_object() {
+        for (key, value) in object {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+fn workspace_branding_color(
+    tokens: &serde_json::Map<String, Value>,
+    token: &str,
+) -> anyhow::Result<(f64, f64, f64)> {
+    let raw = tokens
+        .get(token)
+        .and_then(Value::as_str)
+        .with_context(|| format!("branding token `{token}` is missing"))?;
+    parse_workspace_branding_color(raw)
+        .with_context(|| format!("branding token `{token}` is not parseable for contrast"))
+}
+
+fn is_safe_workspace_branding_color(value: &str) -> bool {
+    let text = value.trim();
+    if text.is_empty() || text.len() > 96 {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("url(")
+        || lower.contains("var(")
+        || lower.contains("attr(")
+        || lower.contains("calc(")
+        || lower.contains("@import")
+        || text
+            .chars()
+            .any(|ch| matches!(ch, ';' | '{' | '}' | '<' | '>'))
+    {
+        return false;
+    }
+    text.starts_with('#')
+        || lower.starts_with("rgb(")
+        || lower.starts_with("rgba(")
+        || lower.starts_with("hsl(")
+        || lower.starts_with("hsla(")
+        || lower.starts_with("oklch(")
+        || lower.starts_with("oklab(")
+}
+
+fn parse_workspace_branding_color(value: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let text = value.trim();
+    if let Some(hex) = text.strip_prefix('#') {
+        return parse_hex_color(hex);
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.starts_with("rgb(") || lower.starts_with("rgba(") {
+        return parse_rgb_color(text);
+    }
+    if lower.starts_with("hsl(") || lower.starts_with("hsla(") {
+        return parse_hsl_color(text);
+    }
+    if lower.starts_with("oklch(") {
+        return parse_oklch_color(text);
+    }
+    if lower.starts_with("oklab(") {
+        return parse_oklab_color(text);
+    }
+    anyhow::bail!("unsupported color format")
+}
+
+fn parse_hex_color(hex: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let expand = |ch: char| -> String { format!("{ch}{ch}") };
+    let (r, g, b) = match hex.len() {
+        3 | 4 => (
+            expand(hex.chars().nth(0).unwrap()),
+            expand(hex.chars().nth(1).unwrap()),
+            expand(hex.chars().nth(2).unwrap()),
+        ),
+        6 | 8 => (
+            hex[0..2].to_owned(),
+            hex[2..4].to_owned(),
+            hex[4..6].to_owned(),
+        ),
+        _ => anyhow::bail!("invalid hex color length"),
+    };
+    Ok((
+        u8::from_str_radix(&r, 16)? as f64 / 255.0,
+        u8::from_str_radix(&g, 16)? as f64 / 255.0,
+        u8::from_str_radix(&b, 16)? as f64 / 255.0,
+    ))
+}
+
+fn parse_rgb_color(value: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let inner = color_function_inner(value)?;
+    let parts = color_components(inner);
+    anyhow::ensure!(parts.len() >= 3, "rgb color requires three components");
+    Ok((
+        parse_rgb_component(&parts[0])?,
+        parse_rgb_component(&parts[1])?,
+        parse_rgb_component(&parts[2])?,
+    ))
+}
+
+fn parse_hsl_color(value: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let inner = color_function_inner(value)?;
+    let parts = color_components(inner);
+    anyhow::ensure!(parts.len() >= 3, "hsl color requires three components");
+    let hue = parse_hue_degrees(&parts[0])?.rem_euclid(360.0);
+    let saturation = parse_percent_component(&parts[1])?;
+    let lightness = parse_percent_component(&parts[2])?;
+    Ok(hsl_to_srgb(hue, saturation, lightness))
+}
+
+fn parse_oklch_color(value: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let inner = color_function_inner(value)?;
+    let parts = color_components(inner);
+    anyhow::ensure!(parts.len() >= 3, "oklch color requires three components");
+    let l = parse_unit_or_percent(&parts[0])?;
+    let c = parse_plain_float(&parts[1])?;
+    let h = parse_hue_degrees(&parts[2])?.to_radians();
+    let a = c * h.cos();
+    let b = c * h.sin();
+    oklab_to_srgb(l, a, b)
+}
+
+fn parse_oklab_color(value: &str) -> anyhow::Result<(f64, f64, f64)> {
+    let inner = color_function_inner(value)?;
+    let parts = color_components(inner);
+    anyhow::ensure!(parts.len() >= 3, "oklab color requires three components");
+    oklab_to_srgb(
+        parse_unit_or_percent(&parts[0])?,
+        parse_plain_float(&parts[1])?,
+        parse_plain_float(&parts[2])?,
+    )
+}
+
+fn color_function_inner(value: &str) -> anyhow::Result<&str> {
+    let start = value
+        .find('(')
+        .context("color function missing open paren")?;
+    let end = value
+        .rfind(')')
+        .context("color function missing close paren")?;
+    anyhow::ensure!(end > start, "invalid color function");
+    Ok(&value[start + 1..end])
+}
+
+fn color_components(inner: &str) -> Vec<String> {
+    inner
+        .replace(',', " ")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_rgb_component(value: &str) -> anyhow::Result<f64> {
+    let trimmed = value.trim();
+    if let Some(percent) = trimmed.strip_suffix('%') {
+        return Ok((percent.trim().parse::<f64>()? / 100.0).clamp(0.0, 1.0));
+    }
+    Ok((trimmed.parse::<f64>()? / 255.0).clamp(0.0, 1.0))
+}
+
+fn parse_unit_or_percent(value: &str) -> anyhow::Result<f64> {
+    let trimmed = value.trim();
+    if let Some(percent) = trimmed.strip_suffix('%') {
+        return Ok((percent.trim().parse::<f64>()? / 100.0).clamp(0.0, 1.0));
+    }
+    Ok(trimmed.parse::<f64>()?.clamp(0.0, 1.0))
+}
+
+fn parse_plain_float(value: &str) -> anyhow::Result<f64> {
+    Ok(value.trim().parse::<f64>()?)
+}
+
+fn parse_percent_component(value: &str) -> anyhow::Result<f64> {
+    let percent = value
+        .trim()
+        .strip_suffix('%')
+        .context("hsl saturation/lightness must be percentages")?;
+    Ok((percent.trim().parse::<f64>()? / 100.0).clamp(0.0, 1.0))
+}
+
+fn parse_hue_degrees(value: &str) -> anyhow::Result<f64> {
+    Ok(value.trim().trim_end_matches("deg").trim().parse::<f64>()?)
+}
+
+fn hsl_to_srgb(hue: f64, saturation: f64, lightness: f64) -> (f64, f64, f64) {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let hue_prime = hue / 60.0;
+    let x = chroma * (1.0 - (hue_prime.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hue_prime.floor() as i32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = lightness - chroma / 2.0;
+    (r1 + m, g1 + m, b1 + m)
+}
+
+fn oklab_to_srgb(l: f64, a: f64, b: f64) -> anyhow::Result<(f64, f64, f64)> {
+    let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
+    let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
+    let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    let r = 4.076_741_662_1 * l3 - 3.307_711_591_3 * m3 + 0.230_969_929_2 * s3;
+    let g = -1.268_438_004_6 * l3 + 2.609_757_401_1 * m3 - 0.341_319_396_5 * s3;
+    let b = -0.004_196_086_3 * l3 - 0.703_418_614_7 * m3 + 1.707_614_701_0 * s3;
+    Ok((linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b)))
+}
+
+fn linear_to_srgb(value: f64) -> f64 {
+    let value = value.clamp(0.0, 1.0);
+    if value <= 0.003_130_8 {
+        12.92 * value
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn contrast_ratio(left: (f64, f64, f64), right: (f64, f64, f64)) -> f64 {
+    let a = relative_luminance(left);
+    let b = relative_luminance(right);
+    let (lighter, darker) = if a >= b { (a, b) } else { (b, a) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn relative_luminance((r, g, b): (f64, f64, f64)) -> f64 {
+    0.2126 * luminance_channel(r) + 0.7152 * luminance_channel(g) + 0.0722 * luminance_channel(b)
+}
+
+fn luminance_channel(value: f64) -> f64 {
+    if value <= 0.03928 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn clean_workspace_branding_name(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+fn safe_workspace_branding_module_id(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_owned()
+}
+
+fn record_workspace_branding_change_event(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    current: Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    insert_business_event(
+        conn,
+        "business_workspace_branding",
+        WORKSPACE_BRANDING_ID,
+        "business_os.workspace_branding.changed",
+        serde_json::json!({
+            "event_type": "business_os.workspace_branding.changed",
+            "actor": session_audit_actor_context(session),
+            "current": current,
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
 }
 
 pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -15555,6 +16160,9 @@ pub fn pull_collection_records_for_projection(
         "ctox_runtime_settings" => {
             return pull_runtime_settings_records(root, since_ms, limit);
         }
+        "business_workspace_branding" => {
+            return pull_workspace_branding_records(root, since_ms, limit);
+        }
         "communication_accounts" => {
             return channels::pull_communication_accounts_for_business_os(root, since_ms, limit);
         }
@@ -15619,6 +16227,9 @@ pub fn pull_collection_record(
         "ctox_runtime_settings" if record_id == "runtime-settings" => {
             return Ok(Some(runtime_settings_for_rxdb(root)?));
         }
+        "business_workspace_branding" if record_id == WORKSPACE_BRANDING_ID => {
+            return Ok(Some(workspace_branding_for_rxdb(root)?));
+        }
         "communication_accounts" | "communication_threads" | "communication_messages" => {
             return channels::pull_communication_record_for_business_os(
                 root, collection, record_id,
@@ -15673,6 +16284,33 @@ fn pull_runtime_settings_records(
         "count": documents.len(),
         "since_ms": since_ms,
         "source": "native_runtime_projection"
+    }))
+}
+
+fn pull_workspace_branding_records(
+    root: &Path,
+    since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let since_ms = since_ms.unwrap_or(0);
+    let document = workspace_branding_for_rxdb(root)?;
+    let updated_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let documents = if limit == 0 || updated_at_ms < since_ms {
+        Vec::new()
+    } else {
+        vec![document]
+    };
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": "business_workspace_branding",
+        "documents": documents,
+        "count": documents.len(),
+        "since_ms": since_ms,
+        "source": "native_workspace_branding_projection"
     }))
 }
 
@@ -17680,6 +18318,39 @@ pub fn accept_rxdb_business_command_with_origin(
                 &command,
                 "completed",
                 None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.branding.update" => {
+            let mutation: WorkspaceBrandingUpdateRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.branding.update payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision = workspace_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::WorkspaceBrandingManage,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = match save_workspace_branding_command(root, &session, mutation) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "workspace_branding",
+                        error,
+                    );
+                }
+            };
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                Some(WORKSPACE_BRANDING_ID),
                 Some("completed"),
                 outcome,
             );
@@ -30459,6 +31130,8 @@ Business OS app task metadata:
 - app_directory: {module_dir}
 - skill: business-os-app-module-development
 - resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md
+- resource.design_guide: src/skills/system/product_engineering/business-os-app-module-development/references/design-guide.md
+- resource.standalone_porting: src/skills/system/product_engineering/business-os-app-module-development/references/standalone-porting.md
 - resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md
 - resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md
 - resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md
@@ -31295,6 +31968,16 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
             active INTEGER NOT NULL DEFAULT 1,
             created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS business_workspace_branding (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            light_json TEXT NOT NULL DEFAULT '{}',
+            dark_json TEXT NOT NULL DEFAULT '{}',
+            module_accents_json TEXT NOT NULL DEFAULT '{}',
+            updated_by TEXT NOT NULL DEFAULT '',
             updated_at_ms INTEGER NOT NULL
         );
 
@@ -32722,10 +33405,12 @@ mod tests {
             allowed_ticket.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(allowed_ticket
-            .pointer("/result/ticket_key")
-            .and_then(Value::as_str)
-            .is_some());
+        assert!(
+            allowed_ticket
+                .pointer("/result/ticket_key")
+                .and_then(Value::as_str)
+                .is_some()
+        );
         Ok(())
     }
 
@@ -33124,8 +33809,8 @@ mod tests {
     }
 
     #[test]
-    fn push_collection_records_batches_non_command_store_writes_in_one_transaction(
-    ) -> anyhow::Result<()> {
+    fn push_collection_records_batches_non_command_store_writes_in_one_transaction()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         reset_push_collection_records_store_transaction_count(root, "customer_opportunities");
@@ -33295,6 +33980,199 @@ mod tests {
         Ok(())
     }
 
+    fn valid_workspace_branding_payload() -> Value {
+        serde_json::json!({
+            "name": "Acme Corporate",
+            "light": {
+                "bg": "#f8fafc",
+                "surface": "#ffffff",
+                "surface_2": "#eef2f7",
+                "line": "#cbd5e1",
+                "text": "#111827",
+                "text_strong": "#030712",
+                "muted": "#475569",
+                "accent": "#005a9c",
+                "accent_soft": "#dbeafe",
+                "accent_foreground": "#ffffff",
+                "danger": "#b91c1c",
+                "warning": "#92400e",
+                "success": "#047857",
+                "focus_ring": "#0ea5e9"
+            },
+            "dark": {
+                "bg": "#030712",
+                "surface": "#111827",
+                "surface_2": "#1f2937",
+                "line": "#374151",
+                "text": "#f9fafb",
+                "text_strong": "#ffffff",
+                "muted": "#d1d5db",
+                "accent": "#7dd3fc",
+                "accent_soft": "#0c4a6e",
+                "accent_foreground": "#001018",
+                "danger": "#fca5a5",
+                "warning": "#fbbf24",
+                "success": "#34d399",
+                "focus_ring": "#38bdf8"
+            },
+            "module_accents": {
+                "customers": "#005a9c"
+            }
+        })
+    }
+
+    #[test]
+    fn workspace_branding_manage_policy_defaults_to_chef_and_admin() {
+        for role in ["chef", "admin"] {
+            let decision = policy::evaluate(
+                &BusinessOsActor::new(Some(role.to_owned()), role),
+                BusinessOsPermission::WorkspaceBrandingManage,
+                &BusinessOsScope::workspace(),
+            );
+            assert!(decision.allowed, "{role} should manage workspace branding");
+        }
+        for role in ["founder", "user"] {
+            let decision = policy::evaluate(
+                &BusinessOsActor::new(Some(role.to_owned()), role),
+                BusinessOsPermission::WorkspaceBrandingManage,
+                &BusinessOsScope::workspace(),
+            );
+            assert!(
+                !decision.allowed,
+                "{role} must not manage workspace branding"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_branding_command_admin_update_and_reset() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+
+        let updated = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_branding_update",
+                "command_id": "cmd_branding_update",
+                "module": "ctox",
+                "command_type": "ctox.business_os.branding.update",
+                "record_id": "workspace-branding",
+                "status": "pending_sync",
+                "payload": valid_workspace_branding_payload(),
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            updated.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let branding = workspace_branding_for_rxdb(root)?;
+        assert_eq!(branding.get("custom").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            branding.get("name").and_then(Value::as_str),
+            Some("Acme Corporate")
+        );
+        assert_eq!(
+            branding.pointer("/light/accent").and_then(Value::as_str),
+            Some("#005a9c")
+        );
+
+        let reset = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_branding_reset",
+                "command_id": "cmd_branding_reset",
+                "module": "ctox",
+                "command_type": "ctox.business_os.branding.update",
+                "record_id": "workspace-branding",
+                "status": "pending_sync",
+                "payload": { "reset": true },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            reset.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let default_branding = workspace_branding_for_rxdb(root)?;
+        assert_eq!(
+            default_branding.get("custom").and_then(Value::as_bool),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_branding_command_rejects_founder_and_invalid_tokens() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "founder1", "founder")?;
+        seed_business_user(root, "ops_admin", "admin")?;
+
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_branding_founder_denied",
+                "command_id": "cmd_branding_founder_denied",
+                "module": "ctox",
+                "command_type": "ctox.business_os.branding.update",
+                "record_id": "workspace-branding",
+                "status": "pending_sync",
+                "payload": valid_workspace_branding_payload(),
+                "client_context": {
+                    "actor": {
+                        "id": "founder1",
+                        "display_name": "Founder One"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "workspace.branding.manage", "workspace", None);
+
+        let mut invalid = valid_workspace_branding_payload();
+        invalid["light"]["unknown_token"] = Value::String("#000000".to_owned());
+        let failed = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_branding_invalid",
+                "command_id": "cmd_branding_invalid",
+                "module": "ctox",
+                "command_type": "ctox.business_os.branding.update",
+                "record_id": "workspace-branding",
+                "status": "pending_sync",
+                "payload": invalid,
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(failed.get("status").and_then(Value::as_str), Some("failed"));
+        assert!(
+            failed
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("unsupported branding token")
+        );
+        let branding = workspace_branding_for_rxdb(root)?;
+        assert_eq!(branding.get("custom").and_then(Value::as_bool), Some(false));
+        Ok(())
+    }
+
     #[test]
     fn source_load_requires_source_view_permission() -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -33397,11 +34275,13 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted
-            .pointer("/result/source_file_ids")
-            .and_then(Value::as_array)
-            .map(|ids| !ids.is_empty())
-            .unwrap_or(false));
+        assert!(
+            granted
+                .pointer("/result/source_file_ids")
+                .and_then(Value::as_array)
+                .map(|ids| !ids.is_empty())
+                .unwrap_or(false)
+        );
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -33428,10 +34308,12 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted_snapshots
-            .get("result")
-            .and_then(Value::as_array)
-            .is_some());
+        assert!(
+            granted_snapshots
+                .get("result")
+                .and_then(Value::as_array)
+                .is_some()
+        );
         Ok(())
     }
 
@@ -33847,8 +34729,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config(
-    ) -> anyhow::Result<()> {
+    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let _ = runtime_settings_for_rxdb(temp.path())?;
         let first = runtime_settings_projection_stamp(temp.path());
@@ -33882,8 +34764,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild(
-    ) -> anyhow::Result<()> {
+    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let first = runtime_settings_for_rxdb(temp.path())?;
         let first_updated_at = first.get("updated_at_ms").cloned();
@@ -33951,14 +34833,18 @@ mod tests {
         );
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
+        assert!(prompt.contains("resource.design_guide:"));
+        assert!(prompt.contains("resource.standalone_porting:"));
         assert!(prompt.contains("resource.dos_and_donts:"));
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
         assert!(prompt.contains(
             "- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
         ));
-        assert!(prompt
-            .contains("- validation: ctox business-os app validate subscriptions --installed"));
+        assert!(
+            prompt
+                .contains("- validation: ctox business-os app validate subscriptions --installed")
+        );
         assert!(!prompt.contains("nextjs-postgres-port"));
         assert!(!prompt.contains("frontend-skill"));
         assert_eq!(
@@ -33999,9 +34885,13 @@ mod tests {
         assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
+        assert!(
+            prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory")
+        );
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
+        assert!(prompt.contains("resource.design_guide:"));
+        assert!(prompt.contains("resource.standalone_porting:"));
         assert!(prompt.contains(
             "- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
         ));
@@ -34347,12 +35237,14 @@ mod tests {
         let catalog =
             load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
                 .context("expected module catalog projection")?;
-        assert!(catalog
-            .get("modules")
-            .and_then(Value::as_array)
-            .is_some_and(|modules| modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))));
+        assert!(
+            catalog
+                .get("modules")
+                .and_then(Value::as_array)
+                .is_some_and(|modules| modules
+                    .iter()
+                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id)))
+        );
         Ok(())
     }
 
@@ -34503,11 +35395,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(denied
-            .pointer("/result/policy_decision/display_reason")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("not allowed"));
+        assert!(
+            denied
+                .pointer("/result/policy_decision/display_reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("not allowed")
+        );
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -35283,13 +36177,15 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(business_event_payloads(
-            &conn,
-            "business_commands",
-            "cmd_activity_allowed_list",
-            "business_os.policy.allowed",
-        )?
-        .is_empty());
+        assert!(
+            business_event_payloads(
+                &conn,
+                "business_commands",
+                "cmd_activity_allowed_list",
+                "business_os.policy.allowed",
+            )?
+            .is_empty()
+        );
 
         Ok(())
     }
@@ -35365,11 +36261,13 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(role_change
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("role".to_owned())));
+        assert!(
+            role_change
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("role".to_owned()))
+        );
 
         Ok(())
     }
@@ -35443,11 +36341,13 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(deactivation
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("active".to_owned())));
+        assert!(
+            deactivation
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("active".to_owned()))
+        );
 
         Ok(())
     }
@@ -35549,12 +36449,16 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
+        );
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
+        );
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -35601,8 +36505,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -35679,12 +36583,16 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(responsible
-            .iter()
-            .any(|user| user.as_str() == Some("ops_admin")));
-        assert!(!responsible
-            .iter()
-            .any(|user| user.as_str() == Some("module_owner")));
+        assert!(
+            responsible
+                .iter()
+                .any(|user| user.as_str() == Some("ops_admin"))
+        );
+        assert!(
+            !responsible
+                .iter()
+                .any(|user| user.as_str() == Some("module_owner"))
+        );
 
         Ok(())
     }
@@ -35730,11 +36638,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -35801,11 +36711,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -36963,8 +37875,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
-    ) -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
+    -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -37468,8 +38380,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -37695,8 +38607,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -37928,11 +38840,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("read_collections"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("read_collections")
+        );
         Ok(())
     }
 
@@ -38868,8 +39782,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -39020,18 +39934,20 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(private_app
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .context("expected responsible ids")?
-            .iter()
-            .any(|id| id.as_str() == Some("ops-admin")));
+        assert!(
+            private_app
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .context("expected responsible ids")?
+                .iter()
+                .any(|id| id.as_str() == Some("ops-admin"))
+        );
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
-    ) -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -39091,11 +40007,13 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains(field_name));
+            assert!(
+                outcome
+                    .pointer("/result/error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains(field_name)
+            );
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -39167,11 +40085,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release insert failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release insert failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -39269,11 +40189,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release status failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release status failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -39556,11 +40478,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("explicit Team grant or locked-state behavior"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("explicit Team grant or locked-state behavior")
+        );
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -39644,11 +40568,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Query returned no rows"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Query returned no rows")
+        );
         Ok(())
     }
 
@@ -39699,11 +40625,13 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         save_widget_source(
             root,
             "module.json",
@@ -39733,11 +40661,13 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(!app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            !app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -39982,9 +40912,10 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(task
-            .prompt
-            .contains(materialized_path.to_string_lossy().as_ref()));
+        assert!(
+            task.prompt
+                .contains(materialized_path.to_string_lossy().as_ref())
+        );
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -40063,8 +40994,8 @@ mod tests {
     }
 
     #[test]
-    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload(
-    ) -> anyhow::Result<()> {
+    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let bytes = simple_text_pdf_bytes(&[
@@ -41382,8 +42313,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
-    ) -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -41721,8 +42652,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record(
-    ) -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -41761,11 +42692,13 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(command
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("health_status"));
+        assert!(
+            command
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("health_status")
+        );
         Ok(())
     }
 
@@ -43999,9 +44932,11 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(backbone
-            .iter()
-            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
+        assert!(
+            backbone
+                .iter()
+                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
+        );
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -44751,8 +45686,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
-    ) -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
+    -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -45089,10 +46024,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(send
-            .pointer("/result/physical_sent_at_ms")
-            .and_then(Value::as_i64)
-            .is_some());
+        assert!(
+            send.pointer("/result/physical_sent_at_ms")
+                .and_then(Value::as_i64)
+                .is_some()
+        );
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -46831,9 +47767,11 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(projections
-            .iter()
-            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
+        assert!(
+            projections
+                .iter()
+                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
+        );
 
         let write = accept_rxdb_business_command(
             root,
@@ -47212,9 +48150,11 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(modules
-            .iter()
-            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        assert!(
+            modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+        );
         Ok(())
     }
 
@@ -47368,24 +48308,30 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(module("private-zero")
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("app-owner")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("preview-user")));
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("app-owner"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("preview-user"))
+        );
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -47394,12 +48340,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
+        );
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -47410,34 +48358,42 @@ mod tests {
                 .count(),
             1
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
+        );
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
+        );
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -47468,11 +48424,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("missing-version")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("missing-version")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -47489,11 +48447,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("invalid-semver")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("invalid-semver")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -47508,12 +48468,14 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(module("restricted-team")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
+        assert!(
+            module("restricted-team")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
+        );
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")
@@ -48070,9 +49032,11 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(config
-            .pointer("/result/domains/0/dkim_private_key")
-            .is_none());
+        assert!(
+            config
+                .pointer("/result/domains/0/dkim_private_key")
+                .is_none()
+        );
 
         let denied_config = accept_rxdb_business_command(
             root,
