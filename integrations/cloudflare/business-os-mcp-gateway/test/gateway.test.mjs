@@ -213,7 +213,7 @@ test("managed mcp forwards server-authenticated context to session object", asyn
   assert.equal(forwardedContext.instance_id, "desk_123");
 });
 
-test("managed ctox.dev read-only token blocks write tools at the gateway", async () => {
+test("managed ctox.dev read-only token blocks upsert_record at the gateway", async () => {
   let routed = false;
   globalThis.fetch = async () => new Response(
     JSON.stringify({
@@ -248,8 +248,11 @@ test("managed ctox.dev read-only token blocks write tools at the gateway", async
         id: 9,
         method: "tools/call",
         params: {
-          name: "business_os.execute_action",
-          arguments: { module_id: "customers", action_id: "create" }
+          name: "business_os.upsert_record",
+          arguments: {
+            collection: "customer_accounts",
+            record: { id: "acct_1", name: "Metric Space" }
+          }
         }
       })
     }),

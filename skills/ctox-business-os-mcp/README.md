@@ -63,6 +63,15 @@ roles and app/data grants: `Owner`/`chef`, `Admin`/`admin`,
 `0.x.y` apps require app visibility grants, `1.0.0+` apps are team-visible by
 default unless restricted, and data reads/writes remain explicit.
 
+Normal app data writes use `business_os.upsert_record` after reading the target
+entity or record. User/account management uses `business_os.upsert_user`, which
+goes through the native Business OS user policy and not through generic record
+mutation. Do not use SQL, shell, direct RxDB writes, browser automation, or HTTP
+data endpoints as a fallback when MCP write tools are denied or unavailable;
+control collections such as users, permissions, app catalog/release/source
+records, queue/approval state, credentials, runtime settings, audit logs, and
+desktop file chunks need dedicated typed tools.
+
 App development goes through typed tools. For direct coding-agent work, use
 `business_os.prepare_app_source`, then inspect and edit app-scoped files with
 `business_os.list_app_files`, `business_os.read_app_file`,

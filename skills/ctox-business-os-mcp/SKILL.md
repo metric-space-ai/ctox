@@ -134,10 +134,14 @@ path for Business OS records.
 2. Use read tools before write tools.
 3. Search or query records with narrow limits.
 4. Fetch record context only when needed.
-5. Propose actions before executing them.
-6. Treat external effects as blocked unless the server explicitly advertises a
+5. For ordinary app data, write through `business_os.upsert_record` only after
+   reading the target entity/record and confirming the actor has write rights.
+6. For team/user management, use `business_os.upsert_user`; do not edit the
+   `business_users` collection with generic record tools.
+7. Propose actions before executing workflow actions.
+8. Treat external effects as blocked unless the server explicitly advertises a
    narrower approval tool for that effect.
-7. Return Business OS deep links for dense inspection.
+9. Return Business OS deep links for dense inspection.
 
 ## Expected Tool Classes
 
@@ -170,6 +174,8 @@ Action tools:
 ```text
 business_os.list_module_actions
 business_os.propose_action
+business_os.upsert_record
+business_os.upsert_user
 business_os.create_app
 business_os.modify_app
 business_os.prepare_app_source
@@ -192,6 +198,27 @@ Use the app-source tools when the connected coding agent should build or edit
 the app itself. These are typed, policy-gated, app-scoped source tools; they do
 not expose generic shell commands, SQL, raw RxDB writes, browser remote control,
 or arbitrary filesystem access.
+
+## Business OS Data Writes Via MCP
+
+Use `business_os.upsert_record` for normal Business OS app data records when
+the server advertises it and the actor is Owner/Admin or has a module/collection
+write grant. The tool writes one canonical record into the local Business OS
+store and returns the persisted record. It is not a SQL bridge and must not be
+used for control collections such as `business_users`, `business_commands`,
+queue tasks, approvals, app catalog/release/source records, permission grants,
+credentials, runtime settings, audit logs, or desktop file chunks.
+
+Use `business_os.upsert_user` for account/team changes. It reuses the native
+Business OS user policy: Admin may create/edit/deactivate users, while assigning
+Owner/Chef still requires Owner authority. Pass the complete user shape (`id`,
+`display_name`, `role`, `active`) and set
+`accept_recovery_responsibility` when deactivating the sole responsible user
+for private apps.
+
+If these tools are missing or rejected by policy, report the MCP policy/role
+blocker. Do not fall back to raw SQL, generic shell, direct RxDB writes, browser
+automation, or HTTP data endpoints.
 
 Direct coding flow:
 

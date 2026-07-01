@@ -210,6 +210,14 @@ pub struct BusinessOsRecordSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsMcpMutationResponse {
+    pub ok: bool,
+    pub collection: String,
+    pub record_id: String,
+    pub record: BusinessOsRecordSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BusinessOsActionDescriptor {
     pub action_id: String,
     pub module_id: String,
@@ -877,6 +885,26 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 required_string("record_id"),
             ]),
         ),
+        write_tool(
+            "business_os.upsert_record",
+            "Use this when an admin or authorized module owner needs to create or update one Business OS app data record through the policy-gated MCP channel. Do not use this for users, commands, queue tasks, app source files, credentials, runtime settings, or raw SQL.",
+            object_schema(vec![
+                required_string("collection"),
+                optional_string("record_id"),
+                required_object("record"),
+            ]),
+        ),
+        write_tool(
+            "business_os.upsert_user",
+            "Use this when an admin needs to create, edit, activate, deactivate, or change the role of a Business OS user through the policy-gated MCP channel.",
+            object_schema(vec![
+                required_string("id"),
+                required_string("display_name"),
+                required_string("role"),
+                optional_boolean("active"),
+                optional_boolean("accept_recovery_responsibility"),
+            ]),
+        ),
         read_tool(
             "business_os.get_record_context",
             "Use this when you need the operational context around one Business OS record.",
@@ -1178,14 +1206,19 @@ pub fn list_entities(
             policy.allowed_collections.is_empty()
                 || policy.allowed_collections.contains(&collection.to_string())
         })
-        .map(|collection| BusinessOsEntityDescriptor {
-            module_id: module.id.clone(),
-            entity_id: collection.to_string(),
-            collection: collection.to_string(),
-            title: titleize_collection(collection),
-            read_only: true,
+        .map(|collection| {
+            let write_decision =
+                business_os_mcp_collection_write_decision(root, context, collection)?;
+            Ok(BusinessOsEntityDescriptor {
+                module_id: module.id.clone(),
+                entity_id: collection.to_string(),
+                collection: collection.to_string(),
+                title: titleize_collection(collection),
+                read_only: !write_decision.allowed
+                    || collection_requires_typed_mcp_tool(collection),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(BusinessOsMcpList {
         ok: true,
         count: entities.len(),
@@ -1247,6 +1280,79 @@ pub fn search_records(
     });
     records.count = records.items.len();
     Ok(records)
+}
+
+pub fn upsert_record(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsMcpMutationResponse> {
+    context.validate()?;
+    let collection = required_arg(arguments, "collection")?;
+    ensure_non_empty("collection", &collection)?;
+    enforce_collection_policy(root, &collection)?;
+    if collection_requires_typed_mcp_tool(&collection) {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "collection",
+            format!(
+                "`{collection}` is a control collection; use the dedicated Business OS MCP tool instead"
+            ),
+        )));
+    }
+    enforce_business_os_mcp_policy(root, context, "business_os.upsert_record", arguments)?;
+
+    let record = arguments
+        .get("record")
+        .cloned()
+        .filter(Value::is_object)
+        .ok_or_else(|| {
+            anyhow::Error::new(BusinessOsMcpError::validation("record", "object required"))
+        })?;
+    let record_id = optional_string_arg(arguments, "record_id")
+        .or_else(|| string_field(&record, "id"))
+        .or_else(|| string_field(&record, "record_id"))
+        .ok_or_else(|| {
+            anyhow::Error::new(BusinessOsMcpError::validation("record_id", "required"))
+        })?;
+    ensure_non_empty("record_id", &record_id)?;
+
+    let conn = store::open_store(root)?;
+    let updated_at_ms = now_ms() as i64;
+    store::upsert_business_record(&conn, &collection, &record_id, updated_at_ms, record)?;
+    drop(conn);
+
+    let record = get_record(root, context, &collection, &record_id)?.record;
+    Ok(BusinessOsMcpMutationResponse {
+        ok: true,
+        collection,
+        record_id,
+        record,
+    })
+}
+
+pub fn upsert_user(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    context.validate()?;
+    enforce_collection_policy(root, "business_users")?;
+    enforce_business_os_mcp_policy(root, context, "business_os.upsert_user", arguments)?;
+    let mutation = store::BusinessOsUserMutation {
+        id: required_arg(arguments, "id")?,
+        display_name: required_arg(arguments, "display_name")?,
+        role: required_arg(arguments, "role")?,
+        active: arguments
+            .get("active")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        accept_recovery_responsibility: optional_bool_arg(
+            arguments,
+            "accept_recovery_responsibility",
+        ),
+    };
+    let session = mcp_session(root, context)?;
+    store::upsert_user(root, &session, mutation)
 }
 
 pub fn create_app(
@@ -2022,6 +2128,12 @@ fn call_tool_inner(
             let collection = required_arg(&arguments, "collection")?;
             let record_id = required_arg(&arguments, "record_id")?;
             serde_json::to_value(get_record(root, &context, &collection, &record_id)?)?
+        }
+        "business_os.upsert_record" => {
+            serde_json::to_value(upsert_record(root, &context, &arguments)?)?
+        }
+        "business_os.upsert_user" => {
+            serde_json::to_value(upsert_user(root, &context, &arguments)?)?
         }
         "business_os.get_record_context" => {
             let collection = required_arg(&arguments, "collection")?;
@@ -3496,6 +3608,21 @@ fn business_os_mcp_policy_decision(
                 &record_id,
             )?))
         }
+        "business_os.upsert_record" => {
+            let collection = required_arg(arguments, "collection")?;
+            Ok(Some(business_os_mcp_collection_write_decision(
+                root,
+                context,
+                &collection,
+            )?))
+        }
+        "business_os.upsert_user" => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::UsersManage,
+            BusinessOsScopeType::Workspace,
+            None,
+        )?)),
         "business_os.list_runs" | "business_os.get_run" => Ok(Some(
             business_os_mcp_collection_read_decision(root, context, "ctox_queue_tasks")?,
         )),
@@ -3755,6 +3882,38 @@ fn business_os_mcp_record_read_decision(
     Ok(record_decision)
 }
 
+fn business_os_mcp_collection_write_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let collection_decision = trusted_mcp_actor_policy_decision(
+        root,
+        context,
+        BusinessOsPermission::DataWrite,
+        BusinessOsScopeType::Collection,
+        Some(collection),
+    )?;
+    if collection_decision.allowed {
+        return Ok(collection_decision);
+    }
+
+    for module_id in module_ids_for_collection(root, collection)? {
+        let module_decision = trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::DataWrite,
+            BusinessOsScopeType::Module,
+            Some(module_id.as_str()),
+        )?;
+        if module_decision.allowed {
+            return Ok(module_decision);
+        }
+    }
+
+    Ok(collection_decision)
+}
+
 fn business_os_mcp_approval_decision(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -3797,6 +3956,33 @@ fn outbound_module_approval_decision(
 
 fn record_scope_id(collection: &str, record_id: &str) -> String {
     format!("{}/{}", collection.trim(), record_id.trim())
+}
+
+fn collection_requires_typed_mcp_tool(collection: &str) -> bool {
+    matches!(
+        collection.trim(),
+        "business_users"
+            | "business_permission_grants"
+            | "business_sessions"
+            | "business_peer_revocations"
+            | "business_events"
+            | "business_os_mcp_events"
+            | "business_commands"
+            | "ctox_queue_tasks"
+            | "ctox_runs"
+            | "business_module_acl"
+            | "business_module_catalog"
+            | "business_module_releases"
+            | "business_module_versions"
+            | "business_module_reports"
+            | "business_module_source_files"
+            | "business_consents"
+            | "business_credentials"
+            | "ctox_runtime_settings"
+            | "ctox_task_approval_requests"
+            | "desktop_files"
+            | "desktop_file_chunks"
+    )
 }
 
 fn module_ids_for_collection(root: &Path, collection: &str) -> anyhow::Result<Vec<String>> {
@@ -3868,6 +4054,37 @@ fn resolved_mcp_actor_context(
     }))
 }
 
+fn mcp_session(
+    root: &Path,
+    context: &McpChannelRequestContext,
+) -> anyhow::Result<store::BusinessOsSession> {
+    let actor = if let Some(role) = context.trusted_role.as_deref() {
+        store::BusinessOsTrustedActor {
+            id: context.actor.clone(),
+            display_name: context.actor.clone(),
+            role: normalize_role(role),
+            active: true,
+            persisted: false,
+        }
+    } else {
+        store::trusted_mcp_actor(root, &context.actor, &context.actor)?
+    };
+    let role = normalize_role(&actor.role);
+    Ok(store::BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(store::BusinessOsSessionUser {
+            id: actor.id,
+            display_name: actor.display_name,
+            is_admin: super::policy::role_can_manage(&role),
+            role,
+        }),
+        login_url: None,
+        reason: None,
+    })
+}
+
 fn enforce_context_policy(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.allowed_actors.is_empty() && !policy.allowed_actors.contains(&context.actor) {
@@ -3925,6 +4142,7 @@ fn enforce_argument_scope_policy(
         "business_os.query_records"
         | "business_os.search_records"
         | "business_os.get_record"
+        | "business_os.upsert_record"
         | "business_os.get_record_context"
         | "business_os.list_record_activity" => {
             if let Some(collection) = string_field(arguments, "collection") {
@@ -4028,6 +4246,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.create_app"
         | "business_os.modify_app"
         | "business_os.prepare_app_source"
+        | "business_os.upsert_record"
+        | "business_os.upsert_user"
         | "business_os.write_app_file"
         | "business_os.validate_app"
         | "business_os.smoke_app"
@@ -4601,6 +4821,17 @@ fn optional_object(name: &'static str) -> (&'static str, Value, bool) {
     )
 }
 
+fn required_object(name: &'static str) -> (&'static str, Value, bool) {
+    (
+        name,
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": true
+        }),
+        true,
+    )
+}
+
 fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
     action_descriptor(
         "ctox.delegate_task",
@@ -4986,14 +5217,14 @@ mod tests {
     }
 
     #[test]
-    fn list_entities_derives_read_only_entities_from_module_collections() -> anyhow::Result<()> {
+    fn list_entities_marks_writable_entities_from_module_collections() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         write_module(
             root,
             "customers",
             "Customers",
-            &["customer_accounts", "customer_contacts"],
+            &["customer_accounts", "business_users"],
         )?;
         seed_default_mcp_admin(root)?;
 
@@ -5004,6 +5235,27 @@ mod tests {
         )?;
 
         assert_eq!(entities.count, 2);
+        assert_eq!(entities.items[0].entity_id, "customer_accounts");
+        assert!(!entities.items[0].read_only);
+        assert_eq!(entities.items[1].entity_id, "business_users");
+        assert!(entities.items[1].read_only);
+        Ok(())
+    }
+
+    #[test]
+    fn list_entities_keeps_non_admin_entities_read_only() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:test-user", "user")?;
+
+        let entities = list_entities(
+            root,
+            &test_context("business_os.list_entities"),
+            "customers",
+        )?;
+
+        assert_eq!(entities.count, 1);
         assert_eq!(entities.items[0].entity_id, "customer_accounts");
         assert!(entities.items[0].read_only);
         Ok(())
@@ -5046,6 +5298,153 @@ mod tests {
     }
 
     #[test]
+    fn upsert_record_persists_app_data_for_admin_mcp_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_default_mcp_admin(root)?;
+
+        let result = call_tool(
+            root,
+            "business_os.upsert_record",
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "record": {
+                    "id": "acct_mcp_1",
+                    "name": "Metric Space",
+                    "status": "active"
+                },
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("record_id").and_then(Value::as_str),
+            Some("acct_mcp_1")
+        );
+        assert_eq!(
+            result.pointer("/record/data/name").and_then(Value::as_str),
+            Some("Metric Space")
+        );
+
+        let stored = get_record(
+            root,
+            &test_context("business_os.get_record"),
+            "customer_accounts",
+            "acct_mcp_1",
+        )?;
+        assert_eq!(
+            stored.record.data.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_record_rejects_control_collections() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let error = call_tool(
+            root,
+            "business_os.upsert_record",
+            serde_json::json!({
+                "collection": "business_users",
+                "record": {
+                    "id": "claude:user_1",
+                    "display_name": "Claude User",
+                    "role": "user"
+                },
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("generic writes must reject control collections");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+        assert_eq!(typed.field.as_deref(), Some("collection"));
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_user_creates_team_member_for_admin_mcp_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let result = call_tool(
+            root,
+            "business_os.upsert_user",
+            serde_json::json!({
+                "id": "claude:user_1",
+                "display_name": "Claude User",
+                "role": "user",
+                "active": true,
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        let users = result
+            .get("users")
+            .and_then(Value::as_array)
+            .context("expected users array")?;
+        let user = users
+            .iter()
+            .find(|user| user.get("id").and_then(Value::as_str) == Some("claude:user_1"))
+            .context("expected created user")?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            user.get("display_name").and_then(Value::as_str),
+            Some("Claude User")
+        );
+        assert_eq!(user.get("role").and_then(Value::as_str), Some("user"));
+        assert_eq!(user.get("active").and_then(Value::as_bool), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_user_rejects_non_admin_mcp_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "chatgpt:test-user", "user")?;
+
+        let error = call_tool(
+            root,
+            "business_os.upsert_user",
+            serde_json::json!({
+                "id": "claude:user_2",
+                "display_name": "Claude User 2",
+                "role": "user",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("non-admin MCP actors must not manage users");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
     fn tool_descriptors_expose_only_typed_business_os_tools() {
         let tools = tool_descriptors();
         assert!(tools.iter().any(|tool| tool.name == "business_os.status"));
@@ -5055,6 +5454,12 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool.name == "business_os.execute_action"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.upsert_record"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.upsert_user"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "business_os.create_app"));
@@ -7700,6 +8105,65 @@ mod tests {
             result.get("actor").and_then(Value::as_str),
             Some("ctox-dev:user:owner_1")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_managed_admin_role_can_upsert_user_without_local_user() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+
+        let response = handle_gateway_message(
+            temp.path(),
+            &serde_json::json!({
+                "type": "mcp_request",
+                "request_id": "gw_req_upsert_user",
+                "context": {
+                    "channel": "ctox_dev_managed_mcp",
+                    "surface": "business_os_mcp",
+                    "actor": "ctox-dev:user:admin_1",
+                    "workspace": "tenant:tenant_1",
+                    "auth_source": "ctox_dev_managed_mcp_token",
+                    "role": "admin"
+                },
+                "body": serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "business_os.upsert_user",
+                        "arguments": {
+                            "id": "claude:user_3",
+                            "display_name": "Claude User 3",
+                            "role": "user",
+                            "active": true,
+                            "_context": {
+                                "actor": "spoofed",
+                                "workspace": "spoofed"
+                            }
+                        }
+                    }
+                }).to_string()
+            })
+            .to_string(),
+        );
+        let envelope: Value = serde_json::from_str(&response)?;
+        let body: Value =
+            serde_json::from_str(envelope.get("body").and_then(Value::as_str).unwrap())?;
+        let result = body
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .expect("tool result JSON");
+        let users = result
+            .get("users")
+            .and_then(Value::as_array)
+            .context("expected users array")?;
+
+        assert_eq!(envelope.get("status").and_then(Value::as_u64), Some(200));
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert!(users
+            .iter()
+            .any(|user| user.get("id").and_then(Value::as_str) == Some("claude:user_3")));
         Ok(())
     }
 

@@ -963,13 +963,23 @@ const READ_TOOLS = new Set([
   "business_os.open_link",
   "business_os.list_mcp_activity",
   "business_os.list_module_actions",
+  "business_os.list_app_files",
+  "business_os.read_app_file",
+  "business_os.search_app_source",
   "business_os.get_command_status"
 ]);
 
 const WRITE_TOOLS = new Set([
   "business_os.propose_action",
+  "business_os.upsert_record",
+  "business_os.upsert_user",
   "business_os.create_app",
   "business_os.modify_app",
+  "business_os.prepare_app_source",
+  "business_os.write_app_file",
+  "business_os.validate_app",
+  "business_os.smoke_app",
+  "business_os.e2e_app",
   "business_os.execute_action"
 ]);
 
