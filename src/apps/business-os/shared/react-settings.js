@@ -428,9 +428,13 @@ export async function openReactSettings({
           { id, display_name: displayName, role: roleValue, active: true },
           { commandBus, db, session },
         );
-        settingsState.users = normalizeUsersForSession(payload.users || settingsState.users, session);
+        settingsState.users = confirmedUsersAfterUpsert(
+          settingsState.users,
+          payload.users,
+          { id, display_name: displayName, role: roleValue, active: true, updated_at_ms: Date.now() },
+          session,
+        );
         settingsState.canManageUsers = roleCanManage(resolveRole(session));
-        await refreshUsers();
         settingsState.commandStatus = `Nutzer ${id} gespeichert.`;
       } catch (error) {
         settingsState.commandStatus = String(error?.message || error);
@@ -1949,6 +1953,21 @@ function normalizeUsersForSession(users, session) {
   if (roleCanManage(resolveRole(session))) return normalized;
   const currentId = session?.user?.id || '';
   return normalized.filter((user) => user.id === currentId);
+}
+
+function confirmedUsersAfterUpsert(currentUsers, payloadUsers, upsertedUser, session) {
+  if (Array.isArray(payloadUsers) && payloadUsers.length) {
+    return normalizeUsersForSession(payloadUsers, session);
+  }
+  const normalizedUpsert = normalizeUsersForSession([upsertedUser], session)[0];
+  if (!normalizedUpsert) return normalizeUsersForSession(currentUsers, session);
+  const existing = normalizeUsersForSession(currentUsers, session)
+    .filter((user) => user.id !== normalizedUpsert.id);
+  return [...existing, normalizedUpsert].sort((left, right) => {
+    const leftName = left.display_name || left.id;
+    const rightName = right.display_name || right.id;
+    return leftName.localeCompare(rightName);
+  });
 }
 
 function moduleKind(mod) {
@@ -4019,5 +4038,6 @@ function formatMsShort(value) {
 }
 
 export const __reactSettingsTestHooks = {
+  confirmedUsersAfterUpsert,
   settingsTemplate,
 };

@@ -73,6 +73,23 @@ test('settings user form keeps owner transfer owner-only', () => {
   assert.doesNotMatch(adminHtml, /<option value="chef">Owner<\/option>/);
 });
 
+test('settings user save keeps confirmed upsert result without stale projection reload', () => {
+  const users = hooks.confirmedUsersAfterUpsert(
+    [
+      { id: 'alice', display_name: 'Alice Old', role: 'admin', active: true },
+      { id: 'bob', display_name: 'Bob', role: 'user', active: true },
+    ],
+    null,
+    { id: 'alice', display_name: 'Alice New', role: 'admin', active: true, updated_at_ms: 99 },
+    { user: { id: 'owner', role: 'admin' } },
+  );
+
+  assert.deepEqual(users.map((user) => [user.id, user.display_name]), [
+    ['alice', 'Alice New'],
+    ['bob', 'Bob'],
+  ]);
+});
+
 test('settings module tab renders responsible-app wording', () => {
   const html = baseTemplate({ tab: 'admin' });
   assert.match(html, /Verantwortlich: founder-a/);

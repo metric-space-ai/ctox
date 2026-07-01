@@ -5748,7 +5748,7 @@ function renderAccountButton(session = state.session) {
   const instanz = getInstanceName();
   if (session?.authenticated) {
     const prefs = readAccountPrefs();
-    const label = prefs.displayName || user.display_name || user.id || 'Account';
+    const label = user.display_name || user.name || user.id || prefs.displayName || 'Account';
     const role = roleDisplayName(user.role || (user.is_admin ? 'admin' : 'user'));
     const userAtInstance = `${label}@${instanz}`;
     if (labelNode) labelNode.textContent = userAtInstance;
@@ -5819,6 +5819,7 @@ function renderProfileDrawer() {
   const user = state.session?.user || {};
   const prefs = readAccountPrefs();
   const role = user.role || (user.is_admin ? 'admin' : 'user');
+  const displayName = user.display_name || user.name || prefs.displayName || '';
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
@@ -5835,7 +5836,7 @@ function renderProfileDrawer() {
     <form class="account-form" data-profile-form>
       <label>
         <span>Anzeigename</span>
-        <input name="displayName" value="${escapeHtml(prefs.displayName || user.display_name || '')}" placeholder="Name" />
+        <input name="displayName" value="${escapeHtml(displayName)}" placeholder="Name" />
       </label>
       <label>
         <span>Standard-Sprache</span>
@@ -5848,7 +5849,7 @@ function renderProfileDrawer() {
         <button class="text-button account-primary" type="submit">Speichern</button>
         <button class="text-button" type="button" data-logout>Logout</button>
       </div>
-      <small>Persönliche Einstellungen bleiben lokal und werden beim Laden der Module angewendet.</small>
+      <small data-profile-status>Anzeigename wird im Team gespeichert. Sprache bleibt lokal und wird beim Laden der Module angewendet.</small>
     </form>
     <form class="account-form account-password-form" data-password-form>
       <label>
@@ -5870,26 +5871,41 @@ function renderProfileDrawer() {
     </form>
   `;
   body.querySelector('[data-close-account]')?.addEventListener('click', closeDrawers);
-  body.querySelector('[data-profile-form]')?.addEventListener('submit', (event) => {
+  body.querySelector('[data-profile-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const prefs = {
+    const formEl = event.currentTarget;
+    const submit = formEl.querySelector('button[type="submit"]');
+    const statusEl = formEl.querySelector('[data-profile-status]');
+    const form = new FormData(formEl);
+    const nextDisplayName = form.get('displayName')?.toString().trim() || '';
+    const language = form.get('language')?.toString() || 'de';
+    if (!nextDisplayName) {
+      statusEl.textContent = 'Bitte Anzeigenamen eingeben.';
+      statusEl.dataset.state = 'error';
+      return;
+    }
+    const prefs = writeAccountPrefs({
       ...readAccountPrefs(),
-      displayName: form.get('displayName')?.toString().trim() || '',
-      language: form.get('language')?.toString() || 'de',
-    };
-    writeAccountPrefs(prefs);
+      displayName: '',
+      language,
+    });
     applyShellLanguage(prefs.language);
     syncHeaderControls();
     postCurrentPreferencesToModule();
-    renderAccountButton({
-      ...state.session,
-      user: {
-        ...(state.session?.user || {}),
-        display_name: prefs.displayName || state.session?.user?.display_name || 'CTOX User',
-      },
-    });
-    closeDrawers();
+    submit.disabled = true;
+    statusEl.textContent = 'Account wird gespeichert...';
+    statusEl.dataset.state = '';
+    try {
+      await saveCurrentSessionUserProfile(nextDisplayName);
+      statusEl.textContent = 'Account gespeichert.';
+      statusEl.dataset.state = 'ok';
+      closeDrawers();
+    } catch (error) {
+      statusEl.textContent = error?.message || 'Account konnte nicht gespeichert werden.';
+      statusEl.dataset.state = 'error';
+    } finally {
+      submit.disabled = false;
+    }
   });
   body.querySelector('[data-logout]')?.addEventListener('click', () => {
     clearStoredBrowserAuth();
@@ -5950,6 +5966,57 @@ function renderProfileDrawer() {
     }
   });
   return body;
+}
+
+async function saveCurrentSessionUserProfile(displayName) {
+  const currentUser = state.session?.user || {};
+  const userId = String(
+    currentUser.id || currentUser.user_id || currentUser.email || currentUser.login || '',
+  ).trim();
+  if (!userId) {
+    throw new Error('Benutzer-ID fehlt.');
+  }
+  const role = normalizeRole(currentUser.role || (currentUser.is_admin ? 'admin' : 'user'));
+  if (!roleCanManage(role)) {
+    throw new Error('Nur Admins können Accounts bearbeiten.');
+  }
+  const command = await dispatchShellModuleCommand({
+    commandType: 'ctox.business_os.user.upsert',
+    moduleId: 'ctox',
+    recordId: userId,
+    payload: {
+      id: userId,
+      display_name: displayName,
+      role,
+      active: currentUser.active !== false,
+    },
+    source: 'business-os-account',
+  });
+  const payload = command?.result || command || {};
+  if (command?.status === 'failed' || payload?.ok === false) {
+    throw new Error(payload?.error || command?.error || 'Account konnte nicht gespeichert werden.');
+  }
+  const users = Array.isArray(payload.users) ? payload.users : [];
+  const savedUser = users.find((candidate) => {
+    const candidateId = String(candidate?.id || candidate?.user_id || '').trim();
+    return candidateId === userId;
+  }) || {};
+  const savedRole = normalizeRole(savedUser.role || role);
+  state.session = {
+    ...state.session,
+    user: {
+      ...currentUser,
+      ...savedUser,
+      id: savedUser.id || savedUser.user_id || currentUser.id || userId,
+      user_id: savedUser.user_id || savedUser.id || currentUser.user_id || userId,
+      display_name: savedUser.display_name || displayName,
+      role: savedRole,
+      is_admin: roleCanAdmin(savedRole),
+      active: savedUser.active !== false,
+    },
+  };
+  renderAccountButton(state.session);
+  return payload;
 }
 
 function readAccountPrefs() {
