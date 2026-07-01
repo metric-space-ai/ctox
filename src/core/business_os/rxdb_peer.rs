@@ -2894,6 +2894,21 @@ struct DesktopFileIndexWatch {
     rx: mpsc::UnboundedReceiver<()>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchEventWait {
+    Event,
+    Timeout,
+    Closed,
+}
+
+fn watch_event_from_drain(saw_event: bool) -> WatchEventWait {
+    if saw_event {
+        WatchEventWait::Event
+    } else {
+        WatchEventWait::Timeout
+    }
+}
+
 impl DesktopFileIndexWatch {
     fn new(scan_roots: &[DesktopFileScanRoot]) -> anyhow::Result<Option<Self>> {
         if scan_roots.is_empty() {
@@ -2927,15 +2942,23 @@ impl DesktopFileIndexWatch {
         saw_event
     }
 
-    async fn wait_for_event(&mut self, timeout: Duration) -> bool {
+    async fn wait_for_event(&mut self, timeout: Duration) -> WatchEventWait {
         if timeout.is_zero() {
-            return self.drain_pending();
+            return watch_event_from_drain(self.drain_pending());
         }
         tokio::select! {
-            _ = tokio::time::sleep(timeout) => self.drain_pending(),
+            _ = tokio::time::sleep(timeout) => watch_event_from_drain(self.drain_pending()),
             event = self.rx.recv() => {
-                let saw_event = event.is_some();
-                self.drain_pending() || saw_event
+                match event {
+                    Some(_) => {
+                        let _ = self.drain_pending();
+                        WatchEventWait::Event
+                    }
+                    None => {
+                        tokio::time::sleep(timeout).await;
+                        WatchEventWait::Closed
+                    }
+                }
             }
         }
     }
@@ -2987,15 +3010,23 @@ impl NotesSyncWatch {
         saw_event
     }
 
-    async fn wait_for_event(&mut self, timeout: Duration) -> bool {
+    async fn wait_for_event(&mut self, timeout: Duration) -> WatchEventWait {
         if timeout.is_zero() {
-            return self.drain_pending();
+            return watch_event_from_drain(self.drain_pending());
         }
         tokio::select! {
-            _ = tokio::time::sleep(timeout) => self.drain_pending(),
+            _ = tokio::time::sleep(timeout) => watch_event_from_drain(self.drain_pending()),
             event = self.rx.recv() => {
-                let saw_event = event.is_some();
-                self.drain_pending() || saw_event
+                match event {
+                    Some(_) => {
+                        let _ = self.drain_pending();
+                        WatchEventWait::Event
+                    }
+                    None => {
+                        tokio::time::sleep(timeout).await;
+                        WatchEventWait::Closed
+                    }
+                }
             }
         }
     }
@@ -3090,13 +3121,22 @@ async fn sync_notes_background_loop(root: PathBuf) {
         }
         let sleep_interval = notes_sync_sleep_interval(unchanged_ticks);
         let event_driven = notes_watch.is_some();
-        let saw_event = if let Some(watch) = notes_watch.as_mut() {
+        let watch_wait = if let Some(watch) = notes_watch.as_mut() {
             watch.wait_for_event(sleep_interval).await
         } else {
             tokio::time::sleep(sleep_interval).await;
-            false
+            WatchEventWait::Timeout
         };
-        if saw_event || !event_driven || unchanged_ticks >= NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS {
+        if watch_wait == WatchEventWait::Closed {
+            notes_watch = None;
+            dirty_notes = true;
+            unchanged_ticks = 0;
+            continue;
+        }
+        if watch_wait == WatchEventWait::Event
+            || !event_driven
+            || unchanged_ticks >= NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS
+        {
             dirty_notes = true;
         }
     }
@@ -3235,14 +3275,22 @@ async fn sync_desktop_file_index_background_loop(
                 SystemTime::now(),
             )
         };
-        let saw_watch_event = if let Some(watch) = file_watch.as_mut() {
+        let watch_wait = if let Some(watch) = file_watch.as_mut() {
             watch.wait_for_event(sleep_for).await
         } else {
             tokio::time::sleep(sleep_for).await;
-            false
+            WatchEventWait::Timeout
         };
-        if saw_watch_event {
-            dirty_scan_roots = true;
+        match watch_wait {
+            WatchEventWait::Event => {
+                dirty_scan_roots = true;
+            }
+            WatchEventWait::Closed => {
+                file_watch = None;
+                file_watch_roots = None;
+                dirty_scan_roots = true;
+            }
+            WatchEventWait::Timeout => {}
         }
     }
 }
@@ -12149,7 +12197,9 @@ mod tests {
         std::fs::create_dir_all(&notes_dir)?;
         let mut saw_create_event = false;
         for _ in 0..10 {
-            if watch.wait_for_event(Duration::from_millis(300)).await {
+            if watch.wait_for_event(Duration::from_millis(300)).await
+                == WatchEventWait::Event
+            {
                 saw_create_event = true;
                 break;
             }
@@ -12167,7 +12217,9 @@ mod tests {
         std::fs::write(notes_dir.join("watch.md"), "# Watch\n")?;
         let mut saw_markdown_event = false;
         for _ in 0..10 {
-            if watch.wait_for_event(Duration::from_millis(300)).await {
+            if watch.wait_for_event(Duration::from_millis(300)).await
+                == WatchEventWait::Event
+            {
                 saw_markdown_event = true;
                 break;
             }
@@ -12175,6 +12227,51 @@ mod tests {
         assert!(
             saw_markdown_event,
             "markdown writes must wake the notes sync watcher before fallback polling"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn notes_sync_watch_closed_channel_waits_before_closed() -> anyhow::Result<()> {
+        let watcher = notify::recommended_watcher(|_: notify::Result<notify::Event>| {})?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(tx);
+        let mut watch = NotesSyncWatch {
+            _watcher: watcher,
+            rx,
+            notes_dir_exists: false,
+        };
+
+        let started = Instant::now();
+        assert_eq!(
+            watch.wait_for_event(Duration::from_millis(25)).await,
+            WatchEventWait::Closed
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "closed notes watcher channels must not return immediately and hot-spin"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn desktop_file_watch_closed_channel_waits_before_closed() -> anyhow::Result<()> {
+        let watcher = notify::recommended_watcher(|_: notify::Result<notify::Event>| {})?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(tx);
+        let mut watch = DesktopFileIndexWatch {
+            _watcher: watcher,
+            rx,
+        };
+
+        let started = Instant::now();
+        assert_eq!(
+            watch.wait_for_event(Duration::from_millis(25)).await,
+            WatchEventWait::Closed
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "closed desktop file watcher channels must not return immediately and hot-spin"
         );
         Ok(())
     }
