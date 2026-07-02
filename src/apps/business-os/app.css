@@ -5833,6 +5833,23 @@ body[data-auth-state="locked"] .topbar {
   box-shadow: var(--shell-focus-ring);
 }
 
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
+  caret-color: var(--accent);
+}
+
+:where(input::placeholder, textarea::placeholder) {
+  color: var(--muted);
+  -webkit-text-fill-color: var(--muted);
+  opacity: 1;
+}
+
+:where(select option, select optgroup) {
+  background: var(--surface);
+  color: var(--text);
+}
+
 :where(button, input, select, textarea):disabled,
 :where(button, input, select, textarea)[aria-disabled="true"],
 :where([role="button"])[aria-disabled="true"] {
