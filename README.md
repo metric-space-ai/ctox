@@ -493,6 +493,9 @@ ctox update rollback
 
 `ctox upgrade --dev` follows the current `main` branch as a source upgrade.
 `ctox upgrade --stable` follows the latest published release.
+Managed upgrades keep the active release and the previous rollback release, but
+prune Cargo `target/` build trees from retained releases after activation so old
+source builds do not keep filling the disk.
 
 ## Repository Layout
 

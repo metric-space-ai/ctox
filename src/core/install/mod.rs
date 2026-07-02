@@ -993,6 +993,7 @@ fn adopt_installation(
         install_root.join(INSTALL_MANIFEST_FILE_NAME).as_path(),
         &manifest,
     )?;
+    prune_release_build_artifacts(&release_root);
     persist_update_state(
         state_root.join(UPDATE_STATE_FILE_NAME).as_path(),
         &UpdateState {
@@ -1540,6 +1541,7 @@ fn prune_old_releases(releases_dir: &Path, manifest: &InstallManifest) {
             continue;
         };
         if Some(name) == current || Some(name) == previous {
+            prune_release_build_artifacts(&path);
             continue;
         }
         match fs::remove_dir_all(&path) {
@@ -1548,6 +1550,46 @@ fn prune_old_releases(releases_dir: &Path, manifest: &InstallManifest) {
                 "warning: failed to prune old release {name}: {err}"
             )),
         }
+    }
+}
+
+fn prune_release_build_artifacts(release_root: &Path) {
+    fn visit(dir: &Path, removed: &mut usize) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            if path.file_name().and_then(OsStr::to_str) == Some("target") {
+                match fs::remove_dir_all(&path) {
+                    Ok(()) => *removed += 1,
+                    Err(err) => progress_step(format!(
+                        "warning: failed to prune release build artifact {}: {err}",
+                        path.display()
+                    )),
+                }
+                continue;
+            }
+            visit(&path, removed);
+        }
+    }
+
+    if !release_root.is_dir() {
+        return;
+    }
+    let mut removed = 0_usize;
+    visit(release_root, &mut removed);
+    if removed > 0 {
+        progress_step(format!(
+            "pruned {removed} release build artifact directory(s) under {}",
+            release_root.display()
+        ));
     }
 }
 
@@ -3746,6 +3788,11 @@ mod tests {
         ensure_dir(&releases.join("current")).unwrap();
         ensure_dir(&releases.join("previous")).unwrap();
         ensure_dir(&releases.join("old")).unwrap();
+        ensure_dir(&releases.join("current/target/release")).unwrap();
+        ensure_dir(&releases.join("current/src/apps/desktop/target/release")).unwrap();
+        ensure_dir(&releases.join("previous/tools/model-runtime/target/release")).unwrap();
+        ensure_dir(&releases.join("current/bin")).unwrap();
+        fs::write(releases.join("current/bin/ctox-real"), "binary").unwrap();
         fs::write(releases.join("note.txt"), "keep non-release files").unwrap();
 
         let manifest = InstallManifest {
@@ -3765,5 +3812,11 @@ mod tests {
         assert!(releases.join("previous").is_dir());
         assert!(!releases.join("old").exists());
         assert!(releases.join("note.txt").is_file());
+        assert!(releases.join("current/bin/ctox-real").is_file());
+        assert!(!releases.join("current/target").exists());
+        assert!(!releases.join("current/src/apps/desktop/target").exists());
+        assert!(!releases
+            .join("previous/tools/model-runtime/target")
+            .exists());
     }
 }

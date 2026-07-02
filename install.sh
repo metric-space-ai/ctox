@@ -280,6 +280,28 @@ cleanup_source_build_artifacts() {
   done
 }
 
+cleanup_managed_release_build_artifacts() {
+  local release_dir="$1"
+  [[ -d "$release_dir" ]] || return 0
+  case "$release_dir" in
+    "$INSTALL_ROOT"/releases/*) ;;
+    *) return 0 ;;
+  esac
+
+  local removed=0
+  local path
+  while IFS= read -r -d '' path; do
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    printf '  %b%bremoving release build artifact %s%b\n' "$C_BOLD" "$C_GREY" "$path" "$C_RESET" >&2
+    remove_tree_with_retry "$path"
+    removed=$((removed + 1))
+  done < <(find "$release_dir" -type d -name target -prune -print0 2>/dev/null || true)
+
+  if [[ "$removed" -gt 0 ]]; then
+    printf '  %b%bremoved %s release build artifact directories%b\n' "$C_BOLD" "$C_GREY" "$removed" "$C_RESET" >&2
+  fi
+}
+
 cleanup_path_is_kept() {
   local candidate="$1"
   shift
@@ -323,6 +345,7 @@ cleanup_managed_releases() {
     [[ -d "$dir" ]] || continue
     real_dir="$(readlink -f "$dir" 2>/dev/null || printf '%s\n' "$dir")"
     if cleanup_path_is_kept "$real_dir" "${keep_dirs[@]}"; then
+      cleanup_managed_release_build_artifacts "$real_dir"
       continue
     fi
     printf '  %b%bremoving old release %s%b\n' "$C_BOLD" "$C_GREY" "$dir" "$C_RESET" >&2
