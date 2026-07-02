@@ -11,6 +11,7 @@
   --text-strong: oklch(0.14 0.018 235);
   --muted: oklch(0.48 0.015 235);
   --accent: oklch(0.48 0.115 215);
+  --accent-foreground: #ffffff;
   --accent-soft: oklch(0.9 0.04 215);
   --danger: oklch(0.56 0.13 28);
   --shadow: 0 18px 50px oklch(0.22 0.015 235 / 0.16);
@@ -54,6 +55,7 @@
   --text-strong: #ffffff;
   --muted: #a3afbd;
   --accent: #6cb8aa;
+  --accent-foreground: #08110f;
   --accent-soft: rgba(108, 184, 170, 0.16);
   --danger: #e06b60;
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
