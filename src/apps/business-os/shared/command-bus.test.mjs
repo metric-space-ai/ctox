@@ -123,3 +123,9 @@ test('command bus scopes demand-only desktop chunk dependencies with leases', ()
   assert.match(source, /releaseSyncPlan\(syncPlan\)/);
   assert.match(source, /cleanContextText\(payload\.source_kind\) === 'zip'/);
 });
+
+test('command bus reports missing queue projection as transient tracking state', () => {
+  assert.match(source, /status:\s*'projection_pending'/);
+  assert.match(source, /transient:\s*true/);
+  assert.match(source, /noch keinen echten Queue-Task/);
+});

@@ -4088,6 +4088,10 @@ function moduleBasePath(mod) {
 }
 
 function createModuleContext(mod) {
+  const actor = actorContext(state.session);
+  const sessionUser = state.session?.user && typeof state.session.user === 'object'
+    ? state.session.user
+    : {};
   return {
     module: mod,
     modules: state.modules,
@@ -4107,6 +4111,15 @@ function createModuleContext(mod) {
     businessChat: createLiveBusinessChatFacade(mod),
     syncConfig: state.sync?.config,
     session: state.session,
+    actor,
+    user: {
+      ...actor,
+      ...sessionUser,
+      id: sessionUser.id || actor.id,
+      display_name: sessionUser.display_name || sessionUser.name || actor.display_name,
+      role: sessionUser.role || actor.role,
+      is_admin: Boolean(sessionUser.is_admin || actor.is_admin),
+    },
     governance: state.governance,
     eventBus: state.eventBus,
     contextMenu: state.contextMenu,
@@ -7601,6 +7614,8 @@ function actorContext(session) {
   const user = session?.user || {};
   return {
     id: user.id || '',
+    email: user.email || '',
+    login: user.login || '',
     display_name: user.display_name || user.name || user.id || '',
     role: user.role || 'user',
     is_admin: Boolean(user.is_admin),

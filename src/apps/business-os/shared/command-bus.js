@@ -468,7 +468,8 @@ async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = CO
   }
   throw commandError(
     commandId,
-    'CTOX hat aus diesem RxDB Command keinen echten Queue-Task zurueckprojiziert.',
+    'CTOX hat aus diesem RxDB Command noch keinen echten Queue-Task zurueckprojiziert.',
+    { status: 'projection_pending', transient: true },
   );
 }
 
@@ -511,10 +512,11 @@ function syncBridgeFromHandle(handle) {
   return handle?.bridge || handle;
 }
 
-function commandError(commandId, message) {
+function commandError(commandId, message, options = {}) {
   const error = new Error(message);
   error.command_id = commandId;
-  error.status = 'failed';
+  error.status = options.status || 'failed';
+  error.transient = Boolean(options.transient);
   return error;
 }
 
