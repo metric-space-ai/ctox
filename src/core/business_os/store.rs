@@ -32381,6 +32381,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
         "ctox.appsec.assessment.create"
             | "ctox.appsec.lab.create"
             | "ctox.appsec.lab.run"
+            | "ctox.appsec.report.export"
             | "ctox.appsec.authz.plan"
             | "ctox.appsec.approval.request"
             | "ctox.appsec.approval.grant"
@@ -32450,6 +32451,20 @@ fn handle_appsec_business_command(
             }
             if command.payload.get("report").and_then(Value::as_bool) == Some(false) {
                 args.push("--no-report".to_string());
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.report.export" => {
+            let format = appsec_payload_string(&command.payload, "format")
+                .unwrap_or_else(|| "markdown".to_string());
+            anyhow::ensure!(
+                matches!(format.as_str(), "markdown" | "md" | "json"),
+                "ctox.appsec.report.export payload.format must be markdown, md, or json"
+            );
+            args.extend(["report".to_string(), "--format".to_string(), format]);
+            if let Some(out) = appsec_payload_string(&command.payload, "out") {
+                let out_path = workspace_bound_path(root, &out, "out")?;
+                args.extend(["--out".to_string(), out_path.display().to_string()]);
             }
             args.push("--json".to_string());
         }
