@@ -1137,6 +1137,25 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("state_dir"),
             ]),
         ),
+        write_tool(
+            "appsec_lab_create",
+            "Use this when an authorized external agent needs to create the local vulnerable AppSec lab fixture for sandbox validation.",
+            object_schema(vec![
+                optional_string("state_dir"),
+                optional_string("out"),
+            ]),
+        ),
+        write_tool(
+            "appsec_lab_run",
+            "Use this when an authorized external agent needs to run the local AppSec lab validation matrix against a sandbox URL and generate normal AppSec evidence/report artifacts.",
+            object_schema(vec![
+                required_string("url"),
+                optional_string("state_dir"),
+                optional_string("profile"),
+                optional_boolean("rebuild_coverage"),
+                optional_boolean("report"),
+            ]),
+        ),
         read_tool(
             "appsec_assessment_status",
             "Use this when an external agent needs the durable AppSec assessment status and completion blockers through the policy-gated Business OS MCP channel.",
@@ -2328,6 +2347,10 @@ fn call_tool_inner(
         "appsec_assessment_create" => {
             serde_json::to_value(appsec_assessment_create(root, &context, &arguments)?)?
         }
+        "appsec_lab_create" => {
+            serde_json::to_value(appsec_lab_create(root, &context, &arguments)?)?
+        }
+        "appsec_lab_run" => serde_json::to_value(appsec_lab_run(root, &context, &arguments)?)?,
         "appsec_assessment_status" => {
             serde_json::to_value(appsec_assessment_status(root, &context, &arguments)?)?
         }
@@ -2431,6 +2454,71 @@ fn appsec_assessment_create(
         "state_dir": state_dir_arg,
         "url": url,
         "init": init,
+        "status": status,
+    }))
+}
+
+fn appsec_lab_create(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_lab_create", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "lab".to_string(),
+        "create".to_string(),
+    ];
+    if let Some(out) = optional_string_arg(arguments, "out") {
+        let out_path = appsec_mcp_workspace_path(root, "out", &out)?;
+        args.extend(["--out".to_string(), path_string(&out_path)]);
+    }
+    let output = crate::run_projected_appsec_command(root, &args)?;
+    Ok(serde_json::json!({
+        "ok": output.get("ok").and_then(Value::as_bool) != Some(false),
+        "command": "appsec_lab_create",
+        "module_id": APPSEC_MCP_MODULE_ID,
+        "state_dir": path_string(&state_dir),
+        "output": output,
+    }))
+}
+
+fn appsec_lab_run(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_lab_run", arguments)?;
+    let url = required_arg(arguments, "url")?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "lab".to_string(),
+        "run".to_string(),
+        "--url".to_string(),
+        url.clone(),
+    ];
+    if let Some(profile) = optional_string_arg(arguments, "profile") {
+        args.extend(["--profile".to_string(), profile]);
+    }
+    if arguments.get("rebuild_coverage").and_then(Value::as_bool) == Some(true) {
+        args.push("--rebuild-coverage".to_string());
+    }
+    if arguments.get("report").and_then(Value::as_bool) == Some(false) {
+        args.push("--no-report".to_string());
+    }
+    let output = crate::run_projected_appsec_command(root, &args)?;
+    let status = appsec_state_status(root, &state_dir, true)?;
+    Ok(serde_json::json!({
+        "ok": output.get("ok").and_then(Value::as_bool) != Some(false),
+        "command": "appsec_lab_run",
+        "module_id": APPSEC_MCP_MODULE_ID,
+        "state_dir": path_string(&state_dir),
+        "url": url,
+        "output": output,
         "status": status,
     }))
 }
@@ -4096,15 +4184,16 @@ fn business_os_mcp_policy_decision(
                 )?))
             }
         }
-        "appsec_assessment_create" | "appsec_authz_plan" => {
-            Ok(Some(trusted_mcp_actor_policy_decision(
-                root,
-                context,
-                BusinessOsPermission::DataWrite,
-                BusinessOsScopeType::Module,
-                Some(APPSEC_MCP_MODULE_ID),
-            )?))
-        }
+        "appsec_assessment_create"
+        | "appsec_lab_create"
+        | "appsec_lab_run"
+        | "appsec_authz_plan" => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::DataWrite,
+            BusinessOsScopeType::Module,
+            Some(APPSEC_MCP_MODULE_ID),
+        )?)),
         "appsec_assessment_status"
         | "appsec_tools_doctor"
         | "appsec_report_get"
@@ -4540,6 +4629,8 @@ fn enforce_argument_scope_policy(
             }
         }
         "appsec_assessment_create"
+        | "appsec_lab_create"
+        | "appsec_lab_run"
         | "appsec_assessment_status"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
@@ -4634,6 +4725,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "business_os.execute_action"
         | "appsec_assessment_create"
+        | "appsec_lab_create"
+        | "appsec_lab_run"
         | "appsec_authz_plan"
         | "business_os.create_app"
         | "business_os.modify_app"
@@ -5900,6 +5993,8 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_assessment_create"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_lab_create"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_lab_run"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_assessment_status"));
@@ -5944,6 +6039,29 @@ mod tests {
             create.get("module_id").and_then(Value::as_str),
             Some(APPSEC_MCP_MODULE_ID)
         );
+
+        let lab = call_tool(
+            root,
+            "appsec_lab_create",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(lab.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            lab.get("command").and_then(Value::as_str),
+            Some("appsec_lab_create")
+        );
+        assert_eq!(
+            lab.get("module_id").and_then(Value::as_str),
+            Some(APPSEC_MCP_MODULE_ID)
+        );
+        assert!(root
+            .join("runtime/appsec/default/lab/vulnerable-webapp/ctox-vulnerable-webapp.py")
+            .is_file());
 
         let status = call_tool(
             root,

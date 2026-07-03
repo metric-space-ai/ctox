@@ -32379,6 +32379,8 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
     matches!(
         command_type,
         "ctox.appsec.assessment.create"
+            | "ctox.appsec.lab.create"
+            | "ctox.appsec.lab.run"
             | "ctox.appsec.authz.plan"
             | "ctox.appsec.approval.request"
             | "ctox.appsec.approval.grant"
@@ -32417,6 +32419,38 @@ fn handle_appsec_business_command(
                 .or_else(|| appsec_payload_string(&command.payload, "target"))
                 .context("ctox.appsec.assessment.create payload.url is required")?;
             args.extend(["init".to_string(), "--url".to_string(), url]);
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.lab.create" => {
+            args.extend(["lab", "create"].map(str::to_string));
+            if let Some(out) = appsec_payload_string(&command.payload, "out") {
+                let out_path = workspace_bound_path(root, &out, "out")?;
+                args.extend(["--out".to_string(), out_path.display().to_string()]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.lab.run" => {
+            let url = appsec_payload_string(&command.payload, "url")
+                .or_else(|| appsec_payload_string(&command.payload, "target"))
+                .context("ctox.appsec.lab.run payload.url is required")?;
+            args.extend([
+                "lab".to_string(),
+                "run".to_string(),
+                "--url".to_string(),
+                url,
+            ]);
+            push_optional_appsec_string_arg(&command.payload, &mut args, "profile", "--profile");
+            if command
+                .payload
+                .get("rebuild_coverage")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--rebuild-coverage".to_string());
+            }
+            if command.payload.get("report").and_then(Value::as_bool) == Some(false) {
+                args.push("--no-report".to_string());
+            }
             args.push("--json".to_string());
         }
         "ctox.appsec.authz.plan" => {

@@ -3880,7 +3880,7 @@ fn enqueue_web_stack_auth_assist_request(
         .or_else(|| module.and_then(|module| module.requires_credential()))
         .unwrap_or_default();
     let now = now_ms();
-    let source_slug = rxdb_id_slug(module.id());
+    let source_slug = rxdb_id_slug(source_id);
     let dedupe_key = format!(
         "{}:{}",
         source_id,
