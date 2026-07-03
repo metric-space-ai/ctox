@@ -123,6 +123,9 @@ const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const HARNESS_AUDIT_IDLE_SAFETY_SECS: u64 = 3600;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS: u64 = 3600;
+const APPSEC_PIPELINE_WORKER_POLL_SECS: u64 = 10;
+const APPSEC_PIPELINE_WORKER_QUEUE_SCAN_LIMIT: usize = 64;
+const APPSEC_PIPELINE_SERVICE_LEASE_OWNER: &str = "ctox-appsec-pipeline-service";
 const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
 const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
@@ -1309,6 +1312,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     start_channel_syncer(root.to_path_buf());
     start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
+    start_appsec_pipeline_worker_loop(root.to_path_buf(), state.clone());
     start_work_hours_dispatcher(root.to_path_buf(), state.clone());
     // Start mail/collaboration server (SMTP, IMAP, CalDAV, CardDAV)
     let mail_db_str = db_path.to_string_lossy().into_owned();
@@ -2050,6 +2054,157 @@ fn run_work_hours_dispatch_tick(root: &Path, state: &Arc<Mutex<SharedState>>) ->
         None => {}
     }
     Ok(())
+}
+
+fn start_appsec_pipeline_worker_loop(root: PathBuf, state: Arc<Mutex<SharedState>>) {
+    thread::spawn(move || loop {
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_appsec_pipeline_worker_tick(&root, &state)
+        }));
+        match tick {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => push_event(
+                &state,
+                format!(
+                    "AppSec pipeline worker skipped: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+            Err(_) => push_event(
+                &state,
+                "AppSec pipeline worker panicked during queue execution; continuing".to_string(),
+            ),
+        }
+        thread::sleep(Duration::from_secs(APPSEC_PIPELINE_WORKER_POLL_SECS));
+    });
+}
+
+fn run_appsec_pipeline_worker_tick(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    if !crate::service::working_hours::accepts_work(root) {
+        return Ok(());
+    }
+    let Some(_lease_attempt) =
+        begin_durable_queue_lease_attempt(state, DurableQueueDispatchGuard::StrictIdle)
+    else {
+        return Ok(());
+    };
+    let Some((task, state_dir)) = next_pending_appsec_pipeline_queue_task(root)? else {
+        return Ok(());
+    };
+    let _activity = AppsecPipelineWorkerActivity::start(state, &task);
+    let output = crate::handle_appsec_pipeline_work(
+        root,
+        &[
+            "pipeline".to_string(),
+            "work".to_string(),
+            "--state-dir".to_string(),
+            state_dir.clone(),
+            "--message-key".to_string(),
+            task.message_key.clone(),
+            "--limit".to_string(),
+            "1".to_string(),
+            "--lease-owner".to_string(),
+            APPSEC_PIPELINE_SERVICE_LEASE_OWNER.to_string(),
+        ],
+    )?;
+    let task_status = output
+        .pointer("/tasks/0/status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let ok = output.get("ok").and_then(Value::as_bool) != Some(false);
+    let event = if ok {
+        format!(
+            "AppSec pipeline worker handled {} as {task_status}",
+            task.message_key
+        )
+    } else {
+        format!(
+            "AppSec pipeline worker could not close {}: {task_status}",
+            task.message_key
+        )
+    };
+    push_event(state, event);
+    Ok(())
+}
+
+fn next_pending_appsec_pipeline_queue_task(
+    root: &Path,
+) -> Result<Option<(channels::QueueTaskView, String)>> {
+    let tasks = channels::list_queue_tasks(
+        root,
+        &["pending".to_string()],
+        APPSEC_PIPELINE_WORKER_QUEUE_SCAN_LIMIT,
+    )?;
+    for task in tasks {
+        if let Some(state_dir) = appsec_pipeline_queue_task_state_dir(root, &task)? {
+            return Ok(Some((task, state_dir)));
+        }
+    }
+    Ok(None)
+}
+
+fn appsec_pipeline_queue_task_state_dir(
+    root: &Path,
+    task: &channels::QueueTaskView,
+) -> Result<Option<String>> {
+    if task.suggested_skill.as_deref() != Some("appsec-pentest") {
+        return Ok(None);
+    }
+    if !channels::queue_task_metadata_value(root, &task.message_key, "stage")?
+        .map(|stage| stage.is_object())
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let Some(value) =
+        channels::queue_task_metadata_value(root, &task.message_key, "appsec_state_dir")?
+    else {
+        return Ok(None);
+    };
+    Ok(value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string))
+}
+
+struct AppsecPipelineWorkerActivity {
+    state: Arc<Mutex<SharedState>>,
+}
+
+impl AppsecPipelineWorkerActivity {
+    fn start(state: &Arc<Mutex<SharedState>>, task: &channels::QueueTaskView) -> Self {
+        {
+            let mut shared = lock_shared_state(state);
+            shared.worker_active_count = shared.worker_active_count.saturating_add(1);
+            shared.worker_phase = Some(format!("appsec-pipeline: {}", task.message_key));
+            if shared.current_goal_preview.is_none() {
+                shared.current_goal_preview = Some(task.title.clone());
+            }
+            if shared.active_source_label.is_none() {
+                shared.active_source_label = Some("appsec-pipeline".to_string());
+            }
+            shared.last_progress_epoch_secs = current_epoch_secs();
+        }
+        Self {
+            state: state.clone(),
+        }
+    }
+}
+
+impl Drop for AppsecPipelineWorkerActivity {
+    fn drop(&mut self) {
+        let mut shared = lock_shared_state(&self.state);
+        shared.worker_active_count = shared.worker_active_count.saturating_sub(1);
+        if shared.worker_active_count == 0 {
+            shared.worker_phase = None;
+            if !shared.busy {
+                shared.current_goal_preview = None;
+                shared.active_source_label = None;
+            }
+        }
+        shared.last_progress_epoch_secs = current_epoch_secs();
+    }
 }
 
 fn run_plan_routing_repair(root: &Path, state: &Arc<Mutex<SharedState>>, phase: &str) {
@@ -14456,6 +14611,9 @@ fn maybe_lease_next_durable_queue_prompt(
             continue;
         }
         if app_queue_lease_active && business_os_queue_task_is_app_module(&task) {
+            continue;
+        }
+        if appsec_pipeline_queue_task_state_dir(root, &task)?.is_some() {
             continue;
         }
         if durable_queue_task_already_enqueued_in_memory_or_clear_stale(state, &task.message_key) {
@@ -36644,6 +36802,177 @@ The previous controller turn is incomplete. Update these files now:\n\
             Path::new("."),
             &job
         ));
+    }
+
+    #[test]
+    fn generic_durable_dispatch_skips_appsec_pipeline_queue_tasks() {
+        let root = temp_root("appsec-dispatch-skip");
+        let state_dir = root.join("runtime/appsec/default");
+        std::fs::create_dir_all(&state_dir).expect("create appsec state dir");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "AppSec stage".to_string(),
+                prompt: "Run AppSec stage through ctox appsec pipeline work.".to_string(),
+                thread_key: "appsec/pipeline".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("appsec-pentest".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "source": "ctox-appsec-pipeline",
+                    "appsec_state_dir": state_dir,
+                    "stage": {
+                        "id": "stage-1",
+                        "phase": "blackbox-map",
+                        "target": "https://example.test"
+                    }
+                })),
+            },
+        )
+        .expect("create appsec queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let leased = maybe_lease_next_durable_queue_prompt(
+            &root,
+            &state,
+            DurableQueueDispatchGuard::StrictIdle,
+        )
+        .expect("durable dispatch should not fail");
+
+        assert!(
+            leased.is_none(),
+            "generic agent dispatcher must leave AppSec pipeline work to the AppSec worker"
+        );
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn appsec_pipeline_service_tick_executes_ready_queue_task() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("appsec-service-worker");
+        let state_dir = root.join("runtime/appsec/default");
+        std::fs::create_dir_all(&state_dir).expect("create appsec state dir");
+        let bin_dir = root.join("runtime/tools/appsec/bin");
+        std::fs::create_dir_all(&bin_dir).expect("create appsec bin dir");
+        let httpx = bin_dir.join("httpx");
+        std::fs::write(
+            &httpx,
+            "#!/bin/sh\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
+        )
+        .expect("write fake httpx");
+        let mut permissions = std::fs::metadata(&httpx)
+            .expect("stat fake httpx")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&httpx, permissions).expect("chmod fake httpx");
+
+        crate::run_projected_appsec_command(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+                "init".to_string(),
+                "--url".to_string(),
+                "https://example.test".to_string(),
+            ],
+        )
+        .expect("init appsec state");
+        std::fs::write(
+            state_dir.join("assessment-pipeline.json"),
+            serde_json::to_string_pretty(&json!({
+                "version": "ctox.appsec_pentest.assessment_pipeline.v1",
+                "generated_at": "test",
+                "profile": "minimal",
+                "active": false,
+                "stages": [{
+                    "id": "stage-1-blackbox-map",
+                    "order": 1,
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "tools": ["httpx"],
+                    "active_required": false,
+                    "readiness_blockers": [],
+                    "completion_gate": "httpx mapping run artifact"
+                }]
+            }))
+            .expect("serialize pipeline"),
+        )
+        .expect("write pipeline");
+        std::fs::write(
+            state_dir.join("coverage.json"),
+            serde_json::to_string_pretty(&json!({
+                "version": "ctox.appsec_pentest.coverage.v1",
+                "workstreams": [{
+                    "id": "ws-map",
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "status": "planned",
+                    "tools": ["httpx"]
+                }]
+            }))
+            .expect("serialize coverage"),
+        )
+        .expect("write coverage");
+
+        let enqueue = crate::run_projected_appsec_command(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "enqueue".to_string(),
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+                "--workspace-root".to_string(),
+                root.to_string_lossy().to_string(),
+            ],
+        )
+        .expect("enqueue appsec pipeline");
+        let message_key = enqueue
+            .pointer("/ctox_queue_enqueue/tasks/0/message_key")
+            .and_then(Value::as_str)
+            .expect("enqueue should return message key")
+            .to_string();
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        run_appsec_pipeline_worker_tick(&root, &state).expect("service AppSec worker tick");
+
+        assert_eq!(route_status_for(&root, &message_key), "handled");
+        let coverage: Value = serde_json::from_str(
+            &std::fs::read_to_string(state_dir.join("coverage.json")).expect("read coverage"),
+        )
+        .expect("parse coverage");
+        assert_eq!(
+            coverage
+                .pointer("/workstreams/0/status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        let writeback: Value = serde_json::from_str(
+            &std::fs::read_to_string(state_dir.join("assessment-pipeline-writeback.json"))
+                .expect("read writeback"),
+        )
+        .expect("parse writeback");
+        assert_eq!(
+            writeback
+                .pointer("/stages/0/status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.worker_active_count, 0);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("AppSec pipeline worker handled")),
+            "AppSec service worker event should be observable: {:?}",
+            shared.recent_events
+        );
+        drop(shared);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -10,7 +10,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -37,6 +38,7 @@ const DEFAULT_RATE_LIMIT_PER_MINUTE: usize = 120;
 const DEFAULT_AUDIT_RETENTION_DAYS: usize = 90;
 const MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const APPSEC_MCP_MODULE_ID: &str = "appsec-pentest";
 const DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_MAX_CONNECTION_AGE_MS: u64 = 15 * 60 * 1000;
@@ -543,7 +545,10 @@ pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> any
         eprintln!("[business-os-mcp] failed to provision inbound auth token: {error:#}");
     }
     println!("CTOX Business OS MCP listening on http://{}", options.addr);
-    println!("MCP endpoint: http://{}/mcp (requires Authorization: Bearer <secret business_os/mcp_inbound_auth_token>)", options.addr);
+    println!(
+        "MCP endpoint: http://{}/mcp (requires Authorization: Bearer <secret business_os/mcp_inbound_auth_token>)",
+        options.addr
+    );
     for request in server.incoming_requests() {
         let root = root.to_path_buf();
         std::thread::spawn(move || {
@@ -1037,10 +1042,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         read_tool(
             "business_os.read_app_file",
             "Use this when a coding agent needs one source file from a Business OS app module.",
-            object_schema(vec![
-                required_string("module_id"),
-                required_string("path"),
-            ]),
+            object_schema(vec![required_string("module_id"), required_string("path")]),
         ),
         read_tool(
             "business_os.search_app_source",
@@ -1126,6 +1128,57 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             "business_os.list_mcp_activity",
             "Use this when you need recent Business OS MCP channel audit events.",
             object_schema(vec![optional_integer("limit", 1, MAX_LIMIT)]),
+        ),
+        write_tool(
+            "appsec_assessment_create",
+            "Use this when an authorized external agent needs to create an AppSec assessment scope in the local CTOX AppSec state. This initializes state only; it does not run scanners.",
+            object_schema(vec![
+                required_string("url"),
+                optional_string("state_dir"),
+            ]),
+        ),
+        read_tool(
+            "appsec_assessment_status",
+            "Use this when an external agent needs the durable AppSec assessment status and completion blockers through the policy-gated Business OS MCP channel.",
+            object_schema(vec![
+                optional_string("state_dir"),
+                optional_boolean("sync"),
+            ]),
+        ),
+        read_tool(
+            "appsec_tools_doctor",
+            "Use this when an external agent needs AppSec scanner readiness evidence through the policy-gated Business OS MCP channel. This does not scan a target.",
+            object_schema(vec![
+                optional_string("state_dir"),
+                optional_string("profile"),
+                optional_boolean("probe_versions"),
+            ]),
+        ),
+        write_tool(
+            "appsec_authz_plan",
+            "Use this when an authorized external agent needs a redacted CTOX web-stack authorization test plan for an initialized AppSec assessment. This writes a local plan artifact only; it does not log in or run browser sessions.",
+            object_schema(vec![
+                required_string("target"),
+                optional_string("state_dir"),
+                optional_string("source_id"),
+                optional_string("subjects"),
+            ]),
+        ),
+        read_tool(
+            "appsec_report_get",
+            "Use this when an external agent needs the existing AppSec report artifact. The tool reads the sanitized report from local AppSec state and does not generate a new report.",
+            object_schema(vec![
+                optional_string("state_dir"),
+                optional_string("format"),
+            ]),
+        ),
+        read_tool(
+            "appsec_finding_get",
+            "Use this when an external agent needs one AppSec finding by id through the policy-gated Business OS MCP channel.",
+            object_schema(vec![
+                required_string("finding_id"),
+                optional_string("state_dir"),
+            ]),
         ),
     ]
 }
@@ -1346,6 +1399,7 @@ pub fn upsert_user(
             .get("active")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        profile: arguments.get("profile").cloned(),
         accept_recovery_responsibility: optional_bool_arg(
             arguments,
             "accept_recovery_responsibility",
@@ -1536,6 +1590,10 @@ fn app_development_contract(
             "src/skills/system/product_engineering/business-os-app-module-development/SKILL.md"
                 .to_string(),
             "src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/design-guide.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/standalone-porting.md"
                 .to_string(),
             "src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md"
                 .to_string(),
@@ -2267,6 +2325,24 @@ fn call_tool_inner(
             let limit = optional_usize_arg(&arguments, "limit");
             serde_json::to_value(list_mcp_activity(root, &context, limit)?)?
         }
+        "appsec_assessment_create" => {
+            serde_json::to_value(appsec_assessment_create(root, &context, &arguments)?)?
+        }
+        "appsec_assessment_status" => {
+            serde_json::to_value(appsec_assessment_status(root, &context, &arguments)?)?
+        }
+        "appsec_tools_doctor" => {
+            serde_json::to_value(appsec_tools_doctor(root, &context, &arguments)?)?
+        }
+        "appsec_authz_plan" => {
+            serde_json::to_value(appsec_authz_plan(root, &context, &arguments)?)?
+        }
+        "appsec_report_get" => {
+            serde_json::to_value(appsec_report_get(root, &context, &arguments)?)?
+        }
+        "appsec_finding_get" => {
+            serde_json::to_value(appsec_finding_get(root, &context, &arguments)?)?
+        }
         other => {
             return Err(anyhow::Error::new(BusinessOsMcpError::not_found(
                 BusinessOsMcpErrorCode::ActionNotAllowed,
@@ -2326,6 +2402,293 @@ fn call_tool_audited_inner(
         );
     }
     result
+}
+
+fn appsec_assessment_create(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_assessment_create", arguments)?;
+    let url = required_arg(arguments, "url")?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let state_dir_arg = path_string(&state_dir);
+    let init = crate::run_projected_appsec_command(
+        root,
+        &[
+            "--state-dir".to_string(),
+            state_dir_arg.clone(),
+            "init".to_string(),
+            "--url".to_string(),
+            url.clone(),
+        ],
+    )?;
+    let status = appsec_state_status(root, &state_dir, true)?;
+    Ok(serde_json::json!({
+        "ok": init.get("ok").and_then(Value::as_bool) != Some(false),
+        "command": "appsec_assessment_create",
+        "module_id": APPSEC_MCP_MODULE_ID,
+        "state_dir": state_dir_arg,
+        "url": url,
+        "init": init,
+        "status": status,
+    }))
+}
+
+fn appsec_assessment_status(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_assessment_status", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let sync = arguments
+        .get("sync")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let mut status = appsec_state_status(root, &state_dir, sync)?;
+    if let Some(object) = status.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_assessment_status".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+    }
+    Ok(status)
+}
+
+fn appsec_tools_doctor(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_tools_doctor", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let profile = appsec_mcp_profile(arguments)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "tools".to_string(),
+        "doctor".to_string(),
+        "--profile".to_string(),
+        profile,
+    ];
+    if optional_bool_arg(arguments, "probe_versions") {
+        args.push("--probe-versions".to_string());
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_tools_doctor".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+    }
+    Ok(output)
+}
+
+fn appsec_authz_plan(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_authz_plan", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let target = required_arg(arguments, "target")?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "plan".to_string(),
+        "--target".to_string(),
+        target,
+    ];
+    if let Some(source_id) = optional_string_arg(arguments, "source_id") {
+        args.push("--source-id".to_string());
+        args.push(source_id);
+    }
+    if let Some(subjects) = optional_string_arg(arguments, "subjects") {
+        let subjects_path = appsec_mcp_workspace_path(root, "subjects", &subjects)?;
+        args.push("--subjects".to_string());
+        args.push(path_string(&subjects_path));
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_plan".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+    }
+    Ok(output)
+}
+
+fn appsec_report_get(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_report_get", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let format = optional_string_arg(arguments, "format").unwrap_or_else(|| "json".to_string());
+    let (format, report_path) = match format.as_str() {
+        "json" => (
+            "json",
+            state_dir.join("reports").join("pentest-report.json"),
+        ),
+        "markdown" | "md" => (
+            "markdown",
+            state_dir.join("reports").join("pentest-report.md"),
+        ),
+        other => {
+            return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+                "format",
+                format!("unsupported AppSec report format `{other}`"),
+            )));
+        }
+    };
+    if !report_path.is_file() {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "command": "appsec_report_get",
+            "module_id": APPSEC_MCP_MODULE_ID,
+            "status": "missing",
+            "format": format,
+            "state_dir": path_string(&state_dir),
+            "report_path": path_string(&report_path),
+            "note": "No existing report artifact was found. Generate a report through the AppSec CLI or pipeline before reading it through MCP.",
+        }));
+    }
+    let content = fs::read_to_string(&report_path)
+        .with_context(|| format!("failed to read AppSec report {}", report_path.display()))?;
+    if format == "json" {
+        let report: Value = serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse AppSec report {}", report_path.display()))?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "command": "appsec_report_get",
+            "module_id": APPSEC_MCP_MODULE_ID,
+            "status": "available",
+            "format": format,
+            "state_dir": path_string(&state_dir),
+            "report_path": path_string(&report_path),
+            "report": report,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "ok": true,
+            "command": "appsec_report_get",
+            "module_id": APPSEC_MCP_MODULE_ID,
+            "status": "available",
+            "format": format,
+            "state_dir": path_string(&state_dir),
+            "report_path": path_string(&report_path),
+            "markdown": content,
+        }))
+    }
+}
+
+fn appsec_finding_get(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_finding_get", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let finding_id = required_arg(arguments, "finding_id")?;
+    let mut output = crate::run_projected_appsec_command(
+        root,
+        &[
+            "--state-dir".to_string(),
+            path_string(&state_dir),
+            "finding".to_string(),
+            "show".to_string(),
+            "--id".to_string(),
+            finding_id.clone(),
+        ],
+    )?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_finding_get".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert("finding_id".to_string(), Value::String(finding_id));
+    }
+    Ok(output)
+}
+
+fn appsec_state_status(root: &Path, state_dir: &Path, sync: bool) -> anyhow::Result<Value> {
+    let mut args = vec![
+        "state".to_string(),
+        "status".to_string(),
+        "--state-dir".to_string(),
+        path_string(state_dir),
+    ];
+    if sync {
+        args.push("--sync".to_string());
+    }
+    crate::appsec_state::handle_state_command(root, &args)
+}
+
+fn appsec_mcp_profile(arguments: &Value) -> anyhow::Result<String> {
+    let profile =
+        optional_string_arg(arguments, "profile").unwrap_or_else(|| "standard".to_string());
+    match profile.as_str() {
+        "minimal" | "standard" | "full" => Ok(profile),
+        other => Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "profile",
+            format!("unsupported AppSec scanner profile `{other}`"),
+        ))),
+    }
+}
+
+fn appsec_mcp_state_dir(root: &Path, arguments: &Value) -> anyhow::Result<PathBuf> {
+    match optional_string_arg(arguments, "state_dir") {
+        Some(raw) => appsec_mcp_workspace_path(root, "state_dir", &raw),
+        None => Ok(root.join("runtime/appsec/default")),
+    }
+}
+
+fn appsec_mcp_workspace_path(root: &Path, field: &str, raw: &str) -> anyhow::Result<PathBuf> {
+    let raw_path = PathBuf::from(raw);
+    if raw_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            field,
+            "path must not contain parent directory components",
+        )));
+    }
+    let path = if raw_path.is_absolute() {
+        raw_path
+    } else {
+        root.join(raw_path)
+    };
+    if !path.starts_with(root) {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            field,
+            "path must stay inside the CTOX workspace",
+        )));
+    }
+    Ok(path)
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
 pub fn get_record(
@@ -3733,6 +4096,25 @@ fn business_os_mcp_policy_decision(
                 )?))
             }
         }
+        "appsec_assessment_create" | "appsec_authz_plan" => {
+            Ok(Some(trusted_mcp_actor_policy_decision(
+                root,
+                context,
+                BusinessOsPermission::DataWrite,
+                BusinessOsScopeType::Module,
+                Some(APPSEC_MCP_MODULE_ID),
+            )?))
+        }
+        "appsec_assessment_status"
+        | "appsec_tools_doctor"
+        | "appsec_report_get"
+        | "appsec_finding_get" => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::DataRead,
+            BusinessOsScopeType::Module,
+            Some(APPSEC_MCP_MODULE_ID),
+        )?)),
         _ => Ok(None),
     }
 }
@@ -4157,6 +4539,14 @@ fn enforce_argument_scope_policy(
                 }
             }
         }
+        "appsec_assessment_create"
+        | "appsec_assessment_status"
+        | "appsec_tools_doctor"
+        | "appsec_authz_plan"
+        | "appsec_report_get"
+        | "appsec_finding_get" => {
+            enforce_module_policy(root, APPSEC_MCP_MODULE_ID)?;
+        }
         _ => {}
     }
     if tool_policy_class(tool_name) == McpToolPolicyClass::Read {
@@ -4243,6 +4633,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "business_os.approve" => McpToolPolicyClass::ExternalEffect,
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "business_os.execute_action"
+        | "appsec_assessment_create"
+        | "appsec_authz_plan"
         | "business_os.create_app"
         | "business_os.modify_app"
         | "business_os.prepare_app_source"
@@ -5505,6 +5897,16 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool.name == "business_os.request_changes"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_assessment_create"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_assessment_status"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_tools_doctor"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_report_get"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_finding_get"));
         for forbidden in [
             "run_cli",
             "run_shell",
@@ -5518,6 +5920,196 @@ mod tests {
                 "{forbidden} must not be exposed as a Business OS MCP tool"
             );
         }
+    }
+
+    #[test]
+    fn appsec_mcp_tools_create_status_plan_report_and_finding() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let create = call_tool(
+            root,
+            "appsec_assessment_create",
+            serde_json::json!({
+                "url": "https://example.test",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(create.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            create.get("module_id").and_then(Value::as_str),
+            Some(APPSEC_MCP_MODULE_ID)
+        );
+
+        let status = call_tool(
+            root,
+            "appsec_assessment_status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(status.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(status.get("synced").and_then(Value::as_bool), Some(true));
+
+        let doctor = call_tool(
+            root,
+            "appsec_tools_doctor",
+            serde_json::json!({
+                "profile": "minimal",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            doctor.get("command").and_then(Value::as_str),
+            Some("tools doctor")
+        );
+        assert_eq!(
+            doctor.get("module_id").and_then(Value::as_str),
+            Some(APPSEC_MCP_MODULE_ID)
+        );
+
+        let authz = call_tool(
+            root,
+            "appsec_authz_plan",
+            serde_json::json!({
+                "target": "https://example.test",
+                "source_id": "custom-web-app",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(authz.get("ok").and_then(Value::as_bool), Some(true));
+        let authz_artifact = authz.get("artifact").and_then(Value::as_str).unwrap();
+        assert!(Path::new(authz_artifact).is_file());
+
+        let state_dir = root.join("runtime/appsec/default");
+        crate::run_projected_appsec_command(
+            root,
+            &[
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+                "finding".to_string(),
+                "create".to_string(),
+                "--title".to_string(),
+                "Authorization check candidate".to_string(),
+                "--target".to_string(),
+                "https://example.test/account".to_string(),
+                "--severity".to_string(),
+                "medium".to_string(),
+            ],
+        )?;
+        crate::run_projected_appsec_command(
+            root,
+            &[
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+                "report".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+            ],
+        )?;
+
+        let finding = call_tool(
+            root,
+            "appsec_finding_get",
+            serde_json::json!({
+                "finding_id": "F-001",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(finding.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            finding.pointer("/finding/id").and_then(Value::as_str),
+            Some("F-001")
+        );
+
+        let report = call_tool(
+            root,
+            "appsec_report_get",
+            serde_json::json!({
+                "format": "json",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(report.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            report.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            report.pointer("/report/version").and_then(Value::as_str),
+            Some("ctox.appsec_pentest.report.v1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn appsec_mcp_tools_respect_module_allowlist_and_path_boundary() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let mut policy = default_mcp_policy();
+        policy.allowed_modules = vec!["customers".to_string()];
+        save_mcp_policy(root, &policy)?;
+        let denied = call_tool(
+            root,
+            "appsec_assessment_status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("allowed_modules must gate appsec MCP tools");
+        let typed = denied
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed MCP error");
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(
+            typed.field.as_deref(),
+            Some("CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES")
+        );
+
+        policy.allowed_modules = vec![APPSEC_MCP_MODULE_ID.to_string()];
+        save_mcp_policy(root, &policy)?;
+        let traversal = call_tool(
+            root,
+            "appsec_assessment_status",
+            serde_json::json!({
+                "state_dir": "../outside",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("state_dir traversal must be rejected");
+        let typed = traversal
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed MCP error");
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+        assert_eq!(typed.field.as_deref(), Some("state_dir"));
+        Ok(())
     }
 
     #[test]
@@ -5568,6 +6160,18 @@ mod tests {
             .iter()
             .any(|path| path.as_str()
                 == Some("runtime/business-os/installed-modules/mcp-inventory/module.json")));
+        let skill_resources = result
+            .pointer("/development_contract/skill_resources")
+            .and_then(Value::as_array)
+            .context("expected development_contract.skill_resources")?;
+        assert!(skill_resources.iter().any(|path| {
+            path.as_str()
+                .is_some_and(|path| path.ends_with("references/design-guide.md"))
+        }));
+        assert!(skill_resources.iter().any(|path| {
+            path.as_str()
+                .is_some_and(|path| path.ends_with("references/standalone-porting.md"))
+        }));
         assert!(
             !root
                 .join("runtime/business-os/installed-modules/mcp-inventory")

@@ -24,6 +24,7 @@ futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
 ctox-doc-stack = { path = "src/tools/doc-stack" }
+ctox-appsec-pentest = { path = "src/tools/appsec-pentest" }
 ctox-pdf-parse = { path = "src/tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_0_6b" }
 ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }

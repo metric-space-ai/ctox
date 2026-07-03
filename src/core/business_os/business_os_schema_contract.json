@@ -137,6 +137,481 @@
     ],
     "additionalProperties": true
   },
+  "accounting_credit_notes": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "credit_note_invoice_id": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "reason_text": {
+        "type": "string"
+      },
+      "delta_net_cents": {
+        "type": "number"
+      },
+      "delta_tax_cents": {
+        "type": "number"
+      },
+      "delta_gross_cents": {
+        "type": "number"
+      },
+      "corrective_invoice_number": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "invoice_id",
+      "credit_note_invoice_id",
+      "created_at_ms"
+    ],
+    "indexes": [
+      "invoice_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_dunning_letters": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "dunning_run_id": {
+        "type": "string"
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "level": {
+        "type": "number"
+      },
+      "letter_date_ms": {
+        "type": "number"
+      },
+      "fee_cents": {
+        "type": "number"
+      },
+      "interest_cents": {
+        "type": "number"
+      },
+      "total_cents": {
+        "type": "number"
+      },
+      "pdf_attachment_id": {
+        "type": "string"
+      },
+      "sent_via": {
+        "type": "string"
+      },
+      "sent_at_ms": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "dunning_run_id",
+      "invoice_id",
+      "level",
+      "letter_date_ms",
+      "total_cents",
+      "status",
+      "created_at_ms"
+    ],
+    "indexes": [
+      "invoice_id",
+      "dunning_run_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_dunning_runs": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "run_date_ms": {
+        "type": "number"
+      },
+      "run_by": {
+        "type": "string"
+      },
+      "filter": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "invoices_total": {
+        "type": "number"
+      },
+      "letters_sent": {
+        "type": "number"
+      },
+      "state": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "run_date_ms",
+      "invoices_total",
+      "state",
+      "created_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_invoice_approvals": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "revision_id": {
+        "type": "string"
+      },
+      "actor_user_id": {
+        "type": "string"
+      },
+      "decision": {
+        "type": "string"
+      },
+      "note": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "invoice_id",
+      "decision",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "invoice_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_invoice_attachments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "desktop_file_id": {
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "size_bytes": {
+        "type": "number"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "invoice_id",
+      "kind",
+      "desktop_file_id",
+      "created_at_ms"
+    ],
+    "indexes": [
+      "invoice_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_invoice_lines": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "position": {
+        "type": "number"
+      },
+      "description": {
+        "type": "string"
+      },
+      "article_number": {
+        "type": "string"
+      },
+      "quantity": {
+        "type": "number"
+      },
+      "unit": {
+        "type": "string"
+      },
+      "unit_price_cents": {
+        "type": "number"
+      },
+      "discount_percent": {
+        "type": "number"
+      },
+      "tax_rate": {
+        "type": "number"
+      },
+      "line_net_cents": {
+        "type": "number"
+      },
+      "line_tax_cents": {
+        "type": "number"
+      },
+      "line_gross_cents": {
+        "type": "number"
+      },
+      "account_code": {
+        "type": "string"
+      },
+      "cost_center_id": {
+        "type": "string"
+      },
+      "project_id": {
+        "type": "string"
+      },
+      "service_period_start_ms": {
+        "type": "number"
+      },
+      "service_period_end_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "invoice_id",
+      "position",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "invoice_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_invoices": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "invoice_number": {
+        "type": "string"
+      },
+      "invoice_type": {
+        "type": "string"
+      },
+      "party_id": {
+        "type": "string"
+      },
+      "party_snapshot": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "invoice_date_ms": {
+        "type": "number"
+      },
+      "due_date_ms": {
+        "type": "number"
+      },
+      "service_period_start_ms": {
+        "type": "number"
+      },
+      "service_period_end_ms": {
+        "type": "number"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "subtotal_cents": {
+        "type": "number"
+      },
+      "tax_cents": {
+        "type": "number"
+      },
+      "total_cents": {
+        "type": "number"
+      },
+      "paid_cents": {
+        "type": "number"
+      },
+      "open_cents": {
+        "type": "number"
+      },
+      "tax_breakdown": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "payment_terms_id": {
+        "type": "string"
+      },
+      "skonto_percent": {
+        "type": "number"
+      },
+      "skonto_days": {
+        "type": "number"
+      },
+      "state": {
+        "type": "string"
+      },
+      "state_changed_at_ms": {
+        "type": "number"
+      },
+      "state_changed_by_command_id": {
+        "type": "string"
+      },
+      "linked_invoice_id": {
+        "type": "string"
+      },
+      "reverse_charge": {
+        "type": "boolean"
+      },
+      "small_business": {
+        "type": "boolean"
+      },
+      "eu_ic_supply": {
+        "type": "boolean"
+      },
+      "xrechnung_xml": {
+        "type": "string"
+      },
+      "pdf_attachment_id": {
+        "type": "string"
+      },
+      "post_journal_entry_id": {
+        "type": "string"
+      },
+      "cancel_journal_entry_id": {
+        "type": "string"
+      },
+      "credit_note_for_id": {
+        "type": "string"
+      },
+      "dunning_level": {
+        "type": "number"
+      },
+      "last_dunning_run_id": {
+        "type": "string"
+      },
+      "proposal_status": {
+        "type": "string"
+      },
+      "draft_status": {
+        "type": "string"
+      },
+      "approval_status": {
+        "type": "string"
+      },
+      "approval_id": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "search_text": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "invoice_type",
+      "state",
+      "currency",
+      "search_text",
+      "is_deleted",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "party_id",
+      "state",
+      "invoice_date_ms",
+      "due_date_ms",
+      "invoice_number",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "accounting_journal_entries": {
     "version": 0,
     "primaryKey": "id",
@@ -325,6 +800,145 @@
     ],
     "additionalProperties": true
   },
+  "accounting_payment_allocations": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "payment_id": {
+        "type": "string"
+      },
+      "invoice_id": {
+        "type": "string"
+      },
+      "allocated_cents": {
+        "type": "number"
+      },
+      "skonto_cents": {
+        "type": "number"
+      },
+      "note": {
+        "type": "string"
+      },
+      "allocated_at_ms": {
+        "type": "number"
+      },
+      "allocated_by_command_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "payment_id",
+      "invoice_id",
+      "allocated_cents",
+      "allocated_at_ms"
+    ],
+    "indexes": [
+      "payment_id",
+      "invoice_id"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_payment_terms": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "name": {
+        "type": "string"
+      },
+      "net_days": {
+        "type": "number"
+      },
+      "skonto_percent": {
+        "type": "number"
+      },
+      "skonto_days": {
+        "type": "number"
+      },
+      "description": {
+        "type": "string"
+      },
+      "is_default": {
+        "type": "boolean"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "net_days",
+      "is_default",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_payments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "payment_date_ms": {
+        "type": "number"
+      },
+      "party_id": {
+        "type": "string"
+      },
+      "amount_cents": {
+        "type": "number"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "reference": {
+        "type": "string"
+      },
+      "bank_statement_line_id": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "payment_date_ms",
+      "amount_cents",
+      "currency",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "party_id",
+      "payment_date_ms"
+    ],
+    "additionalProperties": true
+  },
   "accounting_receipts": {
     "version": 0,
     "primaryKey": "id",
@@ -383,6 +997,66 @@
     ],
     "additionalProperties": true
   },
+  "accounting_recurring_invoices": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "template_invoice_id": {
+        "type": "string"
+      },
+      "interval": {
+        "type": "string"
+      },
+      "interval_count": {
+        "type": "number"
+      },
+      "start_at_ms": {
+        "type": "number"
+      },
+      "end_at_ms": {
+        "type": "number"
+      },
+      "next_run_at_ms": {
+        "type": "number"
+      },
+      "last_run_at_ms": {
+        "type": "number"
+      },
+      "auto_send": {
+        "type": "boolean"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "template_invoice_id",
+      "interval",
+      "interval_count",
+      "start_at_ms",
+      "auto_send",
+      "active",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "applications": {
     "version": 0,
     "primaryKey": "id",
@@ -432,6 +1106,616 @@
       "id",
       "channel",
       "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "appsec_approvals": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "approval_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "target_kind": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "tools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "expires_at": {
+        "type": "string"
+      },
+      "profile": {},
+      "reason": {},
+      "requested_by": {},
+      "approved_by": {},
+      "policy": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "approval_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "approval_id",
+      "state_dir",
+      "status",
+      "target",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_artifacts": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "artifact_id": {
+        "type": "string"
+      },
+      "artifact_path": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "size_bytes": {
+        "type": "number"
+      },
+      "metadata": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "content_available": {
+        "type": "boolean"
+      },
+      "content_policy": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "artifact_id",
+      "state_dir",
+      "kind",
+      "sha256"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "artifact_id",
+      "state_dir",
+      "kind",
+      "sha256",
+      [
+        "state_dir",
+        "kind",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_assessments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "assessment_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "profile": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "command": {
+        "type": "string"
+      },
+      "artifact_path": {
+        "type": "string"
+      },
+      "scan_completed": {},
+      "coverage_complete": {},
+      "created_at": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "assessment_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "assessment_id",
+      "state_dir",
+      "target",
+      "profile",
+      "status",
+      [
+        "state_dir",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_coverage": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "coverage_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "artifact_path": {
+        "type": "string"
+      },
+      "blocker_kind": {},
+      "requires_active_approval": {},
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "coverage_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "coverage_id",
+      "state_dir",
+      "phase",
+      "target",
+      "status",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_findings": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "finding_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "severity": {
+        "type": "string"
+      },
+      "category": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "evidence_artifact": {
+        "type": "string"
+      },
+      "source_tool": {},
+      "signal": {},
+      "validation_state": {},
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "finding_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "finding_id",
+      "state_dir",
+      "severity",
+      "category",
+      "status",
+      "target",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_pipeline_stages": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "stage_key": {
+        "type": "string"
+      },
+      "stage_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "coverage_status": {
+        "type": "string"
+      },
+      "active_required": {
+        "type": "boolean"
+      },
+      "queue_task_id": {
+        "type": "string"
+      },
+      "queue_status": {
+        "type": "string"
+      },
+      "queue_updated_at": {
+        "type": "string"
+      },
+      "resume_gate": {},
+      "completion_gate": {},
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "stage_key",
+      "stage_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "stage_key",
+      "stage_id",
+      "state_dir",
+      "phase",
+      "status",
+      "queue_task_id",
+      "queue_status",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_runs": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "assessment_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "tool": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "command_summary": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "artifact_path": {
+        "type": "string"
+      },
+      "created_at": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "run_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "run_id",
+      "state_dir",
+      "tool",
+      "target",
+      "status",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "appsec_scanner_inventory": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "scanner_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "profile": {
+        "type": "string"
+      },
+      "available": {
+        "type": "boolean"
+      },
+      "status": {
+        "type": "string"
+      },
+      "binary_path": {
+        "type": "string"
+      },
+      "detected_version": {
+        "type": "string"
+      },
+      "category": {},
+      "install_kind": {},
+      "active": {},
+      "default_enabled": {},
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "scanner_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "scanner_id",
+      "state_dir",
+      "profile",
+      "available",
+      "status",
+      [
+        "state_dir",
+        "available",
+        "updated_at_ms"
+      ]
     ],
     "additionalProperties": true
   },
@@ -903,6 +2187,16 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "task_status": {
+        "type": "string"
       }
     },
     "required": [
@@ -913,6 +2207,7 @@
       "status",
       "updated_at_ms"
     ],
+    "additionalProperties": true,
     "indexes": [
       "status",
       "command_id",
@@ -925,9 +2220,11 @@
         "command_type",
         "status",
         "updated_at_ms"
-      ]
-    ],
-    "additionalProperties": true
+      ],
+      "module",
+      "command_type",
+      "updated_at_ms"
+    ]
   },
   "business_consents": {
     "version": 0,
@@ -2275,6 +3572,21 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "route_status": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "thread_key": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "workspace_root": {
+        "type": "string"
       }
     },
     "required": [

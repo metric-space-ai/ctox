@@ -1,9 +1,17 @@
 #![recursion_limit = "256"]
 
 use anyhow::Context;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
+const APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS: u64 = 3;
+const APPSEC_PIPELINE_STAGE_RETRY_DELAY_SECONDS: i64 = 30;
+const APPSEC_PIPELINE_RETRY_VERSION: &str = "ctox.appsec.pipeline_retry.v1";
+
 mod api_costs;
+mod appsec_state;
 mod autonomy;
 mod business_os;
 mod capabilities;
@@ -174,6 +182,7 @@ RUN / EXEC
 CAPABILITIES / WEB STACK
   ctox browser <subcmd>          interactive browser automation
   ctox web <subcmd>              web search/read tooling
+  ctox appsec <subcmd>           application security pentest workflow
   ctox scrape <subcmd>           scraping and extraction helpers
   ctox doc <subcmd>              document stack helpers
   ctox verification <subcmd>     verification records and evidence checks
@@ -314,11 +323,13 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
         match first {
             // Recovery / inspection commands — must work even when the
             // runtime DB is wedged.
-            "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" => return true,
+            "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" | "appsec" => {
+                return true;
+            }
             "business-os" | "business"
                 if matches!(args.get(1).map(String::as_str), Some("serve" | "status")) =>
             {
-                return true
+                return true;
             }
             "business-os" | "business"
                 if args.get(1).map(String::as_str) == Some("peer")
@@ -327,7 +338,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                         None | Some("status" | "ensure" | "rotate")
                     ) =>
             {
-                return true
+                return true;
             }
             "business-os" | "business"
                 if args.get(1).map(String::as_str) == Some("rxdb")
@@ -336,7 +347,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                         None | Some("repair-optional-drift" | "help" | "--help" | "-h")
                     ) =>
             {
-                return true
+                return true;
             }
             "business-os" | "business"
                 if args.get(1).map(String::as_str) == Some("files")
@@ -345,7 +356,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                         Some("sync" | "sync-workspace")
                     ) =>
             {
-                return true
+                return true;
             }
             _ => {}
         }
@@ -443,7 +454,8 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&native_stt::stt_realtime_smoke_json(
-                        &root, &audio_path
+                        &root,
+                        &audio_path
                     ))?
                 );
                 Ok(())
@@ -589,7 +601,10 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             if flags.iter().any(|flag| *flag != "--force") {
                 anyhow::bail!("usage: ctox stop [--force]");
             }
-            println!("{}", service::stop_background_guarded(root, flags.contains(&"--force"))?);
+            println!(
+                "{}",
+                service::stop_background_guarded(root, flags.contains(&"--force"))?
+            );
             Ok(())
         }
         Some("status") => {
@@ -616,7 +631,9 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("turn") => service::turn_ledger::handle_turn_command(root, &args[1..]),
-        Some("harness-flow") => service::harness_flow::handle_harness_flow_command(root, &args[1..]),
+        Some("harness-flow") => {
+            service::harness_flow::handle_harness_flow_command(root, &args[1..])
+        }
         Some("process-mining") => {
             service::process_mining::handle_process_mining_command(root, &args[1..])
         }
@@ -631,18 +648,15 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             tui::run_tui_smoke(&root, page, width, height)
         }
         Some("browser") => browser::handle_browser_command(&root, &args[1..]),
+        Some("appsec") => handle_appsec_command(&root, &args[1..]),
         Some("channel") => channels::handle_channel_command(&root, &args[1..]),
         Some("mailserver") => handle_mailserver_command(&root, &args[1..]),
         Some("doc") => doc::handle_doc_command(&root, &args[1..]),
         Some("follow-up") => follow_up::handle_follow_up_command(&args[1..]),
         Some("governance") => governance::handle_governance_command(&root, &args[1..]),
-        Some("jami-daemon") => {
-            communication::jami_native::handle_daemon_command(&root, &args[1..])
-        }
+        Some("jami-daemon") => communication::jami_native::handle_daemon_command(&root, &args[1..]),
         Some("knowledge") => service::run_knowledge_data(&root, &args[1..]),
-        Some("meeting") => {
-            communication::meeting_native::handle_meeting_command(&root, &args[1..])
-        }
+        Some("meeting") => communication::meeting_native::handle_meeting_command(&root, &args[1..]),
         Some("iot") => iot::commands::handle_iot_command(&root, &args[1..]),
         Some("plan") => plan::handle_plan_command(&root, &args[1..]),
         Some("queue") => queue::handle_queue_command(&root, &args[1..]),
@@ -1152,6 +1166,1750 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             anyhow::bail!("unknown command `{unknown}` — run `ctox help` for usage");
         }
     }
+}
+
+fn handle_appsec_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if matches!(args.first().map(String::as_str), Some("state" | "durable")) {
+        let output = appsec_state::handle_state_command(root, args)
+            .context("ctox appsec state command failed")?;
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        let ok = output.get("ok").and_then(serde_json::Value::as_bool) != Some(false);
+        if ok {
+            return Ok(());
+        }
+        anyhow::bail!("ctox appsec state command failed");
+    }
+
+    if is_appsec_pipeline_work(args) {
+        let output = handle_appsec_pipeline_work(root, args)
+            .context("ctox appsec pipeline work command failed")?;
+        let ok = output.get("ok").and_then(serde_json::Value::as_bool) != Some(false);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        if ok {
+            return Ok(());
+        }
+        anyhow::bail!("ctox appsec pipeline work command failed");
+    }
+
+    let output = run_projected_appsec_command(root, args)?;
+    let ok = output.get("ok").and_then(serde_json::Value::as_bool) != Some(false);
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    if ok {
+        Ok(())
+    } else {
+        anyhow::bail!("ctox appsec command failed")
+    }
+}
+
+fn build_appsec_forwarded_args(root: &Path, args: &[String]) -> Vec<String> {
+    let mut forwarded = Vec::with_capacity(args.len() + 3);
+    forwarded.push("ctox-appsec".to_string());
+    let has_state_dir = args.iter().any(|arg| arg == "--state-dir")
+        || std::env::var("PENTEST_STATE_DIR").is_ok_and(|value| !value.trim().is_empty());
+    if !has_state_dir {
+        forwarded.push("--state-dir".to_string());
+        forwarded.push(
+            root.join("runtime/appsec/default")
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    forwarded.extend(args.iter().cloned());
+    forwarded
+}
+
+fn appsec_state_dir_for_args(root: &Path, args: &[String]) -> PathBuf {
+    if let Some(state_dir) = arg_value(args, "--state-dir") {
+        return PathBuf::from(state_dir);
+    }
+    if let Ok(state_dir) = std::env::var("PENTEST_STATE_DIR") {
+        if !state_dir.trim().is_empty() {
+            return PathBuf::from(state_dir);
+        }
+    }
+    root.join("runtime/appsec/default")
+}
+
+pub(crate) fn run_projected_appsec_command(root: &Path, args: &[String]) -> anyhow::Result<Value> {
+    let forwarded = build_appsec_forwarded_args(root, args);
+    let mut output = ctox_appsec_pentest::run_cli_json(forwarded.clone(), Some(root.to_path_buf()))
+        .context("ctox appsec command failed")?;
+    let ok = output.get("ok").and_then(serde_json::Value::as_bool) != Some(false);
+    if ok && is_appsec_pipeline_enqueue(args) {
+        let enqueue = enqueue_appsec_pipeline_queue_tasks(root, &output)
+            .context("failed to enqueue AppSec pipeline stages")?;
+        if let Some(object) = output.as_object_mut() {
+            object.insert("ctox_queue_enqueue".to_string(), enqueue);
+        }
+    }
+    let projection = appsec_state::project_cli_result(root, &forwarded, &output)
+        .context("failed to project ctox appsec result into durable state")?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert("ctox_durable_projection".to_string(), projection);
+    }
+    Ok(output)
+}
+
+fn is_appsec_pipeline_enqueue(args: &[String]) -> bool {
+    matches!(
+        (
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str)
+        ),
+        (Some("pipeline"), Some("enqueue"))
+    )
+}
+
+fn is_appsec_pipeline_work(args: &[String]) -> bool {
+    matches!(
+        (
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str)
+        ),
+        (Some("pipeline"), Some("work" | "worker" | "run-queue"))
+    )
+}
+
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2)
+        .find(|window| window.first().map(String::as_str) == Some(flag))
+        .and_then(|window| window.get(1))
+        .cloned()
+}
+
+fn arg_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
+pub(crate) fn handle_appsec_pipeline_work(root: &Path, args: &[String]) -> anyhow::Result<Value> {
+    let state_dir = appsec_state_dir_for_args(root, args);
+    let limit = arg_value(args, "--limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1);
+    let dry_run = arg_flag(args, "--dry-run");
+    let lease_owner = arg_value(args, "--lease-owner")
+        .unwrap_or_else(|| "ctox-appsec-pipeline-worker".to_string());
+    let message_key = arg_value(args, "--message-key");
+    let candidates =
+        select_appsec_pipeline_queue_tasks(root, &state_dir, message_key.as_deref(), limit)?;
+    let mut results = Vec::new();
+    for task in candidates.into_iter().take(limit) {
+        let result = if dry_run {
+            appsec_pipeline_worker_dry_run_task(root, &state_dir, &task)?
+        } else {
+            appsec_pipeline_worker_execute_task(root, &state_dir, &task, &lease_owner)?
+        };
+        results.push(result);
+    }
+    let succeeded = results
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("handled"))
+        .count();
+    let blocked = results
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("blocked"))
+        .count();
+    let retry_scheduled = results
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("retry-scheduled"))
+        .count();
+    let failed = results
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("failed"))
+        .count();
+    let output = json!({
+        "ok": failed == 0,
+        "command": "pipeline work",
+        "version": "ctox.appsec.pipeline_worker.v1",
+        "state_dir": state_dir.to_string_lossy(),
+        "dry_run": dry_run,
+        "lease_owner": lease_owner,
+        "summary": {
+            "selected": results.len(),
+            "handled": succeeded,
+            "blocked": blocked,
+            "retry_scheduled": retry_scheduled,
+            "failed": failed,
+        },
+        "tasks": results,
+    });
+    Ok(output)
+}
+
+fn select_appsec_pipeline_queue_tasks(
+    root: &Path,
+    state_dir: &Path,
+    message_key: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<channels::QueueTaskView>> {
+    if let Some(message_key) = message_key {
+        let Some(task) = channels::load_queue_task(root, message_key)? else {
+            anyhow::bail!("queue task `{message_key}` was not found");
+        };
+        ensure_appsec_pipeline_task(root, state_dir, &task)?;
+        if appsec_pipeline_retry_due(root, &task.message_key)? {
+            return Ok(vec![task]);
+        }
+        return Ok(Vec::new());
+    }
+
+    let pending = vec!["pending".to_string()];
+    let mut selected = Vec::new();
+    for task in channels::list_queue_tasks(root, &pending, limit.saturating_mul(20).max(50))? {
+        if is_appsec_pipeline_task_for_state(root, state_dir, &task)?
+            && appsec_pipeline_retry_due(root, &task.message_key)?
+        {
+            selected.push(task);
+            if selected.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn ensure_appsec_pipeline_task(
+    root: &Path,
+    state_dir: &Path,
+    task: &channels::QueueTaskView,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        is_appsec_pipeline_task_for_state(root, state_dir, task)?,
+        "queue task `{}` is not an AppSec pipeline task for {}",
+        task.message_key,
+        state_dir.display()
+    );
+    Ok(())
+}
+
+fn is_appsec_pipeline_task_for_state(
+    root: &Path,
+    state_dir: &Path,
+    task: &channels::QueueTaskView,
+) -> anyhow::Result<bool> {
+    if task.suggested_skill.as_deref() != Some("appsec-pentest") {
+        return Ok(false);
+    }
+    let Some(appsec_state_dir) =
+        channels::queue_task_metadata_value(root, &task.message_key, "appsec_state_dir")?
+    else {
+        return Ok(false);
+    };
+    let Some(appsec_state_dir) = appsec_state_dir.as_str() else {
+        return Ok(false);
+    };
+    Ok(path_string_matches(state_dir, appsec_state_dir))
+}
+
+fn path_string_matches(path: &Path, raw: &str) -> bool {
+    if raw == path.to_string_lossy() {
+        return true;
+    }
+    Path::new(raw) == path
+}
+
+fn appsec_pipeline_task_stage(
+    root: &Path,
+    task: &channels::QueueTaskView,
+) -> anyhow::Result<Value> {
+    channels::queue_task_metadata_value(root, &task.message_key, "stage")?
+        .context("AppSec pipeline queue task is missing stage metadata")
+}
+
+fn appsec_pipeline_worker_dry_run_task(
+    root: &Path,
+    _state_dir: &Path,
+    task: &channels::QueueTaskView,
+) -> anyhow::Result<Value> {
+    let stage = appsec_pipeline_task_stage(root, task)?;
+    Ok(json!({
+        "message_key": task.message_key,
+        "status": "dry-run",
+        "route_status": task.route_status,
+        "stage": appsec_stage_summary(&stage),
+        "commands": appsec_stage_command_plan(&stage),
+    }))
+}
+
+fn appsec_pipeline_worker_execute_task(
+    root: &Path,
+    state_dir: &Path,
+    task: &channels::QueueTaskView,
+    lease_owner: &str,
+) -> anyhow::Result<Value> {
+    ensure_appsec_pipeline_task(root, state_dir, task)?;
+    let leased = channels::lease_queue_task(root, &task.message_key, lease_owner)?;
+    let stage = appsec_pipeline_task_stage(root, &leased)?;
+    let execution = execute_appsec_stage_commands(root, state_dir, &stage)?;
+    let commands = execution
+        .get("commands")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let command_failures = commands
+        .iter()
+        .filter(|command| command.get("ok").and_then(Value::as_bool) == Some(false))
+        .count();
+    let command_blocks = commands
+        .iter()
+        .filter(|command| {
+            command
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status.starts_with("blocked"))
+        })
+        .count();
+    let completed_artifacts = completed_run_artifacts(&commands);
+    let mut coverage_update = Value::Null;
+    let mut analyze_output = Value::Null;
+    let mut pipeline_status = Value::Null;
+    let final_status: String;
+    let final_note: String;
+    let mut failure_policy = Value::Null;
+
+    if command_failures == 0 && command_blocks == 0 && !completed_artifacts.is_empty() {
+        analyze_output = run_projected_appsec_command(
+            root,
+            &[
+                "analyze".to_string(),
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+            ],
+        )?;
+        coverage_update =
+            mark_appsec_stage_coverage(root, state_dir, &stage, &completed_artifacts)?;
+        pipeline_status = run_projected_appsec_command(
+            root,
+            &[
+                "pipeline".to_string(),
+                "status".to_string(),
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+            ],
+        )?;
+        if appsec_pipeline_stage_terminal(&pipeline_status, &stage) {
+            let note = format!(
+                "appsec:terminal-success: pipeline stage completed with coverage evidence for {}",
+                appsec_stage_id(&stage).unwrap_or("unknown-stage")
+            );
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: leased.message_key.clone(),
+                    route_status: Some("handled".to_string()),
+                    status_note: Some(note.clone()),
+                    ..Default::default()
+                },
+            )?;
+            final_status = "handled".to_string();
+            final_note = note;
+        } else {
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: leased.message_key.clone(),
+                    route_status: Some("blocked".to_string()),
+                    status_note: Some(
+                        "AppSec commands ran, but pipeline status is not terminal for this stage"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+            )?;
+            final_status = "blocked".to_string();
+            final_note = "AppSec commands ran, but pipeline status is not terminal for this stage"
+                .to_string();
+        }
+    } else {
+        let note = appsec_stage_worker_blocker_note(
+            command_failures,
+            command_blocks,
+            &completed_artifacts,
+        );
+        if command_failures > 0 && appsec_stage_failure_is_retryable(&commands) {
+            failure_policy =
+                apply_appsec_stage_failure_retry_policy(root, state_dir, &leased, &stage, &note)?;
+            final_status = failure_policy
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("failed")
+                .to_string();
+            final_note = failure_policy
+                .get("note")
+                .and_then(Value::as_str)
+                .unwrap_or(&note)
+                .to_string();
+        } else {
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: leased.message_key.clone(),
+                    route_status: Some("blocked".to_string()),
+                    status_note: Some(note.clone()),
+                    ..Default::default()
+                },
+            )?;
+            failure_policy = json!({
+                "version": APPSEC_PIPELINE_RETRY_VERSION,
+                "status": "blocked",
+                "retryable": false,
+                "reason": "stage command failure is a durable blocker, not a transient tool failure",
+                "max_attempts": APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS,
+                "command_statuses": appsec_stage_command_statuses(&commands),
+            });
+            final_status = "blocked".to_string();
+            final_note = note;
+        }
+    }
+
+    let refreshed = channels::load_queue_task(root, &leased.message_key)?.unwrap_or(leased);
+    let result = json!({
+        "message_key": refreshed.message_key,
+        "status": final_status,
+        "note": final_note,
+        "route_status": refreshed.route_status,
+        "stage": appsec_stage_summary(&stage),
+        "execution": execution,
+        "failure_policy": failure_policy,
+        "analysis": analyze_output,
+        "coverage_update": coverage_update,
+        "pipeline_status": pipeline_status,
+    });
+    channels::set_queue_task_metadata_value(
+        root,
+        &refreshed.message_key,
+        "appsec_worker_result",
+        result.clone(),
+    )?;
+    run_projected_appsec_command(
+        root,
+        &[
+            "pipeline".to_string(),
+            "status".to_string(),
+            "--state-dir".to_string(),
+            state_dir.to_string_lossy().to_string(),
+        ],
+    )?;
+    Ok(result)
+}
+
+fn appsec_pipeline_retry_due(root: &Path, message_key: &str) -> anyhow::Result<bool> {
+    let Some(retry) = channels::queue_task_metadata_value(root, message_key, "appsec_retry")?
+    else {
+        return Ok(true);
+    };
+    let Some(not_before) = retry
+        .get("not_before")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(true);
+    };
+    Ok(not_before <= appsec_pipeline_retry_now_iso().as_str())
+}
+
+fn appsec_pipeline_retry_now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn appsec_pipeline_retry_not_before_iso() -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(APPSEC_PIPELINE_STAGE_RETRY_DELAY_SECONDS))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
+}
+
+fn appsec_stage_failure_is_retryable(commands: &[Value]) -> bool {
+    let failed_statuses = appsec_stage_command_statuses(commands);
+    !failed_statuses.is_empty()
+        && failed_statuses.iter().all(|status| {
+            matches!(
+                status.as_str(),
+                "failed" | "failed-command-error" | "blocked-tool-failed" | "blocked-tool-timeout"
+            )
+        })
+}
+
+fn appsec_stage_command_statuses(commands: &[Value]) -> Vec<String> {
+    commands
+        .iter()
+        .filter(|command| command.get("ok").and_then(Value::as_bool) == Some(false))
+        .filter_map(|command| command.get("status").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn appsec_stage_retry_attempts(root: &Path, message_key: &str) -> anyhow::Result<u64> {
+    Ok(
+        channels::queue_task_metadata_value(root, message_key, "appsec_retry")?
+            .and_then(|retry| {
+                retry
+                    .get("failed_attempts")
+                    .and_then(Value::as_u64)
+                    .or_else(|| retry.get("attempt").and_then(Value::as_u64))
+            })
+            .unwrap_or(0),
+    )
+}
+
+fn apply_appsec_stage_failure_retry_policy(
+    root: &Path,
+    state_dir: &Path,
+    leased: &channels::QueueTaskView,
+    stage: &Value,
+    note: &str,
+) -> anyhow::Result<Value> {
+    let failed_attempts = appsec_stage_retry_attempts(root, &leased.message_key)? + 1;
+    let remaining_attempts = APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS.saturating_sub(failed_attempts);
+    let retryable = failed_attempts < APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS;
+    let now = appsec_pipeline_retry_now_iso();
+    let not_before = if retryable {
+        Value::String(appsec_pipeline_retry_not_before_iso())
+    } else {
+        Value::Null
+    };
+    let retry_metadata = json!({
+        "version": APPSEC_PIPELINE_RETRY_VERSION,
+        "state_dir": state_dir.to_string_lossy(),
+        "stage_id": appsec_stage_id(stage).unwrap_or("unknown-stage"),
+        "failed_attempts": failed_attempts,
+        "max_attempts": APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS,
+        "remaining_attempts": remaining_attempts,
+        "retryable": retryable,
+        "failed_at": now,
+        "not_before": not_before,
+        "last_failure_note": note,
+    });
+    if retryable {
+        let retry_note = format!(
+            "AppSec stage failed transiently; retry {}/{} scheduled after {}",
+            failed_attempts,
+            APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS,
+            retry_metadata
+                .get("not_before")
+                .and_then(Value::as_str)
+                .unwrap_or("the retry delay")
+        );
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: leased.message_key.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some(retry_note.clone()),
+                ..Default::default()
+            },
+        )?;
+        channels::set_queue_task_metadata_value(
+            root,
+            &leased.message_key,
+            "appsec_retry",
+            retry_metadata,
+        )?;
+        Ok(json!({
+            "version": APPSEC_PIPELINE_RETRY_VERSION,
+            "status": "retry-scheduled",
+            "route_status": "pending",
+            "retryable": true,
+            "failed_attempts": failed_attempts,
+            "max_attempts": APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS,
+            "remaining_attempts": remaining_attempts,
+            "note": retry_note,
+        }))
+    } else {
+        channels::ack_leased_messages_with_failure_reason(
+            root,
+            std::slice::from_ref(&leased.message_key),
+            "failed",
+            note,
+        )?;
+        channels::set_queue_task_metadata_value(
+            root,
+            &leased.message_key,
+            "appsec_retry",
+            retry_metadata,
+        )?;
+        Ok(json!({
+            "version": APPSEC_PIPELINE_RETRY_VERSION,
+            "status": "failed",
+            "route_status": "failed",
+            "retryable": false,
+            "failed_attempts": failed_attempts,
+            "max_attempts": APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS,
+            "remaining_attempts": 0,
+            "note": note,
+        }))
+    }
+}
+
+fn execute_appsec_stage_commands(
+    root: &Path,
+    state_dir: &Path,
+    stage: &Value,
+) -> anyhow::Result<Value> {
+    let mut execution_context = AppsecStageExecutionContext::default();
+    let mut command_results = Vec::new();
+    let commands = stage
+        .get("run_commands")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for command in commands {
+        let (command, resolved_placeholders) =
+            match resolve_appsec_stage_command_placeholders(command, &execution_context) {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    command_results.push(json!({
+                        "ok": false,
+                        "status": "blocked-invalid-command",
+                        "error": err.to_string(),
+                    }));
+                    continue;
+                }
+            };
+        let command_kind = command
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if command
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status.starts_with("blocked"))
+        {
+            command_results.push(json!({
+                "ok": false,
+                "status": command.get("status").and_then(Value::as_str).unwrap_or("blocked"),
+                "kind": command_kind,
+                "tool": command.get("tool").cloned().unwrap_or(Value::Null),
+                "requires": command.get("requires").cloned().unwrap_or(Value::Null),
+                "error": command.get("error").cloned().unwrap_or(Value::Null),
+            }));
+            continue;
+        }
+        let argv = command
+            .get("argv")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if !appsec_pipeline_command_is_ctox_contract(command_kind)
+            && command.get("ctox_cli").is_none()
+        {
+            command_results.push(json!({
+                "ok": false,
+                "status": "blocked-external-tooling-required",
+                "kind": command_kind,
+                "argv": argv,
+                "error": "pipeline stage command requires non-CLI CTOX tooling or external evidence",
+            }));
+            continue;
+        }
+        let argv_strings = match appsec_command_argv_strings(&command) {
+            Ok(argv_strings) => argv_strings,
+            Err(err) => {
+                command_results.push(json!({
+                    "ok": false,
+                    "status": "blocked-invalid-command",
+                    "argv": argv,
+                    "error": err.to_string(),
+                }));
+                continue;
+            }
+        };
+        if argv_strings.len() < 3 || argv_strings.first().map(String::as_str) != Some("ctox") {
+            command_results.push(json!({
+                "ok": false,
+                "status": "blocked-invalid-command",
+                "argv": argv_strings,
+                "error": "pipeline worker only executes allowed CTOX CLI contracts",
+            }));
+            continue;
+        }
+        let unresolved_placeholders =
+            appsec_command_unresolved_placeholders(&command, &argv_strings);
+        if !unresolved_placeholders.is_empty() {
+            command_results.push(json!({
+                "ok": false,
+                "status": "blocked-placeholder-required",
+                "argv": argv_strings,
+                "unresolved_placeholders": unresolved_placeholders,
+                "error": "pipeline command contains an unresolved placeholder",
+            }));
+            continue;
+        }
+        if argv_strings.get(1).map(String::as_str) == Some("appsec")
+            && argv_strings.get(2).map(String::as_str) == Some("pipeline")
+            && argv_strings.get(3).map(String::as_str) == Some("work")
+        {
+            command_results.push(json!({
+                "ok": false,
+                "status": "blocked-recursive-worker-command",
+                "argv": argv_strings,
+                "error": "pipeline worker refuses to invoke itself recursively",
+            }));
+            continue;
+        }
+        match execute_appsec_ctox_cli_command(root, state_dir, &command, &argv_strings) {
+            Ok(output) => {
+                let persisted_artifact =
+                    persist_appsec_command_expected_artifact(state_dir, &command, &output)?;
+                let session_bindings =
+                    record_appsec_stage_session_bindings(&mut execution_context, &command, &output);
+                let artifact_bindings = record_appsec_stage_artifact_bindings(
+                    &mut execution_context,
+                    &command,
+                    &output,
+                    persisted_artifact.as_deref(),
+                );
+                let ok = output.get("ok").and_then(Value::as_bool) != Some(false);
+                let status = output
+                    .get("run")
+                    .and_then(|run| run.get("status"))
+                    .and_then(Value::as_str)
+                    .or_else(|| output.get("status").and_then(Value::as_str))
+                    .unwrap_or(if ok { "completed" } else { "failed" });
+                let mut command_result = json!({
+                    "ok": ok,
+                    "status": status,
+                    "argv": argv_strings,
+                    "output": output,
+                });
+                if let Some(artifact) = persisted_artifact {
+                    if let Some(object) = command_result.as_object_mut() {
+                        object.insert("artifact_path".to_string(), Value::String(artifact));
+                    }
+                }
+                insert_non_empty_array(
+                    &mut command_result,
+                    "resolved_placeholders",
+                    resolved_placeholders,
+                );
+                insert_non_empty_array(&mut command_result, "session_bindings", session_bindings);
+                insert_non_empty_array(&mut command_result, "artifact_bindings", artifact_bindings);
+                command_results.push(command_result);
+            }
+            Err(err) => {
+                command_results.push(json!({
+                    "ok": false,
+                    "status": "failed-command-error",
+                    "argv": argv_strings,
+                    "error": err.to_string(),
+                }));
+            }
+        }
+    }
+    Ok(json!({
+        "commands": command_results,
+        "session_bindings": appsec_stage_session_bindings_value(&execution_context),
+        "artifact_bindings": appsec_stage_artifact_bindings_value(&execution_context),
+    }))
+}
+
+#[derive(Debug, Default)]
+struct AppsecStageExecutionContext {
+    session_ids: BTreeMap<String, String>,
+    artifacts: BTreeMap<String, String>,
+}
+
+fn appsec_pipeline_command_is_ctox_contract(command_kind: &str) -> bool {
+    matches!(command_kind, "ctox-cli" | "ctox-web-stack-authz")
+}
+
+fn appsec_command_argv_strings(command: &Value) -> anyhow::Result<Vec<String>> {
+    if let Some(argv) = command.get("argv") {
+        return value_string_array(argv).context("pipeline command argv must be a string array");
+    }
+    let ctox_cli = command
+        .get("ctox_cli")
+        .context("pipeline command is missing argv or ctox_cli")?;
+    let program = ctox_cli
+        .get("program")
+        .and_then(Value::as_str)
+        .context("ctox_cli.program is required")?;
+    let mut argv = vec![program.to_string()];
+    if let Some(args) = ctox_cli.get("args") {
+        argv.extend(value_string_array(args).context("ctox_cli.args must be a string array")?);
+    }
+    Ok(argv)
+}
+
+fn value_string_array(value: &Value) -> anyhow::Result<Vec<String>> {
+    let values = value.as_array().context("value is not an array")?;
+    values
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(ToString::to_string)
+                .context("array contains a non-string value")
+        })
+        .collect()
+}
+
+fn resolve_appsec_stage_command_placeholders(
+    mut command: Value,
+    context: &AppsecStageExecutionContext,
+) -> anyhow::Result<(Value, Vec<Value>)> {
+    let mut resolved_placeholders = Vec::new();
+    replace_appsec_session_placeholders_in_string_array(
+        &mut command,
+        "/argv",
+        "argv",
+        context,
+        &mut resolved_placeholders,
+    )?;
+    replace_appsec_session_placeholders_in_string_array(
+        &mut command,
+        "/ctox_cli/args",
+        "ctox_cli.args",
+        context,
+        &mut resolved_placeholders,
+    )?;
+    replace_appsec_session_placeholder_in_string(
+        &mut command,
+        "/harness_tool/freeform_source",
+        "harness_tool.freeform_source",
+        context,
+        &mut resolved_placeholders,
+    )?;
+    Ok((command, resolved_placeholders))
+}
+
+fn replace_appsec_session_placeholders_in_string_array(
+    command: &mut Value,
+    pointer: &str,
+    field: &str,
+    context: &AppsecStageExecutionContext,
+    resolved_placeholders: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let Some(value) = command.pointer_mut(pointer) else {
+        return Ok(());
+    };
+    let array = value
+        .as_array_mut()
+        .with_context(|| format!("{field} must be a string array"))?;
+    for item in array {
+        let Some(text) = item.as_str() else {
+            anyhow::bail!("{field} contains a non-string value");
+        };
+        let replacement = replace_appsec_session_placeholders_in_text(
+            text,
+            field,
+            context,
+            resolved_placeholders,
+        );
+        if replacement != text {
+            *item = Value::String(replacement);
+        }
+    }
+    Ok(())
+}
+
+fn replace_appsec_session_placeholder_in_string(
+    command: &mut Value,
+    pointer: &str,
+    field: &str,
+    context: &AppsecStageExecutionContext,
+    resolved_placeholders: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let Some(value) = command.pointer_mut(pointer) else {
+        return Ok(());
+    };
+    let text = value
+        .as_str()
+        .with_context(|| format!("{field} must be a string"))?;
+    let replacement =
+        replace_appsec_session_placeholders_in_text(text, field, context, resolved_placeholders);
+    if replacement != text {
+        *value = Value::String(replacement);
+    }
+    Ok(())
+}
+
+fn replace_appsec_session_placeholders_in_text(
+    text: &str,
+    field: &str,
+    context: &AppsecStageExecutionContext,
+    resolved_placeholders: &mut Vec<Value>,
+) -> String {
+    let mut replacement = text.to_string();
+    for (key, session_id) in &context.session_ids {
+        let placeholder = appsec_session_placeholder_token(key);
+        if replacement.contains(&placeholder) {
+            replacement = replacement.replace(&placeholder, session_id);
+            resolved_placeholders.push(json!({
+                "field": field,
+                "placeholder": placeholder,
+                "binding": key,
+                "value_ref": "ctox_web_stack_session_id",
+            }));
+        }
+    }
+    for (key, artifact) in &context.artifacts {
+        let placeholder = appsec_artifact_placeholder_token(key);
+        if replacement.contains(&placeholder) {
+            replacement = replacement.replace(&placeholder, artifact);
+            resolved_placeholders.push(json!({
+                "field": field,
+                "placeholder": placeholder,
+                "binding": key,
+                "value_ref": "ctox_appsec_artifact",
+            }));
+        }
+    }
+    replacement
+}
+
+fn appsec_command_unresolved_placeholders(command: &Value, argv: &[String]) -> Vec<Value> {
+    let mut placeholders = Vec::new();
+    for arg in argv {
+        if appsec_argv_has_placeholder(arg) {
+            placeholders.push(json!({
+                "field": "argv",
+                "value": appsec_placeholder_display(arg),
+            }));
+        }
+    }
+    if let Some(source) = command
+        .pointer("/harness_tool/freeform_source")
+        .and_then(Value::as_str)
+    {
+        for key in appsec_session_placeholder_keys_from_text(source) {
+            placeholders.push(json!({
+                "field": "harness_tool.freeform_source",
+                "placeholder": appsec_session_placeholder_token(&key),
+            }));
+        }
+        for key in appsec_artifact_placeholder_keys_from_text(source) {
+            placeholders.push(json!({
+                "field": "harness_tool.freeform_source",
+                "placeholder": appsec_artifact_placeholder_token(&key),
+            }));
+        }
+        if source.contains("${session_id:")
+            && !placeholders.iter().any(|item| {
+                item.get("field").and_then(Value::as_str) == Some("harness_tool.freeform_source")
+            })
+        {
+            placeholders.push(json!({
+                "field": "harness_tool.freeform_source",
+                "value": "${session_id:*}",
+            }));
+        }
+        if source.contains("${artifact:")
+            && !placeholders.iter().any(|item| {
+                item.get("field").and_then(Value::as_str) == Some("harness_tool.freeform_source")
+            })
+        {
+            placeholders.push(json!({
+                "field": "harness_tool.freeform_source",
+                "value": "${artifact:*}",
+            }));
+        }
+    }
+    placeholders
+}
+
+fn appsec_argv_has_placeholder(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    (trimmed.starts_with('<') && trimmed.ends_with('>'))
+        || trimmed.contains("${")
+        || trimmed.contains("<redacted")
+        || trimmed.contains("<approval")
+}
+
+fn appsec_placeholder_display(value: &str) -> String {
+    let trimmed = value.trim();
+    const MAX_LEN: usize = 160;
+    if trimmed.len() <= MAX_LEN {
+        return trimmed.to_string();
+    }
+    format!("{}...", &trimmed[..MAX_LEN])
+}
+
+fn appsec_session_placeholder_token(key: &str) -> String {
+    format!("${{session_id:{key}}}")
+}
+
+fn appsec_artifact_placeholder_token(key: &str) -> String {
+    format!("${{artifact:{key}}}")
+}
+
+fn appsec_session_placeholder_keys_from_text(text: &str) -> Vec<String> {
+    appsec_placeholder_keys_from_text(text, "${session_id:")
+}
+
+fn appsec_artifact_placeholder_keys_from_text(text: &str) -> Vec<String> {
+    appsec_placeholder_keys_from_text(text, "${artifact:")
+}
+
+fn appsec_placeholder_keys_from_text(text: &str, marker: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut offset = 0;
+    while let Some(relative_start) = text[offset..].find(marker) {
+        let key_start = offset + relative_start + marker.len();
+        let Some(relative_end) = text[key_start..].find('}') else {
+            break;
+        };
+        let key = text[key_start..key_start + relative_end].trim();
+        if !key.is_empty() && !keys.iter().any(|existing| existing == key) {
+            keys.push(key.to_string());
+        }
+        offset = key_start + relative_end + 1;
+    }
+    keys
+}
+
+fn record_appsec_stage_session_bindings(
+    context: &mut AppsecStageExecutionContext,
+    command: &Value,
+    output: &Value,
+) -> Vec<Value> {
+    let Some(session_id) = appsec_output_session_id(output) else {
+        return Vec::new();
+    };
+    let mut keys = appsec_command_session_placeholder_keys(command);
+    if keys.is_empty() {
+        if let Some(subject_id) = command.get("subject_id").and_then(Value::as_str) {
+            keys.push(appsec_sanitize_session_placeholder_key(subject_id));
+        }
+    }
+    let mut bindings = Vec::new();
+    for key in keys {
+        if key.trim().is_empty() {
+            continue;
+        }
+        context.session_ids.insert(key.clone(), session_id.clone());
+        bindings.push(json!({
+            "binding": key,
+            "session_id": session_id,
+            "source": "ctox_web_stack_session_id",
+        }));
+    }
+    bindings
+}
+
+fn record_appsec_stage_artifact_bindings(
+    context: &mut AppsecStageExecutionContext,
+    command: &Value,
+    output: &Value,
+    persisted_artifact: Option<&str>,
+) -> Vec<Value> {
+    let artifact = persisted_artifact
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| appsec_output_artifact(output));
+    let Some(artifact) = artifact else {
+        return Vec::new();
+    };
+    let mut keys = appsec_command_artifact_placeholder_keys(command);
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let mut bindings = Vec::new();
+    for key in keys.drain(..) {
+        if key.trim().is_empty() {
+            continue;
+        }
+        context.artifacts.insert(key.clone(), artifact.clone());
+        bindings.push(json!({
+            "binding": key,
+            "artifact": artifact,
+            "source": "ctox_appsec_artifact",
+        }));
+    }
+    bindings
+}
+
+fn appsec_output_session_id(output: &Value) -> Option<String> {
+    [
+        "/session_id",
+        "/browser_session/session_id",
+        "/result/session_id",
+        "/output/session_id",
+    ]
+    .into_iter()
+    .find_map(|pointer| {
+        output
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn appsec_output_artifact(output: &Value) -> Option<String> {
+    [
+        "/artifact",
+        "/matrix_artifact",
+        "/plan_artifact",
+        "/run/artifact",
+        "/run/combined_artifact",
+        "/output/artifact",
+        "/import_result/artifact",
+    ]
+    .into_iter()
+    .find_map(|pointer| {
+        output
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn appsec_command_session_placeholder_keys(command: &Value) -> Vec<String> {
+    let mut keys = Vec::new();
+    for pointer in [
+        "/produces/session_id/placeholder",
+        "/session_id_ref/placeholder",
+        "/input/session_id",
+        "/harness_tool/arguments/session_id",
+        "/harness_tool/freeform_source",
+    ] {
+        let Some(value) = command.pointer(pointer).and_then(Value::as_str) else {
+            continue;
+        };
+        for key in appsec_session_placeholder_keys_from_text(value) {
+            if !keys.iter().any(|existing| existing == &key) {
+                keys.push(key);
+            }
+        }
+    }
+    keys
+}
+
+fn appsec_command_artifact_placeholder_keys(command: &Value) -> Vec<String> {
+    let mut keys = Vec::new();
+    for pointer in [
+        "/produces/artifact/placeholder",
+        "/artifact_ref/placeholder",
+        "/input/artifact",
+        "/harness_tool/freeform_source",
+    ] {
+        let Some(value) = command.pointer(pointer).and_then(Value::as_str) else {
+            continue;
+        };
+        for key in appsec_artifact_placeholder_keys_from_text(value) {
+            if !keys.iter().any(|existing| existing == &key) {
+                keys.push(key);
+            }
+        }
+    }
+    keys
+}
+
+fn appsec_sanitize_session_placeholder_key(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn appsec_stage_session_bindings_value(context: &AppsecStageExecutionContext) -> Value {
+    Value::Object(
+        context
+            .session_ids
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect(),
+    )
+}
+
+fn appsec_stage_artifact_bindings_value(context: &AppsecStageExecutionContext) -> Value {
+    Value::Object(
+        context
+            .artifacts
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect(),
+    )
+}
+
+fn insert_non_empty_array(target: &mut Value, key: &str, values: Vec<Value>) {
+    if values.is_empty() {
+        return;
+    }
+    if let Some(object) = target.as_object_mut() {
+        object.insert(key.to_string(), Value::Array(values));
+    }
+}
+
+fn execute_appsec_ctox_cli_command(
+    root: &Path,
+    state_dir: &Path,
+    command: &Value,
+    argv: &[String],
+) -> anyhow::Result<Value> {
+    match argv.get(1).map(String::as_str) {
+        Some("appsec") => {
+            let mut appsec_args = argv[2..].to_vec();
+            if !appsec_args.iter().any(|arg| arg == "--state-dir") {
+                appsec_args.push("--state-dir".to_string());
+                appsec_args.push(state_dir.to_string_lossy().to_string());
+            }
+            run_projected_appsec_command(root, &appsec_args)
+        }
+        Some("web") => execute_appsec_web_cli_command(root, state_dir, command, &argv[2..]),
+        Some("business-os") => execute_appsec_business_os_cli_command(root, &argv[2..]),
+        Some(other) => anyhow::bail!("unsupported CTOX CLI domain `{other}` for AppSec worker"),
+        None => anyhow::bail!("missing CTOX CLI domain"),
+    }
+}
+
+fn execute_appsec_web_cli_command(
+    root: &Path,
+    state_dir: &Path,
+    command: &Value,
+    args: &[String],
+) -> anyhow::Result<Value> {
+    match args.first().map(String::as_str) {
+        Some("browser-prepare") => crate::web_stack::prepare_browser_environment(
+            root,
+            &crate::web_stack::BrowserPrepareOptions {
+                dir: arg_value(args, "--dir").map(PathBuf::from),
+                install_reference: arg_flag(args, "--install-reference"),
+                install_browser: arg_flag(args, "--install-browser"),
+                skip_npm_install: arg_flag(args, "--skip-npm-install"),
+            },
+        ),
+        Some("browser-automation") => {
+            let source = browser_automation_source_from_stage_command(state_dir, command)?;
+            if let Some(session_id) = arg_value(args, "--session-id") {
+                return crate::business_os::run_browser_session_automation(
+                    root,
+                    crate::business_os::BrowserSessionAutomationRequest {
+                        session_id,
+                        dir: arg_value(args, "--dir").map(PathBuf::from),
+                        timeout_ms: parse_optional_u64_arg(args, "--timeout-ms")?,
+                        source,
+                    },
+                );
+            }
+            crate::web_stack::run_browser_automation(
+                root,
+                &crate::web_stack::BrowserAutomationRequest {
+                    dir: arg_value(args, "--dir").map(PathBuf::from),
+                    timeout_ms: parse_optional_u64_arg(args, "--timeout-ms")?,
+                    source,
+                },
+            )
+        }
+        Some("browser-capture") => {
+            let url = arg_value(args, "--url")
+                .or_else(|| args.get(1).cloned())
+                .context("ctox web browser-capture requires --url <url>")?;
+            crate::web_stack::capture_browser_transport(
+                root,
+                &crate::web_stack::BrowserCaptureRequest {
+                    dir: arg_value(args, "--dir").map(PathBuf::from),
+                    out_dir: arg_value(args, "--out-dir").map(PathBuf::from),
+                    timeout_ms: parse_optional_u64_arg(args, "--timeout-ms")?,
+                    url,
+                },
+            )
+        }
+        Some(other) => anyhow::bail!("unsupported ctox web command `{other}` for AppSec worker"),
+        None => anyhow::bail!("missing ctox web command"),
+    }
+}
+
+fn browser_automation_source_from_stage_command(
+    state_dir: &Path,
+    command: &Value,
+) -> anyhow::Result<String> {
+    let stdin_contract = command.pointer("/ctox_cli/stdin").and_then(Value::as_str);
+    if stdin_contract != Some("harness_tool.freeform_source") {
+        anyhow::bail!(
+            "ctox web browser-automation must use ctox_cli.stdin=harness_tool.freeform_source"
+        );
+    }
+    let source = command
+        .pointer("/harness_tool/freeform_source")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("browser automation command is missing harness_tool.freeform_source")?;
+    anyhow::ensure!(
+        !source.trim().is_empty(),
+        "browser automation freeform source is empty"
+    );
+    let source = match appsec_authz_replay_candidates_source_prefix(state_dir, command)? {
+        Some(prefix) => format!("{prefix}\n{source}"),
+        None => source,
+    };
+    Ok(source)
+}
+
+fn appsec_authz_replay_candidates_source_prefix(
+    state_dir: &Path,
+    command: &Value,
+) -> anyhow::Result<Option<String>> {
+    if command.get("phase").and_then(Value::as_str) != Some("cross-subject-replay") {
+        return Ok(None);
+    }
+    let artifact_ref = command
+        .pointer("/input/owner_api_map_artifact")
+        .and_then(Value::as_str)
+        .context("cross-subject replay command is missing input.owner_api_map_artifact")?;
+    let artifact_path = appsec_expected_artifact_path(state_dir, artifact_ref);
+    let evidence: Value = serde_json::from_slice(&fs::read(&artifact_path).with_context(|| {
+        format!(
+            "failed to read owner API map artifact {}",
+            artifact_path.display()
+        )
+    })?)
+    .with_context(|| {
+        format!(
+            "failed to parse owner API map artifact {}",
+            artifact_path.display()
+        )
+    })?;
+    let candidates = appsec_authz_replay_candidates_from_evidence(&evidence);
+    anyhow::ensure!(
+        !candidates.is_empty(),
+        "owner API map artifact {} produced no replay candidates",
+        artifact_path.display()
+    );
+    Ok(Some(format!(
+        "globalThis.ctoxAuthzReplayCandidates = {};",
+        serde_json::to_string(&candidates)?
+    )))
+}
+
+fn appsec_authz_replay_candidates_from_evidence(evidence: &Value) -> Vec<Value> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeMap::<String, ()>::new();
+    collect_appsec_authz_replay_candidates(evidence, &mut candidates, &mut seen);
+    candidates
+}
+
+fn collect_appsec_authz_replay_candidates(
+    value: &Value,
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeMap<String, ()>,
+) {
+    match value {
+        Value::Object(object) => {
+            if let Some(candidate) = appsec_authz_candidate_from_object(value) {
+                let endpoint = candidate
+                    .get("endpoint")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let method = candidate
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or("GET");
+                let key = format!("{method} {endpoint}");
+                if !seen.contains_key(&key) {
+                    seen.insert(key, ());
+                    candidates.push(candidate);
+                }
+            }
+            for child in object.values() {
+                collect_appsec_authz_replay_candidates(child, candidates, seen);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_appsec_authz_replay_candidates(item, candidates, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn appsec_authz_candidate_from_object(value: &Value) -> Option<Value> {
+    let endpoint = value
+        .get("endpoint")
+        .or_else(|| value.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())?;
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+        return None;
+    }
+    let mut candidate = json!({
+        "endpoint": endpoint,
+        "method": method,
+        "expected": value.get("expected").and_then(Value::as_str).unwrap_or("deny"),
+    });
+    if let Some(object) = candidate.as_object_mut() {
+        for key in ["object", "object_ref", "object_type", "owner_subject"] {
+            if let Some(value) = value.get(key).cloned() {
+                object.insert(key.to_string(), value);
+            }
+        }
+    }
+    Some(candidate)
+}
+
+fn execute_appsec_business_os_cli_command(root: &Path, args: &[String]) -> anyhow::Result<Value> {
+    if args.first().map(String::as_str) != Some("web-stack") {
+        anyhow::bail!("AppSec worker only allows ctox business-os web-stack commands");
+    }
+    crate::service::business_os::run_business_os_web_stack_cli_json(root, &args[1..])
+}
+
+fn parse_optional_u64_arg(args: &[String], flag: &str) -> anyhow::Result<Option<u64>> {
+    arg_value(args, flag)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .with_context(|| format!("failed to parse {flag}"))
+        })
+        .transpose()
+}
+
+fn appsec_stage_command_plan(stage: &Value) -> Value {
+    Value::Array(
+        stage
+            .get("run_commands")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    )
+}
+
+fn persist_appsec_command_expected_artifact(
+    state_dir: &Path,
+    command: &Value,
+    output: &Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(expected) = command
+        .get("expected_artifact")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let artifact_path = appsec_expected_artifact_path(state_dir, expected);
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create appsec artifact dir {}", parent.display())
+        })?;
+    }
+    let artifact = appsec_redacted_command_artifact(command, output, &artifact_path);
+    fs::write(&artifact_path, serde_json::to_vec_pretty(&artifact)?).with_context(|| {
+        format!(
+            "failed to write appsec artifact {}",
+            artifact_path.display()
+        )
+    })?;
+    Ok(Some(artifact_path.to_string_lossy().to_string()))
+}
+
+fn appsec_expected_artifact_path(state_dir: &Path, expected: &str) -> PathBuf {
+    let path = PathBuf::from(expected);
+    if path.is_absolute() {
+        path
+    } else {
+        state_dir.join(path)
+    }
+}
+
+fn appsec_redacted_command_artifact(
+    command: &Value,
+    output: &Value,
+    artifact_path: &Path,
+) -> Value {
+    let result = output
+        .get("result")
+        .cloned()
+        .unwrap_or_else(|| output.clone());
+    let mut artifact = json!({
+        "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+        "source_tool": command.get("tool").cloned().unwrap_or(Value::Null),
+        "phase": command.get("phase").cloned().unwrap_or(Value::Null),
+        "target": command.get("target").cloned().unwrap_or(Value::Null),
+        "subject_id": command.get("subject_id").cloned().unwrap_or(Value::Null),
+        "owner_subject": command.get("owner_subject").cloned().unwrap_or(Value::Null),
+        "actor_subject": command.get("actor_subject").cloned().unwrap_or(Value::Null),
+        "artifact": artifact_path.to_string_lossy(),
+        "result": result,
+        "secret_policy": "redacted: no cookies, tokens, passwords, screenshots, raw browser streams, or storage state",
+    });
+    for key in [
+        "objects",
+        "cases",
+        "product_failures",
+        "api_requests",
+        "performance_requests",
+        "visible_links",
+        "replay_candidates",
+        "replay_candidates_required",
+    ] {
+        if let Some(value) = artifact.pointer(&format!("/result/{key}")).cloned() {
+            if let Some(object) = artifact.as_object_mut() {
+                object.insert(key.to_string(), value);
+            }
+        }
+    }
+    appsec_redact_for_authz_evidence(&mut artifact);
+    artifact
+}
+
+fn appsec_redact_for_authz_evidence(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let keys = object.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                if appsec_authz_evidence_forbidden_key(&key) {
+                    object.remove(&key);
+                    continue;
+                }
+                if let Some(child) = object.get_mut(&key) {
+                    appsec_redact_for_authz_evidence(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                appsec_redact_for_authz_evidence(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn appsec_authz_evidence_forbidden_key(key: &str) -> bool {
+    let key_lc = key.to_ascii_lowercase();
+    if matches!(
+        key_lc.as_str(),
+        "secret_policy" | "secret_redaction" | "redaction" | "redacted"
+    ) {
+        return false;
+    }
+    let compact = key_lc.replace(['_', '-'], "");
+    [
+        "password",
+        "passwd",
+        "pwd",
+        "cookie",
+        "cookies",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+        "authorization",
+        "bearer",
+        "privatekey",
+        "apikey",
+        "screenshot",
+        "rawbrowserstream",
+        "browserstream",
+        "storagestate",
+        "secret",
+    ]
+    .iter()
+    .any(|needle| key_lc.contains(needle) || compact.contains(needle))
+}
+
+fn completed_run_artifacts(commands: &[Value]) -> Vec<String> {
+    commands
+        .iter()
+        .filter(|command| command.get("ok").and_then(Value::as_bool) == Some(true))
+        .filter_map(|command| {
+            command
+                .pointer("/output/run/combined_artifact")
+                .and_then(Value::as_str)
+                .or_else(|| command.pointer("/output/artifact").and_then(Value::as_str))
+                .or_else(|| {
+                    command
+                        .pointer("/output/import_result/artifact")
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| command.get("artifact_path").and_then(Value::as_str))
+                .map(ToString::to_string)
+        })
+        .collect()
+}
+
+fn mark_appsec_stage_coverage(
+    root: &Path,
+    state_dir: &Path,
+    stage: &Value,
+    artifacts: &[String],
+) -> anyhow::Result<Value> {
+    let phase = stage
+        .get("phase")
+        .and_then(Value::as_str)
+        .context("AppSec stage is missing phase")?;
+    let target = stage
+        .get("target")
+        .and_then(Value::as_str)
+        .context("AppSec stage is missing target")?;
+    let mut args = vec![
+        "coverage".to_string(),
+        "mark".to_string(),
+        "--state-dir".to_string(),
+        state_dir.to_string_lossy().to_string(),
+        "--phase".to_string(),
+        phase.to_string(),
+        "--target".to_string(),
+        target.to_string(),
+        "--status".to_string(),
+        "completed".to_string(),
+        "--note".to_string(),
+        format!(
+            "ctox appsec pipeline worker completed stage `{}` with {} scanner artifact(s)",
+            appsec_stage_id(stage).unwrap_or("unknown-stage"),
+            artifacts.len()
+        ),
+    ];
+    for artifact in artifacts {
+        args.push("--artifact".to_string());
+        args.push(artifact.clone());
+    }
+    run_projected_appsec_command(root, &args)
+}
+
+fn appsec_pipeline_stage_terminal(status_output: &Value, stage: &Value) -> bool {
+    let stage_id = appsec_stage_id(stage);
+    status_output
+        .pointer("/pipeline_status/stages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|candidate| {
+            candidate.get("id").and_then(Value::as_str) == stage_id
+                && matches!(
+                    candidate.get("status").and_then(Value::as_str),
+                    Some("completed" | "not-applicable")
+                )
+        })
+}
+
+fn appsec_stage_id(stage: &Value) -> Option<&str> {
+    stage.get("id").and_then(Value::as_str)
+}
+
+fn appsec_stage_summary(stage: &Value) -> Value {
+    json!({
+        "id": stage.get("id").cloned().unwrap_or(Value::Null),
+        "phase": stage.get("phase").cloned().unwrap_or(Value::Null),
+        "target": stage.get("target").cloned().unwrap_or(Value::Null),
+        "status": stage.get("status").cloned().unwrap_or(Value::Null),
+        "active_required": stage.get("active_required").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn appsec_stage_worker_blocker_note(
+    command_failures: usize,
+    command_blocks: usize,
+    completed_artifacts: &[String],
+) -> String {
+    if command_failures > 0 {
+        return format!(
+            "AppSec pipeline worker failed {command_failures} command(s); inspect appsec_worker_result"
+        );
+    }
+    if command_blocks > 0 {
+        return format!(
+            "AppSec pipeline worker blocked on {command_blocks} command(s) that require external evidence, placeholders, or unsupported tooling"
+        );
+    }
+    if completed_artifacts.is_empty() {
+        return "AppSec pipeline worker produced no completed run artifact".to_string();
+    }
+    "AppSec pipeline worker could not close the stage".to_string()
+}
+
+fn enqueue_appsec_pipeline_queue_tasks(
+    root: &Path,
+    output: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let queue_tasks = output
+        .pointer("/queue_spec/queue_tasks")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut enqueued = Vec::new();
+    for spec in queue_tasks {
+        let title = spec
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .context("AppSec queue task spec is missing title")?;
+        let prompt = spec
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .context("AppSec queue task spec is missing prompt")?;
+        let thread_key = spec
+            .get("thread_key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("appsec-pipeline")
+            .to_string();
+        let workspace_root = spec
+            .get("workspace_root")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let priority = spec
+            .get("priority")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("normal")
+            .to_string();
+        let suggested_skill = spec
+            .get("skill")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let extra_metadata = spec
+            .get("metadata")
+            .cloned()
+            .or_else(|| {
+                spec.get("idempotency_key").map(|key| {
+                    serde_json::json!({
+                        "source": "ctox-appsec-pipeline",
+                        "idempotency_key": key,
+                    })
+                })
+            })
+            .or_else(|| {
+                Some(serde_json::json!({
+                    "source": "ctox-appsec-pipeline",
+                }))
+            });
+        let task = channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: title.to_string(),
+                prompt: prompt.to_string(),
+                thread_key,
+                workspace_root,
+                priority,
+                suggested_skill,
+                parent_message_key: None,
+                extra_metadata,
+            },
+        )?;
+        enqueued.push(serde_json::json!({
+            "stage_id": spec.get("stage_id").cloned().unwrap_or(serde_json::Value::Null),
+            "phase": spec.get("phase").cloned().unwrap_or(serde_json::Value::Null),
+            "target": spec.get("target").cloned().unwrap_or(serde_json::Value::Null),
+            "message_key": task.message_key,
+            "thread_key": task.thread_key,
+            "route_status": task.route_status,
+            "priority": task.priority,
+        }));
+    }
+    Ok(serde_json::json!({
+        "version": "ctox.appsec.pipeline_enqueue.v1",
+        "created_or_updated": enqueued.len(),
+        "tasks": enqueued,
+        "idempotent": true,
+    }))
 }
 
 const CHAT_USAGE: &str = "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>] [--attach-file <path> ...]";
@@ -2149,12 +3907,16 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
                 "\n\x1b[32;1m✓ Domain '{}' erfolgreich hinzugefügt.\x1b[0m",
                 domain
             );
-            println!("\n================================================================================\n");
+            println!(
+                "\n================================================================================\n"
+            );
             println!(
                 "\x1b[1m=== DNS / Vercel-Konfiguration für {} ===\x1b[0m\n",
                 domain
             );
-            println!("Für die DKIM-Signierung fügen Sie bitte folgenden TXT-Eintrag bei Ihrem DNS-Provider hinzu:\n");
+            println!(
+                "Für die DKIM-Signierung fügen Sie bitte folgenden TXT-Eintrag bei Ihrem DNS-Provider hinzu:\n"
+            );
             println!(
                 "  \x1b[33;1mName/Host:\x1b[0m   {}._domainkey.{}",
                 selector, domain
@@ -2184,7 +3946,9 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
                 "    Wert:       v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc@{}",
                 domain
             );
-            println!("\n================================================================================\n");
+            println!(
+                "\n================================================================================\n"
+            );
             Ok(())
         }
         "list-domains" => {
@@ -2308,9 +4072,14 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_status_has_completed_since, find_ctox_root_from_ancestors, looks_like_ctox_root,
-        openrouter_tool_smoke_summary, persist_runtime_turn_timeout, resolve_chat_attachment_paths,
-        resolve_runtime_ctox_root, validated_workspace_root_override,
+        appsec_command_argv_strings, appsec_command_unresolved_placeholders,
+        browser_automation_source_from_stage_command, chat_status_has_completed_since,
+        execute_appsec_stage_commands, find_ctox_root_from_ancestors, handle_appsec_pipeline_work,
+        looks_like_ctox_root, openrouter_tool_smoke_summary,
+        persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
+        resolve_appsec_stage_command_placeholders, resolve_chat_attachment_paths,
+        resolve_runtime_ctox_root, run_projected_appsec_command, validated_workspace_root_override,
+        AppsecStageExecutionContext,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -2528,6 +4297,768 @@ mod tests {
             serde_json::json!(["record_status"])
         );
         assert_eq!(summary["content_len"], serde_json::json!(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn appsec_pipeline_worker_executes_ready_stage_and_handles_queue() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = make_fake_ctox_root("appsec-pipeline-worker");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let bin_dir = root.join("runtime/tools/appsec/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let httpx = bin_dir.join("httpx");
+        fs::write(
+            &httpx,
+            "#!/bin/sh\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&httpx).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&httpx, permissions).unwrap();
+
+        run_projected_appsec_command(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "init".to_string(),
+                "--url".to_string(),
+                "https://example.test".to_string(),
+            ],
+        )
+        .unwrap();
+        fs::write(
+            state.join("assessment-pipeline.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.assessment_pipeline.v1",
+                "generated_at": "test",
+                "profile": "minimal",
+                "active": false,
+                "stages": [{
+                    "id": "stage-1-blackbox-map",
+                    "order": 1,
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "tools": ["httpx"],
+                    "active_required": false,
+                    "readiness_blockers": [],
+                    "completion_gate": "httpx mapping run artifact"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            state.join("coverage.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.coverage.v1",
+                "workstreams": [{
+                    "id": "ws-map",
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "status": "planned",
+                    "tools": ["httpx"]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let enqueue = run_projected_appsec_command(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "enqueue".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--workspace-root".to_string(),
+                root.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            enqueue
+                .pointer("/ctox_queue_enqueue/created_or_updated")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+
+        let worker = handle_appsec_pipeline_work(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "work".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--limit".to_string(),
+                "1".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            worker
+                .pointer("/summary/handled")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        let message_key = worker
+            .pointer("/tasks/0/message_key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        let task = crate::channels::load_queue_task(&root, message_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.route_status, "handled");
+
+        let coverage: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(state.join("coverage.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            coverage
+                .pointer("/workstreams/0/status")
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        let writeback: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(state.join("assessment-pipeline-writeback.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            writeback
+                .pointer("/stages/0/status")
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        let conn = rusqlite::Connection::open(crate::paths::core_db(&root)).unwrap();
+        let proof_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM ctox_core_transition_proofs
+                 WHERE entity_type = 'QueueItem'
+                   AND entity_id = ?1
+                   AND to_state = 'Completed'
+                   AND accepted = 1
+                   AND request_json LIKE '%appsec-pipeline-stage-terminal-success%'",
+                [message_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(proof_count, 1);
+
+        cleanup_test_dir(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn appsec_pipeline_worker_retries_transient_tool_failure_until_budget_exhausted() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = make_fake_ctox_root("appsec-pipeline-retry-budget");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let bin_dir = root.join("runtime/tools/appsec/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let httpx = bin_dir.join("httpx");
+        fs::write(
+            &httpx,
+            "#!/bin/sh\nprintf 'transient failure\\n' >&2\nexit 2\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&httpx).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&httpx, permissions).unwrap();
+
+        run_projected_appsec_command(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "init".to_string(),
+                "--url".to_string(),
+                "https://example.test".to_string(),
+            ],
+        )
+        .unwrap();
+        fs::write(
+            state.join("assessment-pipeline.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.assessment_pipeline.v1",
+                "generated_at": "test",
+                "profile": "minimal",
+                "active": false,
+                "stages": [{
+                    "id": "stage-1-blackbox-map",
+                    "order": 1,
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "tools": ["httpx"],
+                    "active_required": false,
+                    "readiness_blockers": [],
+                    "completion_gate": "httpx mapping run artifact"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            state.join("coverage.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.coverage.v1",
+                "workstreams": [{
+                    "id": "ws-map",
+                    "phase": "blackbox-map",
+                    "target": "https://example.test",
+                    "status": "planned",
+                    "tools": ["httpx"]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let enqueue = run_projected_appsec_command(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "enqueue".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--workspace-root".to_string(),
+                root.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            enqueue
+                .pointer("/ctox_queue_enqueue/created_or_updated")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+
+        for expected_attempt in 1..=3 {
+            let worker = handle_appsec_pipeline_work(
+                &root,
+                &[
+                    "pipeline".to_string(),
+                    "work".to_string(),
+                    "--state-dir".to_string(),
+                    state.to_string_lossy().to_string(),
+                    "--limit".to_string(),
+                    "1".to_string(),
+                ],
+            )
+            .unwrap();
+            let message_key = worker
+                .pointer("/tasks/0/message_key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
+            let retry =
+                crate::channels::queue_task_metadata_value(&root, &message_key, "appsec_retry")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                retry
+                    .pointer("/failed_attempts")
+                    .and_then(serde_json::Value::as_u64),
+                Some(expected_attempt)
+            );
+
+            if expected_attempt < 3 {
+                assert_eq!(
+                    worker
+                        .pointer("/summary/retry_scheduled")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                let task = crate::channels::load_queue_task(&root, &message_key)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(task.route_status, "pending");
+
+                let held = handle_appsec_pipeline_work(
+                    &root,
+                    &[
+                        "pipeline".to_string(),
+                        "work".to_string(),
+                        "--state-dir".to_string(),
+                        state.to_string_lossy().to_string(),
+                        "--limit".to_string(),
+                        "1".to_string(),
+                    ],
+                )
+                .unwrap();
+                assert_eq!(
+                    held.pointer("/summary/selected")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(0),
+                    "retry not_before must stop a hot retry loop"
+                );
+
+                let mut due_retry = retry;
+                due_retry["not_before"] =
+                    serde_json::Value::String("1970-01-01T00:00:00Z".to_string());
+                crate::channels::set_queue_task_metadata_value(
+                    &root,
+                    &message_key,
+                    "appsec_retry",
+                    due_retry,
+                )
+                .unwrap();
+            } else {
+                assert_eq!(
+                    worker
+                        .pointer("/summary/failed")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                let task = crate::channels::load_queue_task(&root, &message_key)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(task.route_status, "failed");
+            }
+        }
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_pipeline_worker_blocks_non_retryable_session_placeholder() {
+        let root = make_fake_ctox_root("appsec-pipeline-nonretryable-blocker");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let stage = serde_json::json!({
+            "id": "stage-authz-replay",
+            "phase": "authenticated-multi-user-authz",
+            "target": "https://example.test",
+            "run_commands": [{
+                "kind": "ctox-cli",
+                "tool": "ctox_browser_automation",
+                "ctox_cli": {
+                    "program": "ctox",
+                    "args": [
+                        "web",
+                        "browser-automation",
+                        "--session-id",
+                        "${session_id:user-a}",
+                        "--source",
+                        "return { ok: true };"
+                    ]
+                }
+            }]
+        });
+        fs::write(
+            state.join("assessment-pipeline.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.assessment_pipeline.v1",
+                "generated_at": "test",
+                "profile": "standard",
+                "active": false,
+                "stages": [stage.clone()]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            state.join("coverage.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.coverage.v1",
+                "workstreams": [{
+                    "id": "ws-authz",
+                    "phase": "authenticated-multi-user-authz",
+                    "target": "https://example.test",
+                    "status": "planned",
+                    "tools": []
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let task = crate::channels::create_queue_task(
+            &root,
+            crate::channels::QueueTaskCreateRequest {
+                title: "AppSec pentest stage: authz replay".to_string(),
+                prompt: "Run replay with an existing session.".to_string(),
+                thread_key: "appsec:authz:https-example-test".to_string(),
+                workspace_root: Some(root.to_string_lossy().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("appsec-pentest".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "source": "ctox-appsec-pipeline",
+                    "idempotency_key": "appsec-stage-authz-replay",
+                    "appsec_state_dir": state.to_string_lossy(),
+                    "stage": stage,
+                })),
+            },
+        )
+        .unwrap();
+
+        let worker = handle_appsec_pipeline_work(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "work".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--message-key".to_string(),
+                task.message_key.clone(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            worker
+                .pointer("/summary/blocked")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            worker
+                .pointer("/tasks/0/failure_policy/retryable")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        let task = crate::channels::load_queue_task(&root, &task.message_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.route_status, "blocked");
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_worker_dispatches_business_os_web_stack_auth_assist_contract() {
+        let root = make_fake_ctox_root("appsec-web-stack-auth-assist");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let stage = serde_json::json!({
+            "run_commands": [{
+                "kind": "ctox-cli",
+                "tool": "ctox_web_auth_assist_request",
+                "ctox_cli": {
+                    "program": "ctox",
+                    "args": [
+                        "business-os",
+                        "web-stack",
+                        "auth-assist-request",
+                        "--source-id",
+                        "custom-web-app",
+                        "--target-url",
+                        "https://example.test/login",
+                        "--credential-ref",
+                        "ctox-secret://appsec/user-a",
+                        "--login-hint",
+                        "user-a@example.test",
+                        "--task-id",
+                        "authz-user-a-auth-assist"
+                    ]
+                },
+                "produces": {
+                    "session_id": {
+                        "placeholder": "${session_id:user-a}"
+                    }
+                }
+            }]
+        });
+
+        let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
+        assert_eq!(
+            execution
+                .pointer("/commands/0/ok")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/status")
+                .and_then(serde_json::Value::as_str),
+            Some("pending_sync")
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/secret_value_in_payload")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/credential_ref")
+                .and_then(serde_json::Value::as_str),
+            Some("ctox-secret://appsec/user-a")
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/login_hint")
+                .and_then(serde_json::Value::as_str),
+            Some("user-a@example.test")
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/source_id")
+                .and_then(serde_json::Value::as_str),
+            Some("custom-web-app")
+        );
+        assert!(execution
+            .pointer("/commands/0/output/session_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value.contains("authz_user_a_auth_assist")));
+        let session_id = execution
+            .pointer("/commands/0/output/session_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert_eq!(
+            execution
+                .pointer("/commands/0/session_bindings/0/binding")
+                .and_then(serde_json::Value::as_str),
+            Some("user-a")
+        );
+        assert_eq!(
+            execution
+                .pointer("/session_bindings/user-a")
+                .and_then(serde_json::Value::as_str),
+            Some(session_id)
+        );
+        assert!(execution
+            .pointer("/commands/0/output/command_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_worker_resolves_web_stack_session_placeholders_before_dispatch() {
+        let mut context = AppsecStageExecutionContext::default();
+        context.session_ids.insert(
+            "user-a".to_string(),
+            "browser_session_web_stack_auth_custom_user_a".to_string(),
+        );
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_browser_context_capture",
+            "harness_tool": {
+                "kind": "freeform",
+                "name": "ctox_browser_automation",
+                "freeform_source": "const sessionIdRef = \"${session_id:user-a}\"; return { sessionIdRef };"
+            },
+            "ctox_cli": {
+                "program": "ctox",
+                "args": [
+                    "business-os",
+                    "web-stack",
+                    "context-capture",
+                    "--session-id",
+                    "${session_id:user-a}",
+                    "--source-id",
+                    "custom-web-app"
+                ],
+                "stdin": "harness_tool.freeform_source"
+            }
+        });
+
+        let (resolved, proof) =
+            resolve_appsec_stage_command_placeholders(command, &context).unwrap();
+        let argv = appsec_command_argv_strings(&resolved).unwrap();
+        assert!(argv
+            .iter()
+            .any(|arg| { arg == "browser_session_web_stack_auth_custom_user_a" }));
+        assert!(resolved
+            .pointer("/harness_tool/freeform_source")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|source| source.contains("browser_session_web_stack_auth_custom_user_a")));
+        assert!(appsec_command_unresolved_placeholders(&resolved, &argv).is_empty());
+        assert_eq!(proof.len(), 2);
+        assert_eq!(
+            proof
+                .iter()
+                .filter(|item| {
+                    item.get("binding").and_then(serde_json::Value::as_str) == Some("user-a")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn appsec_worker_resolves_authz_artifact_placeholders_before_dispatch() {
+        let mut context = AppsecStageExecutionContext::default();
+        context.artifacts.insert(
+            "authz-run".to_string(),
+            "/tmp/ctox/authz/authz-run-1.json".to_string(),
+        );
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_appsec_authz_build_matrix",
+            "ctox_cli": {
+                "program": "ctox",
+                "args": [
+                    "appsec",
+                    "authz",
+                    "build-matrix",
+                    "--run",
+                    "${artifact:authz-run}",
+                    "--evidence-dir",
+                    "/tmp/ctox/authz",
+                    "--import"
+                ]
+            }
+        });
+
+        let (resolved, proof) =
+            resolve_appsec_stage_command_placeholders(command, &context).unwrap();
+        let argv = appsec_command_argv_strings(&resolved).unwrap();
+        assert!(argv
+            .iter()
+            .any(|arg| arg == "/tmp/ctox/authz/authz-run-1.json"));
+        assert!(appsec_command_unresolved_placeholders(&resolved, &argv).is_empty());
+        assert_eq!(
+            proof
+                .iter()
+                .filter(|item| {
+                    item.get("binding").and_then(serde_json::Value::as_str) == Some("authz-run")
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn appsec_replay_source_injects_candidates_from_owner_crawl_artifact() {
+        let root = make_fake_ctox_root("appsec-authz-replay-candidates");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(state.join("authz/user-a")).unwrap();
+        fs::write(
+            state.join("authz/user-a/same-origin-api-map.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                "result": {
+                    "replay_candidates": [{
+                        "endpoint": "/api/projects/123",
+                        "method": "GET",
+                        "expected": "deny",
+                        "object": "123"
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_browser_automation",
+            "phase": "cross-subject-replay",
+            "input": {
+                "owner_api_map_artifact": "authz/user-a/same-origin-api-map.json"
+            },
+            "harness_tool": {
+                "kind": "freeform",
+                "name": "ctox_browser_automation",
+                "freeform_source": "return { count: globalThis.ctoxAuthzReplayCandidates.length };"
+            },
+            "ctox_cli": {
+                "program": "ctox",
+                "args": ["web", "browser-automation", "--session-id", "browser_session_user_b"],
+                "stdin": "harness_tool.freeform_source"
+            }
+        });
+
+        let source = browser_automation_source_from_stage_command(&state, &command).unwrap();
+        assert!(source.starts_with("globalThis.ctoxAuthzReplayCandidates = "));
+        assert!(source.contains("/api/projects/123"));
+        assert!(source.contains("return { count: globalThis.ctoxAuthzReplayCandidates.length };"));
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_expected_authz_artifact_writer_redacts_browser_streams() {
+        let root = make_fake_ctox_root("appsec-authz-redacted-artifact");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_browser_automation",
+            "phase": "cross-subject-replay",
+            "target": "https://example.test",
+            "actor_subject": "user-b",
+            "owner_subject": "user-a",
+            "expected_artifact": "authz/replay/user-a-as-user-b.json"
+        });
+        let output = serde_json::json!({
+            "ok": true,
+            "browser_stream": "rxdb",
+            "screenshot": "redacted",
+            "result": {
+                "cases": [{
+                    "actor_subject": "user-b",
+                    "owner_subject": "user-a",
+                    "endpoint": "/api/projects/123",
+                    "method": "GET",
+                    "expected": "deny",
+                    "actual_status": 200,
+                    "result": "failed"
+                }],
+                "browser_stream": "rxdb"
+            }
+        });
+
+        let artifact = persist_appsec_command_expected_artifact(&state, &command, &output)
+            .unwrap()
+            .unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&artifact).unwrap()).unwrap();
+        assert!(serde_json::to_string(&written)
+            .unwrap()
+            .contains("/api/projects/123"));
+        assert!(!serde_json::to_string(&written)
+            .unwrap()
+            .contains("browser_stream"));
+        assert!(written.get("screenshot").is_none());
+        assert!(written.pointer("/result/screenshot").is_none());
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_worker_blocks_browser_automation_with_unresolved_session_placeholder() {
+        let root = make_fake_ctox_root("appsec-web-stack-browser-placeholder");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let stage = serde_json::json!({
+            "run_commands": [{
+                "kind": "ctox-cli",
+                "tool": "ctox_browser_automation",
+                "harness_tool": {
+                    "kind": "freeform",
+                    "name": "ctox_browser_automation",
+                    "freeform_source": "const sessionIdRef = \"${session_id:user-a}\"; return { sessionIdRef };"
+                },
+                "ctox_cli": {
+                    "program": "ctox",
+                    "args": ["web", "browser-automation", "--timeout-ms", "1000"],
+                    "stdin": "harness_tool.freeform_source"
+                }
+            }]
+        });
+
+        let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
+        assert_eq!(
+            execution
+                .pointer("/commands/0/ok")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/status")
+                .and_then(serde_json::Value::as_str),
+            Some("blocked-placeholder-required")
+        );
+
+        cleanup_test_dir(&root);
     }
 
     fn make_fake_ctox_root(name: &str) -> PathBuf {

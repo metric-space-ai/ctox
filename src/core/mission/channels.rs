@@ -9885,6 +9885,9 @@ fn queue_terminal_policy_proof(actor: &str, reason: &str) -> Option<String> {
     if actor == "ctox-queue-update" && reason.starts_with("business-os:terminal-success:") {
         return Some("policy:business-os-queued-command-terminal-success".to_string());
     }
+    if actor == "ctox-queue-update" && reason.starts_with("appsec:terminal-success:") {
+        return Some("policy:appsec-pipeline-stage-terminal-success".to_string());
+    }
     match (actor, reason) {
         // Inbound mail fully handled by scheduling the requested meeting:
         // routing closes the message without a worker/review pass.
@@ -11894,8 +11897,7 @@ mod tests {
         );
         settings.insert(
             "CTOX_FOUNDER_EMAIL_ROLES".to_string(),
-            "founder@example.com=CEO / Founder,s.mueller@example.com=Sales Officer"
-                .to_string(),
+            "founder@example.com=CEO / Founder,s.mueller@example.com=Sales Officer".to_string(),
         );
 
         sync_prompt_identity(&root, &settings).expect("failed to sync prompt identity");
@@ -12650,12 +12652,10 @@ mod tests {
         let inbound = load_message_from_conn(&conn, "email:cto1@example.com::INBOX::forward-1")
             .expect("load inbound")
             .expect("inbound missing");
-        let addressing = load_message_addressing_from_conn(
-            &conn,
-            "email:cto1@example.com::INBOX::forward-1",
-        )
-        .expect("load addressing")
-        .expect("addressing missing");
+        let addressing =
+            load_message_addressing_from_conn(&conn, "email:cto1@example.com::INBOX::forward-1")
+                .expect("load addressing")
+                .expect("addressing missing");
 
         let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
         assert_eq!(to, vec!["s.mueller@example.com".to_string()]);

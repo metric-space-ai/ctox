@@ -113,8 +113,7 @@ pub fn handle_browser_command(root: &Path, args: &[String]) -> Result<()> {
             let reference_dir = resolve_reference_dir(root, &args[1..]);
             let install_browser = args.iter().any(|arg| arg == "--install-browser");
             let skip_npm_install = args.iter().any(|arg| arg == "--skip-npm-install");
-            let report =
-                install_reference(&reference_dir, !skip_npm_install, install_browser)?;
+            let report = install_reference(&reference_dir, !skip_npm_install, install_browser)?;
             print_json(&serde_json::to_value(report)?)
         }
         "bootstrap" => {
@@ -1618,24 +1617,70 @@ fn build_persistent_browser_runner_script(
         .context("failed to encode browser executable override")?;
     Ok(format!(
         r#"import process from "node:process";
-import path from "node:path";
-import readline from "node:readline";
+	import path from "node:path";
+	import readline from "node:readline";
+	import util from "node:util";
 
-const VIEWPORT_W = {viewport_w};
-const VIEWPORT_H = {viewport_h};
-const fallbackExecutable = {encoded_executable};
+	const VIEWPORT_W = {viewport_w};
+	const VIEWPORT_H = {viewport_h};
+	const fallbackExecutable = {encoded_executable};
+	const logs = [];
 
-for (const level of ["log", "info", "warn", "debug", "error"]) {{
-  console[level] = (...args) => {{
-    try {{
-      process.stderr.write(`[live] ${{args.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" ")}}\n`);
-    }} catch {{}}
-  }};
-}}
+	const formatLogValue = (value) =>
+	  typeof value === "string"
+	    ? value
+	    : util.inspect(value, {{ depth: 4, breakLength: Infinity, maxArrayLength: 32 }});
 
-const respond = (payload) => {{
-  process.stdout.write(JSON.stringify(payload) + "\n");
-}};
+	for (const level of ["log", "info", "warn", "debug", "error"]) {{
+	  console[level] = (...args) => {{
+	    try {{
+	      const text = args.map(formatLogValue).join(" ");
+	      logs.push({{ level, text }});
+	      process.stderr.write(`[live] ${{text}}\n`);
+	    }} catch {{}}
+	  }};
+	}}
+
+	const respond = (payload) => {{
+	  process.stdout.write(JSON.stringify(payload) + "\n");
+	}};
+
+	const safeSerialize = (value, depth = 0, seen = new WeakSet()) => {{
+	  if (depth > 4) return "[depth limit]";
+	  if (value === undefined) return null;
+	  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {{
+	    return value;
+	  }}
+	  if (typeof value === "bigint") return value.toString();
+	  if (typeof value === "function") return `[Function ${{value.name || "anonymous"}}]`;
+	  if (Array.isArray(value)) {{
+	    return value.slice(0, 64).map((item) => safeSerialize(item, depth + 1, seen));
+	  }}
+	  if (typeof value === "object") {{
+	    if (seen.has(value)) return "[circular]";
+	    seen.add(value);
+	    if (typeof value.url === "function" && typeof value.title === "function") {{
+	      return {{
+	        kind: (value.constructor && value.constructor.name) || "PageLike",
+	        url: (() => {{ try {{ return value.url(); }} catch {{ return null; }} }})(),
+	      }};
+	    }}
+	    const out = {{}};
+	    for (const [key, item] of Object.entries(value).slice(0, 64)) {{
+	      out[key] = safeSerialize(item, depth + 1, seen);
+	    }}
+	    return out;
+	  }}
+	  return String(value);
+	}};
+
+	const pageMetadata = async () => {{
+	  let url = null;
+	  let title = null;
+	  try {{ url = page && typeof page.url === "function" ? page.url() : null; }} catch {{}}
+	  try {{ title = page ? await page.title() : null; }} catch {{}}
+	  return {{ url, title }};
+	}};
 
 const {{ chromium }} = await import("patchright");
 const defaultUserAgent = (() => {{
@@ -1760,9 +1805,9 @@ const applyInput = async (events) => {{
   return applied;
 }};
 
-const observe = async (limit, textMax) => {{
-  const cappedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(80, Math.floor(limit))) : 24;
-  const cappedText = Number.isFinite(textMax) ? Math.max(20, Math.min(4000, Math.floor(textMax))) : 1200;
+	const observe = async (limit, textMax) => {{
+	  const cappedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(80, Math.floor(limit))) : 24;
+	  const cappedText = Number.isFinite(textMax) ? Math.max(20, Math.min(4000, Math.floor(textMax))) : 1200;
   let documentText = "";
   try {{
     documentText = await page.evaluate((max) => {{
@@ -1771,11 +1816,218 @@ const observe = async (limit, textMax) => {{
     }}, cappedText);
   }} catch {{}}
   let title = "";
-  try {{ title = await page.title(); }} catch {{}}
-  return {{ url: page.url(), title, documentText, target_limit: cappedLimit }};
-}};
+	  try {{ title = await page.title(); }} catch {{}}
+	  return {{ url: page.url(), title, documentText, target_limit: cappedLimit }};
+	}};
 
-respond({{ ready: true }});
+	const humanlike = await import("./humanlike.mjs").catch(() => null);
+	globalThis.chromium = chromium;
+	globalThis.context = context;
+	globalThis.page = page;
+	globalThis.browser = browser;
+	globalThis.humanlike = humanlike;
+	const ctoxBrowserApi = {{
+	  logs,
+	  profileDir: path.join(process.cwd(), ".ctox-browser-profile"),
+	  locatorFor(target) {{
+	    if (typeof target === "string") return page.locator(target);
+	    if (!target || typeof target !== "object") throw new Error("ctoxBrowser target must be a selector string or target object");
+	    if (target.selector) return page.locator(target.selector);
+	    if (target.testId) return page.getByTestId(String(target.testId));
+	    if (target.role && target.name) return page.getByRole(String(target.role), {{ name: String(target.name), exact: true }});
+	    if (target.label) return page.getByLabel(String(target.label), {{ exact: true }});
+	    if (target.placeholder) return page.getByPlaceholder(String(target.placeholder), {{ exact: true }});
+	    if (target.text) return page.getByText(String(target.text), {{ exact: true }});
+	    throw new Error("ctoxBrowser target has no usable selector, testId, role/name, label, placeholder, or text");
+	  }},
+	  async resolveTarget(target) {{
+	    const locator = this.locatorFor(target);
+	    const count = await locator.count();
+	    if (count !== 1) {{
+	      throw new Error(`ctoxBrowser target resolved to ${{count}} elements; refine the target before acting`);
+	    }}
+	    return locator;
+	  }},
+	  async observe(options = {{}}) {{
+	    const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(200, Math.floor(options.limit))) : 80;
+	    const textMax = Number.isFinite(options.textMax) ? Math.max(20, Math.min(400, Math.floor(options.textMax))) : 120;
+	    const dom = await page.evaluate(
+	      ({{ limit, textMax }}) => {{
+	        const trim = (value, max = textMax) => {{
+	          const text = String(value ?? "").replace(/\s+/g, " ").trim();
+	          return text.length > max ? text.slice(0, max - 1) + "..." : text;
+	        }};
+	        const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
+	          ? globalThis.CSS.escape(String(value))
+	          : String(value).replace(/["\\]/g, "\\$&");
+	        const visible = (element) => {{
+	          const style = globalThis.getComputedStyle(element);
+	          const box = element.getBoundingClientRect();
+	          return style.visibility !== "hidden"
+	            && style.display !== "none"
+	            && Number(style.opacity || "1") > 0
+	            && box.width > 0
+	            && box.height > 0;
+	        }};
+	        const textOf = (element) => trim(
+	          element.getAttribute("aria-label")
+	          || element.getAttribute("title")
+	          || element.getAttribute("alt")
+	          || element.getAttribute("placeholder")
+	          || element.value
+	          || element.innerText
+	          || element.textContent
+	          || ""
+	        );
+	        const candidatesFor = (element) => {{
+	          const candidates = [];
+	          const testId = element.getAttribute("data-testid");
+	          if (testId) candidates.push(`[data-testid="${{cssEscape(testId)}}"]`);
+	          for (const attr of element.getAttributeNames()) {{
+	            if (attr.startsWith("data-") && attr !== "data-testid") {{
+	              const value = element.getAttribute(attr);
+	              if (value && value.length <= 80) candidates.push(`[${{attr}}="${{cssEscape(value)}}"]`);
+	            }}
+	          }}
+	          const id = element.getAttribute("id");
+	          if (id) candidates.push(`#${{cssEscape(id)}}`);
+	          const href = element.getAttribute("href");
+	          if (href) candidates.push(`${{element.tagName.toLowerCase()}}[href="${{cssEscape(href)}}"]`);
+	          const name = element.getAttribute("name");
+	          if (name) candidates.push(`${{element.tagName.toLowerCase()}}[name="${{cssEscape(name)}}"]`);
+	          return [...new Set(candidates)].slice(0, 6);
+	        }};
+	        const selector = [
+	          "a",
+	          "button",
+	          "input",
+	          "textarea",
+	          "select",
+	          "summary",
+	          "[role]",
+	          "[data-testid]",
+	          "[onclick]",
+	          "[contenteditable='true']",
+	        ].join(",");
+	        const targets = [];
+	        for (const element of Array.from(document.querySelectorAll(selector))) {{
+	          if (!visible(element)) continue;
+	          const box = element.getBoundingClientRect();
+	          const candidates = candidatesFor(element);
+	          targets.push({{
+	            id: `target-${{targets.length + 1}}`,
+	            tag: element.tagName.toLowerCase(),
+	            role: element.getAttribute("role") || null,
+	            name: element.getAttribute("aria-label") || textOf(element) || null,
+	            text: textOf(element) || null,
+	            testId: element.getAttribute("data-testid") || null,
+	            href: element.getAttribute("href") || null,
+	            selector: candidates[0] || null,
+	            candidates,
+	            box: {{
+	              x: Math.round(box.x),
+	              y: Math.round(box.y),
+	              width: Math.round(box.width),
+	              height: Math.round(box.height),
+	            }},
+	          }});
+	          if (targets.length >= limit) break;
+	        }}
+	        return {{
+	          documentText: trim(document.body ? document.body.innerText : "", Math.max(textMax * 8, 800)),
+	          targets,
+	        }};
+	      }},
+	      {{ limit, textMax }}
+	    );
+	    return {{
+	      url: page.url(),
+	      title: await page.title(),
+	      documentText: dom.documentText,
+	      targets: dom.targets,
+	    }};
+	  }},
+	  async goto(url, options = {{}}) {{
+	    await page.goto(url, {{
+	      waitUntil: options.waitUntil || "domcontentloaded",
+	      timeout: options.timeoutMs || 30_000,
+	    }});
+	    historyPos += 1;
+	    historyMax = historyPos;
+	    return await this.observe(options);
+	  }},
+	  async click(target, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.click(options);
+	    return await this.observe(options);
+	  }},
+	  async fill(target, value, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.fill(String(value), options);
+	    return await this.observe(options);
+	  }},
+	  async press(target, key, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.press(String(key), options);
+	    return await this.observe(options);
+	  }},
+	  async screenshot(options = {{}}) {{
+	    const buffer = await page.screenshot({{ fullPage: !!options.fullPage }});
+	    return {{ mimeType: "image/png", base64: buffer.toString("base64") }};
+	  }},
+	  async logsFor(levels = ["error", "warning", "warn"]) {{
+	    const wanted = new Set(levels);
+	    return logs.filter((entry) => wanted.has(entry.level));
+	  }},
+	}};
+	globalThis.ctoxBrowser = ctoxBrowserApi;
+
+	const runAutomation = async (source, automationTimeoutMs) => {{
+	  logs.length = 0;
+	  let timeoutHandle = null;
+	  try {{
+	    const AsyncFunction = Object.getPrototypeOf(async function () {{}}).constructor;
+	    const userFunction = new AsyncFunction(String(source || ""));
+	    const result = await Promise.race([
+	      userFunction(),
+	      new Promise((_, reject) =>
+	        timeoutHandle = setTimeout(
+	          () => reject(new Error(`browser automation timed out after ${{automationTimeoutMs}}ms`)),
+	          automationTimeoutMs
+	        )
+	      ),
+	    ]);
+	    if (timeoutHandle) {{
+	      clearTimeout(timeoutHandle);
+	      timeoutHandle = null;
+	    }}
+	    return {{
+	      ok: true,
+	      tool: "ctox_browser_automation",
+	      session_mode: "business-os-persistent",
+	      result: safeSerialize(result),
+	      logs: safeSerialize(logs),
+	      page: await pageMetadata(),
+	      nav: await navState(),
+	    }};
+	  }} catch (error) {{
+	    if (timeoutHandle) {{
+	      clearTimeout(timeoutHandle);
+	      timeoutHandle = null;
+	    }}
+	    return {{
+	      ok: false,
+	      tool: "ctox_browser_automation",
+	      session_mode: "business-os-persistent",
+	      error: (error && error.stack) || String(error),
+	      logs: safeSerialize(logs),
+	      page: await pageMetadata(),
+	      nav: await navState(),
+	    }};
+	  }}
+	}};
+
+	respond({{ ready: true }});
 
 const rl = readline.createInterface({{ input: process.stdin }});
 for await (const line of rl) {{
@@ -1827,11 +2079,15 @@ for await (const line of rl) {{
         height: Number(message.h || VIEWPORT_H),
       }});
       respond({{ id, ok: true }});
-    }} else if (op === "observe") {{
-      respond({{ id, ok: true, observed: await observe(message.limit, message.textMax) }});
-    }} else if (op === "close") {{
-      respond({{ id, ok: true }});
-      try {{ await context.close(); }} catch {{}}
+	    }} else if (op === "observe") {{
+	      respond({{ id, ok: true, observed: await observe(message.limit, message.textMax) }});
+	    }} else if (op === "automation") {{
+	      const automationTimeoutMs = Math.max(1000, Math.min(300000, timeoutMs));
+	      const result = await runAutomation(message.source, automationTimeoutMs);
+	      respond({{ id, ...result }});
+	    }} else if (op === "close") {{
+	      respond({{ id, ok: true }});
+	      try {{ await context.close(); }} catch {{}}
       try {{ await browser.close(); }} catch {{}}
       process.exit(0);
     }} else {{
@@ -2085,6 +2341,7 @@ mod tests {
     use super::browser_doctor_report;
     use super::build_browser_capture_runner_script;
     use super::build_browser_runner_script;
+    use super::build_persistent_browser_runner_script;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
     use super::find_playwright_chromium_executable_in;
@@ -2186,6 +2443,15 @@ mod tests {
         assert!(script.contains("async resolveTarget(target)"));
         assert!(script.contains("async click(target, options = {})"));
         assert!(script.contains("async screenshot(options = {})"));
+    }
+
+    #[test]
+    fn persistent_browser_runner_exposes_session_automation_op() {
+        let script = build_persistent_browser_runner_script(1280, 720, None).unwrap();
+        assert!(script.contains("op === \"automation\""));
+        assert!(script.contains("session_mode: \"business-os-persistent\""));
+        assert!(script.contains("globalThis.ctoxBrowser = ctoxBrowserApi;"));
+        assert!(script.contains("async observe(options = {})"));
     }
 
     #[test]

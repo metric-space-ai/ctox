@@ -16,11 +16,13 @@ pub mod unlock;
 pub mod web_search;
 
 pub use browser::browser_doctor_report;
+pub use browser::capture_browser_transport;
 pub use browser::handle_browser_command;
 pub use browser::prepare_browser_environment;
 pub use browser::run_browser_automation;
 pub use browser::spawn_persistent_browser;
 pub use browser::BrowserAutomationRequest;
+pub use browser::BrowserCaptureRequest;
 pub use browser::BrowserPrepareOptions;
 pub use browser::PersistentBrowserHandle;
 pub use browser::PersistentBrowserSpawn;

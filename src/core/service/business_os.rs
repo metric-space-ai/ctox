@@ -2479,6 +2479,345 @@ fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalCtoxSecretRef {
+    scope: String,
+    name: String,
+}
+
+pub(crate) fn run_business_os_web_stack_auth_assist_request(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let source_id = flag_value(args, "--source-id")
+        .context("usage: ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]")?;
+    let target_url_override = flag_value(args, "--target-url");
+    let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?;
+    let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
+    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    enqueue_web_stack_auth_assist_request(
+        root,
+        source_id,
+        target_url_override,
+        credential_ref.as_deref(),
+        login_hint.as_deref(),
+        requesting_task_id,
+        "ctox_harness",
+        "ctox_web_auth_assist_request",
+        false,
+    )
+}
+
+fn run_business_os_web_stack_auth_assist_login(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let source_id = flag_value(args, "--source-id")
+        .context("usage: ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]")?;
+    let target_url_override = flag_value(args, "--target-url");
+    let credential_ref =
+        optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
+            .context("auth-assist-login requires --credential-ref <ctox-secret://scope/name>")?;
+    let local_secret_ref = parse_local_ctox_secret_ref(&credential_ref)?;
+    let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
+    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    let timeout_ms = flag_value(args, "--timeout-ms")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .with_context(|| format!("failed to parse --timeout-ms `{value}`"))
+        })
+        .transpose()?
+        .unwrap_or(45_000)
+        .clamp(1_000, 300_000);
+    let browser_dir = flag_value(args, "--dir").map(PathBuf::from);
+    let auth_assist = enqueue_web_stack_auth_assist_request(
+        root,
+        source_id,
+        target_url_override,
+        Some(&credential_ref),
+        login_hint.as_deref(),
+        requesting_task_id,
+        "ctox_harness",
+        "ctox_web_auth_assist_login",
+        false,
+    )?;
+    let session_id = auth_assist
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("auth-assist login did not produce a session_id")?
+        .to_string();
+    let target_url = auth_assist
+        .get("target_url")
+        .and_then(serde_json::Value::as_str)
+        .context("auth-assist login did not produce a target_url")?
+        .to_string();
+    let source_id = auth_assist
+        .get("source_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(source_id)
+        .to_string();
+    let credential_selector = flag_value(args, "--credential-selector")
+        .map(str::to_string)
+        .or_else(|| {
+            auth_assist
+                .get("credential_selector")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let verify_selector = flag_value(args, "--verify-selector")
+        .map(str::to_string)
+        .or_else(|| {
+            auth_assist
+                .get("verify_selector")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let secret_value =
+        crate::secrets::read_secret_value(root, &local_secret_ref.scope, &local_secret_ref.name)
+            .with_context(|| {
+                format!(
+            "failed to resolve credential_ref {credential_ref}; expected ctox secret scope/name"
+        )
+            })?;
+    anyhow::ensure!(
+        !secret_value.trim().is_empty(),
+        "credential_ref {credential_ref} resolved to an empty secret"
+    );
+    let automation_source = build_web_stack_auth_assist_login_source(
+        &target_url,
+        &source_id,
+        login_hint.as_deref(),
+        &credential_ref,
+        &secret_value,
+        credential_selector.trim(),
+        verify_selector.trim(),
+    )?;
+    let mut automation = crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.clone(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source: automation_source,
+        },
+    )?;
+    redact_secret_value_from_json(&mut automation, &secret_value);
+    let login_result = automation
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let automation_ok = automation
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let login_ok = login_result
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(automation_ok);
+    Ok(serde_json::json!({
+        "ok": automation_ok && login_ok,
+        "status": if automation_ok && login_ok { "completed" } else { "login_failed" },
+        "command": "business-os web-stack auth-assist-login",
+        "session_id": session_id,
+        "source_id": source_id,
+        "target_url": target_url,
+        "credential_ref": credential_ref,
+        "login_hint": login_hint,
+        "verify_selector": verify_selector,
+        "credential_selector": credential_selector,
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false,
+        "browser_stream": "rxdb",
+        "timeout_ms": timeout_ms,
+        "auth_assist_request": auth_assist,
+        "login_result": login_result,
+        "automation": automation,
+    }))
+}
+
+pub(crate) fn run_business_os_web_stack_context_capture(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let session_id = flag_value(args, "--session-id").context(
+        "usage: ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]",
+    )?;
+    crate::business_os::browser_context_capture(
+        root,
+        crate::business_os::BrowserContextCaptureRequest {
+            session_id: session_id.to_string(),
+            source_id: flag_value(args, "--source-id").map(str::to_string),
+            requesting_task_id: flag_value(args, "--task-id").map(str::to_string),
+            enqueue_handoff: !args.iter().any(|arg| arg == "--no-handoff"),
+        },
+    )
+}
+
+pub(crate) fn run_business_os_web_stack_context_extract(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let session_id = flag_value(args, "--session-id").context(
+        "usage: ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]",
+    )?;
+    let snapshot = crate::business_os::browser_context_capture(
+        root,
+        crate::business_os::BrowserContextCaptureRequest {
+            session_id: session_id.to_string(),
+            source_id: flag_value(args, "--source-id").map(str::to_string),
+            requesting_task_id: flag_value(args, "--task-id").map(str::to_string),
+            enqueue_handoff: false,
+        },
+    )?;
+    let context = snapshot
+        .get("browser_context")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let source_id = flag_value(args, "--source-id")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            context
+                .get("source_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .context("context-extract requires --source-id or a session payload source_id")?;
+    let module = ctox_web_stack::sources::find(&source_id)
+        .with_context(|| format!("unknown web-stack source: {source_id}"))?;
+    let recipe = module.browser_recipe();
+    let capture_script = flag_value(args, "--capture-script")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            context
+                .get("capture_script")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            recipe
+                .as_ref()
+                .and_then(|recipe| recipe.capture_script)
+                .map(str::to_string)
+        })
+        .with_context(|| {
+            format!(
+                "web-stack source `{}` has no browser capture script",
+                module.id()
+            )
+        })?;
+    let now = now_ms();
+    let command_id = format!("browser_extract_harness_{}_{}", now, Uuid::new_v4());
+    let frame_id = context
+        .get("frame_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    let document = serde_json::json!({
+        "id": command_id.clone(),
+        "command_id": command_id.clone(),
+        "module": "browser",
+        "command_type": "browser.capture.extract",
+        "type": "browser.capture.extract",
+        "record_id": session_id,
+        "inbound_channel": "ctox_harness",
+        "status": "pending_sync",
+        "payload": {
+            "session_id": session_id,
+            "source_id": source_id,
+            "capture_script": capture_script,
+            "frame_id": frame_id,
+            "browser_context_artifact": {
+                "kind": "browser_context",
+                "schema_version": 1,
+                "stream": "rxdb",
+                "source_module": "web_stack",
+                "source_id": source_id,
+                "capture_script": capture_script,
+                "browser_context": context,
+                "secret_value_in_payload": false,
+                "frame_data_in_payload": false
+            },
+            "requesting_task_id": requesting_task_id,
+            "secret_value_in_payload": false,
+            "frame_data_in_payload": false
+        },
+        "client_context": {
+            "source": "ctox-harness.browser-context-extract",
+            "source_module": "ctox_harness",
+            "command_path": "ctox_browser_context_extract",
+            "actor": {
+                "user_id": "ctox-harness",
+                "display_name": "CTOX Harness",
+                "role": "admin",
+                "is_admin": true
+            }
+        },
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    let stored = crate::business_os::enqueue_business_command_document(root, document)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "command_id": stored.get("command_id").and_then(serde_json::Value::as_str).unwrap_or(command_id.as_str()),
+        "session_id": session_id,
+        "source_id": source_id,
+        "capture_script": capture_script,
+        "frame_id": frame_id,
+        "browser_stream": "rxdb",
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false,
+        "status": "pending_sync"
+    }))
+}
+
+pub(crate) fn run_business_os_web_stack_cli_json(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    match args.first().map(String::as_str) {
+        Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
+        Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
+        Some("auth-assist-status") => {
+            let session_id = flag_value(args, "--session-id").context(
+                "usage: ctox business-os web-stack auth-assist-status --session-id <id>",
+            )?;
+            crate::business_os::browser_session_status(root, session_id)
+        }
+        Some("context-capture") => run_business_os_web_stack_context_capture(root, args),
+        Some("context-extract") => run_business_os_web_stack_context_extract(root, args),
+        Some("redaction-audit") => run_web_stack_redaction_audit(root, args),
+        Some("browser-doctor") => {
+            let report = ctox_web_stack::browser_doctor_report(
+                root,
+                flag_value(args, "--dir").map(PathBuf::from),
+            )?;
+            Ok(serde_json::json!({
+                "ok": report
+                    .get("automation_ready")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                "browser_stream": "rxdb",
+                "secret_value_in_payload": false,
+                "frame_data_in_payload": false,
+                "doctor": report,
+            }))
+        }
+        Some(other) => anyhow::bail!("unknown business-os web-stack command `{other}`"),
+        None => anyhow::bail!("usage: ctox business-os web-stack <command>"),
+    }
+}
+
 fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("person-research") => {
@@ -2542,6 +2881,8 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
                         root,
                         source_id,
                         None,
+                        None,
+                        None,
                         requesting_task_id,
                         "ctox_web_stack",
                         "ctox_business_os_web_stack_person_research",
@@ -2565,19 +2906,28 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
         }
         Some("auth-assist-request") => {
             let source_id = flag_value(args, "--source-id")
-                .context("usage: ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]")?;
+                .context("usage: ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]")?;
             let target_url_override = flag_value(args, "--target-url");
+            let credential_ref =
+                optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?;
+            let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
             let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
             let summary = enqueue_web_stack_auth_assist_request(
                 root,
                 source_id,
                 target_url_override,
+                credential_ref.as_deref(),
+                login_hint.as_deref(),
                 requesting_task_id,
                 "ctox_harness",
                 "ctox_web_auth_assist_request",
                 false,
             )?;
             print_json(&summary)
+        }
+        Some("auth-assist-login") => {
+            let login = run_business_os_web_stack_auth_assist_login(root, args)?;
+            print_json(&login)
         }
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
@@ -2965,6 +3315,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
             "  ctox business-os backup inspect-manifest --manifest <path>\n  ctox business-os backup key-escrow-status\n  ctox business-os backup prune-drills [--dry-run]",
+        )
+        .replace(
+            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
+            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
         )
 }
 
@@ -3495,23 +3849,26 @@ fn enqueue_web_stack_auth_assist_request(
     root: &Path,
     source_id: &str,
     target_url_override: Option<&str>,
+    credential_ref: Option<&str>,
+    login_hint: Option<&str>,
     requesting_task_id: &str,
     source_module: &str,
     command_path: &str,
     deterministic_for_task: bool,
 ) -> anyhow::Result<serde_json::Value> {
-    let module = ctox_web_stack::sources::find(source_id)
-        .with_context(|| format!("unknown web-stack source: {source_id}"))?;
-    let recipe = module.browser_recipe();
+    let module = ctox_web_stack::sources::find(source_id);
+    let recipe = module.and_then(|module| module.browser_recipe());
     let target_url = target_url_override
         .map(str::to_string)
         .or_else(|| recipe.as_ref().map(|recipe| recipe.login_url.clone()))
         .with_context(|| {
             format!(
                 "web-stack source `{}` has no browser auth-assist recipe",
-                module.id()
+                source_id
             )
         })?;
+    let source_id = module.map(|module| module.id()).unwrap_or(source_id.trim());
+    anyhow::ensure!(!source_id.is_empty(), "web-stack source id is required");
     let allowed_domains = recipe
         .as_ref()
         .map(|recipe| recipe.allowed_domains.clone())
@@ -3520,13 +3877,13 @@ fn enqueue_web_stack_auth_assist_request(
     let secret_name = recipe
         .as_ref()
         .and_then(|recipe| recipe.required_secret_name)
-        .or_else(|| module.requires_credential())
+        .or_else(|| module.and_then(|module| module.requires_credential()))
         .unwrap_or_default();
     let now = now_ms();
     let source_slug = rxdb_id_slug(module.id());
     let dedupe_key = format!(
         "{}:{}",
-        module.id(),
+        source_id,
         requesting_task_id.trim().to_ascii_lowercase()
     );
     let command_id = if deterministic_for_task && !requesting_task_id.trim().is_empty() {
@@ -3558,17 +3915,19 @@ fn enqueue_web_stack_auth_assist_request(
         "module": "ctox",
         "command_type": "web_stack.auth_assist.request",
         "type": "web_stack.auth_assist.request",
-        "record_id": module.id(),
+        "record_id": source_id,
         "status": "pending_sync",
         "payload": {
             "session_id": session_id.clone(),
             "tab_id": tab_id.clone(),
-            "source_id": module.id(),
+            "source_id": source_id,
             "secret_name": secret_name,
             "target_url": target_url.clone(),
             "allowed_domains": allowed_domains.clone(),
             "verify_selector": verify_selector,
             "credential_selector": credential_selector,
+            "credential_ref": credential_ref,
+            "login_hint": login_hint,
             "capture_script": capture_script,
             "purpose": "web_stack_auth",
             "expires_at_ms": now + 30 * 60 * 1000,
@@ -3596,10 +3955,12 @@ fn enqueue_web_stack_auth_assist_request(
         "command_id": stored.get("command_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
         "session_id": session_id,
         "tab_id": tab_id,
-        "source_id": module.id(),
+        "source_id": source_id,
         "target_url": target_url,
         "allowed_domains": allowed_domains,
         "required_secret_name": secret_name,
+        "credential_ref": credential_ref,
+        "login_hint": login_hint,
         "verify_selector": verify_selector,
         "credential_selector": credential_selector,
         "capture_script": capture_script,
@@ -3609,6 +3970,370 @@ fn enqueue_web_stack_auth_assist_request(
         "secret_value_in_payload": false,
         "status": "pending_sync"
     }))
+}
+
+fn optional_web_stack_credential_ref(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        !value.chars().any(char::is_whitespace),
+        "credential_ref must be a reference URI without whitespace"
+    );
+    anyhow::ensure!(
+        [
+            "ctox-secret://",
+            "secret://",
+            "vault://",
+            "op://",
+            "keychain://"
+        ]
+        .iter()
+        .any(|prefix| value.starts_with(prefix)),
+        "credential_ref must be a secret reference URI, not a raw credential value"
+    );
+    Ok(Some(value.to_string()))
+}
+
+fn optional_web_stack_login_hint(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef> {
+    let parsed = Url::parse(value)
+        .with_context(|| format!("failed to parse credential_ref `{value}` as URI"))?;
+    anyhow::ensure!(
+        parsed.scheme() == "ctox-secret",
+        "auth-assist-login can resolve only local ctox-secret://scope/name references"
+    );
+    anyhow::ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "ctox-secret credential_ref must not contain userinfo"
+    );
+    anyhow::ensure!(
+        parsed.query().is_none() && parsed.fragment().is_none(),
+        "ctox-secret credential_ref must not contain query or fragment"
+    );
+    let scope = parsed
+        .host_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("ctox-secret credential_ref must use ctox-secret://scope/name")?;
+    let mut path_segments = parsed
+        .path_segments()
+        .context("ctox-secret credential_ref must use ctox-secret://scope/name")?;
+    let name = path_segments
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("ctox-secret credential_ref must include a secret name")?;
+    anyhow::ensure!(
+        path_segments.next().is_none(),
+        "ctox-secret credential_ref must use exactly one name segment"
+    );
+    Ok(LocalCtoxSecretRef {
+        scope: scope.to_string(),
+        name: name.to_string(),
+    })
+}
+
+fn build_web_stack_auth_assist_login_source(
+    target_url: &str,
+    source_id: &str,
+    login_hint: Option<&str>,
+    credential_ref: &str,
+    secret_value: &str,
+    credential_selector: &str,
+    verify_selector: &str,
+) -> anyhow::Result<String> {
+    let mut source = format!(
+        "// ctox-browser: timeout_ms=45000\nconst targetUrl = {};\nconst sourceId = {};\nconst loginHint = {};\nconst credentialRef = {};\nconst credentialValue = {};\nconst configuredCredentialSelector = {};\nconst configuredVerifySelector = {};\n",
+        serde_json::to_string(target_url)?,
+        serde_json::to_string(source_id)?,
+        match login_hint {
+            Some(value) => serde_json::to_string(value)?,
+            None => "null".to_string(),
+        },
+        serde_json::to_string(credential_ref)?,
+        serde_json::to_string(secret_value)?,
+        serde_json::to_string(credential_selector)?,
+        serde_json::to_string(verify_selector)?,
+    );
+    source.push_str(
+        r#"
+const targetOrigin = new URL(targetUrl).origin;
+const startedAt = Date.now();
+const trimText = (value, max = 180) => {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > max ? text.slice(0, max - 1) + "..." : text;
+};
+const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
+  ? globalThis.CSS.escape(String(value))
+  : String(value).replace(/["\\]/g, "\\$&");
+const browserCandidateFields = async (kind) => page.evaluate(({ kind }) => {
+  const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
+    ? globalThis.CSS.escape(String(value))
+    : String(value).replace(/["\\]/g, "\\$&");
+  const visible = (element) => {
+    const style = globalThis.getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && Number(style.opacity || "1") > 0
+      && box.width > 0
+      && box.height > 0
+      && !element.disabled
+      && element.getAttribute("aria-hidden") !== "true";
+  };
+  const labelFor = (element) => {
+    const labels = [];
+    if (element.id) {
+      for (const label of Array.from(document.querySelectorAll(`label[for="${cssEscape(element.id)}"]`))) {
+        labels.push(label.innerText || label.textContent || "");
+      }
+    }
+    const parentLabel = element.closest("label");
+    if (parentLabel) labels.push(parentLabel.innerText || parentLabel.textContent || "");
+    return labels.join(" ");
+  };
+  const descriptorFor = (element, source) => {
+    const tag = element.tagName.toLowerCase();
+    const id = element.getAttribute("id");
+    const name = element.getAttribute("name");
+    const type = element.getAttribute("type");
+    const placeholder = element.getAttribute("placeholder");
+    let selector = null;
+    if (id) selector = `#${cssEscape(id)}`;
+    else if (name) selector = `${tag}[name="${cssEscape(name)}"]`;
+    else if (placeholder) selector = `${tag}[placeholder="${cssEscape(placeholder)}"]`;
+    else if (type) selector = `${tag}[type="${cssEscape(type)}"]`;
+    else selector = tag;
+    let index = 0;
+    try {
+      const matches = Array.from(document.querySelectorAll(selector));
+      index = Math.max(0, matches.indexOf(element));
+    } catch {}
+    return {
+      selector,
+      index,
+      source,
+      tag,
+      type: type || null,
+      name: name || null,
+      autocomplete: element.getAttribute("autocomplete") || null,
+      placeholder_present: !!placeholder,
+    };
+  };
+  const tokensFor = (element) => [
+    element.getAttribute("type"),
+    element.getAttribute("name"),
+    element.getAttribute("id"),
+    element.getAttribute("autocomplete"),
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    labelFor(element),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const scoreFor = (element) => {
+    const tokens = tokensFor(element);
+    const type = String(element.getAttribute("type") || "").toLowerCase();
+    if (kind === "credential") {
+      let score = type === "password" ? 100 : 0;
+      if (/(password|passwort|passwd|pwd|kennwort|secret)/.test(tokens)) score += 80;
+      if (/(otp|totp|mfa|2fa|code|verification|confirm)/.test(tokens)) score -= 70;
+      return score;
+    }
+    let score = 0;
+    if (type === "email") score += 100;
+    if (/(email|e-mail|mail|username|user name|login|account|benutzer|nutzer)/.test(tokens)) score += 80;
+    if (type === "password" || /(password|passwort|passwd|pwd|kennwort)/.test(tokens)) score -= 100;
+    if (/(search|query|filter)/.test(tokens)) score -= 50;
+    return score;
+  };
+  const fields = Array.from(document.querySelectorAll("input, textarea, [contenteditable='true']"))
+    .filter(visible)
+    .filter((element) => {
+      const type = String(element.getAttribute("type") || "").toLowerCase();
+      return !["hidden", "submit", "button", "checkbox", "radio", "file"].includes(type);
+    })
+    .map((element) => ({ element, score: scoreFor(element) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+  return fields.slice(0, 8).map((entry) => descriptorFor(entry.element, "heuristic"));
+}, { kind });
+const fillField = async (kind, value, configuredSelector = "") => {
+  const candidates = [];
+  if (configuredSelector && kind === "credential") {
+    candidates.push({ selector: configuredSelector, index: 0, source: "configured", configured: true });
+  }
+  candidates.push(...await browserCandidateFields(kind));
+  for (const candidate of candidates) {
+    if (!candidate.selector) continue;
+    try {
+      const locator = page.locator(candidate.selector).nth(Number(candidate.index || 0));
+      if ((await locator.count()) < 1) continue;
+      await locator.fill(String(value), { timeout: 3500 });
+      return {
+        selector: candidate.selector,
+        index: Number(candidate.index || 0),
+        source: candidate.source || "unknown",
+        configured: !!candidate.configured,
+        tag: candidate.tag || null,
+        type: candidate.type || null,
+        name: candidate.name || null,
+        autocomplete: candidate.autocomplete || null,
+        placeholder_present: !!candidate.placeholder_present,
+      };
+    } catch {}
+  }
+  return null;
+};
+const clickSubmit = async (credentialField) => {
+  const submitSelectors = [
+    "button[type='submit']",
+    "input[type='submit']",
+    "button:has-text('Sign in')",
+    "button:has-text('Log in')",
+    "button:has-text('Login')",
+    "button:has-text('Continue')",
+    "button:has-text('Anmelden')",
+    "button:has-text('Einloggen')",
+    "[role='button']:has-text('Sign in')",
+    "[role='button']:has-text('Log in')",
+    "[role='button']:has-text('Continue')",
+  ];
+  for (const selector of submitSelectors) {
+    try {
+      const locator = page.locator(selector).first();
+      if ((await locator.count()) < 1) continue;
+      await locator.click({ timeout: 3500 });
+      return { mode: "click", selector };
+    } catch {}
+  }
+  if (credentialField && credentialField.selector) {
+    try {
+      await page.locator(credentialField.selector).nth(Number(credentialField.index || 0)).press("Enter", { timeout: 3500 });
+      return { mode: "press", key: "Enter", selector: credentialField.selector };
+    } catch {}
+  }
+  return null;
+};
+const pageSignals = async () => {
+  let title = "";
+  try { title = await page.title(); } catch {}
+  let formState = {};
+  try {
+    formState = await page.evaluate(() => {
+      const visible = (element) => {
+        const style = globalThis.getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.visibility !== "hidden"
+          && style.display !== "none"
+          && Number(style.opacity || "1") > 0
+          && box.width > 0
+          && box.height > 0;
+      };
+      return {
+        visible_password_fields: Array.from(document.querySelectorAll("input[type='password']")).filter(visible).length,
+        visible_email_fields: Array.from(document.querySelectorAll("input[type='email']")).filter(visible).length,
+        visible_forms: Array.from(document.querySelectorAll("form")).filter(visible).length,
+      };
+    });
+  } catch {}
+  return { url: page.url(), title, form_state: formState };
+};
+const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
+await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
+const beforeSignals = await pageSignals();
+let loginField = null;
+if (loginHint) {
+  loginField = await fillField("login", loginHint);
+}
+const credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+if (!credentialField) {
+  const observed = await ctoxBrowser.observe({ limit: 40, textMax: 120 });
+  return {
+    ok: false,
+    reason: "credential-field-not-found",
+    source_id: sourceId,
+    target_url: targetUrl,
+    credential_ref: credentialRef,
+    login_hint_present: !!loginHint,
+    before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state },
+    observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
+    redaction: "credential value is not returned",
+  };
+}
+const submit = await clickSubmit(credentialField);
+const waiters = [
+  page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => null),
+  page.waitForURL((url) => String(url) !== beforeSignals.url, { timeout: 12000 }).catch(() => null),
+  page.waitForTimeout(1200).catch(() => null),
+];
+await Promise.race(waiters).catch(() => null);
+await page.waitForTimeout(500).catch(() => null);
+const afterSignals = await pageSignals();
+let verifyFound = null;
+if (configuredVerifySelector) {
+  verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
+}
+const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
+const urlChanged = afterSignals.url !== beforeSignals.url;
+const originAfter = (() => { try { return new URL(afterSignals.url).origin; } catch { return null; } })();
+const passwordFieldsAfter = Number(afterSignals.form_state?.visible_password_fields || 0);
+const formGone = passwordFieldsAfter === 0;
+const ok = configuredVerifySelector
+  ? verifyFound === true
+  : !!submit && (formGone || urlChanged || originAfter !== targetOrigin);
+return {
+  ok,
+  reason: ok ? "login-signals-satisfied" : "login-signals-insufficient",
+  source_id: sourceId,
+  target_url: targetUrl,
+  credential_ref: credentialRef,
+  login_hint_present: !!loginHint,
+  login_field: loginField,
+  credential_field: credentialField,
+  submit,
+  verify_selector: configuredVerifySelector || null,
+  verify_selector_found: verifyFound,
+  before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state },
+  after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state },
+  url_changed: urlChanged,
+  same_origin_after_login: originAfter === targetOrigin,
+  observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
+  elapsed_ms: Date.now() - startedAt,
+  redaction: "credential value is not returned",
+};
+"#,
+    );
+    Ok(source)
+}
+
+fn redact_secret_value_from_json(value: &mut serde_json::Value, secret_value: &str) {
+    if secret_value.is_empty() {
+        return;
+    }
+    match value {
+        serde_json::Value::String(text) => {
+            if text.contains(secret_value) {
+                *text = text.replace(secret_value, "<redacted-credential-value>");
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_secret_value_from_json(item, secret_value);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for child in object.values_mut() {
+                redact_secret_value_from_json(child, secret_value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn available_modules() -> Vec<(&'static str, &'static str, &'static str)> {

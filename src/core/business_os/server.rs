@@ -35,7 +35,7 @@ use uuid::Uuid;
 use super::policy;
 use super::store;
 
-const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
+const CORE_MODULE_IDS: &[&str] = &["ctox", "appsec-pentest", "knowledge"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -524,7 +524,16 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/sync/config") => {
-            respond_json(request, &store::sync_config(root)?)?;
+            let session = request_session(root, &request);
+            let turn_session = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_else(|| "browser".to_owned());
+            respond_json(
+                request,
+                &store::sync_config_for_browser(root, &turn_session)?,
+            )?;
         }
         (Method::Post, "/api/business-os/sync/native-peer/restart") => {
             if std::env::var_os("CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS").is_none() {
@@ -2375,8 +2384,14 @@ fn knowledge_document_payload(root: &Path, id: &str) -> anyhow::Result<Value> {
             table.title,
             table.description,
             table.path.display(),
-            table.row_count.map(|value| value.to_string()).unwrap_or_else(|| "unbekannt".to_owned()),
-            table.bytes.map(|value| value.to_string()).unwrap_or_else(|| "unbekannt".to_owned())
+            table
+                .row_count
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unbekannt".to_owned()),
+            table
+                .bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unbekannt".to_owned())
         )
     } else {
         "# Knowledge\n\nKein Knowledge-Eintrag ausgewählt.".to_owned()
@@ -2769,19 +2784,13 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         let session = request_session(root, &request);
         store::remember_authenticated_session_user(root, &session)?;
         let sync_config = if session.authenticated {
-            let mut config = store::sync_config(root)?;
-            // Append an ephemeral TURN ICE server (coturn use-auth-secret) bound
-            // to the authenticated actor, minted fresh per shell load. No-op
-            // (STUN only) unless an operator configures a TURN URL + secret.
             let turn_session = session
                 .user
                 .as_ref()
                 .map(|user| user.id.clone())
                 .unwrap_or_default();
-            if let Some(turn) = store::ephemeral_turn_server(root, &turn_session) {
-                config.ice_servers.push(turn);
-            }
-            Some(config)
+            let config = store::sync_config_for_browser(root, &turn_session)?;
+            Some(launch_config_value(root, &config)?)
         } else {
             None
         };
@@ -2812,7 +2821,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
 fn inject_launch_context(
     html: String,
     session: &store::BusinessOsSession,
-    sync_config: Option<&store::BusinessOsSyncConfig>,
+    sync_config: Option<&Value>,
 ) -> anyhow::Result<String> {
     let html = ensure_shell_stylesheets_in_index(html);
     let script = format!(
@@ -2832,6 +2841,23 @@ fn inject_launch_context(
     } else {
         Ok(format!("{script}{html}"))
     }
+}
+
+fn launch_config_value(
+    root: &Path,
+    sync_config: &store::BusinessOsSyncConfig,
+) -> anyhow::Result<Value> {
+    let mut value = serde_json::to_value(sync_config)?;
+    if let Ok(catalog) = store::module_catalog_for_rxdb(root) {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("module_catalog_snapshot".to_owned(), catalog);
+            object.insert(
+                "module_catalog_snapshot_source".to_owned(),
+                Value::String("native-launch-config".to_owned()),
+            );
+        }
+    }
+    Ok(value)
 }
 
 fn ensure_shell_stylesheets_in_index(html: String) -> String {

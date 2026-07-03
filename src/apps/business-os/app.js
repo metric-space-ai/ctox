@@ -4314,6 +4314,17 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'business_commands',
     'business_module_catalog',
   ]),
+  'appsec-pentest': Object.freeze([
+    'appsec_approvals',
+    'appsec_artifacts',
+    'appsec_assessments',
+    'appsec_coverage',
+    'appsec_findings',
+    'appsec_pipeline_stages',
+    'appsec_runs',
+    'appsec_scanner_inventory',
+    'business_commands',
+  ]),
   browser: Object.freeze([
     'browser_frames',
     'browser_input_events',

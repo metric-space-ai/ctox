@@ -17,7 +17,7 @@
 // Origin: CTOX
 // License: Apache-2.0
 
-use super::browser_runtime::browser_runtime_manager;
+use super::browser_runtime::{browser_runtime_manager, BrowserSessionAutomationRequest};
 use super::store;
 use crate::mission::channels;
 use crate::mission::tickets;
@@ -1995,6 +1995,46 @@ pub fn browser_context_capture(
     Ok(outcome)
 }
 
+pub fn browser_session_automation(
+    root: &Path,
+    request: BrowserSessionAutomationRequest,
+) -> anyhow::Result<Value> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        anyhow::bail!("session_id is required for persistent browser automation");
+    }
+    if request.source.trim().is_empty() {
+        anyhow::bail!("browser automation source is empty");
+    }
+    let database_path = store::rxdb_store_path(root);
+    let root = root.to_path_buf();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS browser automation runtime")?;
+    if let Some(peer) = current_peer() {
+        return runtime.block_on(async move {
+            browser_session_automation_with_database(root, &peer.database, request).await
+        });
+    }
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let output = browser_session_automation_with_database(root, &database, request).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(output)
+    })
+}
+
 fn current_peer() -> Option<Arc<NativePeer>> {
     NATIVE_PEER.lock().ok().and_then(|guard| guard.clone())
 }
@@ -3813,6 +3853,150 @@ async fn browser_context_snapshot_with_database(
     ))
 }
 
+async fn browser_session_automation_with_database(
+    root: PathBuf,
+    database: &Arc<RxDatabase>,
+    request: BrowserSessionAutomationRequest,
+) -> anyhow::Result<Value> {
+    let session_id = request.session_id.trim().to_string();
+    anyhow::ensure!(
+        !session_id.is_empty(),
+        "session_id is required for persistent browser automation"
+    );
+    let source = request.source.trim().to_string();
+    anyhow::ensure!(!source.is_empty(), "browser automation source is empty");
+    let timeout_ms = request.timeout_ms.unwrap_or(30_000).clamp(1_000, 300_000);
+    let command_created_at_ms = now_ms() as u64;
+    let manager = browser_runtime_manager();
+    let session = manager
+        .ensure_session(root, request.dir, &session_id, 1920, 947)
+        .await?;
+    let mut output = manager
+        .request(
+            &session,
+            "automation",
+            json!({
+                "source": source,
+                "timeoutMs": timeout_ms,
+            }),
+        )
+        .await?;
+
+    let session_doc = find_browser_document(database, "browser_sessions", &session_id).await?;
+    let tab_id = session_doc
+        .get("current_tab_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("browser_tab_{session_id}"));
+    let nav = output.get("nav").cloned().unwrap_or(Value::Null);
+    let page_meta = output.get("page").cloned().unwrap_or(Value::Null);
+    let url = nav
+        .get("url")
+        .and_then(Value::as_str)
+        .or_else(|| page_meta.get("url").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("about:blank")
+        .to_string();
+    let title = nav
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| page_meta.get("title").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Remote Browser")
+        .to_string();
+    let can_go_back = nav
+        .get("can_go_back")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let can_go_forward = nav
+        .get("can_go_forward")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let next_seq = session_doc
+        .get("last_frame_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    let screenshot = manager.request(&session, "screenshot", json!({})).await?;
+    let data = screenshot
+        .get("screenshot")
+        .and_then(|frame| frame.get("base64"))
+        .and_then(Value::as_str)
+        .context("browser runtime did not return screenshot data after automation")?
+        .to_string();
+    let mime_type = screenshot
+        .get("screenshot")
+        .and_then(|frame| frame.get("mimeType"))
+        .and_then(Value::as_str)
+        .unwrap_or("image/png")
+        .to_string();
+    let frame_id = format!("browser_frame_{}_{}", session_id, next_seq);
+    let frame_hash = browser_frame_hash(&data);
+    let size_bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map(|bytes| bytes.len() as u64)
+        .unwrap_or_else(|_| data.len() as u64);
+    upsert_browser_frame(
+        database,
+        &frame_id,
+        &session_id,
+        &tab_id,
+        next_seq,
+        &mime_type,
+        &data,
+        session.viewport_w,
+        session.viewport_h,
+        size_bytes,
+        &frame_hash,
+    )
+    .await?;
+    upsert_browser_tab(
+        database,
+        &tab_id,
+        &session_id,
+        &title,
+        &url,
+        "active",
+        false,
+        can_go_back,
+        can_go_forward,
+        Some(&frame_id),
+        next_seq,
+    )
+    .await?;
+    upsert_browser_session(
+        database,
+        &session_id,
+        &tab_id,
+        "active",
+        "active",
+        &url,
+        &title,
+        session.viewport_w,
+        session.viewport_h,
+        Some(&frame_id),
+        next_seq,
+        "browser.automation",
+        command_created_at_ms,
+        output.get("error").and_then(Value::as_str),
+    )
+    .await?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert("session_id".to_string(), Value::String(session_id));
+        object.insert("tab_id".to_string(), Value::String(tab_id));
+        object.insert("frame_id".to_string(), Value::String(frame_id));
+        object.insert("frame_hash".to_string(), Value::String(frame_hash));
+        object.insert("size_bytes".to_string(), Value::from(size_bytes));
+        object.insert(
+            "browser_stream".to_string(),
+            Value::String("rxdb".to_string()),
+        );
+        object.insert("timeout_ms".to_string(), Value::from(timeout_ms));
+    }
+    Ok(output)
+}
+
 async fn browser_context_related_document(
     database: &Arc<RxDatabase>,
     collection: &str,
@@ -4110,15 +4294,11 @@ async fn accept_pending_business_command(
                     obj.insert("error".to_string(), Value::String(err.to_string()));
                     obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
                 }
-                incremental_upsert_document_with_repair(
-                    &commands,
-                    next,
-                    "failed business_command",
-                )
-                .await
-                .map_err(|err| {
-                    anyhow::anyhow!("upsert failed business_command {command_id}: {err}")
-                })?;
+                incremental_upsert_document_with_repair(&commands, next, "failed business_command")
+                    .await
+                    .map_err(|err| {
+                        anyhow::anyhow!("upsert failed business_command {command_id}: {err}")
+                    })?;
             }
             return Ok(());
         }
@@ -9288,10 +9468,14 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
     let start_idx = i64::try_from(index_window.0).map_err(|err| {
-        demand_file_source_error(format!("desktop file chunk start overflow for {file_id}: {err}"))
+        demand_file_source_error(format!(
+            "desktop file chunk start overflow for {file_id}: {err}"
+        ))
     })?;
     let end_idx = i64::try_from(index_window.1).map_err(|err| {
-        demand_file_source_error(format!("desktop file chunk end overflow for {file_id}: {err}"))
+        demand_file_source_error(format!(
+            "desktop file chunk end overflow for {file_id}: {err}"
+        ))
     })?;
     let mut stmt = conn
         .prepare(
@@ -14858,6 +15042,7 @@ mod tests {
                 display_name: "Alice".to_string(),
                 role: "founder".to_string(),
                 active: true,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )
@@ -14908,6 +15093,7 @@ mod tests {
                 display_name: "Alice".to_string(),
                 role: "founder".to_string(),
                 active: true,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )
@@ -14930,6 +15116,7 @@ mod tests {
                 display_name: "Alice Updated".to_string(),
                 role: "founder".to_string(),
                 active: true,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )

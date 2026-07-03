@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::Connection;
-use rusqlite::OpenFlags;
-use rusqlite::OptionalExtension;
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
+use rusqlite::Connection;
+use rusqlite::OpenFlags;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -55,12 +55,25 @@ const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
 const CORE_MODULE_IDS: &[&str] = &[
     "ctox",
+    "appsec-pentest",
     "knowledge",
     "app-store",
     "desktop",
     "reports",
     "tickets",
     "threads",
+];
+
+const APPSEC_MODULE_ID: &str = "appsec-pentest";
+const APPSEC_BUSINESS_OS_COLLECTIONS: &[&str] = &[
+    "appsec_assessments",
+    "appsec_runs",
+    "appsec_artifacts",
+    "appsec_findings",
+    "appsec_coverage",
+    "appsec_pipeline_stages",
+    "appsec_scanner_inventory",
+    "appsec_approvals",
 ];
 const STARTER_MODULE_IDS: &[&str] = &[
     // Generic productivity apps shipped on every instance.
@@ -98,6 +111,8 @@ const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
 const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
 const BUSINESS_OS_TURN_SECRET_NAME: &str = "webrtc_turn_secret";
+const BUSINESS_OS_TURN_URL_KEY: &str = "CTOX_BUSINESS_OS_TURN_URL";
+const BUSINESS_OS_TURN_SECRET_NAME_KEY: &str = "CTOX_BUSINESS_OS_TURN_SECRET_NAME";
 /// Lifetime of a minted ephemeral TURN credential (coturn use-auth-secret).
 const BUSINESS_OS_TURN_TTL_SECS: i64 = 3600;
 const BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME: &str = "backup_manifest_signing_key_v1";
@@ -111,6 +126,10 @@ const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
+const BUSINESS_USER_PROFILE_MAX_FIELDS: usize = 64;
+const BUSINESS_USER_PROFILE_KEY_MAX_CHARS: usize = 80;
+const BUSINESS_USER_PROFILE_VALUE_MAX_CHARS: usize = 512;
+const BUSINESS_USER_PROFILE_JSON_MAX_BYTES: usize = 16 * 1024;
 const CV_PRINT_PDF_TEXT_MAX_CHARS: usize = 24_000;
 const CV_PRINT_PDF_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
@@ -386,6 +405,8 @@ pub struct BusinessOsSyncConfig {
     pub signaling_urls: Vec<String>,
     pub signaling_urls_source: &'static str,
     pub ice_servers: Vec<Value>,
+    pub ice_servers_refresh_url: &'static str,
+    pub ice_diagnostics: Value,
     pub transport: &'static str,
     pub http_bridge_available: bool,
     pub ctox_instance_required: bool,
@@ -435,6 +456,7 @@ pub struct BusinessOsUser {
     pub display_name: String,
     pub role: String,
     pub active: bool,
+    pub profile: Value,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -455,6 +477,8 @@ pub struct BusinessOsUserMutation {
     pub role: String,
     #[serde(default = "default_true")]
     pub active: bool,
+    #[serde(default)]
+    pub profile: Option<Value>,
     #[serde(default)]
     pub accept_recovery_responsibility: bool,
 }
@@ -691,6 +715,15 @@ pub struct DesktopFileMaterializeRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct DesktopFileExportRequest {
+    pub file_id: String,
+    #[serde(default)]
+    pub generation_id: String,
+    #[serde(default)]
+    pub output_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ModuleFounderAssignment {
     pub module_id: String,
     pub user_id: String,
@@ -882,6 +915,8 @@ struct ModuleManifest {
     entry: String,
     #[serde(default)]
     collections: Vec<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    file_plane: Value,
     #[serde(default)]
     layout: Value,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1672,6 +1707,8 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let ice_servers = ice_servers_config(root);
+    let ice_diagnostics = ice_diagnostics(&ice_servers);
     Ok(BusinessOsSyncConfig {
         ok: true,
         app_hosting: "ctox_instance_webserver",
@@ -1684,7 +1721,9 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         peer_role: "ctox_instance",
         signaling_urls: connection.signaling_urls,
         signaling_urls_source: connection.signaling_urls_source,
-        ice_servers: ice_servers_config(),
+        ice_servers,
+        ice_servers_refresh_url: "/api/business-os/sync/config",
+        ice_diagnostics,
         transport: "webrtc",
         http_bridge_available: false,
         ctox_instance_required: true,
@@ -1697,6 +1736,18 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         native_rxdb_peer_status,
         module_allowlist: business_os_module_allowlist(root),
     })
+}
+
+pub fn sync_config_for_browser(
+    root: &Path,
+    turn_session_id: &str,
+) -> anyhow::Result<BusinessOsSyncConfig> {
+    let mut config = sync_config(root)?;
+    if let Some(turn) = ephemeral_turn_server(root, turn_session_id) {
+        config.ice_servers.push(turn);
+    }
+    config.ice_diagnostics = ice_diagnostics(&config.ice_servers);
+    Ok(config)
 }
 
 pub fn rotate_sync_room_password(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
@@ -1722,7 +1773,7 @@ pub fn rotate_sync_room_password(root: &Path) -> anyhow::Result<BusinessOsSyncCo
     sync_config(root)
 }
 
-fn ice_servers_config() -> Vec<Value> {
+fn ice_servers_config(_root: &Path) -> Vec<Value> {
     if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_ICE_SERVERS") {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
@@ -1797,13 +1848,101 @@ fn normalize_ice_server(value: Value) -> Option<Value> {
     Some(Value::Object(server))
 }
 
+fn ice_diagnostics(ice_servers: &[Value]) -> Value {
+    let mut has_turn = false;
+    let mut has_credentialed_turn = false;
+    let mut credential_expires_at_ms: Option<i64> = None;
+    for server in ice_servers {
+        let Some(object) = server.as_object() else {
+            continue;
+        };
+        let urls = object.get("urls");
+        let url_values = if let Some(url) = urls.and_then(Value::as_str) {
+            vec![url.to_owned()]
+        } else {
+            urls.and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let server_has_turn = url_values.iter().any(|url| {
+            url.trim_start().starts_with("turn:") || url.trim_start().starts_with("turns:")
+        });
+        if !server_has_turn {
+            continue;
+        }
+        has_turn = true;
+        let username = object
+            .get("username")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let credential = object
+            .get("credential")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if !username.is_empty() && !credential.is_empty() {
+            has_credentialed_turn = true;
+        }
+        if let Some((expiry, _)) = username.split_once(':') {
+            if let Ok(expiry_secs) = expiry.parse::<i64>() {
+                let expiry_ms = expiry_secs.saturating_mul(1000);
+                credential_expires_at_ms = Some(
+                    credential_expires_at_ms
+                        .map(|current| current.min(expiry_ms))
+                        .unwrap_or(expiry_ms),
+                );
+            }
+        }
+    }
+    serde_json::json!({
+        "state": if has_credentialed_turn {
+            "credentialed-turn"
+        } else if has_turn {
+            "turn-without-credentials"
+        } else {
+            "stun-or-host-only"
+        },
+        "iceServersConfigured": ice_servers.len(),
+        "iceServersHaveTurn": has_turn,
+        "iceServersHaveCredentialedTurn": has_credentialed_turn,
+        "credentialExpiresAtMs": credential_expires_at_ms,
+        "nativeRelaySupported": false,
+        "nativeRelayStrategy": "browser-turn-plus-native-host-srflx",
+        "warning": if has_credentialed_turn {
+            ""
+        } else {
+            "No credentialed TURN is active; private/NAT browsers may need LAN-reachable native host or managed relay setup."
+        },
+    })
+}
+
 /// Optional TURN server URL (e.g. `turn:turn.example.com:3478`). TURN is opt-in:
 /// when unset, sync uses STUN only and no ephemeral credentials are minted.
-fn business_os_turn_url() -> Option<String> {
-    env::var("CTOX_BUSINESS_OS_TURN_URL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+fn business_os_turn_url(root: &Path) -> Option<String> {
+    if let Some(value) =
+        crate::inference::runtime_env::get_runtime_env_value(root, BUSINESS_OS_TURN_URL_KEY)
+    {
+        return Some(value);
+    }
+    if let Ok(value) = env::var(BUSINESS_OS_TURN_URL_KEY) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            let _ = crate::inference::runtime_env::set_runtime_env_value(
+                root,
+                BUSINESS_OS_TURN_URL_KEY,
+                trimmed,
+            );
+            return Some(trimmed.to_owned());
+        }
+    }
+    None
 }
 
 /// Shared secret used to derive coturn `use-auth-secret` ephemeral credentials.
@@ -1816,7 +1955,12 @@ fn business_os_turn_secret(root: &Path) -> Option<String> {
             return Some(trimmed.to_owned());
         }
     }
-    crate::secrets::read_secret_value(root, BUSINESS_OS_SECRET_SCOPE, BUSINESS_OS_TURN_SECRET_NAME)
+    let secret_name = crate::inference::runtime_env::get_runtime_env_value(
+        root,
+        BUSINESS_OS_TURN_SECRET_NAME_KEY,
+    )
+    .unwrap_or_else(|| BUSINESS_OS_TURN_SECRET_NAME.to_owned());
+    crate::secrets::read_secret_value(root, BUSINESS_OS_SECRET_SCOPE, &secret_name)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -1850,7 +1994,7 @@ fn mint_ephemeral_turn_credentials(
 /// ephemeral credentials bound to `session_id`. Returns `None` when TURN is not
 /// configured (no URL or no secret) — callers then fall back to STUN only.
 pub fn ephemeral_turn_server(root: &Path, session_id: &str) -> Option<Value> {
-    let url = business_os_turn_url()?;
+    let url = business_os_turn_url(root)?;
     let secret = business_os_turn_secret(root)?;
     let (username, credential) =
         mint_ephemeral_turn_credentials(&secret, session_id, now_ms() as i64);
@@ -2748,6 +2892,226 @@ fn module_manifest_collection_ids(manifest: &Value) -> Vec<String> {
     collections.sort();
     collections.dedup();
     collections
+}
+
+fn augment_module_manifest_file_plane(manifest: &mut ModuleManifest, module_dir: &Path) {
+    let declared = manifest
+        .collections
+        .iter()
+        .map(|collection| collection.trim())
+        .filter(|collection| !collection.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    if declared.is_empty() {
+        return;
+    }
+    let schema_path = module_dir.join("collections.schema.json");
+    let Ok(schema_text) = fs::read_to_string(&schema_path) else {
+        return;
+    };
+    let Ok(schema_doc) = serde_json::from_str::<Value>(&schema_text) else {
+        return;
+    };
+    let declarations = business_os_file_plane_declarations_from_schema_doc(&schema_doc, &declared);
+    if declarations.is_empty() {
+        return;
+    }
+    manifest.file_plane = serde_json::json!({
+        "schema_format": "ctox-business-os-file-plane-v1",
+        "declarations": declarations,
+    });
+}
+
+pub(crate) fn business_os_file_plane_declarations_from_schema_doc(
+    schema_doc: &Value,
+    declared_collections: &BTreeSet<String>,
+) -> Vec<Value> {
+    let mut declarations = Vec::new();
+    for key in ["file_plane", "filePlane"] {
+        if let Some(value) = schema_doc.get(key) {
+            collect_business_os_file_plane_declarations(
+                value,
+                None,
+                declared_collections,
+                &mut declarations,
+            );
+        }
+    }
+    for key in ["collection_roles", "collectionRoles"] {
+        if let Some(roles) = schema_doc.get(key).and_then(Value::as_object) {
+            for (collection, value) in roles {
+                collect_business_os_file_plane_declarations(
+                    value,
+                    Some(collection),
+                    declared_collections,
+                    &mut declarations,
+                );
+            }
+        }
+    }
+    if let Some(collections) = schema_doc.get("collections").and_then(Value::as_object) {
+        for (collection, value) in collections {
+            if value.get("role").is_some() || value.get("file_plane").is_some() {
+                collect_business_os_file_plane_declarations(
+                    value,
+                    Some(collection),
+                    declared_collections,
+                    &mut declarations,
+                );
+            }
+        }
+    }
+    let mut by_request = BTreeMap::new();
+    for declaration in declarations {
+        if let Some(request_collection) = declaration
+            .get("request_collection")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        {
+            by_request.insert(request_collection, declaration);
+        }
+    }
+    by_request.into_values().collect()
+}
+
+fn collect_business_os_file_plane_declarations(
+    value: &Value,
+    default_storage_collection: Option<&String>,
+    declared_collections: &BTreeSet<String>,
+    output: &mut Vec<Value>,
+) {
+    if let Some(items) = value.as_array() {
+        for item in items {
+            if let Some(declaration) = normalize_business_os_file_plane_declaration(
+                item,
+                default_storage_collection,
+                declared_collections,
+            ) {
+                output.push(declaration);
+            }
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    for key in [
+        "declarations",
+        "demand_file_sources",
+        "demandFileSources",
+        "file_chunks",
+        "fileChunks",
+    ] {
+        if let Some(items) = object.get(key).and_then(Value::as_array) {
+            for item in items {
+                if let Some(declaration) = normalize_business_os_file_plane_declaration(
+                    item,
+                    default_storage_collection,
+                    declared_collections,
+                ) {
+                    output.push(declaration);
+                }
+            }
+        }
+    }
+    for key in ["collection_roles", "collectionRoles"] {
+        if let Some(roles) = object.get(key).and_then(Value::as_object) {
+            for (collection, role) in roles {
+                collect_business_os_file_plane_declarations(
+                    role,
+                    Some(collection),
+                    declared_collections,
+                    output,
+                );
+            }
+        }
+    }
+    if object.contains_key("role")
+        || object.contains_key("request_collection")
+        || object.contains_key("requestCollection")
+        || object.contains_key("storage_collection")
+        || object.contains_key("storageCollection")
+    {
+        if let Some(declaration) = normalize_business_os_file_plane_declaration(
+            value,
+            default_storage_collection,
+            declared_collections,
+        ) {
+            output.push(declaration);
+        }
+    }
+}
+
+fn normalize_business_os_file_plane_declaration(
+    value: &Value,
+    default_storage_collection: Option<&String>,
+    declared_collections: &BTreeSet<String>,
+) -> Option<Value> {
+    let role = business_os_file_plane_string(value, &["role"]).unwrap_or_default();
+    if !role.is_empty() && role != "file-chunks" {
+        return None;
+    }
+    let storage_collection = business_os_file_plane_string(
+        value,
+        &["storage_collection", "storageCollection", "collection"],
+    )
+    .or_else(|| default_storage_collection.cloned())?;
+    let request_collection =
+        business_os_file_plane_string(value, &["request_collection", "requestCollection"])
+            .unwrap_or_else(|| storage_collection.clone());
+    let key_field = business_os_file_plane_string(value, &["key_field", "keyField"])?;
+    let content_hash_field =
+        business_os_file_plane_string(value, &["content_hash_field", "contentHashField"])
+            .unwrap_or_else(|| "content_hash".to_owned());
+    let chunk_index_field =
+        business_os_file_plane_string(value, &["chunk_index_field", "chunkIndexField"])
+            .unwrap_or_else(|| "idx".to_owned());
+
+    for identifier in [
+        request_collection.as_str(),
+        storage_collection.as_str(),
+        key_field.as_str(),
+        content_hash_field.as_str(),
+        chunk_index_field.as_str(),
+    ] {
+        if !business_os_file_plane_identifier_is_valid(identifier) {
+            return None;
+        }
+    }
+    if !declared_collections.is_empty()
+        && (!declared_collections.contains(&request_collection)
+            || !declared_collections.contains(&storage_collection))
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "role": "file-chunks",
+        "request_collection": request_collection,
+        "storage_collection": storage_collection,
+        "key_field": key_field,
+        "content_hash_field": content_hash_field,
+        "chunk_index_field": chunk_index_field,
+    }))
+}
+
+fn business_os_file_plane_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn business_os_file_plane_identifier_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 160
+        && value
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase())
+        && value
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_lowercase() || ch.is_ascii_digit())
 }
 
 fn module_release_review_completed(review: &Value) -> bool {
@@ -3715,6 +4079,7 @@ pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 "display_name": user.display_name,
                 "role": user.role,
                 "active": user.active,
+                "profile": user.profile,
                 "created_at_ms": user.created_at_ms,
                 "updated_at_ms": user.updated_at_ms,
                 "_deleted": false,
@@ -3773,12 +4138,17 @@ pub(crate) fn business_users_projection_stamp(
     let mut hasher = Sha256::new();
     let mut row_count = 0usize;
     let mut latest_updated_at_ms = 0i64;
+    let profile_column = if rxdb_table_has_column(&conn, "business_users", "profile_json")? {
+        "profile_json"
+    } else {
+        "'{}'"
+    };
     let mut stmt = conn
-        .prepare(
-            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+        .prepare(&format!(
+            "SELECT user_id, display_name, role, active, {profile_column}, created_at_ms, updated_at_ms
              FROM business_users
-             ORDER BY user_id ASC",
-        )
+             ORDER BY user_id ASC"
+        ))
         .context("prepare business users stamp query")?;
     let mut rows = stmt.query([]).context("query business users stamp")?;
     while let Some(row) = rows.next().context("read business users stamp row")? {
@@ -3787,9 +4157,10 @@ pub(crate) fn business_users_projection_stamp(
         let display_name: String = row.get(1)?;
         let role: String = row.get(2)?;
         let active: i64 = row.get(3)?;
-        let created_at_ms: i64 = row.get(4)?;
-        let updated_at_ms: i64 = row.get(5)?;
-        for value in [&user_id, &display_name, &role] {
+        let profile_json: String = row.get(4)?;
+        let created_at_ms: i64 = row.get(5)?;
+        let updated_at_ms: i64 = row.get(6)?;
+        for value in [&user_id, &display_name, &role, &profile_json] {
             hasher.update(value.len().to_le_bytes());
             hasher.update(value.as_bytes());
         }
@@ -6250,6 +6621,13 @@ pub fn upsert_user(
     let now = now_ms() as i64;
     let user_id = mutation.id.trim().to_owned();
     let display_name = mutation.display_name.trim().to_owned();
+    let profile_json = mutation
+        .profile
+        .as_ref()
+        .map(normalize_business_user_profile)
+        .transpose()?
+        .map(|profile| serde_json::to_string(&profile))
+        .transpose()?;
     let previous_user = business_user_audit_snapshot(&conn, &user_id)?;
     if !mutation.active {
         let orphaning_module_ids = sole_responsibility_module_ids_for_user(root, &conn, &user_id)?;
@@ -6264,19 +6642,21 @@ pub fn upsert_user(
     }
     conn.execute(
         "INSERT INTO business_users
-            (user_id, display_name, role, active, created_at_ms, updated_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            (user_id, display_name, role, active, created_at_ms, updated_at_ms, profile_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, COALESCE(?6, '{}'))
          ON CONFLICT(user_id) DO UPDATE SET
             display_name = excluded.display_name,
             role = excluded.role,
             active = excluded.active,
-            updated_at_ms = excluded.updated_at_ms",
+            updated_at_ms = excluded.updated_at_ms,
+            profile_json = COALESCE(?6, business_users.profile_json)",
         params![
             user_id.as_str(),
             display_name.as_str(),
             role.as_str(),
             mutation.active as i64,
-            now
+            now,
+            profile_json.as_deref()
         ],
     )?;
     if !mutation.active {
@@ -6284,12 +6664,9 @@ pub fn upsert_user(
         // (session_with_persisted_user also denies them on the next request).
         let _ = revoke_business_sessions_for_user(root, &user_id);
     }
-    let current_user = serde_json::json!({
-        "id": user_id,
-        "display_name": display_name,
-        "role": role,
-        "active": mutation.active
-    });
+    let current_user = business_user_by_id(&conn, &user_id)?
+        .map(|user| business_user_audit_value(&user))
+        .context("business user was not persisted")?;
     record_business_user_change_event(&conn, session, previous_user.as_ref(), &current_user, now)?;
     Ok(serde_json::json!({
         "ok": true,
@@ -8458,6 +8835,144 @@ pub fn materialize_desktop_file_command(
     }))
 }
 
+pub fn export_desktop_file_command(
+    root: &Path,
+    _session: &BusinessOsSession,
+    request: DesktopFileExportRequest,
+) -> anyhow::Result<Value> {
+    let file_id = request.file_id.trim();
+    anyhow::ensure!(!file_id.is_empty(), "file_id is required");
+    let file_doc = rxdb_desktop_file_document(root, file_id)?;
+    anyhow::ensure!(
+        !is_rxdb_deleted_document(&file_doc),
+        "desktop file `{file_id}` is deleted"
+    );
+    anyhow::ensure!(
+        file_doc
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("file")
+            == "file",
+        "only regular files can be exported"
+    );
+    anyhow::ensure!(
+        file_doc.get("content_state").and_then(Value::as_str) == Some("available"),
+        "desktop file `{file_id}` content is not available"
+    );
+    let generation_id = if request.generation_id.trim().is_empty() {
+        file_doc
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    } else {
+        request.generation_id.trim().to_string()
+    };
+    anyhow::ensure!(
+        !generation_id.is_empty(),
+        "desktop file `{file_id}` has no content generation"
+    );
+    let active_generation_id = file_doc
+        .get("content_generation_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        active_generation_id.is_empty() || active_generation_id == generation_id,
+        "desktop file `{file_id}` generation mismatch"
+    );
+    let content_hash = file_doc
+        .get("content_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    anyhow::ensure!(
+        !content_hash.is_empty(),
+        "desktop file `{file_id}` has no content hash"
+    );
+    let content_hash_scheme = file_doc
+        .get("content_hash_scheme")
+        .and_then(Value::as_str)
+        .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME);
+    anyhow::ensure!(
+        is_supported_business_os_attachment_content_hash_scheme(content_hash_scheme),
+        "desktop file `{file_id}` uses unsupported content hash scheme `{content_hash_scheme}`"
+    );
+    let size_bytes = file_doc
+        .get("size_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let name = if request.output_name.trim().is_empty() {
+        file_doc
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(file_id)
+            .to_string()
+    } else {
+        request.output_name.trim().to_string()
+    };
+    let export_dir = root.join("runtime").join("business-os").join("exports");
+    fs::create_dir_all(&export_dir)
+        .with_context(|| format!("failed to create export dir {}", export_dir.display()))?;
+    let safe_name = materialized_attachment_filename(file_id, &name);
+    let output_path = export_dir.join(safe_name);
+    ensure_path_within_directory(&export_dir, &output_path)?;
+    export_verified_desktop_file_chunks_to_path(
+        root,
+        file_id,
+        &generation_id,
+        size_bytes,
+        &content_hash,
+        &output_path,
+    )?;
+    let metadata = fs::metadata(&output_path)
+        .with_context(|| format!("failed to stat exported file {}", output_path.display()))?;
+    let exported_at_ms = now_ms() as i64;
+    upsert_rxdb_collection_record(
+        root,
+        "desktop_files",
+        file_id,
+        exported_at_ms,
+        serde_json::json!({
+            "file_export_status": "exported",
+            "file_exported_at_ms": exported_at_ms,
+            "file_export_path": output_path.to_string_lossy(),
+            "file_export_generation_id": generation_id,
+            "file_export_size_bytes": metadata.len(),
+            "file_export_content_hash": content_hash,
+            "file_export_content_hash_scheme": content_hash_scheme,
+        }),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "file_id": file_id,
+        "generation_id": generation_id,
+        "path": output_path.to_string_lossy(),
+        "size_bytes": metadata.len(),
+        "content_hash": content_hash,
+        "content_hash_scheme": content_hash_scheme,
+        "exported_at_ms": exported_at_ms
+    }))
+}
+
+fn ensure_path_within_directory(base_dir: &Path, path: &Path) -> anyhow::Result<()> {
+    let canonical_base = base_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize export dir {}", base_dir.display()))?;
+    let parent = path
+        .parent()
+        .with_context(|| format!("export path {} has no parent", path.display()))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize export parent {}", parent.display()))?;
+    anyhow::ensure!(
+        canonical_parent.starts_with(&canonical_base),
+        "export path escapes Business OS export directory"
+    );
+    Ok(())
+}
+
 fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Value> {
     let database_path = rxdb_store_path(root);
     let conn = Connection::open(&database_path)
@@ -8616,6 +9131,7 @@ fn load_module_manifests(
             manifest.manifest_sha256 = hex_sha256(text.as_bytes());
             manifest.local_manifest_path = path.display().to_string();
             backfill_local_module_icon(&mut manifest, &entry.path());
+            augment_module_manifest_file_plane(&mut manifest, &entry.path());
             if manifest.entry.is_empty() {
                 manifest.entry = format!("modules/{}/index.html", manifest.id);
             }
@@ -8676,6 +9192,7 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
         manifest.manifest_sha256 = hex_sha256(text.as_bytes());
         manifest.local_manifest_path = path.display().to_string();
+        augment_module_manifest_file_plane(&mut manifest, &entry.path());
         backfill_local_module_icon(&mut manifest, &entry.path());
         if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
             continue;
@@ -10683,19 +11200,21 @@ pub fn remember_authenticated_session_user(
 
 fn query_users(conn: &Connection) -> anyhow::Result<Vec<BusinessOsUser>> {
     let mut stmt = conn.prepare(
-        "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+        "SELECT user_id, display_name, role, active, profile_json, created_at_ms, updated_at_ms
          FROM business_users
          ORDER BY role ASC, display_name ASC, user_id ASC",
     )?;
     let users = stmt
         .query_map([], |row| {
+            let profile_json: String = row.get(4)?;
             Ok(BusinessOsUser {
                 id: row.get(0)?,
                 display_name: row.get(1)?,
                 role: row.get(2)?,
                 active: row.get::<_, i64>(3)? != 0,
-                created_at_ms: row.get(4)?,
-                updated_at_ms: row.get(5)?,
+                profile: parse_business_user_profile_json(&profile_json),
+                created_at_ms: row.get(5)?,
+                updated_at_ms: row.get(6)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -10712,18 +11231,20 @@ fn business_user_by_id(
     }
     Ok(conn
         .query_row(
-            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+            "SELECT user_id, display_name, role, active, profile_json, created_at_ms, updated_at_ms
              FROM business_users
              WHERE user_id = ?1",
             params![actor_id],
             |row| {
+                let profile_json: String = row.get(4)?;
                 Ok(BusinessOsUser {
                     id: row.get(0)?,
                     display_name: row.get(1)?,
                     role: normalize_business_role(&row.get::<_, String>(2)?),
                     active: row.get::<_, i64>(3)? != 0,
-                    created_at_ms: row.get(4)?,
-                    updated_at_ms: row.get(5)?,
+                    profile: parse_business_user_profile_json(&profile_json),
+                    created_at_ms: row.get(5)?,
+                    updated_at_ms: row.get(6)?,
                 })
             },
         )
@@ -10732,6 +11253,72 @@ fn business_user_by_id(
 
 fn default_true() -> bool {
     true
+}
+
+fn empty_business_user_profile() -> Value {
+    serde_json::json!({})
+}
+
+fn parse_business_user_profile_json(raw: &str) -> Value {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| normalize_business_user_profile(&value).ok())
+        .unwrap_or_else(empty_business_user_profile)
+}
+
+fn normalize_business_user_profile(raw: &Value) -> anyhow::Result<Value> {
+    let Some(object) = raw.as_object() else {
+        if raw.is_null() {
+            return Ok(empty_business_user_profile());
+        }
+        anyhow::bail!("user profile must be an object");
+    };
+    anyhow::ensure!(
+        object.len() <= BUSINESS_USER_PROFILE_MAX_FIELDS,
+        "user profile may contain at most {BUSINESS_USER_PROFILE_MAX_FIELDS} fields"
+    );
+    let mut normalized = serde_json::Map::new();
+    for (key, value) in object {
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        anyhow::ensure!(
+            key.chars().count() <= BUSINESS_USER_PROFILE_KEY_MAX_CHARS,
+            "user profile field names may contain at most {BUSINESS_USER_PROFILE_KEY_MAX_CHARS} characters"
+        );
+        if let Some(value) = normalize_business_user_profile_value(value)? {
+            normalized.insert(key.to_owned(), value);
+        }
+    }
+    let profile = Value::Object(normalized);
+    let profile_json = serde_json::to_string(&profile)?;
+    anyhow::ensure!(
+        profile_json.len() <= BUSINESS_USER_PROFILE_JSON_MAX_BYTES,
+        "user profile is too large"
+    );
+    Ok(profile)
+}
+
+fn normalize_business_user_profile_value(value: &Value) -> anyhow::Result<Option<Value>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            anyhow::ensure!(
+                text.chars().count() <= BUSINESS_USER_PROFILE_VALUE_MAX_CHARS,
+                "user profile field values may contain at most {BUSINESS_USER_PROFILE_VALUE_MAX_CHARS} characters"
+            );
+            Ok(Some(Value::String(text.to_owned())))
+        }
+        Value::Bool(_) | Value::Number(_) => Ok(Some(value.clone())),
+        Value::Array(_) | Value::Object(_) => {
+            anyhow::bail!("user profile field values must be strings, numbers, booleans, or null")
+        }
+    }
 }
 
 /// Default lifetime of an HTTP shell session cookie (30 days).
@@ -15251,23 +15838,18 @@ fn session_audit_actor_context(session: &BusinessOsSession) -> Value {
     })
 }
 
+fn business_user_audit_value(user: &BusinessOsUser) -> Value {
+    serde_json::json!({
+        "id": user.id,
+        "display_name": user.display_name,
+        "role": user.role,
+        "active": user.active,
+        "profile": user.profile,
+    })
+}
+
 fn business_user_audit_snapshot(conn: &Connection, user_id: &str) -> anyhow::Result<Option<Value>> {
-    conn.query_row(
-        "SELECT user_id, display_name, role, active
-         FROM business_users
-         WHERE user_id = ?1",
-        params![user_id],
-        |row| {
-            Ok(serde_json::json!({
-                "id": row.get::<_, String>(0)?,
-                "display_name": row.get::<_, String>(1)?,
-                "role": row.get::<_, String>(2)?,
-                "active": row.get::<_, i64>(3)? != 0
-            }))
-        },
-    )
-    .optional()
-    .map_err(Into::into)
+    Ok(business_user_by_id(conn, user_id)?.map(|user| business_user_audit_value(&user)))
 }
 
 fn module_founder_audit_snapshot(
@@ -15335,7 +15917,8 @@ fn record_business_user_change_event(
             "changed_fields": changed_fields(previous, current, &[
                 "display_name",
                 "role",
-                "active"
+                "active",
+                "profile"
             ]),
             "observed_at_ms": observed_at_ms
         }),
@@ -18836,6 +19419,49 @@ pub fn accept_rxdb_business_command_with_origin(
                 outcome,
             );
         }
+        command_type if is_appsec_business_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let permission = if appsec_business_command_requires_data_write(command_type) {
+                BusinessOsPermission::DataWrite
+            } else {
+                BusinessOsPermission::DataRead
+            };
+            let decision = module_policy_decision(root, &session, permission, APPSEC_MODULE_ID)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            match handle_appsec_business_command(root, &session, &command) {
+                Ok(outcome) => {
+                    let status = if outcome.get("ok").and_then(Value::as_bool) == Some(false) {
+                        "failed"
+                    } else {
+                        "completed"
+                    };
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        status,
+                        command.record_id.as_deref(),
+                        Some(status),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
+        }
         command_type if command_type.starts_with("ctox.ticket.") => {
             let session = rxdb_authenticated_session(root, &command)?;
             let decision = module_policy_decision(
@@ -19108,6 +19734,26 @@ pub fn accept_rxdb_business_command_with_origin(
                     .context("invalid ctox.file.materialize payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
             let outcome = materialize_desktop_file_command(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.file.export" => {
+            let mutation: DesktopFileExportRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.file.export payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::DataRead)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = export_desktop_file_command(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -24406,6 +25052,7 @@ fn trusted_rxdb_command_user(
                 },
                 role: normalize_business_role(&user.role),
                 active: true,
+                profile: empty_business_user_profile(),
                 created_at_ms: 0,
                 updated_at_ms: 0,
             });
@@ -24425,6 +25072,7 @@ fn trusted_rxdb_command_user(
         },
         role: "user".to_owned(),
         active: true,
+        profile: empty_business_user_profile(),
         created_at_ms: 0,
         updated_at_ms: 0,
     })
@@ -24440,18 +25088,20 @@ fn active_business_user(
     }
     Ok(conn
         .query_row(
-            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+            "SELECT user_id, display_name, role, active, profile_json, created_at_ms, updated_at_ms
          FROM business_users
          WHERE user_id = ?1 AND active = 1",
             params![actor_id],
             |row| {
+                let profile_json: String = row.get(4)?;
                 Ok(BusinessOsUser {
                     id: row.get(0)?,
                     display_name: row.get(1)?,
                     role: normalize_business_role(&row.get::<_, String>(2)?),
                     active: row.get::<_, i64>(3)? != 0,
-                    created_at_ms: row.get(4)?,
-                    updated_at_ms: row.get(5)?,
+                    profile: parse_business_user_profile_json(&profile_json),
+                    created_at_ms: row.get(5)?,
+                    updated_at_ms: row.get(6)?,
                 })
             },
         )
@@ -30444,6 +31094,182 @@ fn attachment_ref_string(value: &Value, keys: &[&str]) -> Option<String> {
     })
 }
 
+fn export_verified_desktop_file_chunks_to_path(
+    root: &Path,
+    file_id: &str,
+    generation_id: &str,
+    size_bytes: u64,
+    content_hash: &str,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    let database_path = rxdb_store_path(root);
+    let conn = Connection::open(&database_path)
+        .with_context(|| format!("failed to open {}", database_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
+    let table = "ctox_business_os__desktop_file_chunks__v0";
+    let live_filter = if rxdb_table_has_column(&conn, table, "deleted")? {
+        " AND COALESCE(deleted, 0) = 0"
+    } else {
+        ""
+    };
+    let (chunk_id_lower, chunk_id_upper) =
+        desktop_file_generation_chunk_id_bounds(file_id, generation_id);
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT data FROM {table}
+             WHERE id >= ?1 AND id < ?2{live_filter}
+             ORDER BY json_extract(data, '$.idx') ASC",
+        ))
+        .context("desktop file chunk collection is not available")?;
+    let temp_path = export_temp_path(output_path);
+    let export_result = (|| -> anyhow::Result<()> {
+        let mut output = fs::File::create(&temp_path).with_context(|| {
+            format!("failed to create export temp file {}", temp_path.display())
+        })?;
+        let mut rows = stmt.query(params![chunk_id_lower, chunk_id_upper])?;
+        let mut expected_total: Option<u64> = None;
+        let mut expected_idx = 0_u64;
+        let mut decoded_size = 0_u64;
+        let mut hasher = Sha256::new();
+        while let Some(row) = rows.next()? {
+            let raw: String = row.get(0)?;
+            let chunk: Value =
+                serde_json::from_str(&raw).context("invalid desktop file chunk RxDB document")?;
+            anyhow::ensure!(
+                !is_rxdb_deleted_document(&chunk),
+                "desktop file `{file_id}` export contains a deleted chunk"
+            );
+            anyhow::ensure!(
+                chunk.get("file_id").and_then(Value::as_str) == Some(file_id),
+                "desktop file `{file_id}` export chunk file_id mismatch"
+            );
+            anyhow::ensure!(
+                chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id),
+                "desktop file `{file_id}` export chunk generation mismatch"
+            );
+            let total = chunk
+                .get("total")
+                .and_then(Value::as_u64)
+                .with_context(|| {
+                    format!("desktop file `{file_id}` export chunk total is missing")
+                })?;
+            let expected_chunk_total = expected_desktop_file_chunk_total(size_bytes);
+            anyhow::ensure!(
+                total == expected_chunk_total,
+                "desktop file `{file_id}` export chunk total mismatch"
+            );
+            if let Some(previous_total) = expected_total {
+                anyhow::ensure!(
+                    previous_total == total,
+                    "desktop file `{file_id}` export chunk total mismatch"
+                );
+            } else {
+                expected_total = Some(total);
+            }
+            let idx = chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .with_context(|| format!("desktop file `{file_id}` export chunk idx is missing"))?;
+            anyhow::ensure!(
+                idx == expected_idx,
+                "desktop file `{file_id}` export is missing chunk {expected_idx}"
+            );
+            anyhow::ensure!(
+                chunk
+                    .get("encoding")
+                    .and_then(Value::as_str)
+                    .unwrap_or("base64")
+                    == "base64",
+                "desktop file `{file_id}` export chunk encoding is unsupported"
+            );
+            anyhow::ensure!(
+                chunk
+                    .get("content_hash")
+                    .and_then(Value::as_str)
+                    .map(|hash| hash == content_hash)
+                    .unwrap_or(true),
+                "desktop file `{file_id}` export chunk content hash mismatch"
+            );
+            let data = chunk.get("data").and_then(Value::as_str).with_context(|| {
+                format!("desktop file `{file_id}` export chunk data is missing")
+            })?;
+            if let Some(size) = chunk.get("size_bytes").and_then(Value::as_u64) {
+                anyhow::ensure!(
+                    size == data.len() as u64,
+                    "desktop file `{file_id}` export chunk size mismatch"
+                );
+            }
+            let chunk_hash_scheme = chunk
+                .get("chunk_hash_scheme")
+                .and_then(Value::as_str)
+                .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME);
+            anyhow::ensure!(
+                chunk_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME,
+                "desktop file `{file_id}` export uses unsupported chunk hash scheme `{chunk_hash_scheme}`"
+            );
+            if let Some(chunk_hash) = chunk.get("chunk_hash").and_then(Value::as_str) {
+                anyhow::ensure!(
+                    hex_sha256(data.as_bytes()) == chunk_hash,
+                    "desktop file `{file_id}` export chunk hash mismatch"
+                );
+            }
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(data.as_bytes())
+                .with_context(|| format!("desktop file `{file_id}` export base64 decode failed"))?;
+            output
+                .write_all(&decoded)
+                .with_context(|| format!("failed to write export {}", temp_path.display()))?;
+            hasher.update(&decoded);
+            decoded_size = decoded_size.saturating_add(decoded.len() as u64);
+            expected_idx = expected_idx.saturating_add(1);
+        }
+        let total = expected_total
+            .with_context(|| format!("desktop file `{file_id}` export has no chunks"))?;
+        anyhow::ensure!(
+            expected_idx == total,
+            "desktop file `{file_id}` export is missing chunks"
+        );
+        anyhow::ensure!(
+            decoded_size == size_bytes,
+            "desktop file `{file_id}` export decoded size mismatch"
+        );
+        let actual_hash = format!("{:x}", hasher.finalize());
+        anyhow::ensure!(
+            actual_hash == content_hash,
+            "desktop file `{file_id}` export content hash mismatch"
+        );
+        output
+            .sync_all()
+            .with_context(|| format!("failed to sync export {}", temp_path.display()))?;
+        Ok(())
+    })();
+    if export_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    export_result?;
+    if output_path.exists() {
+        fs::remove_file(output_path)
+            .with_context(|| format!("failed to replace export {}", output_path.display()))?;
+    }
+    fs::rename(&temp_path, output_path).with_context(|| {
+        format!(
+            "failed to move export {} to {}",
+            temp_path.display(),
+            output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn export_temp_path(output_path: &Path) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("export");
+    output_path.with_file_name(format!(".{file_name}.{}.tmp", now_ms()))
+}
+
 fn decode_verified_desktop_file_chunks(
     file_id: &str,
     generation_id: &str,
@@ -31545,6 +32371,814 @@ pub(super) fn project_iot_projection_rows(
     Ok(pairs)
 }
 
+fn is_appsec_business_command(command_type: &str) -> bool {
+    command_type.starts_with("ctox.appsec.")
+}
+
+fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "ctox.appsec.assessment.create"
+            | "ctox.appsec.authz.plan"
+            | "ctox.appsec.approval.request"
+            | "ctox.appsec.approval.grant"
+            | "ctox.appsec.approval.revoke"
+    )
+}
+
+fn handle_appsec_business_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let mut args = Vec::new();
+    push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
+    match command.command_type.as_str() {
+        "ctox.appsec.state.sync" => {
+            args.extend(["state", "status", "--sync", "--json"].map(str::to_string));
+        }
+        "ctox.appsec.tools.doctor" => {
+            args.extend(["tools", "doctor"].map(str::to_string));
+            if let Some(profile) = appsec_payload_string(&command.payload, "profile") {
+                args.extend(["--profile".to_string(), profile]);
+            }
+            if command
+                .payload
+                .get("probe_versions")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--probe-versions".to_string());
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.assessment.create" => {
+            let url = appsec_payload_string(&command.payload, "url")
+                .or_else(|| appsec_payload_string(&command.payload, "target"))
+                .context("ctox.appsec.assessment.create payload.url is required")?;
+            args.extend(["init".to_string(), "--url".to_string(), url]);
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.authz.plan" => {
+            let target = appsec_payload_string(&command.payload, "target")
+                .or_else(|| appsec_payload_string(&command.payload, "url"))
+                .context("ctox.appsec.authz.plan payload.target is required")?;
+            args.extend([
+                "authz".to_string(),
+                "plan".to_string(),
+                "--target".to_string(),
+                target,
+            ]);
+            if let Some(source_id) = appsec_payload_string(&command.payload, "source_id") {
+                args.extend(["--source-id".to_string(), source_id]);
+            }
+            if let Some(subjects) = appsec_payload_string(&command.payload, "subjects") {
+                let subjects_path = workspace_bound_path(root, &subjects, "subjects")?;
+                args.extend([
+                    "--subjects".to_string(),
+                    subjects_path.display().to_string(),
+                ]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.approval.request" => {
+            args.extend(["approval", "request"].map(str::to_string));
+            push_appsec_approval_target_args(&command.payload, &mut args)?;
+            let tools = command
+                .payload
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|items| !items.is_empty())
+                .or_else(|| appsec_payload_string(&command.payload, "tool").map(|tool| vec![tool]))
+                .unwrap_or_else(|| vec!["*".to_string()]);
+            for tool in tools {
+                args.extend(["--tool".to_string(), tool]);
+            }
+            push_optional_appsec_string_arg(&command.payload, &mut args, "profile", "--profile");
+            push_optional_appsec_string_arg(&command.payload, &mut args, "reason", "--reason");
+            push_optional_appsec_string_arg(
+                &command.payload,
+                &mut args,
+                "expires_at",
+                "--expires-at",
+            );
+            if let Some(max_rate) =
+                appsec_payload_u64(&command.payload, "max_request_rate_per_second")
+            {
+                args.extend(["--max-rate".to_string(), max_rate.to_string()]);
+            }
+            if let Some(max_duration) = appsec_payload_u64(&command.payload, "max_duration_seconds")
+            {
+                args.extend(["--max-duration".to_string(), max_duration.to_string()]);
+            }
+            if command
+                .payload
+                .get("destructive_actions_allowed")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--allow-destructive".to_string());
+            }
+            if command
+                .payload
+                .get("production_safe_profile")
+                .and_then(Value::as_bool)
+                == Some(false)
+            {
+                args.push("--production-unsafe".to_string());
+            }
+            let requested_by = session_user_id(session)
+                .map(str::to_string)
+                .unwrap_or_else(|| "business-os-operator".to_string());
+            args.extend(["--requested-by".to_string(), requested_by]);
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.approval.grant" => {
+            let approval_id = appsec_payload_string(&command.payload, "approval_id")
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context("ctox.appsec.approval.grant payload.approval_id is required")?;
+            args.extend([
+                "approval".to_string(),
+                "grant".to_string(),
+                "--id".to_string(),
+                approval_id,
+            ]);
+            let approver = session_user_id(session)
+                .map(str::to_string)
+                .unwrap_or_else(|| "business-os-operator".to_string());
+            args.extend(["--approver".to_string(), approver]);
+            push_optional_appsec_string_arg(&command.payload, &mut args, "reason", "--reason");
+            push_optional_appsec_string_arg(
+                &command.payload,
+                &mut args,
+                "expires_at",
+                "--expires-at",
+            );
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.approval.revoke" => {
+            let approval_id = appsec_payload_string(&command.payload, "approval_id")
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context("ctox.appsec.approval.revoke payload.approval_id is required")?;
+            args.extend([
+                "approval".to_string(),
+                "revoke".to_string(),
+                "--id".to_string(),
+                approval_id,
+            ]);
+            push_optional_appsec_string_arg(&command.payload, &mut args, "reason", "--reason");
+            args.push("--json".to_string());
+        }
+        other => anyhow::bail!("unsupported AppSec Business OS command type: {other}"),
+    }
+    crate::run_projected_appsec_command(root, &args)
+}
+
+pub(crate) fn project_appsec_durable_state_to_business_os(
+    root: &Path,
+    state_dir: &Path,
+) -> anyhow::Result<Vec<(&'static str, String)>> {
+    let core_path = crate::paths::core_db(root);
+    if !core_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let core = Connection::open(&core_path)
+        .with_context(|| format!("failed to open {}", core_path.display()))?;
+    core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure AppSec core SQLite busy_timeout")?;
+    if !APPSEC_BUSINESS_OS_COLLECTIONS
+        .iter()
+        .all(|collection| sqlite_table_exists(&core, collection).unwrap_or(false))
+    {
+        return Ok(Vec::new());
+    }
+
+    let business = open_store(root)?;
+    let state = state_dir.display().to_string();
+    let mut pairs = Vec::new();
+    project_appsec_assessments(&core, &business, &state, &mut pairs)?;
+    project_appsec_runs(&core, &business, &state, &mut pairs)?;
+    project_appsec_artifacts(&core, &business, &state, &mut pairs)?;
+    project_appsec_findings(&core, &business, &state, &mut pairs)?;
+    project_appsec_coverage(&core, &business, &state, &mut pairs)?;
+    project_appsec_pipeline_stages(&core, &business, &state, &mut pairs)?;
+    project_appsec_scanner_inventory(&core, &business, &state, &mut pairs)?;
+    project_appsec_approvals(&core, &business, &state, &mut pairs)?;
+    Ok(pairs)
+}
+
+fn push_appsec_state_dir_arg(
+    root: &Path,
+    payload: &Value,
+    args: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    if let Some(state_dir) = appsec_payload_string(payload, "state_dir") {
+        let state_dir = workspace_bound_path(root, &state_dir, "state_dir")?;
+        args.extend(["--state-dir".to_string(), state_dir.display().to_string()]);
+    }
+    Ok(())
+}
+
+fn push_appsec_approval_target_args(payload: &Value, args: &mut Vec<String>) -> anyhow::Result<()> {
+    if let Some(url) = appsec_payload_string(payload, "url") {
+        args.extend(["--url".to_string(), url]);
+        return Ok(());
+    }
+    if let Some(host) = appsec_payload_string(payload, "host") {
+        args.extend(["--host".to_string(), host]);
+        return Ok(());
+    }
+    if let Some(target) = appsec_payload_string(payload, "target") {
+        args.extend(["--target".to_string(), target]);
+        return Ok(());
+    }
+    anyhow::bail!("AppSec approval request requires payload.url, payload.host, or payload.target")
+}
+
+fn push_optional_appsec_string_arg(payload: &Value, args: &mut Vec<String>, key: &str, flag: &str) {
+    if let Some(value) = appsec_payload_string(payload, key) {
+        args.extend([flag.to_string(), value]);
+    }
+}
+
+fn appsec_payload_string(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn appsec_payload_u64(payload: &Value, key: &str) -> Option<u64> {
+    payload
+        .get(key)
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn workspace_bound_path(root: &Path, value: &str, field: &str) -> anyhow::Result<PathBuf> {
+    let path = PathBuf::from(value.trim());
+    anyhow::ensure!(
+        !path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir)),
+        "{field} must not contain parent-directory components"
+    );
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    anyhow::ensure!(
+        resolved.starts_with(root),
+        "{field} must stay inside the CTOX workspace"
+    );
+    Ok(resolved)
+}
+
+fn project_appsec_assessments(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT assessment_id, target, profile, status, command, artifact_path, payload_json, created_at, updated_at
+         FROM appsec_assessments
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, assessment_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            id,
+            target,
+            profile,
+            status,
+            command,
+            artifact_path,
+            payload_json,
+            created_at,
+            updated_at,
+        ) = row?;
+        let payload = parse_json_value(&payload_json);
+        let record = serde_json::json!({
+            "assessment_id": id,
+            "state_dir": state,
+            "target": target,
+            "profile": profile,
+            "status": status,
+            "command": command,
+            "artifact_path": artifact_path,
+            "scan_completed": payload.get("scan_completed").cloned().unwrap_or(Value::Null),
+            "coverage_complete": payload.get("coverage_complete").cloned().unwrap_or(Value::Null),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_assessments", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_assessments", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_runs(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT run_id, assessment_id, tool, target, status, command_json, artifact_path, created_at, updated_at
+         FROM appsec_runs
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, run_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            id,
+            assessment_id,
+            tool,
+            target,
+            status,
+            command_json,
+            artifact_path,
+            created_at,
+            updated_at,
+        ) = row?;
+        let command_summary = command_json
+            .as_deref()
+            .map(parse_json_value)
+            .map(|value| summarize_appsec_command_json(&value))
+            .unwrap_or(Value::Null);
+        let record = serde_json::json!({
+            "run_id": id,
+            "assessment_id": assessment_id,
+            "state_dir": state,
+            "tool": tool,
+            "target": target,
+            "status": status,
+            "command_summary": command_summary,
+            "artifact_path": artifact_path,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_runs", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_runs", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_artifacts(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at
+         FROM appsec_artifacts
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, artifact_path ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    for row in rows {
+        let (artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at) = row?;
+        let id = stable_record_id("appsec_artifact", &artifact_path);
+        let metadata = sanitize_appsec_projection_json(parse_json_value(&metadata_json));
+        let record = serde_json::json!({
+            "artifact_id": id,
+            "artifact_path": artifact_path,
+            "state_dir": state,
+            "kind": kind,
+            "version": version,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "metadata": metadata,
+            "content_available": false,
+            "content_policy": "metadata-only; use redacted AppSec report/finding tools for detail reads",
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_artifacts", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_artifacts", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_findings(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT finding_id, title, severity, category, status, target, evidence_artifact, payload_json, updated_at
+         FROM appsec_findings
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, finding_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            id,
+            title,
+            severity,
+            category,
+            status,
+            target,
+            evidence_artifact,
+            payload_json,
+            updated_at,
+        ) = row?;
+        let payload = parse_json_value(&payload_json);
+        let record = serde_json::json!({
+            "finding_id": id,
+            "state_dir": state,
+            "title": title,
+            "severity": severity,
+            "category": category,
+            "status": status,
+            "target": target,
+            "evidence_artifact": evidence_artifact,
+            "source_tool": payload.get("source_tool").cloned().unwrap_or(Value::Null),
+            "signal": payload.get("signal").cloned().unwrap_or(Value::Null),
+            "validation_state": payload.get("validation_state").cloned().unwrap_or(Value::Null),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_findings", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_findings", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_coverage(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT coverage_id, phase, target, status, artifact_path, payload_json, updated_at
+         FROM appsec_coverage
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, coverage_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    for row in rows {
+        let (id, phase, target, status, artifact_path, payload_json, updated_at) = row?;
+        let payload = parse_json_value(&payload_json);
+        let record = serde_json::json!({
+            "coverage_id": id,
+            "state_dir": state,
+            "phase": phase,
+            "target": target,
+            "status": status,
+            "artifact_path": artifact_path,
+            "blocker_kind": payload.get("blocker_kind").cloned().unwrap_or(Value::Null),
+            "requires_active_approval": payload.get("requires_active_approval").cloned().unwrap_or(Value::Null),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_coverage", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_coverage", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_pipeline_stages(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT stage_key, stage_id, phase, target, status, coverage_status, active_required,
+                queue_task_id, queue_status, queue_updated_at, payload_json, updated_at
+         FROM appsec_pipeline_stages
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, stage_key ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, String>(11)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            key,
+            stage_id,
+            phase,
+            target,
+            status,
+            coverage_status,
+            active_required,
+            queue_task_id,
+            queue_status,
+            queue_updated_at,
+            payload_json,
+            updated_at,
+        ) = row?;
+        let payload = parse_json_value(&payload_json);
+        let record = serde_json::json!({
+            "stage_key": key,
+            "stage_id": stage_id,
+            "state_dir": state,
+            "phase": phase,
+            "target": target,
+            "status": status,
+            "coverage_status": coverage_status,
+            "active_required": active_required != 0,
+            "queue_task_id": queue_task_id,
+            "queue_status": queue_status,
+            "queue_updated_at": queue_updated_at,
+            "resume_gate": payload.get("resume_gate").cloned().unwrap_or(Value::Null),
+            "completion_gate": payload.get("completion_gate").cloned().unwrap_or(Value::Null),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(
+            business,
+            "appsec_pipeline_stages",
+            &key,
+            updated_at_ms,
+            record,
+        )?;
+        pairs.push(("appsec_pipeline_stages", key));
+    }
+    Ok(())
+}
+
+fn project_appsec_scanner_inventory(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT scanner_id, profile, available, status, binary_path, detected_version, payload_json, updated_at
+         FROM appsec_scanner_inventory
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, scanner_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            id,
+            profile,
+            available,
+            status,
+            binary_path,
+            detected_version,
+            payload_json,
+            updated_at,
+        ) = row?;
+        let payload = parse_json_value(&payload_json);
+        let record = serde_json::json!({
+            "scanner_id": id,
+            "state_dir": state,
+            "profile": profile,
+            "available": available != 0,
+            "status": status,
+            "binary_path": binary_path,
+            "detected_version": detected_version,
+            "category": payload.get("category").cloned().unwrap_or(Value::Null),
+            "install_kind": payload.get("install_kind").cloned().unwrap_or(Value::Null),
+            "active": payload.get("active").cloned().unwrap_or(Value::Null),
+            "default_enabled": payload.get("default_enabled").cloned().unwrap_or(Value::Null),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(
+            business,
+            "appsec_scanner_inventory",
+            &id,
+            updated_at_ms,
+            record,
+        )?;
+        pairs.push(("appsec_scanner_inventory", id));
+    }
+    Ok(())
+}
+
+fn project_appsec_approvals(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT approval_id, status, target_kind, target, tools_json, expires_at, payload_json, updated_at
+         FROM appsec_approvals
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, approval_id ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+        ))
+    })?;
+    for row in rows {
+        let (id, status, target_kind, target, tools_json, expires_at, payload_json, updated_at) =
+            row?;
+        let payload = parse_json_value(&payload_json);
+        let tools = tools_json
+            .as_deref()
+            .map(parse_json_value)
+            .and_then(|value| match value {
+                Value::Array(_) => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| Value::Array(Vec::new()));
+        let record = serde_json::json!({
+            "approval_id": id,
+            "state_dir": state,
+            "status": status,
+            "target_kind": target_kind,
+            "target": target,
+            "tools": tools,
+            "expires_at": expires_at,
+            "profile": payload.get("profile").cloned().unwrap_or(Value::Null),
+            "reason": payload.get("reason").cloned().unwrap_or(Value::Null),
+            "requested_by": payload.get("requested_by").cloned().unwrap_or(Value::Null),
+            "approved_by": payload.get("approved_by").cloned().unwrap_or(Value::Null),
+            "policy": sanitize_appsec_projection_json(payload.get("policy").cloned().unwrap_or(Value::Null)),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(business, "appsec_approvals", &id, updated_at_ms, record)?;
+        pairs.push(("appsec_approvals", id));
+    }
+    Ok(())
+}
+
+fn parse_json_value(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or(Value::Null)
+}
+
+fn appsec_updated_at_ms(value: &str) -> i64 {
+    value.parse::<i64>().unwrap_or_else(|_| now_ms() as i64)
+}
+
+fn summarize_appsec_command_json(value: &Value) -> Value {
+    if let Some(items) = value.as_array() {
+        return serde_json::json!({
+            "argv0": items.first().and_then(Value::as_str).unwrap_or(""),
+            "arg_count": items.len(),
+        });
+    }
+    if let Some(object) = value.as_object() {
+        return serde_json::json!({
+            "program": object.get("program").and_then(Value::as_str).unwrap_or(""),
+            "arg_count": object.get("args").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        });
+    }
+    Value::Null
+}
+
+fn sanitize_appsec_projection_json(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, item) in map {
+                let lowered = key.to_ascii_lowercase();
+                if lowered.contains("cookie")
+                    || lowered.contains("token")
+                    || lowered.contains("authorization")
+                    || lowered.contains("password")
+                    || lowered.contains("secret")
+                    || lowered.contains("private_key")
+                    || lowered.contains("screenshot")
+                    || lowered.contains("raw_stream")
+                    || lowered == "body"
+                    || lowered == "headers"
+                {
+                    out.insert(key, Value::String("[redacted]".to_string()));
+                } else {
+                    out.insert(key, sanitize_appsec_projection_json(item));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(sanitize_appsec_projection_json)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn stable_record_id(prefix: &str, value: &str) -> String {
+    format!("{prefix}_{}", hex_sha256(value.as_bytes()))
+}
+
 /// Tombstone-aware `business_records` upsert for iot projection rows. Unlike
 /// `upsert_business_record` (which always forces `_deleted:false`), this honors a
 /// `_deleted: true` payload so deletion tombstones set the `deleted` column and
@@ -31968,7 +33602,8 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
             active INTEGER NOT NULL DEFAULT 1,
             created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
+            updated_at_ms INTEGER NOT NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS business_workspace_branding (
@@ -32111,6 +33746,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         ",
     )?;
     migrate_business_users_roles(conn)?;
+    migrate_business_users_profile_json(conn)?;
     super::support::migrate(conn)?;
     Ok(())
 }
@@ -32126,7 +33762,15 @@ fn migrate_business_users_roles(conn: &Connection) -> anyhow::Result<()> {
     if !table_sql.contains("'admin', 'user'") || table_sql.contains("'founder'") {
         return Ok(());
     }
-    conn.execute_batch(
+    let old_has_profile_json = table_sql.contains("profile_json");
+    let insert_select = if old_has_profile_json {
+        "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms, profile_json
+         FROM business_users_old"
+    } else {
+        "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms, '{}'
+         FROM business_users_old"
+    };
+    conn.execute_batch(&format!(
         "
         ALTER TABLE business_users RENAME TO business_users_old;
         CREATE TABLE business_users (
@@ -32135,14 +33779,25 @@ fn migrate_business_users_roles(conn: &Connection) -> anyhow::Result<()> {
             role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
             active INTEGER NOT NULL DEFAULT 1,
             created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
+            updated_at_ms INTEGER NOT NULL,
+            profile_json TEXT NOT NULL DEFAULT '{{}}'
         );
         INSERT INTO business_users
-            (user_id, display_name, role, active, created_at_ms, updated_at_ms)
-        SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
-        FROM business_users_old;
+            (user_id, display_name, role, active, created_at_ms, updated_at_ms, profile_json)
+        {insert_select};
         DROP TABLE business_users_old;
-        ",
+        "
+    ))?;
+    Ok(())
+}
+
+fn migrate_business_users_profile_json(conn: &Connection) -> anyhow::Result<()> {
+    if rxdb_table_has_column(conn, "business_users", "profile_json")? {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE business_users ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}'",
+        [],
     )?;
     Ok(())
 }
@@ -32594,6 +34249,53 @@ mod tests {
         assert_eq!((username, password.clone()), (u2, p2));
         let (_, p3) = mint_ephemeral_turn_credentials("different", "user-1", now_ms);
         assert_ne!(p3, password);
+    }
+
+    #[test]
+    fn ephemeral_turn_server_uses_runtime_url_and_secret_reference() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        crate::inference::runtime_env::set_runtime_env_value(
+            root,
+            BUSINESS_OS_TURN_URL_KEY,
+            "turns:turn.example.com:5349",
+        )?;
+        crate::inference::runtime_env::set_runtime_env_value(
+            root,
+            BUSINESS_OS_TURN_SECRET_NAME_KEY,
+            "custom_turn_secret",
+        )?;
+        crate::secrets::write_secret_record(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            "custom_turn_secret",
+            "s3cr3t",
+            None,
+            serde_json::json!({}),
+        )?;
+
+        let server = ephemeral_turn_server(root, "browser-1").expect("turn server");
+        assert_eq!(
+            server.get("urls").and_then(Value::as_str),
+            Some("turns:turn.example.com:5349")
+        );
+        assert!(server
+            .get("username")
+            .and_then(Value::as_str)
+            .is_some_and(|username| username.ends_with(":browser-1")));
+        assert!(server.get("credential").and_then(Value::as_str).is_some());
+
+        let config = sync_config_for_browser(root, "browser-2")?;
+        assert!(config
+            .ice_servers
+            .iter()
+            .any(|entry| entry.get("urls").and_then(Value::as_str)
+                == Some("turns:turn.example.com:5349")));
+        assert_eq!(
+            config.ice_diagnostics.get("state").and_then(Value::as_str),
+            Some("credentialed-turn")
+        );
+        Ok(())
     }
 
     #[test]
@@ -33405,12 +35107,10 @@ mod tests {
             allowed_ticket.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            allowed_ticket
-                .pointer("/result/ticket_key")
-                .and_then(Value::as_str)
-                .is_some()
-        );
+        assert!(allowed_ticket
+            .pointer("/result/ticket_key")
+            .and_then(Value::as_str)
+            .is_some());
         Ok(())
     }
 
@@ -33809,8 +35509,8 @@ mod tests {
     }
 
     #[test]
-    fn push_collection_records_batches_non_command_store_writes_in_one_transaction()
-    -> anyhow::Result<()> {
+    fn push_collection_records_batches_non_command_store_writes_in_one_transaction(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         reset_push_collection_records_store_transaction_count(root, "customer_opportunities");
@@ -34161,13 +35861,11 @@ mod tests {
             }),
         )?;
         assert_eq!(failed.get("status").and_then(Value::as_str), Some("failed"));
-        assert!(
-            failed
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("unsupported branding token")
-        );
+        assert!(failed
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("unsupported branding token"));
         let branding = workspace_branding_for_rxdb(root)?;
         assert_eq!(branding.get("custom").and_then(Value::as_bool), Some(false));
         Ok(())
@@ -34275,13 +35973,11 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted
-                .pointer("/result/source_file_ids")
-                .and_then(Value::as_array)
-                .map(|ids| !ids.is_empty())
-                .unwrap_or(false)
-        );
+        assert!(granted
+            .pointer("/result/source_file_ids")
+            .and_then(Value::as_array)
+            .map(|ids| !ids.is_empty())
+            .unwrap_or(false));
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -34308,12 +36004,10 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted_snapshots
-                .get("result")
-                .and_then(Value::as_array)
-                .is_some()
-        );
+        assert!(granted_snapshots
+            .get("result")
+            .and_then(Value::as_array)
+            .is_some());
         Ok(())
     }
 
@@ -34729,8 +36423,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config()
-    -> anyhow::Result<()> {
+    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let _ = runtime_settings_for_rxdb(temp.path())?;
         let first = runtime_settings_projection_stamp(temp.path());
@@ -34764,8 +36458,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild()
-    -> anyhow::Result<()> {
+    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let first = runtime_settings_for_rxdb(temp.path())?;
         let first_updated_at = first.get("updated_at_ms").cloned();
@@ -34841,10 +36535,8 @@ mod tests {
         assert!(prompt.contains(
             "- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
         ));
-        assert!(
-            prompt
-                .contains("- validation: ctox business-os app validate subscriptions --installed")
-        );
+        assert!(prompt
+            .contains("- validation: ctox business-os app validate subscriptions --installed"));
         assert!(!prompt.contains("nextjs-postgres-port"));
         assert!(!prompt.contains("frontend-skill"));
         assert_eq!(
@@ -34885,9 +36577,7 @@ mod tests {
         assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(
-            prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory")
-        );
+        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
         assert!(prompt.contains("resource.design_guide:"));
@@ -35237,14 +36927,12 @@ mod tests {
         let catalog =
             load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
                 .context("expected module catalog projection")?;
-        assert!(
-            catalog
-                .get("modules")
-                .and_then(Value::as_array)
-                .is_some_and(|modules| modules
-                    .iter()
-                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id)))
-        );
+        assert!(catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .is_some_and(|modules| modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))));
         Ok(())
     }
 
@@ -35395,13 +37083,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(
-            denied
-                .pointer("/result/policy_decision/display_reason")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("not allowed")
-        );
+        assert!(denied
+            .pointer("/result/policy_decision/display_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("not allowed"));
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -36177,15 +37863,13 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(
-            business_event_payloads(
-                &conn,
-                "business_commands",
-                "cmd_activity_allowed_list",
-                "business_os.policy.allowed",
-            )?
-            .is_empty()
-        );
+        assert!(business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_activity_allowed_list",
+            "business_os.policy.allowed",
+        )?
+        .is_empty());
 
         Ok(())
     }
@@ -36204,6 +37888,9 @@ mod tests {
                 display_name: "Member".to_owned(),
                 role: "user".to_owned(),
                 active: true,
+                profile: Some(serde_json::json!({
+                    "Handynummer": "+49 170 9876543"
+                })),
                 accept_recovery_responsibility: false,
             },
         )?;
@@ -36215,6 +37902,7 @@ mod tests {
                 display_name: "Member".to_owned(),
                 role: "founder".to_owned(),
                 active: true,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )?;
@@ -36261,13 +37949,17 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(
+        assert_eq!(
             role_change
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("role".to_owned()))
+                .pointer("/current/profile/Handynummer")
+                .and_then(Value::as_str),
+            Some("+49 170 9876543")
         );
+        assert!(role_change
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("role".to_owned())));
 
         Ok(())
     }
@@ -36341,13 +38033,11 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            deactivation
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("active".to_owned()))
-        );
+        assert!(deactivation
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("active".to_owned())));
 
         Ok(())
     }
@@ -36449,16 +38139,12 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
-        );
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
-        );
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -36505,8 +38191,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -36523,6 +38209,7 @@ mod tests {
                 display_name: "Module Owner".to_owned(),
                 role: "founder".to_owned(),
                 active: false,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )
@@ -36546,6 +38233,7 @@ mod tests {
                 display_name: "Module Owner".to_owned(),
                 role: "founder".to_owned(),
                 active: false,
+                profile: None,
                 accept_recovery_responsibility: true,
             },
         )?;
@@ -36583,16 +38271,12 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(
-            responsible
-                .iter()
-                .any(|user| user.as_str() == Some("ops_admin"))
-        );
-        assert!(
-            !responsible
-                .iter()
-                .any(|user| user.as_str() == Some("module_owner"))
-        );
+        assert!(responsible
+            .iter()
+            .any(|user| user.as_str() == Some("ops_admin")));
+        assert!(!responsible
+            .iter()
+            .any(|user| user.as_str() == Some("module_owner")));
 
         Ok(())
     }
@@ -36638,13 +38322,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -36711,13 +38393,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -36751,6 +38431,7 @@ mod tests {
                 display_name: "Viewer".to_owned(),
                 role: "user".to_owned(),
                 active: true,
+                profile: None,
                 accept_recovery_responsibility: false,
             },
         )?;
@@ -37875,8 +39556,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
-    -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
+    ) -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -38380,8 +40061,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -38607,8 +40288,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -38840,13 +40521,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("read_collections")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("read_collections"));
         Ok(())
     }
 
@@ -39782,8 +41461,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -39934,20 +41613,18 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(
-            private_app
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .context("expected responsible ids")?
-                .iter()
-                .any(|id| id.as_str() == Some("ops-admin"))
-        );
+        assert!(private_app
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .context("expected responsible ids")?
+            .iter()
+            .any(|id| id.as_str() == Some("ops-admin")));
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
-    -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -40007,13 +41684,11 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                outcome
-                    .pointer("/result/error")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains(field_name)
-            );
+            assert!(outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains(field_name));
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -40085,13 +41760,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release insert failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release insert failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -40189,13 +41862,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release status failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release status failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -40478,13 +42149,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("explicit Team grant or locked-state behavior")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("explicit Team grant or locked-state behavior"));
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -40568,13 +42237,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("Query returned no rows")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Query returned no rows"));
         Ok(())
     }
 
@@ -40625,13 +42292,11 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(
-            app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         save_widget_source(
             root,
             "module.json",
@@ -40661,13 +42326,11 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(
-            !app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(!app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -40912,10 +42575,9 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(
-            task.prompt
-                .contains(materialized_path.to_string_lossy().as_ref())
-        );
+        assert!(task
+            .prompt
+            .contains(materialized_path.to_string_lossy().as_ref()));
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -40923,6 +42585,105 @@ mod tests {
                 .prompt
                 .contains(&base64::engine::general_purpose::STANDARD.encode(bytes)),
             "prompt must not inline attachment bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_file_export_writes_verified_browser_upload_to_sandbox() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = b"browser-origin export bytes";
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "export_file",
+            "export.txt",
+            "text/plain",
+            bytes,
+            false,
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_file_export",
+                "command_id": "cmd_file_export",
+                "module": "desktop",
+                "command_type": "ctox.file.export",
+                "record_id": "export_file",
+                "status": "pending_sync",
+                "payload": {
+                    "file_id": "export_file",
+                    "generation_id": generation_id,
+                    "output_name": "../unsafe/export.txt"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "chef",
+                        "role": "chef",
+                        "display_name": "Chef"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(true));
+        let result = outcome.get("result").context("export result")?;
+        assert_eq!(
+            result.get("content_hash").and_then(Value::as_str),
+            Some(content_hash.as_str())
+        );
+        assert_eq!(
+            result.get("content_hash_scheme").and_then(Value::as_str),
+            Some(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME)
+        );
+        let exported_path = PathBuf::from(
+            result
+                .get("path")
+                .and_then(Value::as_str)
+                .context("export path")?,
+        );
+        assert!(exported_path.starts_with(root.join("runtime").join("business-os").join("exports")));
+        assert_eq!(fs::read(&exported_path)?, bytes);
+        assert!(
+            exported_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .contains("unsafe_export.txt"),
+            "output name should be sanitized into the export sandbox"
+        );
+        let exported_doc = rxdb_desktop_file_document(root, "export_file")?;
+        assert_eq!(
+            exported_doc
+                .get("file_export_status")
+                .and_then(Value::as_str),
+            Some("exported")
+        );
+        assert_eq!(
+            exported_doc
+                .get("file_export_content_hash")
+                .and_then(Value::as_str),
+            Some(content_hash.as_str())
+        );
+        assert_eq!(
+            exported_doc
+                .get("file_export_content_hash_scheme")
+                .and_then(Value::as_str),
+            Some(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME)
+        );
+        assert_eq!(
+            exported_doc
+                .get("file_export_generation_id")
+                .and_then(Value::as_str),
+            Some(generation_id.as_str())
+        );
+        assert_eq!(
+            exported_doc
+                .get("file_export_path")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
+            Some(exported_path)
         );
         Ok(())
     }
@@ -40994,8 +42755,8 @@ mod tests {
     }
 
     #[test]
-    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload()
-    -> anyhow::Result<()> {
+    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let bytes = simple_text_pdf_bytes(&[
@@ -42313,8 +44074,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
-    -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -42652,8 +44413,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record()
-    -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -42692,13 +44453,11 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(
-            command
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("health_status")
-        );
+        assert!(command
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("health_status"));
         Ok(())
     }
 
@@ -44932,11 +46691,9 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(
-            backbone
-                .iter()
-                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
-        );
+        assert!(backbone
+            .iter()
+            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -45686,8 +47443,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
-    -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
+    ) -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -46024,11 +47781,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(
-            send.pointer("/result/physical_sent_at_ms")
-                .and_then(Value::as_i64)
-                .is_some()
-        );
+        assert!(send
+            .pointer("/result/physical_sent_at_ms")
+            .and_then(Value::as_i64)
+            .is_some());
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -47767,11 +49523,9 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(
-            projections
-                .iter()
-                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
-        );
+        assert!(projections
+            .iter()
+            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
 
         let write = accept_rxdb_business_command(
             root,
@@ -47987,6 +49741,92 @@ mod tests {
     }
 
     #[test]
+    fn module_catalog_projects_file_plane_declarations_from_schema() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        let module_dir = installed_app_root.join("installed-modules/dynamic-files");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::create_dir_all(&module_dir)?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            module_dir.join("module.json"),
+            r#"{"id":"dynamic-files","title":"Dynamic Files","entry":"installed-modules/dynamic-files/index.html","install_scope":"installed","collections":["business_commands","dynamic_files","dynamic_file_chunks"]}"#,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "dynamic_files": {
+                        "schema": {
+                            "version": 0,
+                            "type": "object",
+                            "primaryKey": "id",
+                            "properties": {"id": {"type": "string", "maxLength": 128}},
+                            "required": ["id"]
+                        }
+                    },
+                    "dynamic_file_chunks": {
+                        "schema": {
+                            "version": 0,
+                            "type": "object",
+                            "primaryKey": "id",
+                            "properties": {
+                                "id": {"type": "string", "maxLength": 180},
+                                "blob_id": {"type": "string"},
+                                "idx": {"type": "number"},
+                                "data": {"type": "string"}
+                            },
+                            "required": ["id", "blob_id", "idx", "data"]
+                        }
+                    }
+                },
+                "file_plane": {
+                    "declarations": [{
+                        "role": "file-chunks",
+                        "request_collection": "dynamic_files",
+                        "storage_collection": "dynamic_file_chunks",
+                        "key_field": "blob_id",
+                        "content_hash_field": "content_hash",
+                        "chunk_index_field": "idx"
+                    }]
+                }
+            }))?,
+        )?;
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let module = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules.iter().find(|module| {
+                    module.get("id").and_then(Value::as_str) == Some("dynamic-files")
+                })
+            })
+            .expect("dynamic-files module must be projected");
+        let declaration = module
+            .pointer("/file_plane/declarations/0")
+            .expect("file-plane declaration must be projected");
+        assert_eq!(
+            declaration
+                .get("storage_collection")
+                .and_then(Value::as_str),
+            Some("dynamic_file_chunks")
+        );
+        assert_eq!(
+            declaration.get("key_field").and_then(Value::as_str),
+            Some("blob_id")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn module_catalog_projection_includes_packaged_research() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -48150,11 +49990,9 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(
-            modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
-        );
+        assert!(modules
+            .iter()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
         Ok(())
     }
 
@@ -48308,30 +50146,24 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("app-owner"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("preview-user"))
-        );
+        assert!(module("private-zero")
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("app-owner")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("preview-user")));
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -48340,14 +50172,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -48358,42 +50188,34 @@ mod tests {
                 .count(),
             1
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
-        );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -48424,13 +50246,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("missing-version")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("missing-version")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -48447,13 +50267,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("invalid-semver")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("invalid-semver")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -48468,14 +50286,12 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(
-            module("restricted-team")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
-        );
+        assert!(module("restricted-team")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")
@@ -49032,11 +50848,9 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            config
-                .pointer("/result/domains/0/dkim_private_key")
-                .is_none()
-        );
+        assert!(config
+            .pointer("/result/domains/0/dkim_private_key")
+            .is_none());
 
         let denied_config = accept_rxdb_business_command(
             root,

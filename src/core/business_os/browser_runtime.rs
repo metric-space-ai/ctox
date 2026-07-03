@@ -47,6 +47,14 @@ pub fn browser_runtime_manager() -> &'static BrowserRuntimeManager {
     MANAGER.get_or_init(BrowserRuntimeManager::new)
 }
 
+#[derive(Debug, Clone)]
+pub struct BrowserSessionAutomationRequest {
+    pub session_id: String,
+    pub dir: Option<PathBuf>,
+    pub timeout_ms: Option<u64>,
+    pub source: String,
+}
+
 impl BrowserRuntimeManager {
     fn new() -> Self {
         Self {

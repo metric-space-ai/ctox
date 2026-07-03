@@ -14,7 +14,9 @@ pub mod store;
 mod support;
 mod threads;
 
+pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
 pub use rxdb_peer::browser_context_capture;
+pub(crate) use rxdb_peer::browser_session_automation as run_browser_session_automation;
 pub use rxdb_peer::browser_session_status;
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::ensure_native_peer;

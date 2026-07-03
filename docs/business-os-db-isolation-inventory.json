@@ -1,9 +1,39 @@
 {
   "schema_version": "business-os-db-isolation-inventory-v1",
-  "updated_at": "2026-06-18",
+  "updated_at": "2026-07-03",
   "owner": "business-os-platform",
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
+    "appsec-pentest": {
+      "title": "AppSec Pentest",
+      "manifest_path": "src/apps/business-os/modules/appsec-pentest/module.json",
+      "source_path": "src/apps/business-os/modules/appsec-pentest",
+      "install_scope": "core",
+      "distribution": "system-module",
+      "default_installed": true,
+      "classification": "system-control-module",
+      "isolation_status": "system-scoped-exception-tested",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "scoped_collections": [
+        "appsec_approvals",
+        "appsec_artifacts",
+        "appsec_assessments",
+        "appsec_coverage",
+        "appsec_findings",
+        "appsec_pipeline_stages",
+        "appsec_runs",
+        "appsec_scanner_inventory",
+        "business_commands"
+      ],
+      "notes": "Scoped system exception: AppSec Pentest resolves durable AppSec projections and business_commands through the scoped system facade. The module uses Business OS guarded subscriptions plus command dispatch only; scanner execution, state sync, and active-scan approval mutations stay server-side."
+    },
     "app-store": {
       "title": "App Store",
       "manifest_path": "src/apps/business-os/modules/app-store/module.json",
