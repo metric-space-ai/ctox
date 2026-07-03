@@ -32383,6 +32383,8 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
             | "ctox.appsec.authz.plan"
+            | "ctox.appsec.authz.run"
+            | "ctox.appsec.authz.build_matrix"
             | "ctox.appsec.pipeline.rework"
             | "ctox.appsec.approval.request"
             | "ctox.appsec.approval.grant"
@@ -32479,6 +32481,15 @@ fn handle_appsec_business_command(
                 let out_path = workspace_bound_path(root, &out, "out")?;
                 args.extend(["--out".to_string(), out_path.display().to_string()]);
             }
+            if command
+                .payload
+                .get("allow_incomplete")
+                .or_else(|| command.payload.get("allow-incomplete"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--allow-incomplete".to_string());
+            }
             args.push("--json".to_string());
         }
         "ctox.appsec.authz.plan" => {
@@ -32500,6 +32511,70 @@ fn handle_appsec_business_command(
                     "--subjects".to_string(),
                     subjects_path.display().to_string(),
                 ]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.authz.run" => {
+            let target = appsec_payload_string(&command.payload, "target")
+                .or_else(|| appsec_payload_string(&command.payload, "url"))
+                .context("ctox.appsec.authz.run payload.target is required")?;
+            let subjects = appsec_payload_string(&command.payload, "subjects")
+                .or_else(|| appsec_payload_string(&command.payload, "subjects_file"))
+                .or_else(|| appsec_payload_string(&command.payload, "subjects-file"))
+                .context("ctox.appsec.authz.run payload.subjects is required")?;
+            let subjects_path = workspace_bound_path(root, &subjects, "subjects")?;
+            args.extend([
+                "authz".to_string(),
+                "run".to_string(),
+                "--target".to_string(),
+                target,
+                "--subjects".to_string(),
+                subjects_path.display().to_string(),
+            ]);
+            if let Some(source_id) = appsec_payload_string(&command.payload, "source_id") {
+                args.extend(["--source-id".to_string(), source_id]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.authz.build_matrix" => {
+            let run = appsec_payload_string(&command.payload, "run")
+                .or_else(|| appsec_payload_string(&command.payload, "run_artifact"))
+                .or_else(|| appsec_payload_string(&command.payload, "run-artifact"))
+                .context("ctox.appsec.authz.build_matrix payload.run is required")?;
+            let evidence_dir = appsec_payload_string(&command.payload, "evidence_dir")
+                .or_else(|| appsec_payload_string(&command.payload, "evidence-dir"))
+                .context("ctox.appsec.authz.build_matrix payload.evidence_dir is required")?;
+            let run_path = workspace_bound_path(root, &run, "run")?;
+            let evidence_dir = workspace_bound_path(root, &evidence_dir, "evidence_dir")?;
+            args.extend([
+                "authz".to_string(),
+                "build-matrix".to_string(),
+                "--run".to_string(),
+                run_path.display().to_string(),
+                "--evidence-dir".to_string(),
+                evidence_dir.display().to_string(),
+            ]);
+            if command
+                .payload
+                .get("import")
+                .or_else(|| command.payload.get("import_matrix"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--import".to_string());
+            }
+            if command
+                .payload
+                .get("no_mark_coverage")
+                .or_else(|| command.payload.get("no-mark-coverage"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--no-mark-coverage".to_string());
+            }
+            if let Some(out) = appsec_payload_string(&command.payload, "out") {
+                let out_path = workspace_bound_path(root, &out, "out")?;
+                args.extend(["--out".to_string(), out_path.display().to_string()]);
             }
             args.push("--json".to_string());
         }

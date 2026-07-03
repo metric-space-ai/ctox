@@ -1189,6 +1189,28 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             ]),
         ),
         write_tool(
+            "appsec_authz_run",
+            "Use this when an authorized external agent needs to create the durable CTOX web-stack authz run artifact from redacted subject references. Browser execution still happens through the CTOX web-stack contracts in the artifact.",
+            object_schema(vec![
+                required_string("target"),
+                required_string("subjects"),
+                optional_string("state_dir"),
+                optional_string("source_id"),
+            ]),
+        ),
+        write_tool(
+            "appsec_authz_build_matrix",
+            "Use this when an authorized external agent needs to normalize redacted CTOX web-stack evidence into an AppSec authz matrix and optionally import it into coverage/findings.",
+            object_schema(vec![
+                required_string("run"),
+                required_string("evidence_dir"),
+                optional_string("state_dir"),
+                optional_string("out"),
+                optional_boolean("import"),
+                optional_boolean("no_mark_coverage"),
+            ]),
+        ),
+        write_tool(
             "appsec_pipeline_rework",
             "Use this when an authorized external agent needs to attach operator-reviewed redacted evidence to one AppSec pipeline stage. This does not create scanner results or findings.",
             object_schema(vec![
@@ -2382,6 +2404,12 @@ fn call_tool_inner(
         "appsec_authz_plan" => {
             serde_json::to_value(appsec_authz_plan(root, &context, &arguments)?)?
         }
+        "appsec_authz_run" => {
+            serde_json::to_value(appsec_authz_run(root, &context, &arguments)?)?
+        }
+        "appsec_authz_build_matrix" => {
+            serde_json::to_value(appsec_authz_build_matrix(root, &context, &arguments)?)?
+        }
         "appsec_pipeline_rework" => {
             serde_json::to_value(appsec_pipeline_rework(root, &context, &arguments)?)?
         }
@@ -2670,6 +2698,91 @@ fn appsec_authz_plan(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
+    }
+    Ok(output)
+}
+
+fn appsec_authz_run(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_authz_run", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let target = required_arg(arguments, "target")?;
+    let subjects = required_arg(arguments, "subjects")?;
+    let subjects_path = appsec_mcp_workspace_path(root, "subjects", &subjects)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "run".to_string(),
+        "--target".to_string(),
+        target,
+        "--subjects".to_string(),
+        path_string(&subjects_path),
+    ];
+    if let Some(source_id) = optional_string_arg(arguments, "source_id") {
+        args.push("--source-id".to_string());
+        args.push(source_id);
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_run".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+    }
+    Ok(output)
+}
+
+fn appsec_authz_build_matrix(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_authz_build_matrix", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let run = required_arg(arguments, "run")?;
+    let evidence_dir = required_arg(arguments, "evidence_dir")?;
+    let run_path = appsec_mcp_workspace_path(root, "run", &run)?;
+    let evidence_dir = appsec_mcp_workspace_path(root, "evidence_dir", &evidence_dir)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "build-matrix".to_string(),
+        "--run".to_string(),
+        path_string(&run_path),
+        "--evidence-dir".to_string(),
+        path_string(&evidence_dir),
+    ];
+    if optional_bool_arg(arguments, "import") {
+        args.push("--import".to_string());
+    }
+    if optional_bool_arg(arguments, "no_mark_coverage") {
+        args.push("--no-mark-coverage".to_string());
+    }
+    if let Some(out) = optional_string_arg(arguments, "out") {
+        let out_path = appsec_mcp_workspace_path(root, "out", &out)?;
+        args.extend(["--out".to_string(), path_string(&out_path)]);
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_build_matrix".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
     }
     Ok(output)
 }
@@ -4301,6 +4414,8 @@ fn business_os_mcp_policy_decision(
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_run"
+        | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
             context,
@@ -4750,6 +4865,8 @@ fn enforce_argument_scope_policy(
         | "appsec_completion_review"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
+        | "appsec_authz_run"
+        | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework"
         | "appsec_report_get"
         | "appsec_finding_get" => {
@@ -4845,6 +4962,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_run"
+        | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework"
         | "business_os.create_app"
         | "business_os.modify_app"
@@ -6153,6 +6272,10 @@ mod tests {
             .any(|tool| tool.name == "appsec_completion_review"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_tools_doctor"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_authz_run"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_authz_build_matrix"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_pipeline_rework"));
@@ -6289,6 +6412,105 @@ mod tests {
         assert_eq!(authz.get("ok").and_then(Value::as_bool), Some(true));
         let authz_artifact = authz.get("artifact").and_then(Value::as_str).unwrap();
         assert!(Path::new(authz_artifact).is_file());
+
+        let subjects_path = root.join("authz-subjects.json");
+        fs::write(
+            &subjects_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "subjects": [
+                    {"id": "user-a", "role": "owner", "login_hint": "a@example.test", "credential_ref": "ctox-secret://appsec/a"},
+                    {"id": "user-b", "role": "member", "login_hint": "b@example.test", "credential_ref": "ctox-secret://appsec/b"}
+                ]
+            }))?,
+        )?;
+        let authz_run = call_tool(
+            root,
+            "appsec_authz_run",
+            serde_json::json!({
+                "target": "https://example.test",
+                "subjects": "authz-subjects.json",
+                "source_id": "custom-web-app",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(authz_run.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            authz_run.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_authz_run")
+        );
+        let authz_run_artifact = authz_run.get("artifact").and_then(Value::as_str).unwrap();
+        assert!(Path::new(authz_run_artifact).is_file());
+        assert!(authz_run
+            .pointer("/run/web_stack_tasks")
+            .and_then(Value::as_array)
+            .is_some_and(|tasks| !tasks.is_empty()));
+
+        let authz_evidence_dir = root.join("runtime/appsec/default/authz/mcp-evidence");
+        fs::create_dir_all(&authz_evidence_dir)?;
+        fs::write(
+            authz_evidence_dir.join("cross-subject-redacted.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                "redacted": true,
+                "objects": [
+                    {"id": "tenant-a", "object_type": "tenant", "owner_subject": "user-a"}
+                ],
+                "cases": [
+                    {
+                        "actor_subject": "user-b",
+                        "owner_subject": "user-a",
+                        "object_ref": "tenant-a",
+                        "endpoint": "/api/tenants/tenant-a",
+                        "method": "GET",
+                        "expected": "deny",
+                        "actual_status": 404,
+                        "result": "pass",
+                        "body_class": "not-found",
+                        "leak": false,
+                        "mutation": false
+                    }
+                ]
+            }))?,
+        )?;
+        let authz_matrix = call_tool(
+            root,
+            "appsec_authz_build_matrix",
+            serde_json::json!({
+                "run": authz_run_artifact,
+                "evidence_dir": "runtime/appsec/default/authz/mcp-evidence",
+                "import": true,
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(authz_matrix.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            authz_matrix.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_authz_build_matrix")
+        );
+        assert_eq!(
+            authz_matrix
+                .pointer("/summary/cases")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            authz_matrix
+                .pointer("/summary/cross_subject_cases")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            authz_matrix
+                .pointer("/import_result/created_candidate_finding")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
 
         let state_dir = root.join("runtime/appsec/default");
         crate::run_projected_appsec_command(
