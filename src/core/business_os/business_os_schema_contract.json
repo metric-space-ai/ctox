@@ -1152,6 +1152,13 @@
       "reason": {},
       "requested_by": {},
       "approved_by": {},
+      "approved_at": {},
+      "revoked_at": {},
+      "grant_reason": {},
+      "grant_review": {
+        "type": "object",
+        "additionalProperties": true
+      },
       "policy": {
         "type": "object",
         "additionalProperties": true

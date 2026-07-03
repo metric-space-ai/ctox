@@ -32760,6 +32760,20 @@ fn handle_appsec_business_command(
                 "expires_at",
                 "--expires-at",
             );
+            if command
+                .payload
+                .get("high_impact_ack")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--high-impact-ack".to_string());
+            }
+            push_optional_appsec_string_arg(
+                &command.payload,
+                &mut args,
+                "review_note",
+                "--review-note",
+            );
             args.push("--json".to_string());
         }
         "ctox.appsec.approval.revoke" => {
@@ -33364,6 +33378,12 @@ fn project_appsec_approvals(
             "reason": payload.get("reason").cloned().unwrap_or(Value::Null),
             "requested_by": payload.get("requested_by").cloned().unwrap_or(Value::Null),
             "approved_by": payload.get("approved_by").cloned().unwrap_or(Value::Null),
+            "approved_at": payload.get("approved_at").cloned().unwrap_or(Value::Null),
+            "revoked_at": payload.get("revoked_at").cloned().unwrap_or(Value::Null),
+            "grant_reason": payload.get("grant_reason").cloned().unwrap_or(Value::Null),
+            "grant_review": sanitize_appsec_projection_json(
+                payload.get("grant_review").cloned().unwrap_or(Value::Null),
+            ),
             "policy": sanitize_appsec_projection_json(payload.get("policy").cloned().unwrap_or(Value::Null)),
             "updated_at": updated_at,
             "source": "ctox-appsec-core-projection",

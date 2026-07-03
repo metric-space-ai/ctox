@@ -56,7 +56,7 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   accounting_receipts: 'f0995e7532ead4def819aa6bc554d53c4abbaccc8bee0db89272c0a11a5e43a0',
   accounting_recurring_invoices: '924982a4dc4773c2fdc01bf5a05a29ee26fd3e5708f69a6ad061bef0dadcc67a',
   applications: 'ef7b52e117777575029346888b1c17412e2f4bda0ef9ca6c5a5e89c54a310e00',
-  appsec_approvals: '99e85939d4fbe249455b295c934adbb34dd1e2d718d27b0be819e4b5dde9f7da',
+  appsec_approvals: 'a44f85d0ea7dc6f6ffe5842634744b0d1c38a434537601b69d6390addaec9b14',
   appsec_artifacts: '96e48a95be0e013773561dd52b5be8170d13aa0409488d5569e7060654eb22e1',
   appsec_assessments: '31327725da3d9bd2769bc6f27b1299a792cb388aaf413dd95c3e8247d8a50fa2',
   appsec_coverage: '6fb9caf08dcf52ab1e7a669950bdb62159aec0b37112fb89aed0f93de475dde1',
