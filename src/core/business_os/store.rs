@@ -32383,6 +32383,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
             | "ctox.appsec.authz.plan"
+            | "ctox.appsec.authz.preflight"
             | "ctox.appsec.authz.run"
             | "ctox.appsec.authz.build_matrix"
             | "ctox.appsec.pipeline.rework"
@@ -32511,6 +32512,65 @@ fn handle_appsec_business_command(
                     "--subjects".to_string(),
                     subjects_path.display().to_string(),
                 ]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.authz.preflight" => {
+            let target = appsec_payload_string(&command.payload, "target")
+                .or_else(|| appsec_payload_string(&command.payload, "url"))
+                .context("ctox.appsec.authz.preflight payload.target is required")?;
+            args.extend([
+                "authz".to_string(),
+                "preflight".to_string(),
+                "--target".to_string(),
+                target,
+            ]);
+            if let Some(source_id) = appsec_payload_string(&command.payload, "source_id") {
+                args.extend(["--source-id".to_string(), source_id]);
+            }
+            if let Some(subjects) = appsec_payload_string(&command.payload, "subjects")
+                .or_else(|| appsec_payload_string(&command.payload, "subjects_file"))
+                .or_else(|| appsec_payload_string(&command.payload, "subjects-file"))
+            {
+                let subjects_path = workspace_bound_path(root, &subjects, "subjects")?;
+                args.extend([
+                    "--subjects".to_string(),
+                    subjects_path.display().to_string(),
+                ]);
+            }
+            if let Some(run) = appsec_payload_string(&command.payload, "run")
+                .or_else(|| appsec_payload_string(&command.payload, "run_artifact"))
+                .or_else(|| appsec_payload_string(&command.payload, "run-artifact"))
+            {
+                let run_path = workspace_bound_path(root, &run, "run")?;
+                args.extend(["--run".to_string(), run_path.display().to_string()]);
+            }
+            if let Some(evidence_dir) = appsec_payload_string(&command.payload, "evidence_dir")
+                .or_else(|| appsec_payload_string(&command.payload, "evidence-dir"))
+            {
+                let evidence_dir = workspace_bound_path(root, &evidence_dir, "evidence_dir")?;
+                args.extend([
+                    "--evidence-dir".to_string(),
+                    evidence_dir.display().to_string(),
+                ]);
+            }
+            if command
+                .payload
+                .get("require_credentials")
+                .or_else(|| command.payload.get("require-credentials"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--require-credentials".to_string());
+            }
+            if command
+                .payload
+                .get("require_evidence")
+                .or_else(|| command.payload.get("require-evidence"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--require-evidence".to_string());
             }
             args.push("--json".to_string());
         }

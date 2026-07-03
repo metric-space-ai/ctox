@@ -1189,6 +1189,20 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             ]),
         ),
         write_tool(
+            "appsec_authz_preflight",
+            "Use this before a live authenticated AppSec authz run to validate redacted subjects, credential references, optional Web-Stack evidence, and next commands without reading secret values or starting browser work.",
+            object_schema(vec![
+                required_string("target"),
+                optional_string("state_dir"),
+                optional_string("source_id"),
+                optional_string("subjects"),
+                optional_string("run"),
+                optional_string("evidence_dir"),
+                optional_boolean("require_credentials"),
+                optional_boolean("require_evidence"),
+            ]),
+        ),
+        write_tool(
             "appsec_authz_run",
             "Use this when an authorized external agent needs to create the durable CTOX web-stack authz run artifact from redacted subject references. Browser execution still happens through the CTOX web-stack contracts in the artifact.",
             object_schema(vec![
@@ -2404,6 +2418,9 @@ fn call_tool_inner(
         "appsec_authz_plan" => {
             serde_json::to_value(appsec_authz_plan(root, &context, &arguments)?)?
         }
+        "appsec_authz_preflight" => {
+            serde_json::to_value(appsec_authz_preflight(root, &context, &arguments)?)?
+        }
         "appsec_authz_run" => {
             serde_json::to_value(appsec_authz_run(root, &context, &arguments)?)?
         }
@@ -2698,6 +2715,58 @@ fn appsec_authz_plan(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
+    }
+    Ok(output)
+}
+
+fn appsec_authz_preflight(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_authz_preflight", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let target = required_arg(arguments, "target")?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "preflight".to_string(),
+        "--target".to_string(),
+        target,
+    ];
+    if let Some(source_id) = optional_string_arg(arguments, "source_id") {
+        args.extend(["--source-id".to_string(), source_id]);
+    }
+    if let Some(subjects) = optional_string_arg(arguments, "subjects") {
+        let subjects_path = appsec_mcp_workspace_path(root, "subjects", &subjects)?;
+        args.extend(["--subjects".to_string(), path_string(&subjects_path)]);
+    }
+    if let Some(run) = optional_string_arg(arguments, "run") {
+        let run_path = appsec_mcp_workspace_path(root, "run", &run)?;
+        args.extend(["--run".to_string(), path_string(&run_path)]);
+    }
+    if let Some(evidence_dir) = optional_string_arg(arguments, "evidence_dir") {
+        let evidence_dir = appsec_mcp_workspace_path(root, "evidence_dir", &evidence_dir)?;
+        args.extend(["--evidence-dir".to_string(), path_string(&evidence_dir)]);
+    }
+    if optional_bool_arg(arguments, "require_credentials") {
+        args.push("--require-credentials".to_string());
+    }
+    if optional_bool_arg(arguments, "require_evidence") {
+        args.push("--require-evidence".to_string());
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_preflight".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
     }
     Ok(output)
 }
@@ -4414,6 +4483,7 @@ fn business_os_mcp_policy_decision(
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework" => Ok(Some(trusted_mcp_actor_policy_decision(
@@ -4865,6 +4935,7 @@ fn enforce_argument_scope_policy(
         | "appsec_completion_review"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
+        | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework"
@@ -4962,6 +5033,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework"
@@ -6272,6 +6344,9 @@ mod tests {
             .any(|tool| tool.name == "appsec_completion_review"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_tools_doctor"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_authz_preflight"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_run"));
         assert!(tools
             .iter()
@@ -6423,6 +6498,38 @@ mod tests {
                 ]
             }))?,
         )?;
+        let authz_preflight = call_tool(
+            root,
+            "appsec_authz_preflight",
+            serde_json::json!({
+                "target": "https://example.test",
+                "subjects": "authz-subjects.json",
+                "source_id": "custom-web-app",
+                "require_credentials": true,
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            authz_preflight.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_authz_preflight")
+        );
+        assert_eq!(
+            authz_preflight.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            authz_preflight.get("status").and_then(Value::as_str),
+            Some("ready-for-web-stack-execution")
+        );
+        assert_eq!(
+            authz_preflight
+                .pointer("/preflight/subject_summary/cross_subject_pairs")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
         let authz_run = call_tool(
             root,
             "appsec_authz_run",
