@@ -1165,6 +1165,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             ]),
         ),
         read_tool(
+            "appsec_completion_review",
+            "Use this when an external agent needs the local AppSec completion review gate produced by the same CLI path used by finish and report.",
+            object_schema(vec![optional_string("state_dir")]),
+        ),
+        read_tool(
             "appsec_tools_doctor",
             "Use this when an external agent needs AppSec scanner readiness evidence through the policy-gated Business OS MCP channel. This does not scan a target.",
             object_schema(vec![
@@ -2368,6 +2373,9 @@ fn call_tool_inner(
         "appsec_assessment_status" => {
             serde_json::to_value(appsec_assessment_status(root, &context, &arguments)?)?
         }
+        "appsec_completion_review" => {
+            serde_json::to_value(appsec_completion_review(root, &context, &arguments)?)?
+        }
         "appsec_tools_doctor" => {
             serde_json::to_value(appsec_tools_doctor(root, &context, &arguments)?)?
         }
@@ -2563,6 +2571,35 @@ fn appsec_assessment_status(
         );
     }
     Ok(status)
+}
+
+fn appsec_completion_review(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_completion_review", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let mut output = crate::run_projected_appsec_command(
+        root,
+        &[
+            "--state-dir".to_string(),
+            path_string(&state_dir),
+            "review".to_string(),
+        ],
+    )?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_completion_review".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+    }
+    Ok(output)
 }
 
 fn appsec_tools_doctor(
@@ -4272,6 +4309,7 @@ fn business_os_mcp_policy_decision(
             Some(APPSEC_MCP_MODULE_ID),
         )?)),
         "appsec_assessment_status"
+        | "appsec_completion_review"
         | "appsec_tools_doctor"
         | "appsec_report_get"
         | "appsec_finding_get" => Ok(Some(trusted_mcp_actor_policy_decision(
@@ -4709,6 +4747,7 @@ fn enforce_argument_scope_policy(
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_assessment_status"
+        | "appsec_completion_review"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
         | "appsec_pipeline_rework"
@@ -6109,6 +6148,9 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_assessment_status"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_completion_review"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_tools_doctor"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
         assert!(tools
@@ -6189,6 +6231,28 @@ mod tests {
         )?;
         assert_eq!(status.get("ok").and_then(Value::as_bool), Some(true));
         assert_eq!(status.get("synced").and_then(Value::as_bool), Some(true));
+
+        let review = call_tool(
+            root,
+            "appsec_completion_review",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            review.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_completion_review")
+        );
+        assert_eq!(
+            review.pointer("/completion_review/closable").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(root
+            .join("runtime/appsec/default/completion-review.json")
+            .is_file());
 
         let doctor = call_tool(
             root,

@@ -32401,6 +32401,9 @@ fn handle_appsec_business_command(
         "ctox.appsec.state.sync" => {
             args.extend(["state", "status", "--sync", "--json"].map(str::to_string));
         }
+        "ctox.appsec.review" => {
+            args.extend(["review", "--json"].map(str::to_string));
+        }
         "ctox.appsec.tools.doctor" => {
             args.extend(["tools", "doctor"].map(str::to_string));
             if let Some(profile) = appsec_payload_string(&command.payload, "profile") {
@@ -32428,6 +32431,15 @@ fn handle_appsec_business_command(
             if let Some(out) = appsec_payload_string(&command.payload, "out") {
                 let out_path = workspace_bound_path(root, &out, "out")?;
                 args.extend(["--out".to_string(), out_path.display().to_string()]);
+            }
+            if command
+                .payload
+                .get("allow_incomplete")
+                .or_else(|| command.payload.get("allow-incomplete"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--allow-incomplete".to_string());
             }
             args.push("--json".to_string());
         }
