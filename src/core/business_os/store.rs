@@ -32383,6 +32383,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
             | "ctox.appsec.authz.plan"
+            | "ctox.appsec.pipeline.rework"
             | "ctox.appsec.approval.request"
             | "ctox.appsec.approval.grant"
             | "ctox.appsec.approval.revoke"
@@ -32486,6 +32487,46 @@ fn handle_appsec_business_command(
                 args.extend([
                     "--subjects".to_string(),
                     subjects_path.display().to_string(),
+                ]);
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.pipeline.rework" => {
+            args.extend(["pipeline", "rework"].map(str::to_string));
+            if let Some(stage_id) = appsec_payload_string(&command.payload, "stage_id")
+                .or_else(|| appsec_payload_string(&command.payload, "stage-id"))
+            {
+                args.extend(["--stage-id".to_string(), stage_id]);
+            } else if let Some(phase) = appsec_payload_string(&command.payload, "phase") {
+                args.extend(["--phase".to_string(), phase]);
+            } else {
+                anyhow::bail!(
+                    "ctox.appsec.pipeline.rework payload.stage_id or payload.phase is required"
+                );
+            }
+            push_optional_appsec_string_arg(&command.payload, &mut args, "target", "--target");
+            push_optional_appsec_string_arg(&command.payload, &mut args, "status", "--status");
+            let reason = appsec_payload_string(&command.payload, "reason")
+                .or_else(|| appsec_payload_string(&command.payload, "note"))
+                .context("ctox.appsec.pipeline.rework payload.reason is required")?;
+            args.extend(["--reason".to_string(), reason]);
+            let operator = session_user_id(session)
+                .map(str::to_string)
+                .unwrap_or_else(|| "business-os-operator".to_string());
+            args.extend(["--operator".to_string(), operator]);
+            let mut artifacts = appsec_payload_string_list(&command.payload, "artifacts");
+            if let Some(artifact) = appsec_payload_string(&command.payload, "artifact") {
+                artifacts.push(artifact);
+            }
+            anyhow::ensure!(
+                !artifacts.is_empty(),
+                "ctox.appsec.pipeline.rework payload.artifact or payload.artifacts is required"
+            );
+            for artifact in artifacts {
+                let artifact_path = workspace_bound_path(root, &artifact, "artifact")?;
+                args.extend([
+                    "--artifact".to_string(),
+                    artifact_path.display().to_string(),
                 ]);
             }
             args.push("--json".to_string());
@@ -32666,6 +32707,27 @@ fn appsec_payload_string(payload: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn appsec_payload_string_list(payload: &Value, key: &str) -> Vec<String> {
+    match payload.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn appsec_payload_u64(payload: &Value, key: &str) -> Option<u64> {

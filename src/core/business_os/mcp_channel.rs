@@ -1183,6 +1183,20 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("subjects"),
             ]),
         ),
+        write_tool(
+            "appsec_pipeline_rework",
+            "Use this when an authorized external agent needs to attach operator-reviewed redacted evidence to one AppSec pipeline stage. This does not create scanner results or findings.",
+            object_schema(vec![
+                optional_string("state_dir"),
+                optional_string("stage_id"),
+                optional_string("phase"),
+                optional_string("target"),
+                optional_string("status"),
+                required_string("reason"),
+                optional_string("artifact"),
+                optional_string_array("artifacts"),
+            ]),
+        ),
         read_tool(
             "appsec_report_get",
             "Use this when an external agent needs the existing AppSec report artifact. The tool reads the sanitized report from local AppSec state and does not generate a new report.",
@@ -2360,6 +2374,9 @@ fn call_tool_inner(
         "appsec_authz_plan" => {
             serde_json::to_value(appsec_authz_plan(root, &context, &arguments)?)?
         }
+        "appsec_pipeline_rework" => {
+            serde_json::to_value(appsec_pipeline_rework(root, &context, &arguments)?)?
+        }
         "appsec_report_get" => {
             serde_json::to_value(appsec_report_get(root, &context, &arguments)?)?
         }
@@ -2611,6 +2628,65 @@ fn appsec_authz_plan(
         object.insert(
             "mcp_tool".to_string(),
             Value::String("appsec_authz_plan".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+    }
+    Ok(output)
+}
+
+fn appsec_pipeline_rework(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_pipeline_rework", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "pipeline".to_string(),
+        "rework".to_string(),
+    ];
+    if let Some(stage_id) = optional_string_arg(arguments, "stage_id") {
+        args.extend(["--stage-id".to_string(), stage_id]);
+    } else if let Some(phase) = optional_string_arg(arguments, "phase") {
+        args.extend(["--phase".to_string(), phase]);
+    } else {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "stage_id",
+            "stage_id or phase is required",
+        )));
+    }
+    if let Some(target) = optional_string_arg(arguments, "target") {
+        args.extend(["--target".to_string(), target]);
+    }
+    if let Some(status) = optional_string_arg(arguments, "status") {
+        args.extend(["--status".to_string(), status]);
+    }
+    args.extend(["--reason".to_string(), required_arg(arguments, "reason")?]);
+    args.extend(["--operator".to_string(), context.actor.clone()]);
+    let mut artifacts = optional_string_array_arg(arguments, "artifacts");
+    if let Some(artifact) = optional_string_arg(arguments, "artifact") {
+        artifacts.push(artifact);
+    }
+    if artifacts.is_empty() {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "artifact",
+            "artifact or artifacts is required",
+        )));
+    }
+    for artifact in artifacts {
+        let artifact_path = appsec_mcp_workspace_path(root, "artifact", &artifact)?;
+        args.extend(["--artifact".to_string(), path_string(&artifact_path)]);
+    }
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_pipeline_rework".to_string()),
         );
         object.insert(
             "module_id".to_string(),
@@ -4187,7 +4263,8 @@ fn business_os_mcp_policy_decision(
         "appsec_assessment_create"
         | "appsec_lab_create"
         | "appsec_lab_run"
-        | "appsec_authz_plan" => Ok(Some(trusted_mcp_actor_policy_decision(
+        | "appsec_authz_plan"
+        | "appsec_pipeline_rework" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
             context,
             BusinessOsPermission::DataWrite,
@@ -4634,6 +4711,7 @@ fn enforce_argument_scope_policy(
         | "appsec_assessment_status"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
+        | "appsec_pipeline_rework"
         | "appsec_report_get"
         | "appsec_finding_get" => {
             enforce_module_policy(root, APPSEC_MCP_MODULE_ID)?;
@@ -4728,6 +4806,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_pipeline_rework"
         | "business_os.create_app"
         | "business_os.modify_app"
         | "business_os.prepare_app_source"
@@ -5057,6 +5136,27 @@ fn optional_string_arg(arguments: &Value, field: &str) -> Option<String> {
     string_field(arguments, field)
 }
 
+fn optional_string_array_arg(arguments: &Value, field: &str) -> Vec<String> {
+    match arguments.get(field) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![value.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn optional_usize_arg(arguments: &Value, field: &str) -> Option<usize> {
     arguments
         .get(field)
@@ -5273,6 +5373,17 @@ fn required_string(name: &'static str) -> (&'static str, Value, bool) {
 
 fn optional_string(name: &'static str) -> (&'static str, Value, bool) {
     (name, serde_json::json!({ "type": "string" }), false)
+}
+
+fn optional_string_array(name: &'static str) -> (&'static str, Value, bool) {
+    (
+        name,
+        serde_json::json!({
+            "type": "array",
+            "items": { "type": "string" }
+        }),
+        false,
+    )
 }
 
 fn optional_integer(
@@ -6000,6 +6111,9 @@ mod tests {
             .any(|tool| tool.name == "appsec_assessment_status"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_tools_doctor"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_pipeline_rework"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_report_get"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_finding_get"));
         for forbidden in [
@@ -6113,6 +6227,57 @@ mod tests {
         assert!(Path::new(authz_artifact).is_file());
 
         let state_dir = root.join("runtime/appsec/default");
+        crate::run_projected_appsec_command(
+            root,
+            &[
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+                "assess".to_string(),
+                "--profile".to_string(),
+                "standard".to_string(),
+                "--url".to_string(),
+                "https://example.test".to_string(),
+                "--json".to_string(),
+            ],
+        )?;
+        let rework_evidence = state_dir.join("mcp-rework-evidence.json");
+        fs::write(
+            &rework_evidence,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "test.redacted-rework-evidence.v1",
+                "redacted": true,
+                "observation": "operator-reviewed MCP rework evidence"
+            }))?,
+        )?;
+        let rework = call_tool(
+            root,
+            "appsec_pipeline_rework",
+            serde_json::json!({
+                "phase": "blackbox-map",
+                "target": "https://example.test",
+                "status": "not-applicable",
+                "reason": "MCP operator supplied redacted manual evidence for this stage.",
+                "artifact": "runtime/appsec/default/mcp-rework-evidence.json",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(rework.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            rework.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_pipeline_rework")
+        );
+        let rework_stages = rework
+            .pointer("/pipeline_status/stages")
+            .and_then(Value::as_array)
+            .context("expected pipeline stages")?;
+        assert!(rework_stages.iter().any(|stage| {
+            stage.get("phase").and_then(Value::as_str) == Some("blackbox-map")
+                && stage.get("status").and_then(Value::as_str) == Some("not-applicable")
+        }));
+
         crate::run_projected_appsec_command(
             root,
             &[
