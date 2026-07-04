@@ -2421,9 +2421,7 @@ fn call_tool_inner(
         "appsec_authz_preflight" => {
             serde_json::to_value(appsec_authz_preflight(root, &context, &arguments)?)?
         }
-        "appsec_authz_run" => {
-            serde_json::to_value(appsec_authz_run(root, &context, &arguments)?)?
-        }
+        "appsec_authz_run" => serde_json::to_value(appsec_authz_run(root, &context, &arguments)?)?,
         "appsec_authz_build_matrix" => {
             serde_json::to_value(appsec_authz_build_matrix(root, &context, &arguments)?)?
         }
@@ -2642,7 +2640,10 @@ fn appsec_completion_review(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
-        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
     }
     Ok(output)
 }
@@ -2766,7 +2767,10 @@ fn appsec_authz_preflight(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
-        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
     }
     Ok(output)
 }
@@ -2805,7 +2809,10 @@ fn appsec_authz_run(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
-        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
     }
     Ok(output)
 }
@@ -2851,7 +2858,10 @@ fn appsec_authz_build_matrix(
             "module_id".to_string(),
             Value::String(APPSEC_MCP_MODULE_ID.to_string()),
         );
-        object.insert("state_dir".to_string(), Value::String(path_string(&state_dir)));
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
     }
     Ok(output)
 }
@@ -6445,7 +6455,9 @@ mod tests {
             Some("appsec_completion_review")
         );
         assert_eq!(
-            review.pointer("/completion_review/closable").and_then(Value::as_bool),
+            review
+                .pointer("/completion_review/closable")
+                .and_then(Value::as_bool),
             Some(false)
         );
         assert!(root

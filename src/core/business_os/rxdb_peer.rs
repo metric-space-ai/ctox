@@ -12381,9 +12381,7 @@ mod tests {
         std::fs::create_dir_all(&notes_dir)?;
         let mut saw_create_event = false;
         for _ in 0..10 {
-            if watch.wait_for_event(Duration::from_millis(300)).await
-                == WatchEventWait::Event
-            {
+            if watch.wait_for_event(Duration::from_millis(300)).await == WatchEventWait::Event {
                 saw_create_event = true;
                 break;
             }
@@ -12401,9 +12399,7 @@ mod tests {
         std::fs::write(notes_dir.join("watch.md"), "# Watch\n")?;
         let mut saw_markdown_event = false;
         for _ in 0..10 {
-            if watch.wait_for_event(Duration::from_millis(300)).await
-                == WatchEventWait::Event
-            {
+            if watch.wait_for_event(Duration::from_millis(300)).await == WatchEventWait::Event {
                 saw_markdown_event = true;
                 break;
             }

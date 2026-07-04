@@ -3895,10 +3895,7 @@ mod tests {
     #[test]
     fn synced_message_direction_keeps_external_sender_as_inbound() {
         assert_eq!(
-            synced_message_direction(
-                "Max Mustermann <founder@example.com>",
-                "cto1@example.com"
-            ),
+            synced_message_direction("Max Mustermann <founder@example.com>", "cto1@example.com"),
             "inbound"
         );
     }
