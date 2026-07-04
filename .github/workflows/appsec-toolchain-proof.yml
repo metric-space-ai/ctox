@@ -53,15 +53,21 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
-      CARGO_TARGET_DIR: ${{ runner.temp }}/ctox-cargo-target
       APPSEC_PROFILE: ${{ inputs.profile || 'full' }}
       APPSEC_INCLUDE_DATA_BUNDLES: ${{ inputs.include_data_bundles }}
       APPSEC_ATTEST_NATIVE: ${{ inputs.attest_native }}
       APPSEC_SMOKE_TIMEOUT_SECONDS: ${{ inputs.smoke_timeout_seconds || '45' }}
-      APPSEC_PROOF_ROOT: ${{ runner.temp }}/ctox-appsec-proof
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Configure AppSec proof paths
+        shell: bash
+        run: |
+          {
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/ctox-cargo-target"
+            echo "APPSEC_PROOF_ROOT=$RUNNER_TEMP/ctox-appsec-proof"
+          } >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@master
         with:
