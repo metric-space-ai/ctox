@@ -5315,107 +5315,181 @@ var OPEN_TIMEOUT_MS = 4e3;
 function createIndexedDbMetaBackend({ databaseName }) {
   if (!databaseName) throw new TypeError("createIndexedDbMetaBackend requires databaseName");
   let dbPromise = null;
-  const open = () => {
-    if (!dbPromise) dbPromise = openSidecarDatabase(databaseName);
+  let fallbackBackend = null;
+  const fallback = () => {
+    if (!fallbackBackend) fallbackBackend = createMemoryMetaBackend();
+    return fallbackBackend;
+  };
+  const open = async () => {
+    if (!dbPromise) {
+      dbPromise = Promise.resolve().then(() => openSidecarDatabase(databaseName)).catch((error) => {
+        dbPromise = null;
+        throw markSidecarOpenError(error);
+      });
+    }
     return dbPromise;
   };
+  const withDb = async (method, args, operation) => {
+    if (fallbackBackend) return fallbackBackend[method](...args);
+    try {
+      return await operation(await open());
+    } catch (error) {
+      if (!isSidecarOpenError(error)) throw error;
+      return fallback()[method](...args);
+    }
+  };
   return {
-    name: "indexeddb",
+    get name() {
+      return fallbackBackend ? "memory-fallback" : "indexeddb";
+    },
     async putQueryWindow(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
+      await withDb(
+        "putQueryWindow",
+        [record],
+        (db) => runRequest(
+          db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
+        )
       );
     },
     async getQueryWindow(key) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).get(parseQueryWindowKey(key))
+      return withDb(
+        "getQueryWindow",
+        [key],
+        (db) => runRequest(
+          db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).get(parseQueryWindowKey(key))
+        )
       );
     },
     async deleteQueryWindow(key) {
-      const db = await open();
-      await deleteQueryWindowRefs(db, stringKey3(parseQueryWindowKey(key)));
-      await runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
+      await withDb(
+        "deleteQueryWindow",
+        [key],
+        async (db) => {
+          await deleteQueryWindowRefs(db, stringKey3(parseQueryWindowKey(key)));
+          await runRequest(
+            db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
+          );
+        }
       );
     },
     async scanQueryWindows() {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
+      return withDb(
+        "scanQueryWindows",
+        [],
+        (db) => runRequest(
+          db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
+        )
       );
     },
     async replaceQueryWindowDocumentRefs(record) {
-      const db = await open();
-      const windowKey = queryWindowKey2(record);
-      await deleteQueryWindowRefs(db, windowKey);
-      await putQueryWindowRefs(db, record);
+      await withDb(
+        "replaceQueryWindowDocumentRefs",
+        [record],
+        async (db) => {
+          const windowKey = queryWindowKey2(record);
+          await deleteQueryWindowRefs(db, windowKey);
+          await putQueryWindowRefs(db, record);
+        }
+      );
     },
     async getQueryWindowKeysByDocumentIds(collection, ids) {
       const normalizedIds = normalizeDocumentIds3(ids);
       if (!normalizedIds.length) return [];
-      const db = await open();
-      const tx = db.transaction(STORE_QUERY_WINDOW_REFS, "readonly");
-      const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index("collection_documentId");
-      const requests = normalizedIds.map((id) => runRequest(index.getAll([collection, id])));
-      const rowsByDocument = await Promise.all(requests);
-      const keys = /* @__PURE__ */ new Set();
-      for (const rows of rowsByDocument) {
-        for (const row of rows || []) {
-          if (row?.windowKey) keys.add(row.windowKey);
+      return withDb(
+        "getQueryWindowKeysByDocumentIds",
+        [collection, ids],
+        async (db) => {
+          const tx = db.transaction(STORE_QUERY_WINDOW_REFS, "readonly");
+          const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index("collection_documentId");
+          const requests = normalizedIds.map((id) => runRequest(index.getAll([collection, id])));
+          const rowsByDocument = await Promise.all(requests);
+          const keys = /* @__PURE__ */ new Set();
+          for (const rows of rowsByDocument) {
+            for (const row of rows || []) {
+              if (row?.windowKey) keys.add(row.windowKey);
+            }
+          }
+          return Array.from(keys);
         }
-      }
-      return Array.from(keys);
+      );
     },
     async putDocumentAccess(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
+      await withDb(
+        "putDocumentAccess",
+        [record],
+        (db) => runRequest(
+          db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
+        )
       );
     },
     async getDocumentAccess(collection, id) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).get([collection, id])
+      return withDb(
+        "getDocumentAccess",
+        [collection, id],
+        (db) => runRequest(
+          db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).get([collection, id])
+        )
       );
     },
     async deleteDocumentAccess(collection, id) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).delete([collection, id])
+      await withDb(
+        "deleteDocumentAccess",
+        [collection, id],
+        (db) => runRequest(
+          db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).delete([collection, id])
+        )
       );
     },
     async scanDocumentAccess() {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).getAll()
+      return withDb(
+        "scanDocumentAccess",
+        [],
+        (db) => runRequest(
+          db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).getAll()
+        )
       );
     },
     async putCacheStats(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
+      await withDb(
+        "putCacheStats",
+        [record],
+        (db) => runRequest(
+          db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
+        )
       );
     },
     async getCacheStats(databaseName2) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_CACHE_STATS, "readonly").objectStore(STORE_CACHE_STATS).get(databaseName2)
+      return withDb(
+        "getCacheStats",
+        [databaseName2],
+        (db) => runRequest(
+          db.transaction(STORE_CACHE_STATS, "readonly").objectStore(STORE_CACHE_STATS).get(databaseName2)
+        )
       );
     },
     async clear() {
-      const db = await open();
-      for (const name of [STORE_QUERY_WINDOWS, STORE_QUERY_WINDOW_REFS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
-        await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
-      }
+      await withDb(
+        "clear",
+        [],
+        async (db) => {
+          for (const name of [STORE_QUERY_WINDOWS, STORE_QUERY_WINDOW_REFS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
+            await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
+          }
+        }
+      );
     },
     async close() {
-      if (dbPromise) {
-        const db = await dbPromise;
-        db.close();
-        dbPromise = null;
+      const currentDbPromise = dbPromise;
+      dbPromise = null;
+      if (currentDbPromise) {
+        try {
+          const db = await currentDbPromise;
+          db.close();
+        } catch {
+        }
       }
+      await fallbackBackend?.close?.();
+      fallbackBackend = null;
     }
   };
 }
@@ -5424,8 +5498,16 @@ function openSidecarDatabase(databaseName) {
     throw new Error("indexedDB is required for sidecar metadata storage");
   }
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+      return true;
+    };
     const timer = setTimeout(() => {
-      reject(new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
+      finish(reject, new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
     }, OPEN_TIMEOUT_MS);
     const request = globalThis.indexedDB.open(databaseName, SIDECAR_DB_VERSION);
     request.onupgradeneeded = () => {
@@ -5461,18 +5543,36 @@ function openSidecarDatabase(databaseName) {
       }
     };
     request.onsuccess = () => {
-      clearTimeout(timer);
-      resolve(request.result);
+      const db = request.result;
+      if (!finish(resolve, db)) {
+        try {
+          db.close();
+        } catch {
+        }
+      }
     };
     request.onerror = () => {
-      clearTimeout(timer);
-      reject(request.error || new Error(`failed to open sidecar ${databaseName}`));
+      finish(reject, request.error || new Error(`failed to open sidecar ${databaseName}`));
     };
     request.onblocked = () => {
-      clearTimeout(timer);
-      reject(new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
+      finish(reject, new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
     };
   });
+}
+function markSidecarOpenError(error) {
+  if (error && typeof error === "object") {
+    try {
+      error.ctoxSidecarOpenError = true;
+    } catch {
+    }
+    return error;
+  }
+  const wrapped = new Error(String(error || "sidecar IndexedDB open failed"));
+  wrapped.ctoxSidecarOpenError = true;
+  return wrapped;
+}
+function isSidecarOpenError(error) {
+  return Boolean(error?.ctoxSidecarOpenError);
 }
 function parseQueryWindowKey(key) {
   if (Array.isArray(key)) return key;

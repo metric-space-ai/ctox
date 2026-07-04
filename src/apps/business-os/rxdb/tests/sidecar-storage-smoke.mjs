@@ -1,6 +1,7 @@
 import {
   SIDECAR_DATABASE_NAME,
   SIDECAR_PIN_RECENT_READ_TTL_MS,
+  createIndexedDbMetaBackend,
   createSidecarWithMemoryBackend,
 } from '../dist/ctox-rxdb-js.mjs';
 
@@ -108,6 +109,49 @@ assert(
   (await storage.getDocumentAccess(collection, 'a')) === null,
   'clear removes document access',
 );
+
+const originalIndexedDbDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+try {
+  Object.defineProperty(globalThis, 'indexedDB', {
+    configurable: true,
+    value: undefined,
+  });
+  const fallbackBackend = createIndexedDbMetaBackend({
+    databaseName: 'ctox-sidecar-indexeddb-unavailable-smoke',
+  });
+  await fallbackBackend.putQueryWindow({
+    collection,
+    queryFingerprint: 'fallback-fingerprint',
+    offset: 0,
+    limit: 10,
+    documentIds: ['fallback-doc'],
+    complete: true,
+  });
+  const fallbackWindow = await fallbackBackend.getQueryWindow([
+    collection,
+    'fallback-fingerprint',
+    0,
+    10,
+  ]);
+  assert(fallbackWindow?.complete === true, 'IndexedDB-open failure falls back to memory sidecar');
+  assert(fallbackBackend.name === 'memory-fallback', 'fallback backend name exposes memory fallback mode');
+  await fallbackBackend.replaceQueryWindowDocumentRefs({
+    collection,
+    queryFingerprint: 'fallback-fingerprint',
+    offset: 0,
+    limit: 10,
+    documentIds: ['fallback-doc'],
+  });
+  const fallbackRefs = await fallbackBackend.getQueryWindowKeysByDocumentIds(collection, ['fallback-doc']);
+  assert(fallbackRefs.length === 1, 'memory fallback keeps document-ref invalidation index');
+  await fallbackBackend.close();
+} finally {
+  if (originalIndexedDbDescriptor) {
+    Object.defineProperty(globalThis, 'indexedDB', originalIndexedDbDescriptor);
+  } else {
+    try { delete globalThis.indexedDB; } catch {}
+  }
+}
 
 console.log('ctox-rxdb-js sidecar storage smoke OK');
 
