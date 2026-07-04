@@ -4239,11 +4239,17 @@ const clickSubmit = async (credentialField) => {
     "button:has-text('Log in')",
     "button:has-text('Login')",
     "button:has-text('Continue')",
+    "button:has-text('Next')",
     "button:has-text('Anmelden')",
     "button:has-text('Einloggen')",
+    "button:has-text('Weiter')",
+    "button:has-text('Fortfahren')",
     "[role='button']:has-text('Sign in')",
     "[role='button']:has-text('Log in')",
     "[role='button']:has-text('Continue')",
+    "[role='button']:has-text('Next')",
+    "[role='button']:has-text('Weiter')",
+    "[role='button']:has-text('Fortfahren')",
   ];
   for (const selector of submitSelectors) {
     try {
@@ -4360,6 +4366,16 @@ const pageSignals = async () => {
   } catch {}
   return { url: page.url(), title, form_state: formState, auth_signals: authSignals };
 };
+const waitForAuthTransition = async (previousUrl, timeoutMs = 12000) => {
+  const waiters = [
+    page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => null),
+    page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs }).catch(() => null),
+    page.waitForTimeout(1200).catch(() => null),
+  ];
+  await Promise.race(waiters).catch(() => null);
+  await page.waitForTimeout(500).catch(() => null);
+  return pageSignals();
+};
 const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
 const beforeSignals = await pageSignals();
@@ -4367,35 +4383,41 @@ let loginField = null;
 if (loginHint) {
   loginField = await fillField("login", loginHint);
 }
-const credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+let credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+let loginTransition = null;
+let afterLoginStepSignals = null;
+if (!credentialField && loginField) {
+  loginTransition = await clickSubmit(loginField);
+  if (loginTransition) {
+    afterLoginStepSignals = await waitForAuthTransition(beforeSignals.url, 12000);
+    credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+  }
+}
 if (!credentialField) {
   const observed = await ctoxBrowser.observe({ limit: 40, textMax: 120 });
   const missingFieldSignals = await pageSignals();
   return {
     ok: false,
-    reason: "credential-field-not-found",
+    reason: loginTransition ? "credential-field-not-found-after-login-transition" : "credential-field-not-found",
     login_state: "credential_field_missing",
     source_id: sourceId,
     target_url: targetUrl,
     credential_ref: credentialRef,
     login_hint_present: !!loginHint,
+    login_transition: loginTransition,
     mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
     login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
     auth_signals: missingFieldSignals.auth_signals,
     before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, auth_signals: beforeSignals.auth_signals },
+    after_login_step: afterLoginStepSignals
+      ? { url: afterLoginStepSignals.url, title: afterLoginStepSignals.title, form_state: afterLoginStepSignals.form_state, auth_signals: afterLoginStepSignals.auth_signals }
+      : null,
     observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
     redaction: "credential value is not returned",
   };
 }
 const submit = await clickSubmit(credentialField);
-const waiters = [
-  page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => null),
-  page.waitForURL((url) => String(url) !== beforeSignals.url, { timeout: 12000 }).catch(() => null),
-  page.waitForTimeout(1200).catch(() => null),
-];
-await Promise.race(waiters).catch(() => null);
-await page.waitForTimeout(500).catch(() => null);
-const afterSignals = await pageSignals();
+const afterSignals = await waitForAuthTransition(beforeSignals.url, 12000);
 let verifyFound = null;
 if (configuredVerifySelector) {
   verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
@@ -4439,6 +4461,7 @@ return {
   target_url: targetUrl,
   credential_ref: credentialRef,
   login_hint_present: !!loginHint,
+  login_transition: loginTransition,
   mfa_required: mfaRequired,
   login_error_detected: loginErrorDetected,
   auth_signals: authSignals,
@@ -4702,6 +4725,9 @@ mod tests {
         assert!(source.contains("mfa-required"));
         assert!(source.contains("login-error-detected"));
         assert!(source.contains("verify-selector-not-found"));
+        assert!(source.contains("waitForAuthTransition"));
+        assert!(source.contains("login_transition"));
+        assert!(source.contains("credential-field-not-found-after-login-transition"));
 
         Ok(())
     }
