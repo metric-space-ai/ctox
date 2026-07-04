@@ -4417,13 +4417,15 @@ if (!credentialField) {
   };
 }
 const submit = await clickSubmit(credentialField);
-const afterSignals = await waitForAuthTransition(beforeSignals.url, 12000);
+const credentialSubmitBaseSignals = await pageSignals();
+const afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
 let verifyFound = null;
 if (configuredVerifySelector) {
   verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
 }
 const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
 const urlChanged = afterSignals.url !== beforeSignals.url;
+const credentialUrlChanged = afterSignals.url !== credentialSubmitBaseSignals.url;
 const originAfter = (() => { try { return new URL(afterSignals.url).origin; } catch { return null; } })();
 const passwordFieldsAfter = Number(afterSignals.form_state?.visible_password_fields || 0);
 const formGone = passwordFieldsAfter === 0;
@@ -4433,7 +4435,7 @@ const loginErrorDetected = authSignals.login_error_detected === true;
 const verifySelectorMissing = !!configuredVerifySelector && verifyFound !== true;
 const baseLoginSignal = configuredVerifySelector
   ? verifyFound === true
-  : !!submit && (formGone || urlChanged || originAfter !== targetOrigin);
+  : !!submit && (formGone || credentialUrlChanged || originAfter !== targetOrigin);
 const ok = baseLoginSignal && !mfaRequired && !loginErrorDetected;
 const loginState = ok
   ? "authenticated"
@@ -4471,8 +4473,10 @@ return {
   verify_selector: configuredVerifySelector || null,
   verify_selector_found: verifyFound,
   before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, auth_signals: beforeSignals.auth_signals },
+  credential_submit_base: { url: credentialSubmitBaseSignals.url, title: credentialSubmitBaseSignals.title, form_state: credentialSubmitBaseSignals.form_state, auth_signals: credentialSubmitBaseSignals.auth_signals },
   after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state, auth_signals: afterSignals.auth_signals },
   url_changed: urlChanged,
+  credential_url_changed: credentialUrlChanged,
   same_origin_after_login: originAfter === targetOrigin,
   observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
   elapsed_ms: Date.now() - startedAt,
@@ -4728,6 +4732,8 @@ mod tests {
         assert!(source.contains("waitForAuthTransition"));
         assert!(source.contains("login_transition"));
         assert!(source.contains("credential-field-not-found-after-login-transition"));
+        assert!(source.contains("credentialSubmitBaseSignals"));
+        assert!(source.contains("credential_url_changed"));
 
         Ok(())
     }
