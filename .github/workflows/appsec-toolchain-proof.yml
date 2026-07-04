@@ -1,0 +1,213 @@
+name: AppSec Toolchain Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "AppSec scanner profile to prove"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - minimal
+          - standard
+          - full
+      include_data_bundles:
+        description: "Fetch pinned templates, wordlists, and Trivy DB cache"
+        required: true
+        default: true
+        type: boolean
+      attest_native:
+        description: "Record current nmap/ncat/ndiff checksums after platform install"
+        required: true
+        default: true
+        type: boolean
+      smoke_timeout_seconds:
+        description: "Per-scanner smoke timeout"
+        required: true
+        default: "45"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'full' }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: Linux full AppSec toolchain proof
+          - os: macos-latest
+            label: macOS full AppSec toolchain proof
+          - os: windows-latest
+            label: Windows full AppSec toolchain proof
+
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_TARGET_DIR: ${{ runner.temp }}/ctox-cargo-target
+      APPSEC_PROFILE: ${{ inputs.profile || 'full' }}
+      APPSEC_INCLUDE_DATA_BUNDLES: ${{ inputs.include_data_bundles }}
+      APPSEC_ATTEST_NATIVE: ${{ inputs.attest_native }}
+      APPSEC_SMOKE_TIMEOUT_SECONDS: ${{ inputs.smoke_timeout_seconds || '45' }}
+      APPSEC_PROOF_ROOT: ${{ runner.temp }}/ctox-appsec-proof
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          check-latest: true
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Linux native AppSec packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nmap git ca-certificates pkg-config libssl-dev libfontconfig1-dev
+
+      - name: Install macOS native AppSec packages
+        if: runner.os == 'macOS'
+        run: |
+          brew list nmap >/dev/null 2>&1 || brew install nmap
+
+      - name: Install Windows native AppSec packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nmap -y --no-progress
+          $candidates = @("${env:ProgramFiles(x86)}\Nmap", "${env:ProgramFiles}\Nmap")
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              Add-Content -Path $env:GITHUB_PATH -Value $candidate
+            }
+          }
+
+      - name: Build CTOX CLI
+        run: cargo build --locked --bin ctox
+
+      - name: Run AppSec toolchain proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$APPSEC_PROOF_ROOT/runtime/appsec/default"
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+          fi
+          args=(
+            appsec
+            tools
+            proof-run
+            --state-dir
+            "$APPSEC_PROOF_ROOT/runtime/appsec/default"
+            --profile
+            "$APPSEC_PROFILE"
+            --probe-versions
+            --smoke-timeout
+            "$APPSEC_SMOKE_TIMEOUT_SECONDS"
+          )
+          if [ "$APPSEC_INCLUDE_DATA_BUNDLES" != "true" ]; then
+            args+=(--skip-data)
+          fi
+          if [ "$APPSEC_ATTEST_NATIVE" = "true" ]; then
+            args+=(--attest-current-native --reviewed-by "github-actions:${RUNNER_OS}")
+          fi
+          "$CTOX_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const out = path.join(process.env.APPSEC_PROOF_ROOT, 'proof-run-output.json');
+          const payload = JSON.parse(fs.readFileSync(out, 'utf8'));
+          const proof = payload.proof_run || {};
+          if (payload.ok !== true || proof.ready !== true) {
+            console.error('AppSec toolchain proof is not ready.');
+            console.error(JSON.stringify({
+              ok: payload.ok,
+              ready: proof.ready,
+              summary: proof.summary || null,
+            }, null, 2));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Summarize AppSec proof
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.env.APPSEC_PROOF_ROOT;
+          const out = path.join(root, 'proof-run-output.json');
+          const proofPath = path.join(root, 'runtime/tools/appsec/toolchain-proof-run.json');
+          let payload = null;
+          for (const candidate of [proofPath, out]) {
+            if (!fs.existsSync(candidate)) continue;
+            try {
+              const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+              payload = parsed.proof_run || parsed;
+              break;
+            } catch (_) {}
+          }
+          const summary = payload?.summary || {};
+          const lines = [
+            `# AppSec toolchain proof`,
+            ``,
+            `ready: ${payload?.ready ?? 'unknown'}`,
+            `profile: ${payload?.profile ?? process.env.APPSEC_PROFILE}`,
+            `platform: ${payload?.platform?.os ?? process.platform}/${payload?.platform?.arch ?? process.arch}`,
+            ``,
+            `| Field | Value |`,
+            `| --- | --- |`,
+            `| required_tools | ${summary.required_tools ?? 'n/a'} |`,
+            `| available_required_tools | ${summary.available_required_tools ?? 'n/a'} |`,
+            `| missing_required_tools | ${summary.missing_required_tools ?? 'n/a'} |`,
+            `| unverified_required_tools | ${summary.unverified_required_tools ?? 'n/a'} |`,
+            `| missing_required_data_bundles | ${summary.missing_required_data_bundles ?? 'n/a'} |`,
+            `| smoke_failed_or_unavailable | ${summary.smoke_failed_or_unavailable ?? 'n/a'} |`,
+            ``,
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
+          NODE
+
+      - name: Upload AppSec proof evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: appsec-toolchain-proof-${{ runner.os }}-${{ matrix.os }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/ctox-appsec-proof/proof-run-output.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/appsec/default/*.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/*.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/install-logs/**
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/templates/**/.ctox-data-bundle.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/wordlists/**/.ctox-data-bundle.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/trivy-cache/.ctox-data-bundle.json
