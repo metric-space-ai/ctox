@@ -27,9 +27,15 @@ test("signed artifact smoke writes platform evidence for all release targets", (
     assert.equal(linuxEvidence.checks.bundledHelper.executable, true);
     assertEvidence(winEvidence, "win", ["nsisInstaller", "unpackedApp", "appAsar", "bundledHelper", "signature"]);
     assert.match(winEvidence.checks.bundledHelper.path, /ctox\.exe$/);
-    // Off-Windows the Authenticode status cannot be read, but the evidence must
-    // still record that it was considered (never silently absent).
-    assert.equal(winEvidence.checks.signature.checked, false);
+    // Off-Windows the Authenticode status cannot be read; on Windows the dummy
+    // fixture is deliberately unsigned. Both cases must record the signature
+    // decision instead of silently omitting it.
+    if (process.platform === "win32") {
+      assert.equal(winEvidence.checks.signature.checked, true);
+      assert.equal(winEvidence.checks.signature.signed, false);
+    } else {
+      assert.equal(winEvidence.checks.signature.checked, false);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

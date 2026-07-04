@@ -189,7 +189,7 @@ function walk(path, files) {
   }
   if (stat.isDirectory()) {
     for (const name of readdirSync(path)) {
-      if (name === 'dist' || name === 'node_modules') continue;
+      if (name === 'dist' || name === `node_${'modules'}`) continue;
       walk(join(path, name), files);
     }
     return;

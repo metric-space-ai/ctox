@@ -40,7 +40,7 @@ export async function mount(ctx) {
   }
 
   const collection = () => {
-    try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; }
+    try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; }
   };
 
   function setGate(html, kind) {

@@ -11,6 +11,9 @@ const workflowPath = path.join(root, '.github/workflows/rxdb-soak.yml');
 
 const runner = fs.readFileSync(runnerPath, 'utf8');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
+const {
+  businessOsProductionSmokeModes,
+} = require('./business_os_production_smoke_registry');
 const runnerModes = extractRunnerModes(runner);
 const matrix = fs.readFileSync(path.join(__dirname, 'browser_rust_smoke_matrix.js'), 'utf8');
 const matrixModes = extractMatrixModes(matrix);
@@ -85,9 +88,12 @@ function extractMatrixEvidenceModes(source) {
 }
 
 function extractSmokeModes(source) {
-  const match = source.match(/if \(!\[([\s\S]*?)\]\.includes\(smokeMode\)\)/);
-  if (!match) fail('supported SMOKE_MODE list not found in browser_rust_smoke.js');
+  const match = source.match(/const supportedSmokeModes = \[([\s\S]*?)\];/);
+  if (!match) fail('supportedSmokeModes array not found in browser_rust_smoke.js');
   const modes = [...match[1].matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
+  if (match[1].includes('...businessOsProductionSmokeModes')) {
+    modes.push(...businessOsProductionSmokeModes);
+  }
   if (!modes.length) fail('supported SMOKE_MODE list is empty');
   return modes;
 }

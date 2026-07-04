@@ -1,5 +1,6 @@
 import { collections as knowledgeCollections } from '../knowledge/schema.js';
 import { collections as documentCollections } from '../documents/schema.js';
+import { collections as ctoxCollections } from '../ctox/schema.js';
 
 const commandSchema = {
   version: 1,
@@ -18,29 +19,6 @@ const commandSchema = {
     updated_at_ms: { type: 'number' },
   },
   required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true,
-};
-
-const businessChatSchema = {
-  version: 0,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    title: { type: 'string' },
-    open: { type: 'boolean' },
-    minimized: { type: 'boolean' },
-    owner_user_id: { type: 'string' },
-    lastTrackingId: { type: 'string' },
-    messages: {
-      type: 'array',
-      items: { type: 'object', additionalProperties: true },
-    },
-    draft: { type: 'string' },
-    createdAt: { type: 'number' },
-    updated_at_ms: { type: 'number' },
-  },
-  required: ['id', 'title', 'updated_at_ms'],
   additionalProperties: true,
 };
 
@@ -140,7 +118,7 @@ const knowledgeRecordSchema = knowledgeCollections.knowledge_tables;
 
 export const collections = {
   business_commands: commandSchema,
-  business_chats: businessChatSchema,
+  business_chats: ctoxCollections.business_chats,
   ctox_queue_tasks: ctoxQueueTaskSchema,
   research_tasks: researchTaskSchema,
   research_runs: researchRunSchema,

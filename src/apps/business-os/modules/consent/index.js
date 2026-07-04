@@ -25,7 +25,7 @@ export async function mount(ctx) {
   if (subEl) subEl.textContent = ctx.manifest?.description || '';
 
   let rowsCache = [];
-  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; } };
+  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
   function setGate(html, kind) {
     if (!gateEl) return;

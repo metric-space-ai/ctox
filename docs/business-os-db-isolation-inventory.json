@@ -1,6 +1,6 @@
 {
   "schema_version": "business-os-db-isolation-inventory-v1",
-  "updated_at": "2026-07-03",
+  "updated_at": "2026-07-04",
   "owner": "business-os-platform",
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
@@ -88,7 +88,7 @@
       "title": "Buchhaltung",
       "manifest_path": "src/apps/business-os/modules/buchhaltung/module.json",
       "source_path": "src/apps/business-os/modules/buchhaltung",
-      "install_scope": "store",
+      "install_scope": "starter",
       "distribution": "ctox-repo-module",
       "default_installed": false,
       "classification": "packaged-user-module",
@@ -141,6 +141,25 @@
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Coding Agents uses the guarded DB facade in Shell context and resolves projection collections through ctx.db.collection(name) without ctx.db.collections fallback. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on the manifest-declared coding_agent_sessions collection before data.read, read success after an exact collection data.read grant and write denial without data.write."
     },
+    "consent": {
+      "title": "Einwilligungen",
+      "manifest_path": "src/apps/business-os/modules/consent/module.json",
+      "source_path": "src/apps/business-os/modules/consent",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Consent resolves business_consents only through ctx.db.collection(name) without guarded property fallback. Subject export/erase and consent checks stay server-authoritative through the Business OS command bus."
+    },
     "conversations": {
       "title": "Conversations",
       "manifest_path": "src/apps/business-os/modules/conversations/module.json",
@@ -164,8 +183,8 @@
       "title": "App Creator",
       "manifest_path": "src/apps/business-os/modules/creator/module.json",
       "source_path": "src/apps/business-os/modules/creator",
-      "install_scope": "internal",
-      "distribution": "internal-tool",
+      "install_scope": "core",
+      "distribution": "system-module",
       "default_installed": true,
       "classification": "internal-builder-tool",
       "isolation_status": "internal-scoped-exception-tested",
@@ -182,6 +201,25 @@
         "business_module_catalog"
       ],
       "notes": "Scoped internal exception: Creator now resolves business_module_catalog and business_commands through the scoped system facade, while generated apps continue to use guarded data grants. Browser/Rust dynamic-app smoke denies the registered foreign ctox_runtime_settings collection through collection(), property, raw and collections access and checks the permission/capability facade contract."
+    },
+    "credentials": {
+      "title": "Zugangsdaten",
+      "manifest_path": "src/apps/business-os/modules/credentials/module.json",
+      "source_path": "src/apps/business-os/modules/credentials",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Credentials does not unwrap the Shell DB facade or cache DB handles. Credential storage and release actions stay server-authoritative through command dispatch and scoped Business OS permissions."
     },
     "ctox": {
       "title": "CTOX",
@@ -212,7 +250,7 @@
       "title": "Kunden",
       "manifest_path": "src/apps/business-os/modules/customers/module.json",
       "source_path": "src/apps/business-os/modules/customers",
-      "install_scope": "store",
+      "install_scope": "starter",
       "distribution": "ctox-repo-module",
       "default_installed": false,
       "classification": "packaged-user-module",
@@ -231,7 +269,7 @@
       "title": "CV Print Builder",
       "manifest_path": "src/apps/business-os/modules/cv-print-builder/module.json",
       "source_path": "src/apps/business-os/modules/cv-print-builder",
-      "install_scope": "local",
+      "install_scope": "starter",
       "distribution": "catalog-module",
       "default_installed": true,
       "classification": "catalog-user-module",
@@ -289,6 +327,25 @@
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Documents uses the guarded DB facade in Shell context and resolves document, version, runbook, blob and command collections through ctx.db.collection(name) without collection-property fallback. Browser/Rust dynamic-app smoke requires collection/property/raw/context denial on the manifest-declared business_commands collection before data.read, read success after an exact collection data.read grant and write denial without data.write."
     },
+    "esign": {
+      "title": "E-Signatur",
+      "manifest_path": "src/apps/business-os/modules/esign/module.json",
+      "source_path": "src/apps/business-os/modules/esign",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: E-Signatur resolves signature_requests only through ctx.db.collection(name) without guarded property fallback. Signature request/create/sign effects are dispatched through native Business OS commands."
+    },
     "invoices": {
       "title": "Rechnungen",
       "manifest_path": "src/apps/business-os/modules/invoices/module.json",
@@ -307,6 +364,44 @@
         "uses_cached_db_handle": false
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Invoices uses the guarded DB facade in Shell context and resolves all watched collections through ctx.db.collection(name) without property or ctx.db.collections fallback. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on the manifest-declared accounting_invoices collection before data.read, read success after an exact collection data.read grant and write denial without data.write. The former global debug bridge no longer exposes STATE/ctx/db and only returns a sanitized snapshot."
+    },
+    "intake": {
+      "title": "Bewerbungseingang",
+      "manifest_path": "src/apps/business-os/modules/intake/module.json",
+      "source_path": "src/apps/business-os/modules/intake",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Intake resolves applications only through ctx.db.collection(name) without guarded property fallback. Candidate intake actions stay on the command bus and permission-checked data facade."
+    },
+    "interviews": {
+      "title": "Interviews",
+      "manifest_path": "src/apps/business-os/modules/interviews/module.json",
+      "source_path": "src/apps/business-os/modules/interviews",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Interviews resolves interview_scorecards and interview_meetings only through ctx.db.collection(name) without guarded property fallback. Interview scheduling and score actions stay server-authoritative through Business OS commands."
     },
     "iot": {
       "title": "IoT",
@@ -356,7 +451,7 @@
       "title": "Matching",
       "manifest_path": "src/apps/business-os/modules/matching/module.json",
       "source_path": "src/apps/business-os/modules/matching",
-      "install_scope": "store",
+      "install_scope": "starter",
       "distribution": "ctox-repo-module",
       "default_installed": false,
       "classification": "packaged-user-module",
@@ -370,6 +465,25 @@
         "uses_cached_db_handle": false
       },
       "notes": "Phase 13C migrated Matching to the guarded facade batch: the module now receives the Shell Business OS context through setBusinessOsDatabaseContext(ctx), resolves matching_requirements/matching_objects/matching_results only through ctx.db.collection(name), removed its standalone CTOX DB/open-bundle fallback and ctx.db.raw injection, and gates writes through ctx.permissions.canWriteCollection. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on matching_requirements before data.read, read success after an exact collection data.read grant and write denial without data.write."
+    },
+    "nachweise": {
+      "title": "Nachweise",
+      "manifest_path": "src/apps/business-os/modules/nachweise/module.json",
+      "source_path": "src/apps/business-os/modules/nachweise",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Nachweise resolves business_credentials only through ctx.db.collection(name) without guarded property fallback. Deployment-readiness and sign-off decisions stay server-authoritative through native Business OS commands."
     },
     "notes": {
       "title": "Notes",
@@ -408,6 +522,25 @@
         "uses_cached_db_handle": false
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Outbound uses the guarded DB facade in Shell context after Active Outreach stopped using ctx.db.raw, automatic default/import-repair writes were gated by ctx.permissions.canWriteCollection, ctox_queue_tasks operational-status access was made optional/read-permission-aware instead of part of the Outbound module grant, and all outbound runtime collections now resolve through ctx.db.collection(name) without collection-property fallback. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on outbound_campaigns before data.read, read success after an exact collection data.read grant and write denial without data.write. Shell fallback collections are reconciled for outbound_skillbooks/outbound_letter_templates."
+    },
+    "placements": {
+      "title": "Vermittlungen",
+      "manifest_path": "src/apps/business-os/modules/placements/module.json",
+      "source_path": "src/apps/business-os/modules/placements",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Placements resolves placements only through ctx.db.collection(name) without guarded property fallback. Placement creation and early-leave effects are dispatched through native Business OS commands."
     },
     "reports": {
       "title": "Bugs & Features",
@@ -458,7 +591,7 @@
       "title": "Einsatzplanung",
       "manifest_path": "src/apps/business-os/modules/shiftflow/module.json",
       "source_path": "src/apps/business-os/modules/shiftflow",
-      "install_scope": "store",
+      "install_scope": "starter",
       "distribution": "ctox-repo-module",
       "default_installed": false,
       "classification": "packaged-user-module",
@@ -510,6 +643,53 @@
         "uses_cached_db_handle": false
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Support uses the guarded DB facade in Shell context and resolves support collections through ctx.db.collection(name) without collection-property fallback. Browser/Rust dynamic-app smoke requires collection/property/raw/context denial on the manifest-declared business_commands collection before data.read, ctx.permissions denial/allowance symmetry, a Shell locked state for a real support module open without data grants, read success after an exact collection data.read grant and write denial without data.write."
+    },
+    "submissions": {
+      "title": "Vorstellungen",
+      "manifest_path": "src/apps/business-os/modules/submissions/module.json",
+      "source_path": "src/apps/business-os/modules/submissions",
+      "install_scope": "starter",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "ATS catalog module: Submissions resolves submissions only through ctx.db.collection(name) without guarded property fallback. Candidate presentation effects stay on the native Business OS command path."
+    },
+    "threads": {
+      "title": "Threads",
+      "manifest_path": "src/apps/business-os/modules/threads/module.json",
+      "source_path": "src/apps/business-os/modules/threads",
+      "install_scope": "core",
+      "distribution": "system-module",
+      "default_installed": true,
+      "classification": "system-control-module",
+      "isolation_status": "system-scoped-exception-tested",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "scoped_collections": [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_task_approval_requests",
+        "user_notifications",
+        "user_thread_links",
+        "user_thread_messages",
+        "user_threads"
+      ],
+      "notes": "Scoped system exception: Threads resolves user thread, notification, task approval, command and queue projections through the scoped system facade. Browser/Rust dynamic-app smoke denies foreign collections through collection(), property, raw and collections access."
     },
     "tickets": {
       "title": "Tickets",
