@@ -178,6 +178,17 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --check
 
+      - name: AppSec non-network fixture gates
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml scanner_schema_covers_all_allowlisted_tools --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_realistic_web_scanner_outputs_validate_contracts --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_remaining_allowlisted_tools_have_structured_output --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_high_impact_pinned_outputs_extract_actionable_evidence --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml failed_scanner_run_is_classified_as_blocked_tool_failed --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_bundle_exports_authz_replay_issue_and_fix_check_script --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_verify_bundle_executes_proof_script_and_records_fix_status --quiet
+
       - name: Business OS RxDB-only contract
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
