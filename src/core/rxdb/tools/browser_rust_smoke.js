@@ -811,6 +811,10 @@ function writeBusinessOsReleaseModuleFixture(installedModulesRoot, id, module) {
 <script type="module" src="./index.js"></script>
 `);
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), '.phase10-release-app { display: grid; gap: 0.5rem; padding: 1rem; }\n');
+  fs.writeFileSync(
+    path.join(moduleRoot, 'icon.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#0f766e"/><path d="M7 12.5 10.5 16 17 8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>\n'
+  );
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
   const host = ctx.host || document.body;

@@ -195,7 +195,12 @@ const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
-const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
+// Browser-originated commands are user-visible control-plane work. Same-process
+// RxDB writes wake this loop through table notifiers, but replicated browser
+// writes can arrive through SQLite without tripping that notifier reliably on
+// every platform. Keep a short safety poll even when idle so pending commands
+// cannot sit in `pending_sync` until a standby reconcile.
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = BUSINESS_COMMAND_ACTIVE_POLL_SECS;
 const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY: &str =
@@ -12464,11 +12469,11 @@ mod tests {
         );
         assert_eq!(
             business_command_poll_sleep_secs(1),
-            BUSINESS_COMMAND_IDLE_POLL_SECS
+            BUSINESS_COMMAND_ACTIVE_POLL_SECS
         );
         assert_eq!(
             business_command_poll_sleep_secs(u32::MAX),
-            BUSINESS_COMMAND_IDLE_POLL_SECS
+            BUSINESS_COMMAND_ACTIVE_POLL_SECS
         );
     }
 
