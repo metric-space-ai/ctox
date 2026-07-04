@@ -152,4 +152,26 @@ function createMockSyncRuntime() {
   await runtime.stop();
 }
 
+{
+  const { runtime, starts, cancels } = createMockSyncRuntime();
+  const lease = await runtime.leaseCollection('desktop_file_chunks', 'module-demand-only-restart-smoke');
+  await runtime.restartCollection('desktop_file_chunks');
+  assert.equal(starts.length, 2, 'restartCollection preserves the demand-only lease and restarts replication');
+  assert.deepEqual(cancels, ['desktop_file_chunks']);
+  await runtime.restartCollections(['desktop_file_chunks']);
+  assert.equal(starts.length, 3, 'restartCollections preserves the demand-only lease and restarts replication');
+  assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks']);
+  await runtime.suspendCollections(['desktop_file_chunks'], 'module-demand-only-suspend-smoke');
+  assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks']);
+  await runtime.resumeCollections(['desktop_file_chunks']);
+  assert.equal(starts.length, 4, 'resumeCollections preserves the demand-only lease after suspension');
+  assert.equal(await lease.release(), true, 'lease release succeeds after restart/suspend/resume');
+  assert.deepEqual(
+    cancels,
+    ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks'],
+    'final release stops the resumed demand-only bridge',
+  );
+  await runtime.stop();
+}
+
 console.log('ctox-rxdb module demand-only collections smoke OK');

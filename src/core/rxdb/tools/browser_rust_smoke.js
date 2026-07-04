@@ -5719,6 +5719,24 @@ function ensureCtoxSmokeBinary() {
         if (isRecoverablePeerLifecycleError(error)) return;
         console.error(label, error);
       };
+      const demandOnlyAppSyncCollections = new Set([
+        'desktop_file_chunks',
+        'document_blob_chunks',
+        'spreadsheet_blob_chunks',
+      ]);
+      const syncBridgeFromHandle = (handle) => handle?.bridge || handle;
+      const startAppSyncCollection = async (state, collection, reason = 'browser-rust-smoke') => {
+        if (!state?.sync?.startCollection && !state?.sync?.leaseCollection) {
+          throw new Error(`Business OS sync runtime is not available for ${collection}`);
+        }
+        if (demandOnlyAppSyncCollections.has(collection)) {
+          if (typeof state.sync.leaseCollection !== 'function') {
+            throw new Error(`${collection} is demand-only and requires sync.leaseCollection().`);
+          }
+          return syncBridgeFromHandle(await state.sync.leaseCollection(collection, reason));
+        }
+        return state.sync.startCollection(collection);
+      };
 
       let db;
       let appFileReplicationState = null;
@@ -5863,8 +5881,8 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsFileCollections) {
           const fileCollectionsStartedAt = Date.now();
-          const fileBridge = await appState.sync.startCollection('desktop_files');
-          const chunkBridge = await appState.sync.startCollection('desktop_file_chunks');
+          const fileBridge = await startAppSyncCollection(appState, 'desktop_files', 'browser-rust-smoke-file-sync');
+          const chunkBridge = await startAppSyncCollection(appState, 'desktop_file_chunks', 'browser-rust-smoke-file-sync');
           fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
           chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
           appFileReplicationState = fileBridge?.state || null;
@@ -11065,11 +11083,11 @@ function ensureCtoxSmokeBinary() {
 
       async function startDeferredAppFileCollections(label = 'desktop_files') {
         const state = appState || globalThis.ctoxBusinessOsSmoke?.state;
-        if (!state?.sync?.startCollection) {
+        if (!state?.sync?.startCollection && !state?.sync?.leaseCollection) {
           throw new Error(`Business OS sync runtime is not available for deferred ${label} replication`);
         }
-        const fileBridge = await state.sync.startCollection('desktop_files');
-        const chunkBridge = await state.sync.startCollection('desktop_file_chunks');
+        const fileBridge = await startAppSyncCollection(state, 'desktop_files', `deferred-${label}`);
+        const chunkBridge = await startAppSyncCollection(state, 'desktop_file_chunks', `deferred-${label}`);
         fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
         chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
         appFileReplicationState = fileBridge?.state || null;

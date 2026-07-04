@@ -127,6 +127,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     const bridgePromises = [...bridges.values()];
     bridges.clear();
     activeCollections.clear();
+    collectionLeaseCounts.clear();
     const states = await Promise.allSettled(bridgePromises);
     for (const state of states) {
       if (state.status === 'fulfilled') {
@@ -369,9 +370,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         throw error;
       }
     },
-    async stopCollection(collection) {
+    async stopCollection(collection, options = {}) {
+      collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
-      collectionLeaseCounts.delete(collection);
+      if (!options?.preserveLeases) collectionLeaseCounts.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
       if (!bridgePromise) return false;
@@ -391,20 +393,25 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     },
     async restartCollection(collection) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      collection = normalizeCollectionName(collection);
+      if (!collection) throw new Error('collection is required.');
       activeCollections.add(collection);
-      await this.stopCollection(collection);
+      await this.stopCollection(collection, { preserveLeases: true });
       return this.startCollection(collection);
     },
     async restartCollections(collections) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
-      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      const requested = [...new Set((collections || [])
+        .filter((collection) => typeof collection === 'string')
+        .map(normalizeCollectionName)
+        .filter(Boolean))];
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
       for (const collection of requested) activeCollections.add(collection);
       for (const collection of requested) {
-        await this.stopCollection(collection);
+        await this.stopCollection(collection, { preserveLeases: true });
       }
       const startBatch = async () => {
         collectionStartQueue = Promise.resolve();
@@ -438,7 +445,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
             lastLifecycleEvent: lifecycleEvent,
             reconnectingSince: new Date().toISOString(),
           });
-          await this.stopCollection(collection);
+          await this.stopCollection(collection, { preserveLeases: true });
         }
         restarted = await startBatch();
         try {
@@ -453,14 +460,17 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
-      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      const requested = [...new Set((collections || [])
+        .filter((collection) => typeof collection === 'string')
+        .map(normalizeCollectionName)
+        .filter(Boolean))];
       suspensionReason = reason || 'sync-suspended';
       for (const collection of requested) {
         activeCollections.add(collection);
         suspendedCollections.add(collection);
       }
       for (const collection of requested) {
-        await this.stopCollection(collection);
+        await this.stopCollection(collection, { preserveLeases: true });
         recordCollection(collection, {
           status: 'paused',
           connectionStatus: 'paused',
@@ -474,7 +484,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     },
     async resumeCollections(collections) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
-      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      const requested = [...new Set((collections || [])
+        .filter((collection) => typeof collection === 'string')
+        .map(normalizeCollectionName)
+        .filter(Boolean))];
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
       return this.restartCollections(requested);
