@@ -2193,18 +2193,23 @@ fn record_appsec_stage_artifact_bindings(
     output: &Value,
     persisted_artifact: Option<&str>,
 ) -> Vec<Value> {
-    let artifact = persisted_artifact
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| appsec_output_artifact(output));
-    let Some(artifact) = artifact else {
-        return Vec::new();
-    };
     let mut keys = appsec_command_artifact_placeholder_keys(command);
     if keys.is_empty() {
         return Vec::new();
     }
+    let output_artifact = appsec_output_artifact(output);
+    let persisted_artifact = persisted_artifact
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let artifact = if command.pointer("/produces/artifact/placeholder").is_some() {
+        output_artifact.or(persisted_artifact)
+    } else {
+        persisted_artifact.or(output_artifact)
+    };
+    let Some(artifact) = artifact else {
+        return Vec::new();
+    };
     let mut bindings = Vec::new();
     for key in keys.drain(..) {
         if key.trim().is_empty() {
@@ -4157,9 +4162,9 @@ mod tests {
         execute_appsec_stage_commands, find_ctox_root_from_ancestors, handle_appsec_pipeline_work,
         looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
-        resolve_appsec_stage_command_placeholders, resolve_chat_attachment_paths,
-        resolve_runtime_ctox_root, run_projected_appsec_command, validated_workspace_root_override,
-        AppsecStageExecutionContext,
+        record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
+        resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
+        validated_workspace_root_override, AppsecStageExecutionContext,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -5002,6 +5007,45 @@ mod tests {
                 })
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn appsec_worker_binds_authz_run_placeholder_to_real_run_artifact() {
+        let mut context = AppsecStageExecutionContext::default();
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_appsec_authz_run",
+            "produces": {
+                "artifact": {
+                    "placeholder": "${artifact:authz-run}",
+                    "json_path": "/artifact"
+                }
+            },
+            "expected_artifact": "authz/authz-run-redacted.json"
+        });
+        let output = serde_json::json!({
+            "ok": true,
+            "artifact": "/tmp/ctox/.pentest/authz/authz-run-real.json"
+        });
+
+        let bindings = record_appsec_stage_artifact_bindings(
+            &mut context,
+            &command,
+            &output,
+            Some("/tmp/ctox/.pentest/authz/authz-run-redacted.json"),
+        );
+
+        assert_eq!(
+            context.artifacts.get("authz-run").map(String::as_str),
+            Some("/tmp/ctox/.pentest/authz/authz-run-real.json")
+        );
+        assert_eq!(
+            bindings
+                .first()
+                .and_then(|binding| binding.get("artifact"))
+                .and_then(serde_json::Value::as_str),
+            Some("/tmp/ctox/.pentest/authz/authz-run-real.json")
         );
     }
 
