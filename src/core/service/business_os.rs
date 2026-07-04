@@ -2666,6 +2666,168 @@ fn run_business_os_web_stack_auth_assist_login(
     }))
 }
 
+fn run_business_os_web_stack_auth_assist_signup(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(
+        args.iter().any(|arg| arg == "--confirm-provisioning"),
+        "auth-assist-signup requires --confirm-provisioning because it may create an account"
+    );
+    let source_id = flag_value(args, "--source-id")
+        .context("usage: ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--email-selector <selector>] [--credential-selector <selector>] [--confirm-credential-selector <selector>] [--submit-selector <selector>] [--verify-selector <selector>] [--accept-terms] [--terms-selector <selector>]")?;
+    let target_url_override = flag_value(args, "--target-url")
+        .context("auth-assist-signup requires --target-url <signup-url>")?;
+    let credential_ref =
+        optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
+            .context("auth-assist-signup requires --credential-ref <ctox-secret://scope/name>")?;
+    let local_secret_ref = parse_local_ctox_secret_ref(&credential_ref)?;
+    let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"))
+        .context("auth-assist-signup requires --login-hint <account-email-or-username>")?;
+    let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
+    let timeout_ms = flag_value(args, "--timeout-ms")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .with_context(|| format!("failed to parse --timeout-ms `{value}`"))
+        })
+        .transpose()?
+        .unwrap_or(60_000)
+        .clamp(1_000, 300_000);
+    let browser_dir = flag_value(args, "--dir").map(PathBuf::from);
+    let auth_assist = enqueue_web_stack_auth_assist_request(
+        root,
+        source_id,
+        Some(target_url_override),
+        Some(&credential_ref),
+        Some(login_hint.as_str()),
+        requesting_task_id,
+        "ctox_harness",
+        "ctox_web_auth_assist_signup",
+        false,
+    )?;
+    let session_id = auth_assist
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .context("auth-assist signup did not produce a session_id")?
+        .to_string();
+    let target_url = auth_assist
+        .get("target_url")
+        .and_then(serde_json::Value::as_str)
+        .context("auth-assist signup did not produce a target_url")?
+        .to_string();
+    let source_id = auth_assist
+        .get("source_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(source_id)
+        .to_string();
+    let secret_value =
+        crate::secrets::read_secret_value(root, &local_secret_ref.scope, &local_secret_ref.name)
+            .with_context(|| {
+                format!(
+            "failed to resolve credential_ref {credential_ref}; expected ctox secret scope/name"
+        )
+            })?;
+    anyhow::ensure!(
+        !secret_value.trim().is_empty(),
+        "credential_ref {credential_ref} resolved to an empty secret"
+    );
+    let email_selector = flag_value(args, "--email-selector").unwrap_or_default();
+    let credential_selector = flag_value(args, "--credential-selector").unwrap_or_default();
+    let confirm_credential_selector =
+        flag_value(args, "--confirm-credential-selector").unwrap_or_default();
+    let submit_selector = flag_value(args, "--submit-selector").unwrap_or_default();
+    let verify_selector = flag_value(args, "--verify-selector").unwrap_or_default();
+    let terms_selector = flag_value(args, "--terms-selector").unwrap_or_default();
+    let display_name = flag_value(args, "--display-name").unwrap_or_default();
+    let display_name_selector = flag_value(args, "--display-name-selector").unwrap_or_default();
+    let tenant_name = flag_value(args, "--tenant-name").unwrap_or_default();
+    let tenant_name_selector = flag_value(args, "--tenant-name-selector").unwrap_or_default();
+    let accept_terms = args.iter().any(|arg| arg == "--accept-terms");
+    let automation_source = build_web_stack_auth_assist_signup_source(
+        &target_url,
+        &source_id,
+        &login_hint,
+        &credential_ref,
+        &secret_value,
+        email_selector.trim(),
+        credential_selector.trim(),
+        confirm_credential_selector.trim(),
+        submit_selector.trim(),
+        verify_selector.trim(),
+        accept_terms,
+        terms_selector.trim(),
+        display_name.trim(),
+        display_name_selector.trim(),
+        tenant_name.trim(),
+        tenant_name_selector.trim(),
+    )?;
+    let mut automation = crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.clone(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source: automation_source,
+        },
+    )?;
+    redact_secret_value_from_json(&mut automation, &secret_value);
+    let signup_result = automation
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let automation_ok = automation
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let signup_ok = signup_result
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(automation_ok);
+    let signup_state = signup_result
+        .get("signup_state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(if automation_ok && signup_ok {
+            "provisioned"
+        } else {
+            "signup_failed"
+        });
+    let status = if automation_ok && signup_ok {
+        "completed"
+    } else {
+        match signup_state {
+            "already_registered" => "already_registered",
+            "verification_required" => "verification_required",
+            "signup_error" => "signup_failed",
+            _ => "signup_failed",
+        }
+    };
+    Ok(serde_json::json!({
+        "ok": automation_ok && signup_ok,
+        "status": status,
+        "command": "business-os web-stack auth-assist-signup",
+        "session_id": session_id,
+        "source_id": source_id,
+        "target_url": target_url,
+        "credential_ref": credential_ref,
+        "login_hint": login_hint,
+        "signup_state": signup_state,
+        "verification_required": signup_result.get("verification_required").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "signup_error_detected": signup_result.get("signup_error_detected").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "already_registered": signup_result.get("already_registered").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "verify_selector": verify_selector,
+        "credential_selector": credential_selector,
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false,
+        "browser_stream": "rxdb",
+        "timeout_ms": timeout_ms,
+        "provisioning_confirmed": true,
+        "auth_assist_request": auth_assist,
+        "signup_result": signup_result,
+        "automation": automation,
+    }))
+}
+
 pub(crate) fn run_business_os_web_stack_context_capture(
     root: &Path,
     args: &[String],
@@ -2815,6 +2977,7 @@ pub(crate) fn run_business_os_web_stack_cli_json(
 ) -> anyhow::Result<serde_json::Value> {
     match args.first().map(String::as_str) {
         Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
+        Some("auth-assist-signup") => run_business_os_web_stack_auth_assist_signup(root, args),
         Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
@@ -2952,6 +3115,10 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
                 false,
             )?;
             print_json(&summary)
+        }
+        Some("auth-assist-signup") => {
+            let signup = run_business_os_web_stack_auth_assist_signup(root, args)?;
+            print_json(&signup)
         }
         Some("auth-assist-login") => {
             let login = run_business_os_web_stack_auth_assist_login(root, args)?;
@@ -3346,7 +3513,7 @@ fn business_os_usage() -> String {
         )
         .replace(
             "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
-            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
+            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
         )
 }
 
@@ -4487,6 +4654,396 @@ return {
     Ok(source)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_web_stack_auth_assist_signup_source(
+    target_url: &str,
+    source_id: &str,
+    login_hint: &str,
+    credential_ref: &str,
+    secret_value: &str,
+    email_selector: &str,
+    credential_selector: &str,
+    confirm_credential_selector: &str,
+    submit_selector: &str,
+    verify_selector: &str,
+    accept_terms: bool,
+    terms_selector: &str,
+    display_name: &str,
+    display_name_selector: &str,
+    tenant_name: &str,
+    tenant_name_selector: &str,
+) -> anyhow::Result<String> {
+    let mut source = format!(
+        "// ctox-browser: timeout_ms=60000\nconst targetUrl = {};\nconst sourceId = {};\nconst loginHint = {};\nconst credentialRef = {};\nconst credentialValue = {};\nconst configuredEmailSelector = {};\nconst configuredCredentialSelector = {};\nconst configuredConfirmCredentialSelector = {};\nconst configuredSubmitSelector = {};\nconst configuredVerifySelector = {};\nconst shouldAcceptTerms = {};\nconst configuredTermsSelector = {};\nconst displayNameHint = {};\nconst configuredDisplayNameSelector = {};\nconst tenantNameHint = {};\nconst configuredTenantNameSelector = {};\n",
+        serde_json::to_string(target_url)?,
+        serde_json::to_string(source_id)?,
+        serde_json::to_string(login_hint)?,
+        serde_json::to_string(credential_ref)?,
+        serde_json::to_string(secret_value)?,
+        serde_json::to_string(email_selector)?,
+        serde_json::to_string(credential_selector)?,
+        serde_json::to_string(confirm_credential_selector)?,
+        serde_json::to_string(submit_selector)?,
+        serde_json::to_string(verify_selector)?,
+        serde_json::to_string(&accept_terms)?,
+        serde_json::to_string(terms_selector)?,
+        serde_json::to_string(display_name)?,
+        serde_json::to_string(display_name_selector)?,
+        serde_json::to_string(tenant_name)?,
+        serde_json::to_string(tenant_name_selector)?,
+    );
+    source.push_str(
+        r#"
+const targetOrigin = new URL(targetUrl).origin;
+const startedAt = Date.now();
+const trimText = (value, max = 180) => {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > max ? text.slice(0, max - 1) + "..." : text;
+};
+const candidateFields = async (kind) => page.evaluate(({ kind }) => {
+  const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
+    ? globalThis.CSS.escape(String(value))
+    : String(value).replace(/["\\]/g, "\\$&");
+  const visible = (element) => {
+    const style = globalThis.getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.visibility !== "hidden"
+      && style.display !== "none"
+      && Number(style.opacity || "1") > 0
+      && box.width > 0
+      && box.height > 0
+      && !element.disabled
+      && element.getAttribute("aria-hidden") !== "true";
+  };
+  const labelFor = (element) => {
+    const labels = [];
+    if (element.id) {
+      for (const label of Array.from(document.querySelectorAll(`label[for="${cssEscape(element.id)}"]`))) {
+        labels.push(label.innerText || label.textContent || "");
+      }
+    }
+    const parentLabel = element.closest("label");
+    if (parentLabel) labels.push(parentLabel.innerText || parentLabel.textContent || "");
+    return labels.join(" ");
+  };
+  const descriptorFor = (element, source) => {
+    const tag = element.tagName.toLowerCase();
+    const id = element.getAttribute("id");
+    const name = element.getAttribute("name");
+    const type = element.getAttribute("type");
+    const placeholder = element.getAttribute("placeholder");
+    let selector = null;
+    if (id) selector = `#${cssEscape(id)}`;
+    else if (name) selector = `${tag}[name="${cssEscape(name)}"]`;
+    else if (placeholder) selector = `${tag}[placeholder="${cssEscape(placeholder)}"]`;
+    else if (type) selector = `${tag}[type="${cssEscape(type)}"]`;
+    else selector = tag;
+    let index = 0;
+    try {
+      const matches = Array.from(document.querySelectorAll(selector));
+      index = Math.max(0, matches.indexOf(element));
+    } catch {}
+    return { selector, index, source, tag, type: type || null, name: name || null, autocomplete: element.getAttribute("autocomplete") || null, placeholder_present: !!placeholder };
+  };
+  const tokensFor = (element) => [
+    element.getAttribute("type"),
+    element.getAttribute("name"),
+    element.getAttribute("id"),
+    element.getAttribute("autocomplete"),
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    labelFor(element),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const scoreFor = (element) => {
+    const tokens = tokensFor(element);
+    const type = String(element.getAttribute("type") || "").toLowerCase();
+    if (kind === "credential" || kind === "confirm_credential") {
+      let score = type === "password" ? 100 : 0;
+      if (/(password|passwort|passwd|pwd|kennwort)/.test(tokens)) score += 80;
+      if (kind === "confirm_credential" && /(confirm|repeat|again|bestaetig|bestätig|wiederhol)/.test(tokens)) score += 70;
+      if (kind === "credential" && /(confirm|repeat|again|bestaetig|bestätig|wiederhol)/.test(tokens)) score -= 50;
+      return score;
+    }
+    if (kind === "display_name") {
+      let score = 0;
+      if (/(name|display|full name|fullname|company|firma|organisation|organization)/.test(tokens)) score += 80;
+      if (type === "password" || type === "email") score -= 80;
+      return score;
+    }
+    let score = 0;
+    if (type === "email") score += 100;
+    if (/(email|e-mail|mail|username|user name|login|account|benutzer|nutzer)/.test(tokens)) score += 80;
+    if (type === "password" || /(password|passwort|passwd|pwd|kennwort)/.test(tokens)) score -= 100;
+    return score;
+  };
+  const fields = Array.from(document.querySelectorAll("input, textarea, [contenteditable='true']"))
+    .filter(visible)
+    .filter((element) => {
+      const type = String(element.getAttribute("type") || "").toLowerCase();
+      return !["hidden", "submit", "button", "checkbox", "radio", "file"].includes(type);
+    })
+    .map((element) => ({ element, score: scoreFor(element) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+  return fields.slice(0, 8).map((entry) => descriptorFor(entry.element, "heuristic"));
+}, { kind });
+const fillField = async (kind, value, configuredSelector = "") => {
+  if (!value) return null;
+  const candidates = [];
+  if (configuredSelector) candidates.push({ selector: configuredSelector, index: 0, source: "configured", configured: true });
+  candidates.push(...await candidateFields(kind));
+  for (const candidate of candidates) {
+    if (!candidate.selector) continue;
+    try {
+      const locator = page.locator(candidate.selector).nth(Number(candidate.index || 0));
+      if ((await locator.count()) < 1) continue;
+      await locator.fill(String(value), { timeout: 3500 });
+      return { ...candidate, index: Number(candidate.index || 0), configured: !!candidate.configured };
+    } catch {}
+  }
+  return null;
+};
+const clickTerms = async () => {
+  if (!shouldAcceptTerms) return null;
+  const selectors = [];
+  if (configuredTermsSelector) selectors.push(configuredTermsSelector);
+  selectors.push(
+    "input[type='checkbox'][name*='terms' i]",
+    "input[type='checkbox'][id*='terms' i]",
+    "input[type='checkbox'][name*='privacy' i]",
+    "input[type='checkbox'][id*='privacy' i]",
+    "label:has-text('Terms')",
+    "label:has-text('Privacy')",
+    "label:has-text('AGB')",
+    "label:has-text('Datenschutz')"
+  );
+  for (const selector of selectors) {
+    try {
+      const locator = page.locator(selector).first();
+      if ((await locator.count()) < 1) continue;
+      const tag = await locator.evaluate((element) => element.tagName.toLowerCase()).catch(() => "");
+      if (tag === "input") await locator.check({ timeout: 3500 }).catch(async () => locator.click({ timeout: 3500 }));
+      else await locator.click({ timeout: 3500 });
+      return { selector, mode: "terms-accepted" };
+    } catch {}
+  }
+  return { mode: "terms-not-found" };
+};
+const clickSubmit = async () => {
+  const selectors = [];
+  if (configuredSubmitSelector) selectors.push(configuredSubmitSelector);
+  selectors.push(
+    "button[type='submit']",
+    "input[type='submit']",
+    "button:has-text('Create account')",
+    "button:has-text('Sign up')",
+    "button:has-text('Register')",
+    "button:has-text('Get started')",
+    "button:has-text('Continue')",
+    "button:has-text('Konto erstellen')",
+    "button:has-text('Registrieren')",
+    "button:has-text('Anmelden')",
+    "button:has-text('Weiter')",
+    "[role='button']:has-text('Create account')",
+    "[role='button']:has-text('Sign up')",
+    "[role='button']:has-text('Register')",
+    "[role='button']:has-text('Registrieren')"
+  );
+  for (const selector of selectors) {
+    try {
+      const locator = page.locator(selector).first();
+      if ((await locator.count()) < 1) continue;
+      await locator.click({ timeout: 3500 });
+      return { mode: "click", selector };
+    } catch {}
+  }
+  try {
+    await page.keyboard.press("Enter");
+    return { mode: "press", key: "Enter" };
+  } catch {}
+  return null;
+};
+const pageSignals = async () => {
+  let title = "";
+  try { title = await page.title(); } catch {}
+  try {
+    const pageState = await page.evaluate(() => {
+      const visible = (element) => {
+        const style = globalThis.getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.visibility !== "hidden"
+          && style.display !== "none"
+          && Number(style.opacity || "1") > 0
+          && box.width > 0
+          && box.height > 0;
+      };
+      const text = String(document.body ? document.body.innerText || "" : "").replace(/\s+/g, " ").trim();
+      const lower = text.toLowerCase();
+      const terms = (entries) => entries.filter((entry) => entry.pattern.test(lower)).map((entry) => entry.term);
+      const verificationTerms = terms([
+        { term: "verify-email", pattern: /verify\s+(your\s+)?email|verification\s+email|confirm\s+(your\s+)?email/ },
+        { term: "check-email", pattern: /check\s+(your\s+)?email|sent\s+.*email/ },
+        { term: "bestaetigung", pattern: /bestaetig|bestätig|verifizier|e-?mail\s+gesendet/ },
+      ]);
+      const existingTerms = terms([
+        { term: "already-registered", pattern: /already\s+(registered|exists|have\s+an\s+account)/ },
+        { term: "account-exists", pattern: /account\s+(already\s+)?exists|user\s+(already\s+)?exists/ },
+        { term: "konto-vorhanden", pattern: /konto\s+(existiert|vorhanden)|bereits\s+(registriert|angemeldet)/ },
+      ]);
+      const errorTerms = terms([
+        { term: "invalid", pattern: /\binvalid\b/ },
+        { term: "weak", pattern: /weak\s+password|password\s+too\s+short|too\s+weak/ },
+        { term: "required", pattern: /\brequired\b|missing\s+field/ },
+        { term: "failed", pattern: /sign\s+up\s+failed|registration\s+failed|could\s+not\s+create/ },
+        { term: "ungueltig", pattern: /ungueltig|ungültig/ },
+        { term: "fehlgeschlagen", pattern: /registrierung\s+fehlgeschlagen|konto.*nicht.*erstellt/ },
+      ]);
+      const errorNodes = Array.from(document.querySelectorAll([
+        "[role='alert']",
+        "[data-testid*='error' i]",
+        "[class*='error' i]",
+        "[id*='error' i]",
+      ].join(",")))
+        .filter(visible)
+        .map((element) => String(element.innerText || element.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      return {
+        visible_text_sample: text.slice(0, 240),
+        form_state: {
+          visible_password_fields: Array.from(document.querySelectorAll("input[type='password']")).filter(visible).length,
+          visible_email_fields: Array.from(document.querySelectorAll("input[type='email']")).filter(visible).length,
+          visible_forms: Array.from(document.querySelectorAll("form")).filter(visible).length,
+        },
+        signup_signals: {
+          verification_required: verificationTerms.length > 0,
+          already_registered: existingTerms.length > 0,
+          signup_error_detected: (errorTerms.length > 0 || errorNodes.length > 0) && existingTerms.length === 0,
+          verification_terms: verificationTerms.slice(0, 8),
+          existing_account_terms: existingTerms.slice(0, 8),
+          error_terms: errorTerms.slice(0, 8),
+          error_text: (errorNodes.join(" ") || "").slice(0, 240),
+        },
+      };
+    });
+    return { url: page.url(), title, form_state: pageState.form_state || {}, signup_signals: pageState.signup_signals || {}, visible_text_sample: pageState.visible_text_sample || "" };
+  } catch {
+    return { url: page.url(), title, form_state: {}, signup_signals: {}, visible_text_sample: "" };
+  }
+};
+const waitForTransition = async (previousUrl, timeoutMs = 15000) => {
+  await Promise.race([
+    page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => null),
+    page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs }).catch(() => null),
+    page.waitForTimeout(1500).catch(() => null),
+  ]).catch(() => null);
+  await page.waitForTimeout(500).catch(() => null);
+  return pageSignals();
+};
+
+const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
+await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
+const beforeSignals = await pageSignals();
+const emailField = await fillField("login", loginHint, configuredEmailSelector);
+const credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+let confirmCredentialField = null;
+if (configuredConfirmCredentialSelector) {
+  confirmCredentialField = await fillField("confirm_credential", credentialValue, configuredConfirmCredentialSelector);
+} else {
+  confirmCredentialField = await fillField("confirm_credential", credentialValue, "");
+}
+const displayNameField = displayNameHint ? await fillField("display_name", displayNameHint, configuredDisplayNameSelector) : null;
+const tenantNameField = tenantNameHint ? await fillField("display_name", tenantNameHint, configuredTenantNameSelector) : null;
+const terms = await clickTerms();
+if (!emailField || !credentialField) {
+  const observed = await ctoxBrowser.observe({ limit: 40, textMax: 120 });
+  const signals = await pageSignals();
+  return {
+    ok: false,
+    reason: !emailField ? "signup-email-field-not-found" : "signup-credential-field-not-found",
+    signup_state: "signup_field_missing",
+    source_id: sourceId,
+    target_url: targetUrl,
+    credential_ref: credentialRef,
+    login_hint_present: !!loginHint,
+    before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, signup_signals: beforeSignals.signup_signals },
+    after: { url: signals.url, title: signals.title, form_state: signals.form_state, signup_signals: signals.signup_signals },
+    observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
+    redaction: "credential value is not returned",
+  };
+}
+const submit = await clickSubmit();
+const submitBaseSignals = await pageSignals();
+const afterSignals = await waitForTransition(submitBaseSignals.url, 15000);
+let verifyFound = null;
+if (configuredVerifySelector) {
+  verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 3500 }).catch(() => false);
+}
+const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
+const signals = afterSignals.signup_signals || {};
+const verificationRequired = signals.verification_required === true;
+const alreadyRegistered = signals.already_registered === true;
+const signupErrorDetected = signals.signup_error_detected === true;
+const passwordFieldsAfter = Number(afterSignals.form_state?.visible_password_fields || 0);
+const formGone = passwordFieldsAfter === 0;
+const submitUrlChanged = afterSignals.url !== submitBaseSignals.url;
+const originAfter = (() => { try { return new URL(afterSignals.url).origin; } catch { return null; } })();
+const baseProvisioningSignal = configuredVerifySelector
+  ? verifyFound === true
+  : !!submit && (formGone || submitUrlChanged || originAfter !== targetOrigin);
+const ok = alreadyRegistered || (baseProvisioningSignal && !verificationRequired && !signupErrorDetected);
+const signupState = alreadyRegistered
+  ? "already_registered"
+  : ok
+    ? "provisioned"
+    : verificationRequired
+      ? "verification_required"
+      : signupErrorDetected
+        ? "signup_error"
+        : "inconclusive";
+const reason = alreadyRegistered
+  ? "account-already-registered"
+  : ok
+    ? "signup-signals-satisfied"
+    : verificationRequired
+      ? "verification-required"
+      : signupErrorDetected
+        ? "signup-error-detected"
+        : "signup-signals-insufficient";
+return {
+  ok,
+  reason,
+  signup_state: signupState,
+  source_id: sourceId,
+  target_url: targetUrl,
+  credential_ref: credentialRef,
+  login_hint_present: !!loginHint,
+  email_field: emailField,
+  credential_field: credentialField,
+  confirm_credential_field: confirmCredentialField,
+  display_name_field: displayNameField,
+  tenant_name_field: tenantNameField,
+  terms,
+  submit,
+  verify_selector: configuredVerifySelector || null,
+  verify_selector_found: verifyFound,
+  verification_required: verificationRequired,
+  already_registered: alreadyRegistered,
+  signup_error_detected: signupErrorDetected,
+  signup_signals: signals,
+  before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, signup_signals: beforeSignals.signup_signals },
+  submit_base: { url: submitBaseSignals.url, title: submitBaseSignals.title, form_state: submitBaseSignals.form_state, signup_signals: submitBaseSignals.signup_signals },
+  after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state, signup_signals: afterSignals.signup_signals },
+  submit_url_changed: submitUrlChanged,
+  same_origin_after_signup: originAfter === targetOrigin,
+  observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
+  elapsed_ms: Date.now() - startedAt,
+  redaction: "credential value is not returned",
+};
+"#,
+    );
+    Ok(source)
+}
+
 fn redact_secret_value_from_json(value: &mut serde_json::Value, secret_value: &str) {
     if secret_value.is_empty() {
         return;
@@ -4734,6 +5291,41 @@ mod tests {
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_auth_assist_signup_source_classifies_provisioning_states() -> anyhow::Result<()> {
+        let source = build_web_stack_auth_assist_signup_source(
+            "https://example.test/register",
+            "example-source",
+            "user@example.test",
+            "ctox-secret://appsec/user-a",
+            "secret-value",
+            "input[type='email']",
+            "input[name='password']",
+            "input[name='confirmPassword']",
+            "button[type='submit']",
+            "[data-testid='account-home']",
+            true,
+            "input[name='terms']",
+            "User A",
+            "input[name='displayName']",
+            "Tenant A",
+            "input[name='tenantName']",
+        )?;
+
+        assert!(source.contains("signup_state"));
+        assert!(source.contains("already_registered"));
+        assert!(source.contains("verification_required"));
+        assert!(source.contains("signup_error_detected"));
+        assert!(source.contains("account-already-registered"));
+        assert!(source.contains("verification-required"));
+        assert!(source.contains("signup-signals-satisfied"));
+        assert!(source.contains("shouldAcceptTerms"));
+        assert!(source.contains("confirm_credential"));
+        assert!(source.contains("credential value is not returned"));
 
         Ok(())
     }
