@@ -624,6 +624,7 @@ const startupReloadBudgetInput = process.env.SMOKE_STARTUP_RELOAD_BUDGET || '0';
 const startupHookWaitBudgetInput = process.env.SMOKE_STARTUP_HOOK_WAIT_BUDGET_MS || '60000';
 const fileChunkStatusStartupHookWaitBudgetInput = process.env.SMOKE_FILE_CHUNK_STATUS_STARTUP_HOOK_WAIT_BUDGET_MS || '12000';
 const browserWarningBudgetInput = process.env.SMOKE_BROWSER_WARNING_BUDGET;
+const browserErrorBudgetInput = process.env.SMOKE_BROWSER_ERROR_BUDGET;
 const requestFailureBudgetInput = process.env.SMOKE_BROWSER_REQUEST_FAILURE_BUDGET;
 const assetResponseErrorBudgetInput = process.env.SMOKE_BROWSER_ASSET_RESPONSE_ERROR_BUDGET || '0';
 const networkFlapBrowserWarningBudgetInput = process.env.SMOKE_NETWORK_FLAP_BROWSER_WARNING_BUDGET;
@@ -680,6 +681,11 @@ const browserWarningBudget = parseOptionalNonNegativeIntegerConfig(
   browserWarningBudgetInput,
   { max: 100000 },
 );
+const browserErrorBudget = parseOptionalNonNegativeIntegerConfig(
+  'SMOKE_BROWSER_ERROR_BUDGET',
+  browserErrorBudgetInput,
+  { max: 100000 },
+);
 const requestFailureBudget = parseOptionalNonNegativeIntegerConfig(
   'SMOKE_BROWSER_REQUEST_FAILURE_BUDGET',
   requestFailureBudgetInput,
@@ -717,6 +723,7 @@ summary.configuration = {
   signalingPortBase,
   budgets: {
     browserWarningBudget,
+    browserErrorBudget,
     websocketWarningBudget,
     requestFailureBudget,
     assetResponseErrorBudget,
@@ -820,6 +827,7 @@ for (const [index, mode] of modes.entries()) {
       ? validateBrowserDiagnosticsBudget(evidence, {
           websocketWarningBudget,
           browserWarningBudget: effectiveBrowserWarningBudget,
+          browserErrorBudget,
           requestFailureBudget: effectiveRequestFailureBudget,
           assetResponseErrorBudget,
           syncConfigWaitBudgetMs,
@@ -862,6 +870,8 @@ for (const [index, mode] of modes.entries()) {
       warningBudget: {
         browserWarnings: Number(evidence.browser_warning_count || 0),
         maxBrowserWarnings: effectiveBrowserWarningBudget,
+        browserErrors: Number(evidence.browser_error_count || 0),
+        maxBrowserErrors: browserErrorBudget,
         websocketWarnings: Number(evidence.browser_websocket_warning_count || 0),
         maxWebsocketWarnings: websocketWarningBudget,
         requestFailures: Number(evidence.browser_request_failure_count || 0),
@@ -981,6 +991,25 @@ function runSmokeMatrixSelfTest() {
     broken.modes[0].attempts[0].warningBudget.browserWarnings = 1;
     validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
   });
+  assertSelfTestThrows('smoke artifact production browser error budget drift', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    broken.modes[0].attempts[0].warningBudget.browserErrors = 1;
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  const browserErrorBudgetProblems = validateBrowserDiagnosticsBudget(
+    { browser_error_count: 1, browser_websocket_warning_count: 0, browser_asset_response_error_count: 0 },
+    {
+      websocketWarningBudget: 5,
+      browserWarningBudget: null,
+      browserErrorBudget: 0,
+      requestFailureBudget: null,
+      assetResponseErrorBudget: 0,
+      syncConfigWaitBudgetMs: null,
+    },
+  );
+  if (!browserErrorBudgetProblems.includes('browser_error_count<=0')) {
+    throw new Error('Browser-error budget self-test did not reject browser_error_count=1');
+  }
   console.log(`business_os_production_smoke_registry_modes=${businessOsProductionSmokeModes.join(',')}`);
   console.log('business_os_production_smoke_registry_self_test=1');
 }
@@ -1101,6 +1130,7 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
       if (attempt.warningBudget && typeof attempt.warningBudget === 'object') {
         const numericBudgetKeys = [
           'browserWarnings',
+          'browserErrors',
           'websocketWarnings',
           'requestFailures',
           'assetResponseErrors',
@@ -1111,6 +1141,7 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
         ];
         const nullableBudgetKeys = [
           'maxBrowserWarnings',
+          'maxBrowserErrors',
           'maxWebsocketWarnings',
           'maxRequestFailures',
           'maxAssetResponseErrors',
@@ -1159,6 +1190,7 @@ function requireSuccessfulAttemptWithinBudgets(warningBudget, attemptPrefix, req
   if (!warningBudget || typeof warningBudget !== 'object') return;
   const checks = [
     ['browserWarnings', 'maxBrowserWarnings'],
+    ['browserErrors', 'maxBrowserErrors'],
     ['websocketWarnings', 'maxWebsocketWarnings'],
     ['requestFailures', 'maxRequestFailures'],
     ['assetResponseErrors', 'maxAssetResponseErrors'],
@@ -1224,6 +1256,8 @@ function makeSmokeMatrixSummarySelfTestArtifact() {
         warningBudget: {
           browserWarnings: 0,
           maxBrowserWarnings: 0,
+          browserErrors: 0,
+          maxBrowserErrors: 0,
           websocketWarnings: 0,
           maxWebsocketWarnings: 5,
           requestFailures: 0,
@@ -1364,6 +1398,12 @@ function validateBrowserDiagnosticsBudget(evidence, budget) {
     const browserWarnings = Number(evidence.browser_warning_count || 0);
     if (Number.isFinite(browserWarnings) && browserWarnings > budget.browserWarningBudget) {
       problems.push(`browser_warning_count<=${budget.browserWarningBudget}`);
+    }
+  }
+  if (budget.browserErrorBudget !== null) {
+    const browserErrors = Number(evidence.browser_error_count || 0);
+    if (Number.isFinite(browserErrors) && browserErrors > budget.browserErrorBudget) {
+      problems.push(`browser_error_count<=${budget.browserErrorBudget}`);
     }
   }
   const websocketWarnings = Number(evidence.browser_websocket_warning_count || 0);

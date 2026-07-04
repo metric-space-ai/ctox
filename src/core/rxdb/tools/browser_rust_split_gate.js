@@ -162,6 +162,7 @@ function printCompactSummary() {
   const maxDuration = Math.max(0, ...attempts.map((attempt) => Number(attempt.matrixDurationMs || attempt.durationMs || 0)));
   const maxSync = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.ctox_sync_config_wait_ms || 0)));
   const maxWarnings = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.browser_warning_count || 0)));
+  const maxErrors = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.browser_error_count || 0)));
   const maxRequestFailures = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.browser_request_failure_count || 0)));
   const maxRepairs = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.browser_cache_repair_count || 0)));
   const maxReloads = Math.max(0, ...attempts.map((attempt) => Number(attempt.evidence?.startup_smoke_hook_reload_count || 0)));
@@ -180,6 +181,7 @@ function printCompactSummary() {
     maxDuration,
     maxSync,
     maxWarnings,
+    maxErrors,
     maxRequestFailures,
     maxRepairs,
     maxReloads,
