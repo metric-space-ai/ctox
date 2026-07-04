@@ -2617,15 +2617,43 @@ fn run_business_os_web_stack_auth_assist_login(
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(automation_ok);
+    let login_state = login_result
+        .get("login_state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(if automation_ok && login_ok {
+            "authenticated"
+        } else {
+            "login_failed"
+        });
+    let status = if automation_ok && login_ok {
+        "completed"
+    } else {
+        match login_state {
+            "mfa_required" => "mfa_required",
+            "verify_selector_missing" => "verify_selector_missing",
+            _ => "login_failed",
+        }
+    };
+    let mfa_required = login_result
+        .get("mfa_required")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let login_error_detected = login_result
+        .get("login_error_detected")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     Ok(serde_json::json!({
         "ok": automation_ok && login_ok,
-        "status": if automation_ok && login_ok { "completed" } else { "login_failed" },
+        "status": status,
         "command": "business-os web-stack auth-assist-login",
         "session_id": session_id,
         "source_id": source_id,
         "target_url": target_url,
         "credential_ref": credential_ref,
         "login_hint": login_hint,
+        "login_state": login_state,
+        "mfa_required": mfa_required,
+        "login_error_detected": login_error_detected,
         "verify_selector": verify_selector,
         "credential_selector": credential_selector,
         "secret_value_in_payload": false,
@@ -3895,8 +3923,13 @@ fn enqueue_web_stack_auth_assist_request(
     } else {
         format!("web_stack_auth_assist_harness_{}_{}", now, Uuid::new_v4())
     };
-    let session_id = format!("browser_session_web_stack_auth_{source_slug}");
-    let tab_id = format!("browser_tab_web_stack_auth_{source_slug}");
+    let session_suffix = if requesting_task_id.trim().is_empty() {
+        source_slug.clone()
+    } else {
+        format!("{}_{}", source_slug, rxdb_id_slug(requesting_task_id))
+    };
+    let session_id = format!("browser_session_web_stack_auth_{session_suffix}");
+    let tab_id = format!("browser_tab_web_stack_auth_{session_suffix}");
     let verify_selector = recipe
         .as_ref()
         .and_then(|recipe| recipe.verify_selector)
@@ -4070,6 +4103,14 @@ const trimText = (value, max = 180) => {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text.length > max ? text.slice(0, max - 1) + "..." : text;
 };
+const emptyAuthSignals = () => ({
+  mfa_required: false,
+  login_error_detected: false,
+  otp_field_count: 0,
+  mfa_terms: [],
+  error_terms: [],
+  login_error_text: "",
+});
 const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
   ? globalThis.CSS.escape(String(value))
   : String(value).replace(/["\\]/g, "\\$&");
@@ -4224,8 +4265,13 @@ const pageSignals = async () => {
   let title = "";
   try { title = await page.title(); } catch {}
   let formState = {};
+  let authSignals = emptyAuthSignals();
   try {
-    formState = await page.evaluate(() => {
+    const pageState = await page.evaluate(() => {
+      const trimLocal = (value, max = 180) => {
+        const text = String(value ?? "").replace(/\s+/g, " ").trim();
+        return text.length > max ? text.slice(0, max - 1) + "..." : text;
+      };
       const visible = (element) => {
         const style = globalThis.getComputedStyle(element);
         const box = element.getBoundingClientRect();
@@ -4235,14 +4281,84 @@ const pageSignals = async () => {
           && box.width > 0
           && box.height > 0;
       };
+      const tokensFor = (element) => [
+        element.getAttribute("type"),
+        element.getAttribute("name"),
+        element.getAttribute("id"),
+        element.getAttribute("autocomplete"),
+        element.getAttribute("placeholder"),
+        element.getAttribute("aria-label"),
+        element.textContent,
+      ].filter(Boolean).join(" ").toLowerCase();
+      const visibleText = String(document.body ? document.body.innerText || "" : "").replace(/\s+/g, " ").trim();
+      const lowerText = visibleText.toLowerCase();
+      const matchingTerms = (entries) => entries
+        .filter((entry) => entry.pattern.test(lowerText))
+        .map((entry) => entry.term);
+      const mfaTerms = matchingTerms([
+        { term: "mfa", pattern: /\bmfa\b/ },
+        { term: "2fa", pattern: /\b2fa\b/ },
+        { term: "two-factor", pattern: /two[-\s]?factor/ },
+        { term: "multi-factor", pattern: /multi[-\s]?factor/ },
+        { term: "one-time-code", pattern: /one[-\s]?time[-\s]?code/ },
+        { term: "otp", pattern: /\botp\b/ },
+        { term: "verification-code", pattern: /verification\s+code/ },
+        { term: "security-code", pattern: /security\s+code/ },
+        { term: "authenticator", pattern: /authenticator/ },
+        { term: "sicherheitscode", pattern: /sicherheitscode/ },
+        { term: "verifizierungscode", pattern: /verifizierungscode/ },
+        { term: "zweifaktor", pattern: /zweifaktor|zwei[-\s]?faktor|zweistufig/ },
+      ]);
+      const errorTerms = matchingTerms([
+        { term: "invalid", pattern: /\binvalid\b/ },
+        { term: "incorrect", pattern: /\bincorrect\b/ },
+        { term: "wrong", pattern: /\bwrong\b/ },
+        { term: "login-failed", pattern: /login\s+failed|sign\s+in\s+failed|authentication\s+failed/ },
+        { term: "denied", pattern: /\bdenied\b|access\s+denied/ },
+        { term: "locked", pattern: /\blocked\b/ },
+        { term: "disabled", pattern: /\bdisabled\b/ },
+        { term: "too-many", pattern: /too\s+many/ },
+        { term: "expired", pattern: /\bexpired\b/ },
+        { term: "ungueltig", pattern: /ungueltig/ },
+        { term: "falsches-passwort", pattern: /falsches\s+passwort/ },
+        { term: "anmeldung-fehlgeschlagen", pattern: /anmeldung\s+fehlgeschlagen/ },
+        { term: "gesperrt", pattern: /gesperrt/ },
+        { term: "abgelaufen", pattern: /abgelaufen/ },
+      ]);
+      const otpFieldCount = Array.from(document.querySelectorAll("input, textarea"))
+        .filter(visible)
+        .filter((element) => /(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\s]?time)/.test(tokensFor(element)))
+        .length;
+      const errorNodes = Array.from(document.querySelectorAll([
+        "[role='alert']",
+        "[data-testid*='error' i]",
+        "[class*='error' i]",
+        "[id*='error' i]",
+      ].join(",")))
+        .filter(visible)
+        .map((element) => trimLocal(element.innerText || element.textContent || "", 240))
+        .filter(Boolean);
+      const loginErrorText = trimLocal(errorNodes.join(" ") || (errorTerms.length > 0 ? visibleText : ""), 240);
       return {
-        visible_password_fields: Array.from(document.querySelectorAll("input[type='password']")).filter(visible).length,
-        visible_email_fields: Array.from(document.querySelectorAll("input[type='email']")).filter(visible).length,
-        visible_forms: Array.from(document.querySelectorAll("form")).filter(visible).length,
+        form_state: {
+          visible_password_fields: Array.from(document.querySelectorAll("input[type='password']")).filter(visible).length,
+          visible_email_fields: Array.from(document.querySelectorAll("input[type='email']")).filter(visible).length,
+          visible_forms: Array.from(document.querySelectorAll("form")).filter(visible).length,
+        },
+        auth_signals: {
+          mfa_required: mfaTerms.length > 0 || otpFieldCount > 0,
+          login_error_detected: errorTerms.length > 0 || errorNodes.length > 0,
+          otp_field_count: otpFieldCount,
+          mfa_terms: mfaTerms.slice(0, 8),
+          error_terms: errorTerms.slice(0, 8),
+          login_error_text: loginErrorText,
+        },
       };
     });
+    formState = pageState.form_state || {};
+    authSignals = pageState.auth_signals || emptyAuthSignals();
   } catch {}
-  return { url: page.url(), title, form_state: formState };
+  return { url: page.url(), title, form_state: formState, auth_signals: authSignals };
 };
 const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
@@ -4254,14 +4370,19 @@ if (loginHint) {
 const credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
 if (!credentialField) {
   const observed = await ctoxBrowser.observe({ limit: 40, textMax: 120 });
+  const missingFieldSignals = await pageSignals();
   return {
     ok: false,
     reason: "credential-field-not-found",
+    login_state: "credential_field_missing",
     source_id: sourceId,
     target_url: targetUrl,
     credential_ref: credentialRef,
     login_hint_present: !!loginHint,
-    before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state },
+    mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
+    login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
+    auth_signals: missingFieldSignals.auth_signals,
+    before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, auth_signals: beforeSignals.auth_signals },
     observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
     redaction: "credential value is not returned",
   };
@@ -4284,23 +4405,50 @@ const urlChanged = afterSignals.url !== beforeSignals.url;
 const originAfter = (() => { try { return new URL(afterSignals.url).origin; } catch { return null; } })();
 const passwordFieldsAfter = Number(afterSignals.form_state?.visible_password_fields || 0);
 const formGone = passwordFieldsAfter === 0;
-const ok = configuredVerifySelector
+const authSignals = afterSignals.auth_signals || emptyAuthSignals();
+const mfaRequired = authSignals.mfa_required === true;
+const loginErrorDetected = authSignals.login_error_detected === true;
+const verifySelectorMissing = !!configuredVerifySelector && verifyFound !== true;
+const baseLoginSignal = configuredVerifySelector
   ? verifyFound === true
   : !!submit && (formGone || urlChanged || originAfter !== targetOrigin);
+const ok = baseLoginSignal && !mfaRequired && !loginErrorDetected;
+const loginState = ok
+  ? "authenticated"
+  : mfaRequired
+    ? "mfa_required"
+    : loginErrorDetected
+      ? "login_error"
+      : verifySelectorMissing
+        ? "verify_selector_missing"
+        : "inconclusive";
+const reason = ok
+  ? "login-signals-satisfied"
+  : mfaRequired
+    ? "mfa-required"
+    : loginErrorDetected
+      ? "login-error-detected"
+      : verifySelectorMissing
+        ? "verify-selector-not-found"
+        : "login-signals-insufficient";
 return {
   ok,
-  reason: ok ? "login-signals-satisfied" : "login-signals-insufficient",
+  reason,
+  login_state: loginState,
   source_id: sourceId,
   target_url: targetUrl,
   credential_ref: credentialRef,
   login_hint_present: !!loginHint,
+  mfa_required: mfaRequired,
+  login_error_detected: loginErrorDetected,
+  auth_signals: authSignals,
   login_field: loginField,
   credential_field: credentialField,
   submit,
   verify_selector: configuredVerifySelector || null,
   verify_selector_found: verifyFound,
-  before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state },
-  after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state },
+  before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, auth_signals: beforeSignals.auth_signals },
+  after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state, auth_signals: afterSignals.auth_signals },
   url_changed: urlChanged,
   same_origin_after_login: originAfter === targetOrigin,
   observed: { url: observed.url, title: observed.title, document_text: trimText(observed.documentText) },
@@ -4533,6 +4681,29 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn web_stack_auth_assist_login_source_classifies_login_states() -> anyhow::Result<()> {
+        let source = build_web_stack_auth_assist_login_source(
+            "https://example.test/login",
+            "example-source",
+            Some("user@example.test"),
+            "ctox-secret://appsec/user-a",
+            "secret-value",
+            "input[name='password']",
+            "[data-testid='account-home']",
+        )?;
+
+        assert!(source.contains("login_state"));
+        assert!(source.contains("mfa_required"));
+        assert!(source.contains("login_error_detected"));
+        assert!(source.contains("verify_selector_missing"));
+        assert!(source.contains("mfa-required"));
+        assert!(source.contains("login-error-detected"));
+        assert!(source.contains("verify-selector-not-found"));
+
+        Ok(())
     }
 
     #[test]
