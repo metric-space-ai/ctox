@@ -298,7 +298,7 @@ First-install overrides:
 Use this when CTOX should call an API-backed model instead of local inference:
 
 ```sh
-ctox secret put --scope credentials --name OPENAI_API_KEY --value "sk-..."
+printf '%s\n' "sk-..." | ctox secret put --scope credentials --name OPENAI_API_KEY --value-stdin
 ctox
 ```
 

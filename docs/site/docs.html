@@ -906,7 +906,7 @@ ctox update rollback</code></pre>
             inference through the integrated runtime.
           </p>
           <h3>API model example</h3>
-          <pre><code>ctox secret put --scope credentials --name OPENAI_API_KEY --value "sk-..."
+          <pre><code>printf '%s\n' "sk-..." | ctox secret put --scope credentials --name OPENAI_API_KEY --value-stdin
 ctox
 
 # In TUI Settings:

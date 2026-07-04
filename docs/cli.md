@@ -309,6 +309,7 @@ ctox business-os skills list|enable|disable           # Manage packed skills
 Securely store and retrieve API keys, credentials, and configuration scopes:
 
 ```sh
+printf '%s\n' "<value>" | ctox secret put --scope <scope> --name <name> --value-stdin
 ctox secret put --scope <scope> --name <name> --value "<value>"
 ctox secret get --scope <scope> --name <name>
 ctox secret list

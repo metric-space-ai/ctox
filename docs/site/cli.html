@@ -1155,9 +1155,9 @@ ctox schedule run-now --task-id &lt;id&gt;
 ctox scrape &lt;subcmd&gt; [args]
 ctox secret delete --scope &lt;scope&gt; --name &lt;name&gt;
 ctox secret get --scope &lt;scope&gt; --name &lt;name&gt;
-ctox secret intake --scope &lt;scope&gt; --name &lt;name&gt; --value &lt;text&gt; [--description &lt;text&gt;] [--metadata-json &lt;json&gt;] [--db &lt;path&gt; --conversation-id &lt;id&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]]
+ctox secret intake --scope &lt;scope&gt; --name &lt;name&gt; (--value &lt;text&gt;|--value-stdin) [--description &lt;text&gt;] [--metadata-json &lt;json&gt;] [--db &lt;path&gt; --conversation-id &lt;id&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]]
 ctox secret memory-rewrite --db &lt;path&gt; --conversation-id &lt;id&gt; --scope &lt;scope&gt; --name &lt;name&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]
-ctox secret put --scope &lt;scope&gt; --name &lt;name&gt; --value &lt;text&gt; [--description &lt;text&gt;] [--metadata-json &lt;json&gt;]
+ctox secret put --scope &lt;scope&gt; --name &lt;name&gt; (--value &lt;text&gt;|--value-stdin) [--description &lt;text&gt;] [--metadata-json &lt;json&gt;]
 ctox secret show --scope &lt;scope&gt; --name &lt;name&gt;
 ctox strategy activate --directive-id &lt;id&gt; [--decided-by &lt;name&gt;] [--reason &lt;text&gt;]
 ctox strategy propose --kind &lt;vision|mission|...&gt; --title &lt;text&gt; --body &lt;text&gt;|--body-file &lt;path&gt; [--conversation-id &lt;id&gt;|--thread-key &lt;key&gt;] [--author &lt;name&gt;] [--reason &lt;text&gt;]

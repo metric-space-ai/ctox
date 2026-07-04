@@ -15,6 +15,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -27,6 +28,8 @@ use crate::persistence;
 const MASTER_KEY_STORAGE_KEY: &str = "secret_master_key_b64";
 const SECRET_STORE_FILE: &str = "ctox-secrets.sqlite3";
 const SECRET_KV_TABLE: &str = "ctox_secret_kv";
+const SECRET_PUT_USAGE: &str = "usage: ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]";
+const SECRET_INTAKE_USAGE: &str = "usage: ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]";
 
 type SecretMaterial = Zeroizing<Vec<u8>>;
 
@@ -65,34 +68,36 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             )
         }
         "put" => {
-            let scope = required_flag_value(args, "--scope")
-                .context("usage: ctox secret put --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>]")?;
-            let name = required_flag_value(args, "--name")
-                .context("usage: ctox secret put --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>]")?;
-            let value = required_flag_value(args, "--value")
-                .context("usage: ctox secret put --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>]")?;
+            let scope = required_flag_value(args, "--scope").context(SECRET_PUT_USAGE)?;
+            let name = required_flag_value(args, "--name").context(SECRET_PUT_USAGE)?;
+            let value = resolve_secret_value_arg(args, SECRET_PUT_USAGE)?;
             let description = find_flag_value(args, "--description").map(str::to_string);
             let metadata = find_flag_value(args, "--metadata-json")
                 .map(parse_json_value)
                 .transpose()?
                 .unwrap_or_else(|| json!({}));
-            let record = put_secret(root, scope, name, value, description, metadata)?;
+            let record = put_secret(root, scope, name, value.as_str(), description, metadata)?;
             print_json(&json!({"ok": true, "secret": record}))
         }
         "intake" => {
-            let scope = required_flag_value(args, "--scope")
-                .context("usage: ctox secret intake --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]")?;
-            let name = required_flag_value(args, "--name")
-                .context("usage: ctox secret intake --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]")?;
-            let value = required_flag_value(args, "--value")
-                .context("usage: ctox secret intake --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]")?;
+            let scope = required_flag_value(args, "--scope").context(SECRET_INTAKE_USAGE)?;
+            let name = required_flag_value(args, "--name").context(SECRET_INTAKE_USAGE)?;
+            let value = resolve_secret_value_arg(args, SECRET_INTAKE_USAGE)?;
             let description = find_flag_value(args, "--description").map(str::to_string);
             let metadata = find_flag_value(args, "--metadata-json")
                 .map(parse_json_value)
                 .transpose()?
                 .unwrap_or_else(|| json!({}));
             let rewrite = parse_intake_rewrite_request(args)?;
-            let intake = intake_secret(root, scope, name, value, description, metadata, rewrite)?;
+            let intake = intake_secret(
+                root,
+                scope,
+                name,
+                value.as_str(),
+                description,
+                metadata,
+                rewrite,
+            )?;
             print_json(&json!({"ok": true, "intake": intake}))
         }
         "list" => {
@@ -153,7 +158,7 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&json!({"ok": true, "rewrite": result}))
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> --value <text> [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
+            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
         ),
     }
 }
@@ -1152,6 +1157,45 @@ fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     })
 }
 
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
+fn resolve_secret_value_arg(args: &[String], usage: &str) -> Result<Zeroizing<String>> {
+    let arg_value = find_flag_value(args, "--value");
+    let stdin_value = has_flag(args, "--value-stdin");
+    anyhow::ensure!(
+        arg_value.is_some() ^ stdin_value,
+        "{usage}; provide exactly one of --value or --value-stdin"
+    );
+    match arg_value {
+        Some(value) => Ok(Zeroizing::new(value.to_string())),
+        None => read_secret_value_from_stdin(),
+    }
+}
+
+fn read_secret_value_from_stdin() -> Result<Zeroizing<String>> {
+    read_secret_value_from_reader(std::io::stdin())
+}
+
+fn read_secret_value_from_reader(mut reader: impl Read) -> Result<Zeroizing<String>> {
+    let mut value = String::new();
+    reader
+        .read_to_string(&mut value)
+        .context("failed to read secret value from stdin")?;
+    Ok(Zeroizing::new(strip_single_trailing_line_ending(value)))
+}
+
+fn strip_single_trailing_line_ending(mut value: String) -> String {
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    value
+}
+
 fn parse_json_value(raw: &str) -> Result<Value> {
     serde_json::from_str(raw).with_context(|| format!("failed to parse JSON value: {raw}"))
 }
@@ -1462,6 +1506,58 @@ mod tests {
             .contains("sk-live-super-secret"));
 
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn secret_cli_value_arg_requires_exactly_one_source() -> Result<()> {
+        let value_args = vec![
+            "put".to_string(),
+            "--value".to_string(),
+            "literal".to_string(),
+        ];
+        let value = resolve_secret_value_arg(&value_args, "usage")?;
+        assert_eq!(value.as_str(), "literal");
+
+        let missing_args = vec!["put".to_string()];
+        let missing = resolve_secret_value_arg(&missing_args, "usage").unwrap_err();
+        assert!(format!("{missing:#}").contains("exactly one of --value or --value-stdin"));
+
+        let conflict_args = vec![
+            "put".to_string(),
+            "--value".to_string(),
+            "literal".to_string(),
+            "--value-stdin".to_string(),
+        ];
+        let conflict = resolve_secret_value_arg(&conflict_args, "usage").unwrap_err();
+        assert!(format!("{conflict:#}").contains("exactly one of --value or --value-stdin"));
+        Ok(())
+    }
+
+    #[test]
+    fn secret_stdin_value_strips_one_terminal_line_ending() {
+        assert_eq!(
+            strip_single_trailing_line_ending("secret-value\n".to_string()),
+            "secret-value"
+        );
+        assert_eq!(
+            strip_single_trailing_line_ending("secret-value\r\n".to_string()),
+            "secret-value"
+        );
+        assert_eq!(
+            strip_single_trailing_line_ending("secret-value\n\n".to_string()),
+            "secret-value\n"
+        );
+        assert_eq!(
+            strip_single_trailing_line_ending("secret-value".to_string()),
+            "secret-value"
+        );
+    }
+
+    #[test]
+    fn secret_stdin_value_reader_reads_without_requiring_arg_value() -> Result<()> {
+        let value = read_secret_value_from_reader(std::io::Cursor::new("stdin-secret\r\n"))?;
+        assert_eq!(value.as_str(), "stdin-secret");
         Ok(())
     }
 
