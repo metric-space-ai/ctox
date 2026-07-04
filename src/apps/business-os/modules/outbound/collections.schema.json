@@ -627,6 +627,102 @@
       "type": "object",
       "version": 0
     },
+    "outbound_research_adapters": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "adapter_kind": {
+          "type": "string"
+        },
+        "auth_mode": {
+          "type": "string"
+        },
+        "auth_status": {
+          "type": "string"
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "countries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credential_secret_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "field_keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "last_run_id": {
+          "type": "string"
+        },
+        "last_success_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "requires_credential": {
+          "type": "boolean"
+        },
+        "scrape_status": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "url",
+        "adapter_kind",
+        "status",
+        "enabled",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "outbound_research_runs": {
       "additionalProperties": true,
       "primaryKey": "id",
@@ -969,78 +1065,8 @@
     }
   },
   "migration_strategies": {
-    "business_commands": {
-      "1": {
-        "operations": [
-          {
-            "default": "",
-            "field": "inbound_channel",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "inbound_channel",
-              "module"
-            ]
-          }
-        ]
-      }
-    },
-    "outbound_messages": {
-      "1": {
-        "operations": [
-          {
-            "default": "email",
-            "field": "channel",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "channel",
-              "payload.channel",
-              "payload.default_channel"
-            ]
-          },
-          {
-            "default": "",
-            "field": "recipient_address_text",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "recipient_address_text",
-              "payload.recipient_address_text"
-            ]
-          },
-          {
-            "default": "",
-            "field": "document_id",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "document_id"
-            ]
-          },
-          {
-            "default": "",
-            "field": "document_version_id",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "document_version_id"
-            ]
-          },
-          {
-            "default": "",
-            "field": "document_pdf_url",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "document_pdf_url"
-            ]
-          },
-          {
-            "default": 0,
-            "field": "physical_sent_at_ms",
-            "op": "set_from_first_truthy",
-            "paths": [
-              "physical_sent_at_ms"
-            ]
-          }
-        ]
-      }
-    }
+    "business_commands": {},
+    "outbound_messages": {}
   },
   "module_id": "outbound",
   "schema_format": "ctox-business-os-module-collections-v1"

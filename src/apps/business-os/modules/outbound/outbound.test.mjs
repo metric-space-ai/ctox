@@ -140,6 +140,94 @@ test('outbound import validation requires source-specific input', () => {
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [{ name: 'companies.csv' }] } }).valid, true);
 });
 
+test('research source policy includes DACH defaults and credential references only', () => {
+  const sources = hooks.normalizeResearchSources();
+  const ids = sources.map((source) => source.id);
+
+  assert.ok(ids.includes('northdata.de'));
+  assert.ok(ids.includes('leadfeeder.com'));
+  assert.ok(ids.includes('dnbhoovers.com'));
+  assert.ok(ids.includes('companyhouse.de'));
+  assert.ok(ids.includes('linkedin.com'));
+  assert.ok(ids.includes('xing.com'));
+  assert.ok(ids.includes('firmenabc.at'));
+  assert.ok(ids.includes('moneyhouse.ch'));
+  assert.ok(ids.includes('zefix.ch'));
+
+  const policy = hooks.researchSourcePolicyForPrompt({ researchSources: sources });
+  assert.ok(policy.preferred_sources.includes('moneyhouse.ch'));
+  assert.ok(policy.preferred_sources.includes('zefix.ch'));
+  assert.ok(policy.include_private.includes('leadfeeder.com'));
+  assert.ok(policy.include_private.includes('dnbhoovers.com'));
+  assert.ok(policy.include_private.includes('linkedin.com'));
+  assert.ok(policy.include_private.includes('xing.com'));
+  assert.equal(policy.min_independent_sources, 2);
+  assert.equal(policy.allow_generic_web_fallback, true);
+  assert.equal(policy.secret_value_in_payload, false);
+  assert.ok(policy.source_adapters.some((source) => source.source_id === 'northdata.de' && source.target_key === 'northdata-de'));
+  assert.ok(policy.source_adapters.some((source) => source.source_id === 'companyhouse.de' && source.target_key === 'companyhouse-de'));
+  assert.ok(policy.source_adapters.some((source) => source.source_id === 'firmenabc.at' && source.target_key === 'firmenabc-at'));
+  assert.ok(policy.source_adapters.some((source) => source.source_id === 'moneyhouse.ch' && source.target_key === 'moneyhouse-ch'));
+  assert.ok(policy.source_adapters.every((source) => source.secret_value_in_payload === false));
+  assert.equal(JSON.stringify(policy).includes('credential_value'), false);
+});
+
+test('research source URLs normalize aliases and disabled sources stay out of policy', () => {
+  assert.equal(hooks.normalizeResearchSourceId('https://www.moneyhouse.ch/de/company/acme-123'), 'moneyhouse.ch');
+  assert.equal(hooks.normalizeResearchSourceId('https://www.zefix.admin.ch/'), 'zefix.ch');
+  assert.equal(hooks.normalizeResearchSourceId('https://app.dnbhoovers.com/login'), 'dnbhoovers.com');
+
+  const sources = hooks.normalizeResearchSources([
+    { id: 'linkedin.com', enabled: false },
+    { url: 'https://app.dnbhoovers.com/login', requiresCredential: true, credentialSecretName: 'DNB_DIRECT_API_KEY' },
+    { id: 'research.partner.example', label: 'Partner Research', url: 'https://research.partner.example/', requiresCredential: true, credentialSecretName: 'PARTNER_RESEARCH_TOKEN' },
+  ]);
+  const policy = hooks.researchSourcePolicyForPrompt({ researchSources: sources });
+
+  assert.equal(policy.preferred_sources.includes('linkedin.com'), false);
+  assert.ok(policy.preferred_sources.includes('dnbhoovers.com'));
+  assert.ok(policy.preferred_sources.includes('research.partner.example'));
+  assert.ok(policy.include_private.includes('dnbhoovers.com'));
+  assert.ok(policy.include_private.includes('research.partner.example'));
+  assert.ok(policy.sources.some((source) => source.id === 'research.partner.example' && source.credential_secret_name === 'PARTNER_RESEARCH_TOKEN'));
+  assert.ok(policy.source_adapters.some((source) => source.source_id === 'research.partner.example' && source.target_key === 'research-partner-example'));
+});
+
+test('research source adapter lifecycle is command-bus based', () => {
+  assert.match(bundledSource, /outbound_research_adapters/);
+  assert.match(bundledSource, /outbound\.research_source\.generate_adapter/);
+  assert.match(bundledSource, /outbound\.research_source\.test/);
+  assert.match(bundledSource, /outbound\.research_source\.auth_assist/);
+  assert.match(bundledSource, /universal-scraping/);
+  assert.doesNotMatch(bundledSource, /\/api\/business-os\/research-source/);
+});
+
+test('research source adapter command result preserves server status', () => {
+  const adapter = hooks.researchAdapterFromCommandResult({
+    status: 'completed',
+    result: {
+      ok: true,
+      adapter: {
+        id: 'adapter-1',
+        status: 'adapter_ready',
+        scrape_status: 'registered',
+        auth_status: 'not_required',
+        last_run_id: 'cmd-1',
+        payload: {
+          scrape_registry_effect: { script_registered: true },
+          secret_value_in_payload: false,
+        },
+      },
+    },
+  });
+  const patch = hooks.researchAdapterPatchFromServer(adapter);
+
+  assert.equal(patch.status, 'adapter_ready');
+  assert.equal(patch.scrape_status, 'registered');
+  assert.equal(patch.auth_status, 'not_required');
+  assert.equal(patch.payload.secret_value_in_payload, false);
+});
+
 test('outbound import extracts company rows from uploaded Excel workbooks', async (t) => {
   const workbookPath = process.env.OUTBOUND_XLSX_FIXTURE;
   if (!workbookPath) {

@@ -43,6 +43,10 @@ impl SourceModule for Firmenabc {
         &["firmenabc"]
     }
 
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        Some("firmenabc-at")
+    }
+
     fn tier(&self) -> Tier {
         Tier::S
     }

@@ -135,6 +135,39 @@ const outboundResearchRunSchema = {
   additionalProperties: true,
 };
 
+const outboundResearchAdapterSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    campaign_id: { type: 'string' },
+    source_id: { type: 'string' },
+    label: { type: 'string' },
+    url: { type: 'string' },
+    adapter_kind: { type: 'string' },
+    target_key: { type: 'string' },
+    status: { type: 'string' },
+    enabled: { type: 'boolean' },
+    tier: { type: 'string' },
+    countries: { type: 'array', items: { type: 'string' } },
+    field_keys: { type: 'array', items: { type: 'string' } },
+    requires_credential: { type: 'boolean' },
+    credential_secret_name: { type: 'string' },
+    auth_mode: { type: 'string' },
+    auth_status: { type: 'string' },
+    scrape_status: { type: 'string' },
+    last_run_id: { type: 'string' },
+    last_success_at_ms: { type: 'number' },
+    last_error: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'source_id', 'url', 'adapter_kind', 'status', 'enabled', 'payload', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
 const outboundEngagementSchema = {
   version: 0,
   primaryKey: 'id',
@@ -374,6 +407,7 @@ export const collections = {
   outbound_companies: outboundCompanySchema,
   outbound_pipeline_items: outboundPipelineSchema,
   outbound_research_runs: outboundResearchRunSchema,
+  outbound_research_adapters: outboundResearchAdapterSchema,
   outbound_engagements: outboundEngagementSchema,
   outbound_messages: outboundMessageSchema,
   outbound_approvals: outboundApprovalSchema,

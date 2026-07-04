@@ -1,0 +1,25 @@
+{
+  "target_key": "moneyhouse-ch",
+  "display_name": "Moneyhouse CH Company Aggregator",
+  "start_url": "https://www.moneyhouse.ch/",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "moneyhouse",
+    "country_hints": ["CH"],
+    "tier": "S",
+    "skip_probe": false,
+    "expected_min_records": 1,
+    "record_key_fields": ["field", "source_url"],
+    "api": {
+      "semantic": {
+        "source_fields": ["value", "note"]
+      }
+    }
+  },
+  "output_schema": {
+    "schema_key": "prospect.v1",
+    "primary_artifact_kind": "field_records_json",
+    "record_key_fields": ["field", "source_url"]
+  }
+}

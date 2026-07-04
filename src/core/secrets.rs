@@ -1211,6 +1211,7 @@ const CREDENTIAL_CATALOG: &[(&str, &str)] = &[
     ("CTOX_LLM_PROXY_API_KEY", "CTOX LLM proxy API key"),
     ("AZURE_FOUNDRY_API_KEY", "Azure AI Foundry API key"),
     ("DATABASE_URL", "Database connection URL"),
+    ("SELLIFY_SQLSERVER_PASSWORD", "Sellify SQL Server password"),
     ("CTO_EMAIL_PASSWORD", "Email account password"),
     ("CTO_EMAIL_GRAPH_PASSWORD", "Microsoft Graph email password"),
     (
@@ -1234,6 +1235,10 @@ const CREDENTIAL_CATALOG: &[(&str, &str)] = &[
     ("CTO_IOT_MQTT_PASSWORD", "IoT MQTT device password"),
     ("CTO_IOT_HTTP_AUTH_HEADER", "IoT HTTP auth header"),
     ("CTO_IOT_WS_AUTH_HEADER", "IoT WebSocket auth header"),
+    ("LEADFEEDER_API_KEY", "Leadfeeder API key"),
+    ("DNB_DIRECT_API_KEY", "D&B Direct+ API key"),
+    ("LINKEDIN_SALES_NAV_TOKEN", "LinkedIn Sales Navigator token"),
+    ("XING_API_TOKEN", "XING API token"),
     ("HF_TOKEN", "Hugging Face token"),
     ("HUGGINGFACE_HUB_TOKEN", "Hugging Face Hub token"),
 ];
@@ -1521,8 +1526,7 @@ vercel-password-123
     fn auto_intake_does_not_rewrite_workspace_paths_as_secrets() -> Result<()> {
         let root = temp_root("prompt-auto-intake-workspace-path");
         fs::create_dir_all(&root)?;
-        let workspace =
-            "/home/you/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
+        let workspace = "/home/you/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
         let prompt = format!(
             "Work only inside this workspace: {workspace}\nCreate smoke.txt in that workspace."
         );

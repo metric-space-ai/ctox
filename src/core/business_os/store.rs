@@ -5,6 +5,7 @@ use super::policy::{
     self, BusinessOsActor, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType,
     PolicyDecision,
 };
+use crate::capabilities::scrape;
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
@@ -20543,6 +20544,10 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.engagement.reapply_sequence"
             | "outbound.scheduling.update_slots"
             | "outbound.pipeline.write_outreach_draft"
+            | "outbound.research_source.upsert"
+            | "outbound.research_source.generate_adapter"
+            | "outbound.research_source.test"
+            | "outbound.research_source.auth_assist"
     )
 }
 
@@ -21675,7 +21680,746 @@ fn handle_outbound_active_command(
         "outbound.scheduling.update_slots" => {
             outbound_handle_scheduling_update_slots(&conn, command, now)
         }
+        "outbound.research_source.upsert" => {
+            outbound_handle_research_source_adapter(root, &conn, command, now, "active")
+        }
+        "outbound.research_source.generate_adapter" => {
+            outbound_handle_research_source_adapter(root, &conn, command, now, "adapter_requested")
+        }
+        "outbound.research_source.test" => {
+            outbound_handle_research_source_adapter(root, &conn, command, now, "test_requested")
+        }
+        "outbound.research_source.auth_assist" => {
+            outbound_handle_research_source_adapter(root, &conn, command, now, "auth_requested")
+        }
         other => anyhow::bail!("unsupported active outbound command: {other}"),
+    }
+}
+
+fn outbound_handle_research_source_adapter(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+    next_status: &str,
+) -> anyhow::Result<Value> {
+    let adapter_payload = command.payload.get("adapter").unwrap_or(&command.payload);
+    let adapter_id = outbound_first_string(&[
+        outbound_string(&command.payload, &["adapter_id"]),
+        outbound_string(adapter_payload, &["id"]),
+        command
+            .record_id
+            .as_ref()
+            .map(|value| value.trim().to_string()),
+    ])
+    .context("adapter_id is required")?;
+    let source_id = outbound_first_string(&[
+        outbound_string(adapter_payload, &["source_id"]),
+        outbound_string(adapter_payload, &["id"]),
+        outbound_string(&command.payload, &["source_id"]),
+    ])
+    .context("source_id is required")?;
+    let url = outbound_first_string(&[
+        outbound_string(adapter_payload, &["url"]),
+        outbound_string(&command.payload, &["url"]),
+    ])
+    .unwrap_or_else(|| format!("https://{source_id}/"));
+
+    let mut record =
+        outbound_load_record_or_rxdb(root, conn, "outbound_research_adapters", &adapter_id)?
+            .unwrap_or_else(|| outbound_object_payload(adapter_payload));
+    outbound_put_string(&mut record, "id", adapter_id.clone());
+    outbound_put_string(
+        &mut record,
+        "campaign_id",
+        outbound_first_string(&[
+            outbound_string(adapter_payload, &["campaign_id"]),
+            outbound_string(&command.payload, &["campaign_id"]),
+            outbound_string(&command.client_context, &["campaign_id"]),
+        ])
+        .unwrap_or_default(),
+    );
+    outbound_put_string(&mut record, "source_id", source_id.clone());
+    outbound_put_string(
+        &mut record,
+        "label",
+        outbound_first_string(&[
+            outbound_string(adapter_payload, &["label"]),
+            outbound_string(&command.payload, &["label"]),
+            Some(source_id.clone()),
+        ])
+        .unwrap_or_else(|| source_id.clone()),
+    );
+    outbound_put_string(&mut record, "url", url);
+    outbound_put_string(
+        &mut record,
+        "adapter_kind",
+        outbound_first_string(&[
+            outbound_string(adapter_payload, &["adapter_kind"]),
+            outbound_string(&command.payload, &["adapter_kind"]),
+        ])
+        .unwrap_or_else(|| "custom_url".to_string()),
+    );
+    outbound_put_string(
+        &mut record,
+        "target_key",
+        outbound_first_string(&[
+            outbound_string(adapter_payload, &["target_key"]),
+            outbound_string(&command.payload, &["target_key"]),
+        ])
+        .unwrap_or_default(),
+    );
+    outbound_put_string(&mut record, "status", next_status);
+    if let Some(object) = record.as_object_mut() {
+        let enabled = adapter_payload
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        object.insert("enabled".to_string(), Value::Bool(enabled));
+        object.insert(
+            "countries".to_string(),
+            adapter_payload
+                .get("countries")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        );
+        object.insert(
+            "field_keys".to_string(),
+            adapter_payload
+                .get("field_keys")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        );
+        object.insert(
+            "requires_credential".to_string(),
+            Value::Bool(
+                adapter_payload
+                    .get("requires_credential")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
+        );
+    }
+    outbound_merge_fields(
+        &mut record,
+        adapter_payload,
+        &[
+            "tier",
+            "credential_secret_name",
+            "auth_mode",
+            "auth_status",
+            "scrape_status",
+            "last_run_id",
+            "last_success_at_ms",
+            "last_error",
+        ],
+    );
+    if next_status == "adapter_requested" {
+        outbound_put_string(&mut record, "scrape_status", "registration_requested");
+    } else if next_status == "test_requested" {
+        outbound_put_string(&mut record, "scrape_status", "test_requested");
+    } else if next_status == "auth_requested" {
+        outbound_put_string(&mut record, "auth_status", "auth_requested");
+    }
+    outbound_put_default_object(&mut record, "payload");
+    outbound_payload_insert(
+        &mut record,
+        "last_command_id",
+        Value::String(command.id.clone().unwrap_or_default()),
+    );
+    outbound_payload_insert(
+        &mut record,
+        "last_command_type",
+        Value::String(command.command_type.clone()),
+    );
+    if let Some(contract) = command.payload.get("scrape_contract") {
+        outbound_payload_insert(&mut record, "scrape_contract", contract.clone());
+    }
+    if let Some(manifest) = command.payload.get("target_manifest") {
+        outbound_payload_insert(&mut record, "target_manifest", manifest.clone());
+    }
+    outbound_payload_insert(&mut record, "secret_value_in_payload", Value::Bool(false));
+    if let Some(scrape_effect) = outbound_apply_research_adapter_scrape_effect(
+        root,
+        command,
+        adapter_payload,
+        &adapter_id,
+        &source_id,
+        &mut record,
+    ) {
+        outbound_payload_insert(&mut record, "scrape_registry_effect", scrape_effect);
+    }
+    let credential_effect = outbound_apply_research_adapter_credential_status(
+        root,
+        adapter_payload,
+        &mut record,
+        next_status,
+    );
+    outbound_payload_insert(&mut record, "credential_ref", credential_effect);
+    outbound_put_default_i64(&mut record, "created_at_ms", now);
+    outbound_put_i64(&mut record, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_research_adapters",
+        &adapter_id,
+        now,
+        record.clone(),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": "outbound_research_adapters",
+        "adapter": record,
+        "adapter_id": adapter_id,
+        "command_effect": next_status,
+        "secret_value_in_payload": false
+    }))
+}
+
+fn outbound_apply_research_adapter_scrape_effect(
+    root: &Path,
+    command: &BusinessCommand,
+    adapter_payload: &Value,
+    adapter_id: &str,
+    source_id: &str,
+    record: &mut Value,
+) -> Option<Value> {
+    let command_type = command.command_type.as_str();
+    if !matches!(
+        command_type,
+        "outbound.research_source.generate_adapter" | "outbound.research_source.test"
+    ) {
+        return None;
+    }
+    let adapter_kind = outbound_string(record, &["adapter_kind"])
+        .or_else(|| outbound_string(adapter_payload, &["adapter_kind"]))
+        .unwrap_or_else(|| "custom_url".to_string());
+    if !matches!(adapter_kind.as_str(), "scrape_target" | "custom_url") {
+        return Some(serde_json::json!({
+            "ok": true,
+            "skipped": true,
+            "reason": "source_is_not_scrape_target",
+            "adapter_kind": adapter_kind,
+        }));
+    }
+    let Some(target_key) = outbound_first_string(&[
+        outbound_string(record, &["target_key"]),
+        outbound_string(adapter_payload, &["target_key"]),
+        outbound_string(&command.payload, &["target_key"]),
+    ]) else {
+        outbound_put_string(record, "scrape_status", "target_key_missing");
+        outbound_put_string(
+            record,
+            "last_error",
+            "target_key is required for scrape adapter",
+        );
+        return Some(serde_json::json!({
+            "ok": false,
+            "error": "target_key is required for scrape adapter",
+        }));
+    };
+
+    let registration = outbound_register_research_scrape_target(
+        root,
+        adapter_payload,
+        record,
+        adapter_id,
+        source_id,
+        &target_key,
+    );
+    let mut effect = match registration {
+        Ok(effect) => effect,
+        Err(err) => {
+            let message = err.to_string();
+            outbound_put_string(record, "status", "adapter_failed");
+            outbound_put_string(record, "scrape_status", "registration_failed");
+            outbound_put_string(record, "last_error", message.clone());
+            return Some(serde_json::json!({
+                "ok": false,
+                "phase": "register",
+                "target_key": target_key,
+                "error": message,
+            }));
+        }
+    };
+
+    let has_script = effect
+        .get("script_registered")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if command_type == "outbound.research_source.generate_adapter" {
+        if !has_script {
+            match outbound_queue_research_scraper_generation(
+                root,
+                command,
+                adapter_payload,
+                source_id,
+                &target_key,
+            ) {
+                Ok(task_effect) => {
+                    if let Some(object) = effect.as_object_mut() {
+                        object.insert("generation_task".to_string(), task_effect);
+                    }
+                    outbound_put_string(record, "status", "generation_queued");
+                    outbound_put_string(record, "scrape_status", "generation_queued");
+                    return Some(effect);
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    if let Some(object) = effect.as_object_mut() {
+                        object.insert(
+                            "generation_task".to_string(),
+                            serde_json::json!({ "ok": false, "error": message }),
+                        );
+                    }
+                    outbound_put_string(record, "last_error", message);
+                }
+            }
+        }
+        outbound_put_string(record, "status", "adapter_ready");
+        outbound_put_string(
+            record,
+            "scrape_status",
+            if has_script {
+                "registered"
+            } else {
+                "script_required"
+            },
+        );
+        return Some(effect);
+    }
+
+    if !has_script {
+        outbound_put_string(record, "status", "test_blocked");
+        outbound_put_string(record, "scrape_status", "script_required");
+        outbound_put_string(
+            record,
+            "last_error",
+            "scrape target has no registered script yet",
+        );
+        if let Some(object) = effect.as_object_mut() {
+            object.insert("test_skipped".to_string(), Value::Bool(true));
+            object.insert(
+                "test_skip_reason".to_string(),
+                Value::String("scrape target has no registered script yet".to_string()),
+            );
+        }
+        return Some(effect);
+    }
+
+    match outbound_execute_research_scrape_target(
+        root,
+        command,
+        adapter_payload,
+        source_id,
+        &target_key,
+    ) {
+        Ok(test_effect) => {
+            outbound_put_string(record, "status", "test_ok");
+            outbound_put_string(record, "scrape_status", "test_executed");
+            if let Some(object) = effect.as_object_mut() {
+                object.insert("test".to_string(), test_effect);
+            }
+            Some(effect)
+        }
+        Err(err) => {
+            let message = err.to_string();
+            outbound_put_string(record, "status", "test_failed");
+            outbound_put_string(record, "scrape_status", "test_failed");
+            outbound_put_string(record, "last_error", message.clone());
+            if let Some(object) = effect.as_object_mut() {
+                object.insert(
+                    "test".to_string(),
+                    serde_json::json!({
+                        "ok": false,
+                        "error": message,
+                    }),
+                );
+            }
+            Some(effect)
+        }
+    }
+}
+
+fn outbound_queue_research_scraper_generation(
+    root: &Path,
+    command: &BusinessCommand,
+    adapter_payload: &Value,
+    source_id: &str,
+    target_key: &str,
+) -> anyhow::Result<Value> {
+    let label = outbound_first_string(&[
+        outbound_string(adapter_payload, &["label"]),
+        Some(source_id.to_string()),
+    ])
+    .unwrap_or_else(|| source_id.to_string());
+    let url = outbound_string(adapter_payload, &["url"]).unwrap_or_default();
+    let manifest = adapter_payload
+        .get("target_manifest")
+        .or_else(|| {
+            adapter_payload
+                .get("payload")
+                .and_then(|payload| payload.get("target_manifest"))
+        })
+        .or_else(|| command.payload.get("target_manifest"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let contract = adapter_payload
+        .get("scrape_contract")
+        .or_else(|| {
+            adapter_payload
+                .get("payload")
+                .and_then(|payload| payload.get("scrape_contract"))
+        })
+        .or_else(|| command.payload.get("scrape_contract"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let command_id = command.id.clone().unwrap_or_default();
+    let prompt = format!(
+        "Erzeuge oder repariere einen CTOX Universal-Scraping Adapter fuer die Outbound Research Quelle.\n\
+         Ziel:\n\
+         - source_id: {source_id}\n\
+         - label: {label}\n\
+         - url: {url}\n\
+         - target_key: {target_key}\n\n\
+         Anforderungen:\n\
+         - Nutze den universal-scraping Skill.\n\
+         - Lege den ausfuehrbaren Scraper als JavaScript unter runtime/scraping/targets/{target_key}/scripts/ ab.\n\
+         - Registriere das Target mit `ctox scrape upsert-target` und den Script-Stand mit `ctox scrape register-script`.\n\
+         - Der Scraper muss `prospect.v1` Records ausgeben: field, value, confidence, source_url, note.\n\
+         - Verwende keine Credential-Werte im Prompt, Code oder Log. Nur Secret-Referenzen sind erlaubt.\n\
+         - Fuehre danach `ctox scrape execute --target-key {target_key} --allow-heal` mit einem kleinen Testinput aus und dokumentiere Run-ID, Quellen und Felder.\n\n\
+         target_manifest:\n{manifest}\n\n\
+         scrape_contract:\n{contract}\n"
+    );
+    let task = channels::create_queue_task(
+        root,
+        channels::QueueTaskCreateRequest {
+            title: format!("Outbound Scraper Adapter erzeugen: {label}"),
+            prompt,
+            thread_key: format!("business-os/outbound/research-adapter/{target_key}"),
+            workspace_root: Some(root.display().to_string()),
+            priority: "high".to_string(),
+            suggested_skill: Some("universal-scraping".to_string()),
+            parent_message_key: None,
+            extra_metadata: Some(serde_json::json!({
+                "business_os_command_id": command_id,
+                "source": "outbound.research_source.generate_adapter",
+                "adapter_source_id": source_id,
+                "target_key": target_key,
+                "idempotency_key": format!("outbound-research-adapter:{target_key}"),
+            })),
+        },
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "task_id": task.message_key,
+        "task_status": task.route_status,
+        "target_key": target_key,
+        "suggested_skill": "universal-scraping",
+        "secret_value_in_payload": false,
+    }))
+}
+
+fn outbound_apply_research_adapter_credential_status(
+    root: &Path,
+    adapter_payload: &Value,
+    record: &mut Value,
+    next_status: &str,
+) -> Value {
+    let requires_credential = record
+        .get("requires_credential")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            adapter_payload
+                .get("requires_credential")
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false);
+    if !requires_credential {
+        outbound_put_string(record, "auth_status", "not_required");
+        return serde_json::json!({
+            "required": false,
+            "scope": crate::secrets::credential_scope(),
+            "secret_value_in_payload": false,
+        });
+    }
+
+    let secret_name = outbound_first_string(&[
+        outbound_string(record, &["credential_secret_name"]),
+        outbound_string(adapter_payload, &["credential_secret_name"]),
+    ]);
+    let Some(secret_name) = secret_name else {
+        outbound_put_string(record, "auth_status", "credential_name_missing");
+        return serde_json::json!({
+            "required": true,
+            "scope": crate::secrets::credential_scope(),
+            "name": "",
+            "exists": false,
+            "secret_value_in_payload": false,
+        });
+    };
+
+    let exists =
+        crate::secrets::secret_exists(root, crate::secrets::credential_scope(), &secret_name)
+            .unwrap_or(false);
+    let status = if exists {
+        "credential_available"
+    } else if next_status == "auth_requested" {
+        "auth_requested"
+    } else {
+        "credential_missing"
+    };
+    outbound_put_string(record, "auth_status", status);
+    serde_json::json!({
+        "required": true,
+        "scope": crate::secrets::credential_scope(),
+        "name": secret_name,
+        "exists": exists,
+        "status": status,
+        "secret_value_in_payload": false,
+    })
+}
+
+fn outbound_register_research_scrape_target(
+    root: &Path,
+    adapter_payload: &Value,
+    record: &Value,
+    adapter_id: &str,
+    source_id: &str,
+    target_key: &str,
+) -> anyhow::Result<Value> {
+    let url = outbound_first_string(&[
+        outbound_string(record, &["url"]),
+        outbound_string(adapter_payload, &["url"]),
+    ]);
+    if let Some(target_dir) =
+        outbound_find_bundled_scrape_target_dir(root, source_id, target_key, url.as_deref())
+    {
+        let manifest_path = target_dir.join("target.json");
+        let script_path = target_dir.join("scripts").join("v1.js");
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "upsert-target".to_string(),
+                "--input".to_string(),
+                manifest_path.to_string_lossy().to_string(),
+            ],
+        )?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "register-script".to_string(),
+                "--target-key".to_string(),
+                target_key.to_string(),
+                "--script-file".to_string(),
+                script_path.to_string_lossy().to_string(),
+                "--language".to_string(),
+                "javascript".to_string(),
+                "--change-reason".to_string(),
+                "outbound_adapter_registration".to_string(),
+                "--notes".to_string(),
+                format!("Registered from Outbound adapter {adapter_id} for {source_id}"),
+            ],
+        )?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "target_key": target_key,
+            "registered_from": "source_tree",
+            "target_manifest": manifest_path,
+            "script_file": script_path,
+            "script_registered": true,
+        }));
+    }
+
+    let Some(manifest) = adapter_payload.get("target_manifest").or_else(|| {
+        record
+            .get("payload")
+            .and_then(|payload| payload.get("target_manifest"))
+    }) else {
+        anyhow::bail!("no bundled scrape target or target_manifest found for {source_id}");
+    };
+    let manifest_path = outbound_write_research_scrape_manifest(root, target_key, manifest)?;
+    scrape::handle_scrape_command(
+        root,
+        &[
+            "upsert-target".to_string(),
+            "--input".to_string(),
+            manifest_path.to_string_lossy().to_string(),
+        ],
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "target_key": target_key,
+        "registered_from": "adapter_manifest",
+        "target_manifest": manifest_path,
+        "script_registered": false,
+        "next_step": "generate or register scripts/v1.js with universal-scraping",
+    }))
+}
+
+fn outbound_execute_research_scrape_target(
+    root: &Path,
+    command: &BusinessCommand,
+    adapter_payload: &Value,
+    source_id: &str,
+    target_key: &str,
+) -> anyhow::Result<Value> {
+    let company = outbound_first_string(&[
+        outbound_string(&command.payload, &["test_input", "company"]),
+        outbound_string(&command.payload, &["company"]),
+        outbound_string(adapter_payload, &["label"]),
+        Some(source_id.to_string()),
+    ])
+    .unwrap_or_else(|| source_id.to_string());
+    let country = outbound_first_string(&[
+        outbound_string(&command.payload, &["test_input", "country"]),
+        outbound_string(&command.payload, &["country"]),
+        adapter_payload
+            .get("countries")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    ])
+    .unwrap_or_else(|| "DE".to_string());
+    let input = serde_json::json!({
+        "company": company,
+        "country": country,
+        "source_id": source_id,
+        "adapter_test": true,
+    });
+    scrape::handle_scrape_command(
+        root,
+        &[
+            "execute".to_string(),
+            "--target-key".to_string(),
+            target_key.to_string(),
+            "--trigger-kind".to_string(),
+            "manual".to_string(),
+            "--timeout-seconds".to_string(),
+            "45".to_string(),
+            "--allow-heal".to_string(),
+            "--input-json".to_string(),
+            input.to_string(),
+        ],
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "target_key": target_key,
+        "input": input,
+        "executed": true,
+    }))
+}
+
+fn outbound_find_bundled_scrape_target_dir(
+    root: &Path,
+    source_id: &str,
+    target_key: &str,
+    url: Option<&str>,
+) -> Option<PathBuf> {
+    let mut host_candidates = BTreeSet::new();
+    for candidate in [
+        Some(source_id.to_string()),
+        outbound_host_from_url(url),
+        Some(target_key.replace('-', ".")),
+        Some(target_key.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let normalized = candidate
+            .trim()
+            .trim_start_matches("www.")
+            .trim_start_matches("app.")
+            .trim_start_matches("api.")
+            .to_ascii_lowercase();
+        if !normalized.is_empty() {
+            host_candidates.insert(normalized);
+        }
+    }
+
+    for base in outbound_scrape_target_roots(root) {
+        for host in &host_candidates {
+            let dir = base.join(host);
+            if dir.join("target.json").is_file() && dir.join("scripts").join("v1.js").is_file() {
+                return Some(dir);
+            }
+        }
+    }
+    None
+}
+
+fn outbound_scrape_target_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut push_root = |candidate: PathBuf| {
+        let key = candidate.to_string_lossy().to_string();
+        if seen.insert(key) {
+            roots.push(candidate);
+        }
+    };
+    for ancestor in root.ancestors() {
+        push_root(ancestor.join("src/tools/web-stack/scrape-targets"));
+    }
+    if let Ok(current_dir) = env::current_dir() {
+        for ancestor in current_dir.ancestors() {
+            push_root(ancestor.join("src/tools/web-stack/scrape-targets"));
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        for ancestor in current_exe.ancestors() {
+            push_root(ancestor.join("src/tools/web-stack/scrape-targets"));
+        }
+    }
+    roots
+}
+
+fn outbound_host_from_url(url: Option<&str>) -> Option<String> {
+    let raw = url?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Url::parse(raw)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(ToOwned::to_owned))
+        .or_else(|| raw.split('/').next().map(ToOwned::to_owned))
+}
+
+fn outbound_write_research_scrape_manifest(
+    root: &Path,
+    target_key: &str,
+    manifest: &Value,
+) -> anyhow::Result<PathBuf> {
+    let dir = root
+        .join("runtime")
+        .join("scraping")
+        .join("outbound-adapters")
+        .join(outbound_safe_path_component(target_key));
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create scrape adapter dir {}", dir.display()))?;
+    let manifest_path = dir.join("target.json");
+    fs::write(&manifest_path, serde_json::to_vec_pretty(manifest)?).with_context(|| {
+        format!(
+            "failed to write scrape target manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    Ok(manifest_path)
+}
+
+fn outbound_safe_path_component(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    if out.is_empty() {
+        "adapter".to_string()
+    } else {
+        out
     }
 }
 
@@ -44713,6 +45457,173 @@ mod tests {
         assert_eq!(
             outbound_string(&contact, &["outreach_status"]).as_deref(),
             Some("drafted")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_research_adapter_records_credential_reference_without_secret_value(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        crate::secrets::set_credential(root, "LEADFEEDER_API_KEY", "DO_NOT_LEAK_LEADFEEDER")?;
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_outbound_adapter_credential_ref",
+                "command_id": "cmd_outbound_adapter_credential_ref",
+                "module": "outbound",
+                "command_type": "outbound.research_source.upsert",
+                "record_id": "adapter_leadfeeder",
+                "status": "pending_sync",
+                "payload": {
+                    "adapter_id": "adapter_leadfeeder",
+                    "campaign_id": "camp",
+                    "source_id": "leadfeeder.com",
+                    "adapter": {
+                        "id": "adapter_leadfeeder",
+                        "campaign_id": "camp",
+                        "source_id": "leadfeeder.com",
+                        "label": "Leadfeeder",
+                        "url": "https://www.leadfeeder.com/",
+                        "adapter_kind": "api",
+                        "requires_credential": true,
+                        "credential_secret_name": "LEADFEEDER_API_KEY",
+                        "auth_mode": "api_key"
+                    },
+                    "secret_value_in_payload": false
+                },
+                "client_context": actor
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/adapter/auth_status")
+                .and_then(Value::as_str),
+            Some("credential_available")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/adapter/payload/credential_ref/exists")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let serialized = serde_json::to_string(&outcome)?;
+        assert!(
+            !serialized.contains("DO_NOT_LEAK_LEADFEEDER"),
+            "outbound adapter outcome leaked a credential value"
+        );
+
+        let conn = open_store(root)?;
+        let adapter = outbound_load_required(
+            &conn,
+            "outbound_research_adapters",
+            "adapter_leadfeeder",
+            "adapter",
+        )?;
+        assert_eq!(
+            outbound_string(&adapter, &["auth_status"]).as_deref(),
+            Some("credential_available")
+        );
+        assert_eq!(
+            adapter
+                .pointer("/payload/credential_ref/secret_value_in_payload")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !serde_json::to_string(&adapter)?.contains("DO_NOT_LEAK_LEADFEEDER"),
+            "persisted outbound adapter leaked a credential value"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_custom_research_adapter_queues_universal_scraping_generation() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_outbound_adapter_generate_custom",
+                "command_id": "cmd_outbound_adapter_generate_custom",
+                "module": "outbound",
+                "command_type": "outbound.research_source.generate_adapter",
+                "record_id": "adapter_partner",
+                "status": "pending_sync",
+                "payload": {
+                    "adapter_id": "adapter_partner",
+                    "campaign_id": "camp",
+                    "source_id": "research.partner.example",
+                    "adapter": {
+                        "id": "adapter_partner",
+                        "campaign_id": "camp",
+                        "source_id": "research.partner.example",
+                        "label": "Partner Research",
+                        "url": "https://research.partner.example/",
+                        "adapter_kind": "custom_url",
+                        "target_key": "research-partner-example",
+                        "requires_credential": false
+                    },
+                    "target_manifest": {
+                        "target_key": "research-partner-example",
+                        "display_name": "Partner Research",
+                        "start_url": "https://research.partner.example/",
+                        "target_kind": "prospect-research",
+                        "status": "active",
+                        "output_schema": { "schema_key": "prospect.v1" }
+                    },
+                    "scrape_contract": {
+                        "skill": "universal-scraping",
+                        "target_key": "research-partner-example",
+                        "output_schema": "prospect.v1"
+                    },
+                    "secret_value_in_payload": false
+                },
+                "client_context": actor
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/adapter/status")
+                .and_then(Value::as_str),
+            Some("generation_queued")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/adapter/scrape_status")
+                .and_then(Value::as_str),
+            Some("generation_queued")
+        );
+        let task_id = outcome
+            .pointer("/result/adapter/payload/scrape_registry_effect/generation_task/task_id")
+            .and_then(Value::as_str)
+            .context("generation task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("generation task exists")?;
+        assert_eq!(task.suggested_skill.as_deref(), Some("universal-scraping"));
+        assert!(task.prompt.contains("research-partner-example"));
+        assert!(
+            !serde_json::to_string(&outcome)?.contains("credential_value"),
+            "generation command must not introduce credential values"
         );
         Ok(())
     }

@@ -531,6 +531,7 @@
         "outbound_companies",
         "outbound_pipeline_items",
         "outbound_research_runs",
+        "outbound_research_adapters",
         "outbound_engagements",
         "outbound_messages",
         "outbound_approvals",
@@ -550,7 +551,7 @@
         "left": "campaign selection and source import",
         "center": "company qualification and pipeline workbench"
       },
-      "version": "v0.1",
+      "version": "0.1.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "store": {
@@ -561,7 +562,7 @@
         "editable_after_install": true,
         "distribution": "catalog-module"
       },
-      "install_scope": "local",
+      "install_scope": "starter",
       "default_installed": true
     },
     {

@@ -115,6 +115,11 @@ const RESEARCH_FIELD_DEFS = Object.freeze([
   ['fax', 'Fax'],
   ['email', 'E-Mail'],
   ['domain', 'Domain'],
+  ['address_source', 'Adressquelle'],
+  ['owner', 'Verantwortlich'],
+  ['source_file', 'Excel-Datei'],
+  ['research_note', 'Bemerkung'],
+  ['statistical_campaign', 'Statistische Kampagne'],
   ['vat_id', 'USt-Id'],
   ['industry_wz', 'Branche (WZ)'],
   ['representative_1', 'Ges. Vertreter 1'],
@@ -129,6 +134,7 @@ const RESEARCH_FIELD_DEFS = Object.freeze([
   ['revenue_eur', 'Umsatz EUR'],
   ['equity_eur', 'Eigenkapital EUR'],
   ['employee_count', 'Mitarbeiterzahl'],
+  ['sellify_number', 'Sellify-Nummer'],
 ]);
 const DEFAULT_RESEARCH_FIELD_IDS = Object.freeze(RESEARCH_FIELD_DEFS.map(([id]) => id));
 const DEFAULT_RESEARCH_FIELD_IDS_COMPACT = Object.freeze([
@@ -136,17 +142,85 @@ const DEFAULT_RESEARCH_FIELD_IDS_COMPACT = Object.freeze([
 ]);
 const CONTACT_FIELD_DEFS = Object.freeze([
   ['contact.people', 'Ansprechpartner', 'Gefundene relevante Personen, Rollen und kurze Einordnung.'],
+  ['contact.address', 'Person-Adresse', 'Öffentlich belegbarer Standort oder Adressbezug der Person, falls verfügbar.'],
+  ['contact.gender', 'Geschlecht', 'Nur als unsicherer Hinweis übernehmen, wenn öffentlich plausibel belegbar.'],
+  ['contact.title', 'Titel', 'Akademischer oder beruflicher Titel, nur wenn öffentlich angegeben.'],
+  ['contact.first_name', 'Vorname', 'Korrekte Schreibweise des Vornamens ohne führende oder folgende Leerzeichen.'],
+  ['contact.last_name', 'Nachname', 'Korrekte Schreibweise des Nachnamens ohne führende oder folgende Leerzeichen.'],
+  ['contact.function', 'Funktion', 'Aktuelle Funktion im Unternehmen, nur bei aktueller Bestätigung.'],
+  ['contact.position', 'Position', 'Offizielle Position oder Seniorität im Unternehmen.'],
   ['contact.role', 'Rolle', 'Funktion, Seniorität und Verantwortungsbereich der wichtigsten Ansprechpartner.'],
   ['contact.email', 'E-Mail', 'Öffentlich belegbare E-Mail-Adressen der Ansprechpartner.'],
   ['contact.linkedin', 'LinkedIn', 'Öffentlich belegbare LinkedIn- oder Profil-URLs.'],
+  ['contact.xing', 'XING', 'Öffentlich belegbare XING-Profil-URLs.'],
   ['contact.phone', 'Telefon', 'Öffentlich belegbare Direktwahl oder zentrale Telefonnummer für den Kontakt.'],
   ['contact.fit', 'Kontakt Fit', 'Warum diese Person für den Campaign Scope relevant ist.'],
   ['contact.status', 'Kontakt', 'Status der Ansprechpartner-Qualifizierung.'],
   ['lead.reason', 'Lead Grund', 'Warum der Ansprechpartner als Lead qualifiziert oder abgelehnt wurde.'],
   ['lead.status', 'Lead', 'Status der Lead-Qualifizierung.'],
 ]);
-const DEFAULT_CONTACT_FIELD_IDS = Object.freeze(['contact.people', 'contact.status', 'lead.status']);
+const DEFAULT_CONTACT_FIELD_IDS = Object.freeze([
+  'contact.people',
+  'contact.address',
+  'contact.gender',
+  'contact.title',
+  'contact.first_name',
+  'contact.last_name',
+  'contact.function',
+  'contact.position',
+  'contact.role',
+  'contact.email',
+  'contact.linkedin',
+  'contact.xing',
+  'contact.phone',
+  'contact.fit',
+  'contact.status',
+  'lead.reason',
+  'lead.status',
+]);
 const DEFAULT_CONTACT_FIELD_IDS_COMPACT = Object.freeze(['contact.people', 'contact.status']);
+
+const OUTBOUND_RESEARCH_SOURCE_DEFS = Object.freeze([
+  { id: 'northdata.de', label: 'Northdata', url: 'https://www.northdata.de/', tier: 'S', countries: ['DE', 'AT', 'CH'], adapterKind: 'scrape_target', targetKey: 'northdata-de', requiresCredential: false, credentialSecretName: '', authMode: 'none', scrapeStatus: 'target_available' },
+  { id: 'leadfeeder.com', label: 'Leadfeeder', url: 'https://www.leadfeeder.com/', tier: 'C', countries: ['DE', 'AT', 'CH'], adapterKind: 'api', targetKey: '', requiresCredential: true, credentialSecretName: 'LEADFEEDER_API_KEY', authMode: 'api_key', scrapeStatus: 'api_path' },
+  { id: 'dnbhoovers.com', label: 'D&B Hoovers', url: 'https://www.dnbhoovers.com/', tier: 'C', countries: ['DE', 'AT', 'CH'], adapterKind: 'api', targetKey: '', requiresCredential: true, credentialSecretName: 'DNB_DIRECT_API_KEY', authMode: 'api_key', scrapeStatus: 'api_path' },
+  { id: 'companyhouse.de', label: 'CompanyHouse', url: 'https://www.companyhouse.de/', tier: 'S', countries: ['DE'], adapterKind: 'scrape_target', targetKey: 'companyhouse-de', requiresCredential: false, credentialSecretName: '', authMode: 'none', scrapeStatus: 'target_available' },
+  { id: 'linkedin.com', label: 'LinkedIn', url: 'https://www.linkedin.com/', tier: 'C', countries: ['DE', 'AT', 'CH'], adapterKind: 'api_browser', targetKey: '', requiresCredential: true, credentialSecretName: 'LINKEDIN_SALES_NAV_TOKEN', authMode: 'browser_or_token', scrapeStatus: 'api_path' },
+  { id: 'xing.com', label: 'XING', url: 'https://www.xing.com/', tier: 'C', countries: ['DE', 'AT', 'CH'], adapterKind: 'api_browser', targetKey: '', requiresCredential: true, credentialSecretName: 'XING_API_TOKEN', authMode: 'browser_or_token', scrapeStatus: 'api_path' },
+  { id: 'firmenabc.at', label: 'FirmenABC', url: 'https://www.firmenabc.at/', tier: 'S', countries: ['AT'], adapterKind: 'scrape_target', targetKey: 'firmenabc-at', requiresCredential: false, credentialSecretName: '', authMode: 'none', scrapeStatus: 'target_available' },
+  { id: 'moneyhouse.ch', label: 'Moneyhouse', url: 'https://www.moneyhouse.ch/', tier: 'S', countries: ['CH'], adapterKind: 'scrape_target', targetKey: 'moneyhouse-ch', requiresCredential: false, credentialSecretName: '', authMode: 'none', scrapeStatus: 'target_available' },
+  { id: 'zefix.ch', label: 'Zefix', url: 'https://www.zefix.ch/', tier: 'P', countries: ['CH'], adapterKind: 'api', targetKey: '', requiresCredential: false, credentialSecretName: '', authMode: 'none', scrapeStatus: 'api_path' },
+]);
+
+const OUTBOUND_RESEARCH_SOURCE_ALIASES = Object.freeze({
+  'www.northdata.de': 'northdata.de',
+  northdata: 'northdata.de',
+  'www.leadfeeder.com': 'leadfeeder.com',
+  'app.leadfeeder.com': 'leadfeeder.com',
+  'api.leadfeeder.com': 'leadfeeder.com',
+  leadfeeder: 'leadfeeder.com',
+  'www.dnbhoovers.com': 'dnbhoovers.com',
+  'app.dnbhoovers.com': 'dnbhoovers.com',
+  'plus.dnb.com': 'dnbhoovers.com',
+  dnb: 'dnbhoovers.com',
+  dnbhoovers: 'dnbhoovers.com',
+  'www.companyhouse.de': 'companyhouse.de',
+  companyhouse: 'companyhouse.de',
+  'www.linkedin.com': 'linkedin.com',
+  'api.linkedin.com': 'linkedin.com',
+  linkedin: 'linkedin.com',
+  'www.xing.com': 'xing.com',
+  'api.xing.com': 'xing.com',
+  xing: 'xing.com',
+  'www.firmenabc.at': 'firmenabc.at',
+  firmenabc: 'firmenabc.at',
+  'www.moneyhouse.ch': 'moneyhouse.ch',
+  moneyhouse: 'moneyhouse.ch',
+  'www.zefix.ch': 'zefix.ch',
+  'www.zefix.admin.ch': 'zefix.ch',
+  'zefix.admin.ch': 'zefix.ch',
+  zefix: 'zefix.ch',
+});
 
 const CAMPAIGN_IDEA_TEMPLATES = Object.freeze({
   de: Object.freeze([
@@ -658,6 +732,7 @@ const state = {
   companies: [],
   pipeline: [],
   runs: [],
+  researchAdapters: [],
   commands: [],
   queueTasks: [],
   selectedCampaignId: '',
@@ -692,6 +767,7 @@ const state = {
   lastActiveColsKey: '',
   outreachView: false,
   campaignEditDrafts: new Map(),
+  campaignCreateDraft: null,
 };
 
 export async function mount(ctx) {
@@ -877,7 +953,6 @@ async function knowledgeCommand(args) {
     throw new Error('RxDB command bus is not available');
   }
   const commandId = `cmd_knowledge_${crypto.randomUUID()}`;
-  const startedAtMs = Date.now();
   const dispatched = await state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'knowledge',
@@ -893,17 +968,7 @@ async function knowledgeCommand(args) {
       command_path: 'knowledge',
     },
   });
-  if (dispatched?.status && dispatched.status !== 'pending_sync') {
-    return normalizeKnowledgeCommandResult(dispatched, commandId);
-  }
-  const projection = await waitForBusinessCommandProjection(commandId, startedAtMs);
-  if (!projection) {
-    throw new Error(`Knowledge command ${commandId} was not acknowledged by the native RxDB peer`);
-  }
-  if (projection.status === 'failed') {
-    throw new Error(projection.error || projection.result?.error || `Knowledge command ${commandId} failed`);
-  }
-  return normalizeKnowledgeCommandResult(projection, commandId);
+  return normalizeKnowledgeCommandResult(dispatched, commandId);
 }
 
 function normalizeKnowledgeCommandResult(value, commandId) {
@@ -1091,31 +1156,6 @@ function scheduleCampaignKnowledgeSetup(campaign, options = {}) {
   window.setTimeout(run, delayMs);
 }
 
-async function waitForBusinessCommandProjection(commandId, startedAtMs, timeoutMs = 45000) {
-  const collection = outboundCollection('business_commands');
-  if (!collection) return null;
-  const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const doc = await collection.findOne(commandId).exec();
-      const match = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
-      if (
-        match
-        && Number(match.updated_at_ms || 0) >= earliestUpdatedAt
-        && match.status
-        && match.status !== 'pending_sync'
-      ) {
-        return match;
-      }
-    } catch (_) {
-      // Retry below; replicated command results may arrive just after dispatch.
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
-  }
-  return null;
-}
-
 async function waitForCampaignProjection(campaignId, minUpdatedAtMs, timeoutMs = 15000) {
   const collection = outboundCollection('outbound_campaigns');
   if (!collection) return null;
@@ -1141,12 +1181,11 @@ async function dispatchBusinessCommandWithRxdbFallback(command, options = {}) {
     ...command,
     id: commandId,
   };
-  await ensureBusinessCommandsReady(options.readyTimeoutMs || 10000);
   const dispatchResult = state.ctx?.commandBus?.dispatch
     ? await withTimeout(state.ctx.commandBus.dispatch(prepared), options.timeoutMs || 45000, null)
     : null;
   if (dispatchResult) return dispatchResult;
-  throw new Error('business_commands collection is required for outbound command fallback');
+  throw new Error('CTOX command bus is required for outbound command dispatch');
 }
 
 async function enqueueBusinessCommandForProjection(command) {
@@ -1155,20 +1194,6 @@ async function enqueueBusinessCommandForProjection(command) {
     throw new Error('CTOX command bus is required for outbound command enqueue');
   }
   return state.ctx.commandBus.dispatch({ ...command, id: commandId });
-}
-
-async function ensureBusinessCommandsReady(timeoutMs = 10000) {
-  const bridge = state.ctx?.sync?.startCollection
-    ? await withTimeout(state.ctx.sync.startCollection('business_commands'), timeoutMs, null)
-    : null;
-  const bridgeState = bridge?.state;
-  if (bridgeState) {
-    await withTimeout(
-      Promise.resolve().then(() => bridgeState.awaitInSync?.() || bridgeState.awaitInitialReplication?.()),
-      timeoutMs,
-      null,
-    );
-  }
 }
 
 function openCampaignRunbook(campaignId) {
@@ -1215,18 +1240,20 @@ async function ensureDefaultCampaign() {
 }
 
 async function loadAll(options = {}) {
-  const [campaigns, sources, companies, pipeline, runs] = await Promise.all([
+  const [campaigns, sources, companies, pipeline, runs, researchAdapters] = await Promise.all([
     findAll(outboundCollection('outbound_campaigns')),
     findAll(outboundCollection('outbound_sources')),
     findAll(outboundCollection('outbound_companies')),
     findAll(outboundCollection('outbound_pipeline_items')),
     findAll(outboundCollection('outbound_research_runs')),
+    findAll(optionalReadableCollection('outbound_research_adapters')),
   ]);
   state.campaigns = campaigns;
   state.sources = sources;
   state.companies = companies;
   state.pipeline = dedupePipelineItems(pipeline);
   state.runs = runs;
+  state.researchAdapters = researchAdapters;
   refreshOperationalStateInBackground();
   selectBestCampaignAfterLoad();
   const visible = visibleCampaigns();
@@ -1400,6 +1427,9 @@ function projectCompaniesFromKnowledgeRows(campaign, rows) {
       country: stringValue(row.country || row.land || raw.country || raw.Land),
       qualification_status: stringValue(row.qualification_status || row.company_qualification_status || 'new'),
       research_status: stringValue(row.research_status || statusFromKnowledgeResult(row) || 'pending'),
+      research_validation_status: stringValue(row.validation_status || row.research_validation_status || (row.research_status === 'validated' ? 'validated' : '')),
+      validated_at_ms: Number(row.validated_at_ms || 0),
+      validated_by_user_id: stringValue(row.validated_by_user_id || row.validated_by || ''),
       pipeline_status: stringValue(row.pipeline_status || 'not_started'),
       fit_score: Number(row.fit_score || row.company_fit_score || 0),
       fit_status: stringValue(row.fit_status || 'unqualified'),
@@ -1409,6 +1439,11 @@ function projectCompaniesFromKnowledgeRows(campaign, rows) {
         imported_row: raw,
         knowledge_row: row,
         knowledge_projection: true,
+        research_validation: {
+          status: stringValue(row.validation_status || row.research_validation_status || (row.research_status === 'validated' ? 'validated' : '')),
+          validated_at_ms: Number(row.validated_at_ms || 0),
+          validated_by_user_id: stringValue(row.validated_by_user_id || row.validated_by || ''),
+        },
       },
       created_at_ms: Number(row.created_at_ms || row.imported_at_ms || row.updated_at_ms || now),
       updated_at_ms: Number(row.updated_at_ms || row.researched_at_ms || row.imported_at_ms || now),
@@ -1469,6 +1504,10 @@ function projectRunsFromKnowledgeRows(campaign, rows) {
     command_id: stringValue(row.command_id),
     request: parseJsonObject(row.request_json || '{}'),
     result: parseJsonObject(row.result_json || '{}'),
+    log_path: stringValue(row.log_path),
+    log_manifest_path: stringValue(row.log_manifest_path),
+    log_continuation_path: stringValue(row.log_continuation_path),
+    workspace: parseJsonObject(row.workspace_json || '{}'),
     error: stringValue(row.error || ''),
     created_at_ms: Number(row.created_at_ms || Date.now()),
     updated_at_ms: Number(row.updated_at_ms || row.created_at_ms || Date.now()),
@@ -1555,6 +1594,7 @@ function companyQualityScore(company) {
 
 function mergedResearchStatus(a, b) {
   const statuses = [a, b].map((value) => String(value || '').toLowerCase());
+  if (statuses.includes('validated')) return 'validated';
   if (statuses.some((status) => ['researched', 'completed', 'done'].includes(status))) return 'researched';
   if (statuses.some((status) => isQueuedStatus(status))) return 'queued';
   return a || b || 'pending';
@@ -1690,6 +1730,7 @@ function isLeadKnowledgeRow(row) {
 }
 
 function statusFromKnowledgeResult(row) {
+  if (row.validated_at_ms || row.validation_status === 'validated' || row.research_validation_status === 'validated') return 'validated';
   if (row.researched_at_ms || row.company_data_json || row.research_json || row.result_json) return 'researched';
   return '';
 }
@@ -2013,6 +2054,10 @@ function wireEvents(root) {
       renderLeft();
     }
     if (action === 'cancel-campaign-edit') {
+      if (id && state.campaignCreateDraft?.id === id) {
+        state.campaignCreateDraft = null;
+        if (state.selectedCampaignId === id) selectBestCampaignAfterLoad();
+      }
       state.editingCampaignId = '';
       renderLeft();
     }
@@ -2031,6 +2076,8 @@ function wireEvents(root) {
       render();
     }
     if (action === 'research-company') await queueCompanyResearch(id || state.selectedCompanyId);
+    if (action === 'validate-company-research') await validateCompanyResearch(id || state.selectedCompanyId);
+    if (action === 'download-company-research-log') downloadCompanyResearchLog(id || state.selectedCompanyId);
     if (action === 'qualify-company') await setCompanyQualification(id || state.selectedCompanyId, 'qualified');
     if (action === 'reject-company') await setCompanyQualification(id || state.selectedCompanyId, 'rejected');
     if (action === 'send-pipeline') await sendCompanyToPipeline(id || state.selectedCompanyId);
@@ -2068,6 +2115,12 @@ function wireEvents(root) {
     if (action === 'research-contacts') await queueContactResearch(id || state.selectedPipelineId);
     if (action === 'open-research-settings') openResearchSettingsDrawer();
     if (action === 'research-settings-tab') toggleResearchSettingsTab(event.target.dataset.tab);
+    if (action === 'research-settings-add-source') addResearchSettingsSource();
+    if (action === 'research-settings-remove-source') removeResearchSettingsSource(event.target.closest('[data-research-source-row]'));
+    if (action === 'research-settings-reset-sources') resetResearchSettingsSources();
+    if (action === 'research-settings-generate-adapter') await requestResearchSourceAdapterBuild(event.target.closest('[data-research-source-row]'));
+    if (action === 'research-settings-test-source') await requestResearchSourceAdapterTest(event.target.closest('[data-research-source-row]'));
+    if (action === 'research-settings-auth-source') await requestResearchSourceAuthAssist(event.target.closest('[data-research-source-row]'));
     if (action === 'generate-outreach') {
       const tr = event.target.closest('tr');
       if (tr && tr.dataset.contactIndex != null) {
@@ -2117,8 +2170,7 @@ function wireEvents(root) {
       }
       try {
         const commandId = `cmd_mailserver_save_domain_${crypto.randomUUID()}`;
-        const startedAtMs = Date.now();
-        const dispatched = await state.ctx.commandBus.dispatch({
+        const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
           type: 'ctox.mailserver.save_domain',
@@ -2131,10 +2183,6 @@ function wireEvents(root) {
           },
           client_context: { source_module: 'outbound' }
         });
-        let result = dispatched;
-        if (!dispatched?.status || dispatched.status === 'pending_sync') {
-          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-        }
         if (!result || (result.status !== 'completed' && !result.result)) {
           throw new Error('Fehler beim Speichern der Domain.');
         }
@@ -2165,8 +2213,7 @@ function wireEvents(root) {
       }
       try {
         const commandId = `cmd_mailserver_delete_domain_${crypto.randomUUID()}`;
-        const startedAtMs = Date.now();
-        const dispatched = await state.ctx.commandBus.dispatch({
+        const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
           type: 'ctox.mailserver.delete_domain',
@@ -2175,10 +2222,6 @@ function wireEvents(root) {
           payload: { domain_name: domainName },
           client_context: { source_module: 'outbound' }
         });
-        let result = dispatched;
-        if (!dispatched?.status || dispatched.status === 'pending_sync') {
-          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-        }
         if (!result || (result.status !== 'completed' && !result.result)) {
           throw new Error('Fehler beim Löschen der Domain.');
         }
@@ -2208,8 +2251,7 @@ function wireEvents(root) {
       }
       try {
         const commandId = `cmd_mailserver_save_user_${crypto.randomUUID()}`;
-        const startedAtMs = Date.now();
-        const dispatched = await state.ctx.commandBus.dispatch({
+        const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
           type: 'ctox.mailserver.save_user',
@@ -2218,10 +2260,6 @@ function wireEvents(root) {
           payload: { username, password },
           client_context: { source_module: 'outbound' }
         });
-        let result = dispatched;
-        if (!dispatched?.status || dispatched.status === 'pending_sync') {
-          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-        }
         if (!result || (result.status !== 'completed' && !result.result)) {
           throw new Error('Fehler beim Erstellen des E-Mail-Kontos.');
         }
@@ -2252,8 +2290,7 @@ function wireEvents(root) {
       }
       try {
         const commandId = `cmd_mailserver_delete_user_${crypto.randomUUID()}`;
-        const startedAtMs = Date.now();
-        const dispatched = await state.ctx.commandBus.dispatch({
+        const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
           type: 'ctox.mailserver.delete_user',
@@ -2262,10 +2299,6 @@ function wireEvents(root) {
           payload: { username },
           client_context: { source_module: 'outbound' }
         });
-        let result = dispatched;
-        if (!dispatched?.status || dispatched.status === 'pending_sync') {
-          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-        }
         if (!result || (result.status !== 'completed' && !result.result)) {
           throw new Error('Fehler beim Löschen des E-Mail-Kontos.');
         }
@@ -2612,7 +2645,9 @@ function renderLeft() {
   const root = state.ctx.host.querySelector('.outbound-left');
   if (!root) return;
   const previousScrollTop = root.querySelector('.outbound-scroll')?.scrollTop ?? state.leftScrollTop ?? 0;
-  const campaigns = visibleCampaigns();
+  const campaigns = state.campaignCreateDraft
+    ? [state.campaignCreateDraft, ...visibleCampaigns()]
+    : visibleCampaigns();
   const outreachActive = !!state.outreachView;
   const outreachCounts = state.selectedCampaignId
     ? activeOutreachCounts(state.selectedCampaignId)
@@ -2735,18 +2770,20 @@ function inputImportStatusLabel(metrics) {
 }
 
 function renderCampaignEditItem(campaign) {
-  const originalSubtitle = campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`;
-  const originalScope = campaign.payload?.scope || campaign.objective || '';
-  const originalBriefing = campaignBriefing(campaign);
-  const originalTemplateId = campaignBriefingTemplateId(campaign);
+  const isCreateDraft = Boolean(campaign.payload?.create_draft);
+  const originalName = isCreateDraft ? '' : campaign.name;
+  const originalSubtitle = isCreateDraft ? '' : (campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`);
+  const originalScope = isCreateDraft ? '' : (campaign.payload?.scope || campaign.objective || '');
+  const originalBriefing = isCreateDraft ? '' : campaignBriefing(campaign);
+  const originalTemplateId = isCreateDraft ? 'custom' : campaignBriefingTemplateId(campaign);
   const draft = state.campaignEditDrafts.get(campaign.id) || {};
   const name = draft.name ?? campaign.name;
-  const subtitle = draft.subtitle ?? originalSubtitle;
-  const scope = draft.scope ?? originalScope;
-  const briefing = draft.briefing ?? originalBriefing;
-  const templateId = draft.templateId ?? originalTemplateId;
+  const subtitle = draft.subtitle ?? (campaign.payload?.subtitle || originalSubtitle);
+  const scope = draft.scope ?? (campaign.payload?.scope || originalScope);
+  const briefing = draft.briefing ?? (campaignBriefing(campaign) || originalBriefing);
+  const templateId = draft.templateId ?? (campaignBriefingTemplateId(campaign) || originalTemplateId);
   const canSave = !!String(name || '').trim()
-    && (String(name || '').trim() !== String(campaign.name || '').trim()
+    && (isCreateDraft || String(name || '').trim() !== String(originalName || '').trim()
       || String(subtitle || '').trim() !== String(originalSubtitle || '').trim()
       || String(scope || '').trim() !== String(originalScope || '').trim()
       || String(briefing || '').trim() !== String(originalBriefing || '').trim()
@@ -2756,7 +2793,8 @@ function renderCampaignEditItem(campaign) {
       class="outbound-campaign-item outbound-campaign-edit"
       aria-current="${campaign.id === state.selectedCampaignId}"
       data-id="${escapeHtml(campaign.id)}"
-      data-original-name="${escapeHtml(campaign.name)}"
+      ${isCreateDraft ? 'data-new-campaign="true"' : ''}
+      data-original-name="${escapeHtml(originalName)}"
       data-original-subtitle="${escapeHtml(originalSubtitle)}"
       data-original-scope="${escapeHtml(originalScope)}"
       data-original-briefing="${escapeHtml(originalBriefing)}"
@@ -3322,7 +3360,7 @@ function renderCRMCompanyRows(row) {
     const contactKey = row.item ? `${row.item.id}_0` : `${row.company.id}_0`;
 
     html += `
-      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}">
     `;
 
     const contactCols = activeCols.filter(col => col.type === 'contact_people' || col.type === 'contact_field');
@@ -3355,6 +3393,8 @@ function renderCRMCompanyRows(row) {
                 `}
                 <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
                 <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
+                <button class="mini-btn" style="background: rgba(16, 185, 129, 0.12); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35);" type="button" data-action="validate-company-research" data-id="${escapeHtml(row.company.id)}" title="Recherche nach menschlicher Kontrolle markieren">Validiert</button>
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="download-company-research-log" data-id="${escapeHtml(row.company.id)}" title="Agent-Run-Log herunterladen">Log</button>
               </div>
             </div>
           </td>
@@ -3401,7 +3441,7 @@ function renderCRMCompanyRows(row) {
     const activeNoteKey = state.activeNoteByContact.get(contactKey) || 'note_general';
 
     html += `
-      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}" data-context-record-id="${escapeHtml(row.company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(row.company.name)}">
     `;
 
     activeCols.forEach(col => {
@@ -3431,6 +3471,8 @@ function renderCRMCompanyRows(row) {
                 `}
                 <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
                 <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
+                <button class="mini-btn" style="background: rgba(16, 185, 129, 0.12); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35);" type="button" data-action="validate-company-research" data-id="${escapeHtml(row.company.id)}" title="Recherche nach menschlicher Kontrolle markieren">Validiert</button>
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="download-company-research-log" data-id="${escapeHtml(row.company.id)}" title="Agent-Run-Log herunterladen">Log</button>
               </div>
             </div>
           </td>
@@ -3762,6 +3804,8 @@ function companyTableColumns(fields) {
       label: field.label,
       value: (row) => companyResearchValue(row.company, field.id),
     })),
+    { id: 'company.research', label: t('researchStatus', 'Research'), value: (row) => labelResearch(companyResearchStatus(row.company)) },
+    { id: 'company.validation', label: t('validationStatus', 'Kontrolle'), value: (row) => companyValidationLabel(row.company) },
     { id: 'company.qualification', label: t('qualification', 'Qualifizierung'), value: (row) => labelQualification(row.company.qualification_status), badge: true },
   ];
 }
@@ -3816,7 +3860,7 @@ function renderCompanyDataRow(row, columns) {
   const status = companyResearchStatus(company);
   const rowClass = tableRowStatusClass(status);
   return `
-    <tr${rowClass} data-action="select-company" data-id="${escapeHtml(company.id)}" aria-current="${company.id === state.selectedCompanyId}">
+    <tr${rowClass} data-action="select-company" data-id="${escapeHtml(company.id)}" data-context-record-id="${escapeHtml(company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(company.name)}" aria-current="${company.id === state.selectedCompanyId}">
       ${columns.map((column) => {
         if (column.primary) {
           return `<td><strong>${escapeHtml(column.value(row) || '-')}</strong>${renderInlineResearchStatus(labelResearch(status), status)}</td>`;
@@ -4303,6 +4347,8 @@ function renderResearchSettingsDrawer(campaign) {
         </div>
       </div>
     `;
+  } else if (state.researchSettingsActiveTab === 'sources') {
+    tabBodyHtml = renderResearchSourcesSettings(settings);
   } else if (state.researchSettingsActiveTab === 'mailserver') {
     const ms = state.mailserver || { domains: [], users: [], loading: false, error: null };
     
@@ -4498,6 +4544,7 @@ function renderResearchSettingsDrawer(campaign) {
       <div class="outbound-drawer-tabs">
         <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="columns" ${state.researchSettingsActiveTab === 'columns' ? 'aria-selected="true"' : ''}>${escapeHtml(t('columnsAndFieldsTab', 'Spalten & Felder'))}</button>
         <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="prompts" ${state.researchSettingsActiveTab === 'prompts' ? 'aria-selected="true"' : ''}>${escapeHtml(t('outreachAndApiTab', 'Outreach & API Prompts'))}</button>
+        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="sources" ${state.researchSettingsActiveTab === 'sources' ? 'aria-selected="true"' : ''}>${escapeHtml(t('researchSourcesTab', 'Quellen'))}</button>
         <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="mailserver" ${state.researchSettingsActiveTab === 'mailserver' ? 'aria-selected="true"' : ''}>${escapeHtml(t('mailserverTab', 'Mailserver & Domains'))}</button>
       </div>
       <div class="outbound-research-body">
@@ -4505,6 +4552,87 @@ function renderResearchSettingsDrawer(campaign) {
       </div>
       ${footerHtml}
     </section>
+  `;
+}
+
+function renderResearchSourcesSettings(settings) {
+  const sources = researchSourcesForSettings(settings, selectedCampaign());
+  const enabledCount = sources.filter((source) => source.enabled).length;
+  const adapterCount = sources.filter((source) => source.adapterStatus && source.adapterStatus !== 'draft').length;
+  return `
+    <div class="outbound-research-sources-settings">
+      <section class="outbound-settings-section">
+        <div class="outbound-custom-research-head">
+          <div>
+            <span>${escapeHtml(t('researchSourcesKicker', 'Research Sources'))}</span>
+            <strong>${escapeHtml(t('researchSourcesTitle', 'Quellen und Accounts'))}</strong>
+          </div>
+          <button class="outbound-button" type="button" data-action="research-settings-reset-sources">${escapeHtml(t('resetSources', 'Standard'))}</button>
+        </div>
+        <div class="outbound-source-policy-summary">
+          <span>${escapeHtml(t('enabledSourcesCount', '{0} aktiv', enabledCount))}</span>
+          <span>${escapeHtml(t('adapterCount', '{0} Adapter', adapterCount))}</span>
+          <span>${escapeHtml(t('redundantEvidencePolicy', '2 unabhängige Quellen je Feld'))}</span>
+          <span>${escapeHtml(t('genericFallbackPolicy', 'Generische Websuche bleibt erlaubt'))}</span>
+        </div>
+        <div class="outbound-research-source-list">
+          ${sources.map(renderResearchSourceRow).join('')}
+        </div>
+        <div class="outbound-research-source-add">
+          <input data-research-source-new-url placeholder="https://www.example.com/" aria-label="${escapeHtml(t('sourceUrl', 'Quellen-URL'))}" />
+          <input data-research-source-new-secret placeholder="OPTIONAL_SECRET_NAME" aria-label="${escapeHtml(t('credentialSecretName', 'Credential Secret Name'))}" />
+          <button class="outbound-button" type="button" data-action="research-settings-add-source">${escapeHtml(t('addSource', 'Hinzufügen'))}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderResearchSourceRow(source) {
+  const secretValue = source.credentialSecretName || '';
+  const countries = Array.isArray(source.countries) && source.countries.length ? source.countries.join('/') : 'DACH';
+  const adapterKind = source.adapterKind || 'custom_url';
+  const targetLabel = source.targetKey || (adapterKind === 'api' || adapterKind === 'api_browser' ? 'API' : 'Target offen');
+  const adapterStatus = source.adapterStatus || source.status || 'draft';
+  const authStatus = source.requiresCredential ? (source.authStatus || 'credential_ref') : 'ohne Auth';
+  const generateLabel = source.targetKey || adapterKind === 'custom_url'
+    ? t('generateAdapter', 'Adapter')
+    : t('prepareAdapter', 'Vorbereiten');
+  return `
+    <div class="outbound-research-source-row" data-research-source-row data-source-id="${escapeHtml(source.id)}">
+      <label class="outbound-source-enabled" title="${escapeHtml(t('sourceEnabled', 'Quelle aktiv'))}">
+        <input type="checkbox" data-research-source-enabled ${source.enabled ? 'checked' : ''} />
+      </label>
+      <div class="outbound-research-source-main">
+        <div class="outbound-research-source-title">
+          <strong>${escapeHtml(source.label || source.id)}</strong>
+          <span>${escapeHtml(source.tier || 'custom')} · ${escapeHtml(countries)} · ${escapeHtml(adapterKind)}</span>
+        </div>
+        <div class="outbound-research-source-meta">
+          <span>${escapeHtml(targetLabel)}</span>
+          <span>${escapeHtml(adapterStatus)}</span>
+          <span>${escapeHtml(authStatus)}</span>
+        </div>
+        <label>
+          <span>${escapeHtml(t('sourceUrl', 'Quellen-URL'))}</span>
+          <input data-research-source-url value="${escapeHtml(source.url || '')}" />
+        </label>
+      </div>
+      <label class="outbound-source-credential-toggle">
+        <span>${escapeHtml(t('credentialRequiredShort', 'Auth'))}</span>
+        <input type="checkbox" data-research-source-requires-credential ${source.requiresCredential ? 'checked' : ''} />
+      </label>
+      <label class="outbound-source-secret">
+        <span>${escapeHtml(t('credentialSecretName', 'Secret Name'))}</span>
+        <input data-research-source-secret value="${escapeHtml(secretValue)}" placeholder="SECRET_NAME" />
+      </label>
+      <div class="outbound-research-source-actions">
+        <button type="button" data-action="research-settings-generate-adapter" title="${escapeHtml(t('generateAdapterTitle', 'Adapter/Scraper erzeugen oder aktualisieren'))}">${escapeHtml(generateLabel)}</button>
+        <button type="button" data-action="research-settings-test-source" title="${escapeHtml(t('testSourceTitle', 'Quelle mit Web-Stack testen'))}">${escapeHtml(t('testSource', 'Test'))}</button>
+        <button type="button" data-action="research-settings-auth-source" title="${escapeHtml(t('authSourceTitle', 'Authentifizierung im Browser vorbereiten'))}" ${source.requiresCredential ? '' : 'disabled'}>${escapeHtml(t('authSource', 'Auth'))}</button>
+      </div>
+      <button class="outbound-research-source-remove" type="button" data-action="research-settings-remove-source" aria-label="${escapeHtml(t('deleteSource', 'Quelle entfernen'))}" ${source.builtin ? 'disabled' : ''}>×</button>
+    </div>
   `;
 }
 
@@ -4594,6 +4722,7 @@ async function saveResearchSettings() {
     payload: nextPayload,
     updated_at_ms: Date.now(),
   });
+  await syncResearchAdaptersForCampaign(campaign, researchSettings);
 
   state.campaigns = state.campaigns.map((item) => (
     item.id === campaign.id
@@ -4686,6 +4815,268 @@ function removeResearchSettingsField(fieldId, side = 'company') {
   row?.remove();
 }
 
+function addResearchSettingsSource() {
+  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (!drawer || !state.tempResearchSettings) return;
+  saveResearchSettingsTemporaryState(drawer);
+  const urlInput = drawer.querySelector('[data-research-source-new-url]');
+  const secretInput = drawer.querySelector('[data-research-source-new-secret]');
+  const rawUrl = urlInput?.value?.trim() || '';
+  if (!rawUrl) {
+    showBusinessAlert(t('sourceUrlRequired', 'Bitte eine Quellen-URL eingeben.'));
+    return;
+  }
+  const source = normalizeResearchSource({
+    url: rawUrl,
+    credentialSecretName: secretInput?.value?.trim() || '',
+    requiresCredential: Boolean(secretInput?.value?.trim()),
+  });
+  if (!source.id) return;
+  const existing = normalizeResearchSources(state.tempResearchSettings.researchSources);
+  const idx = existing.findIndex((item) => item.id === source.id);
+  if (idx >= 0) {
+    existing[idx] = { ...existing[idx], ...source, enabled: true };
+  } else {
+    existing.push({ ...source, builtin: false, enabled: true });
+  }
+  state.tempResearchSettings.researchSources = existing;
+  drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+}
+
+function removeResearchSettingsSource(row) {
+  if (!row || !state.tempResearchSettings) return;
+  saveResearchSettingsTemporaryState(row.closest('.outbound-research-drawer'));
+  const id = row.dataset.sourceId || '';
+  state.tempResearchSettings.researchSources = normalizeResearchSources(state.tempResearchSettings.researchSources)
+    .filter((source) => source.id !== id || source.builtin);
+  const next = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (next) next.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+}
+
+function resetResearchSettingsSources() {
+  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (!drawer || !state.tempResearchSettings) return;
+  state.tempResearchSettings.researchSources = defaultResearchSources();
+  drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+}
+
+async function requestResearchSourceAdapterBuild(row) {
+  await requestResearchSourceAdapterCommand(row, 'outbound.research_source.generate_adapter', {
+    status: 'adapter_requested',
+    scrape_status: 'registration_requested',
+  });
+}
+
+async function requestResearchSourceAdapterTest(row) {
+  await requestResearchSourceAdapterCommand(row, 'outbound.research_source.test', {
+    status: 'test_requested',
+    scrape_status: 'test_requested',
+  });
+}
+
+async function requestResearchSourceAuthAssist(row) {
+  await requestResearchSourceAdapterCommand(row, 'outbound.research_source.auth_assist', {
+    status: 'auth_requested',
+    auth_status: 'auth_requested',
+  });
+}
+
+async function requestResearchSourceAdapterCommand(row, commandType, statusPatch) {
+  const campaign = selectedCampaign();
+  const drawer = row?.closest('.outbound-research-drawer');
+  if (!campaign || !row || !drawer) return;
+  saveResearchSettingsTemporaryState(drawer);
+  const source = researchSourceFromRow(row);
+  if (!source.id && !source.url) return;
+  const adapter = await upsertResearchAdapterDocumentForCampaign(campaign, source, statusPatch);
+  if (!adapter) {
+    showBusinessAlert(t('adapterCollectionMissing', 'Research-Adapter konnten nicht gespeichert werden.'));
+    return;
+  }
+  const command = buildResearchAdapterCommand(commandType, campaign, adapter);
+  const result = await state.ctx?.commandBus?.dispatch?.(command).catch((error) => ({
+    ok: false,
+    status: 'dispatch_failed',
+    error: error?.message || String(error),
+  }));
+  const completed = result?.status === 'completed' || result?.result?.ok === true || result?.ok === true;
+  const resultAdapter = researchAdapterFromCommandResult(result);
+  const nextAdapterPatch = resultAdapter
+    ? {
+        ...researchAdapterPatchFromServer(resultAdapter),
+        payload: {
+          ...(adapter.payload || {}),
+          ...(resultAdapter.payload || {}),
+          last_command_id: command.id,
+          last_command_type: commandType,
+          last_command_status: result?.status || (result?.ok === false ? 'failed' : 'queued'),
+        },
+      }
+    : {
+        ...statusPatch,
+        status: completed ? adapter.status : statusPatch.status,
+        last_run_id: command.id,
+        last_error: result?.error || result?.result?.error || '',
+        payload: {
+          ...(adapter.payload || {}),
+          last_command_id: command.id,
+          last_command_type: commandType,
+          last_command_status: result?.status || (result?.ok === false ? 'failed' : 'queued'),
+        },
+      };
+  await upsertResearchAdapterDocumentForCampaign(campaign, source, {
+    ...nextAdapterPatch,
+  });
+  await loadAll({ hydrateKnowledge: false, skipImportRecovery: true });
+  const next = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (next) next.innerHTML = renderResearchSettingsDrawer(campaign);
+}
+
+function buildResearchAdapterCommand(commandType, campaign, adapter) {
+  const commandId = `cmd_${commandType.replaceAll('.', '_')}_${crypto.randomUUID()}`;
+  const sampleCompany = currentCompanies()[0]?.name || campaign?.name || '';
+  return {
+    id: commandId,
+    command_id: commandId,
+    module: 'outbound',
+    type: commandType,
+    command_type: commandType,
+    record_id: adapter.id,
+    inbound_channel: 'business_os.outbound',
+    sync_collections: ['outbound_research_adapters'],
+    payload: {
+      adapter_id: adapter.id,
+      campaign_id: campaign?.id || '',
+      source_id: adapter.source_id,
+      adapter,
+      sample_company: sampleCompany,
+      source_policy: researchSourcePolicyForPrompt({ researchSources: [adapterToResearchSource(adapter)] }),
+      target_manifest: researchSourceTargetManifest(adapterToResearchSource(adapter)),
+      scrape_contract: researchSourceScrapeContract(adapterToResearchSource(adapter)),
+      secret_value_in_payload: false,
+    },
+    client_context: {
+      source_module: 'outbound',
+      command_path: 'outbound.research_source',
+      campaign_id: campaign?.id || '',
+      adapter_id: adapter.id,
+      source_id: adapter.source_id,
+    },
+  };
+}
+
+function researchAdapterFromCommandResult(result) {
+  const candidates = [
+    result?.result?.adapter,
+    result?.result?.outcome?.adapter,
+    result?.payload?.outcome?.adapter,
+    result?.payload?.adapter,
+  ];
+  return candidates.find((item) => item && typeof item === 'object') || null;
+}
+
+function researchAdapterPatchFromServer(adapter) {
+  return {
+    adapter_kind: adapter.adapter_kind,
+    target_key: adapter.target_key,
+    status: adapter.status,
+    enabled: adapter.enabled,
+    field_keys: adapter.field_keys,
+    requires_credential: adapter.requires_credential,
+    credential_secret_name: adapter.credential_secret_name,
+    auth_mode: adapter.auth_mode,
+    auth_status: adapter.auth_status,
+    scrape_status: adapter.scrape_status,
+    last_run_id: adapter.last_run_id,
+    last_success_at_ms: adapter.last_success_at_ms,
+    last_error: adapter.last_error || '',
+    payload: adapter.payload || {},
+  };
+}
+
+async function syncResearchAdaptersForCampaign(campaign, researchSettings) {
+  const collection = outboundCollection('outbound_research_adapters');
+  if (!campaign?.id || !collection || !canWriteCollection('outbound_research_adapters')) return;
+  const sources = normalizeResearchSources(researchSettings?.researchSources);
+  const adapterIds = new Set();
+  for (const source of sources) {
+    const adapter = await upsertResearchAdapterDocumentForCampaign(campaign, source, {
+      status: source.enabled ? 'active' : 'disabled',
+    });
+    if (adapter?.id) adapterIds.add(adapter.id);
+  }
+  await removeWhere(collection, (item) => item.campaign_id === campaign.id && !adapterIds.has(item.id));
+}
+
+async function upsertResearchAdapterDocumentForCampaign(campaign, source, patch = {}) {
+  const collection = outboundCollection('outbound_research_adapters');
+  if (!campaign?.id || !collection || !canWriteCollection('outbound_research_adapters')) return null;
+  const normalized = normalizeResearchSource(source);
+  const now = Date.now();
+  const id = normalized.adapterId || researchAdapterId(campaign, normalized);
+  const existingDoc = await collection.findOne(id).exec();
+  const existing = existingDoc?.toJSON ? existingDoc.toJSON() : existingDoc;
+  const mergedPayload = {
+    ...(existing?.payload || {}),
+    ...(patch.payload || {}),
+    source_policy_ref: normalized.id,
+    scrape_contract: researchSourceScrapeContract(normalized),
+    target_manifest: researchSourceTargetManifest(normalized),
+    secret_value_in_payload: false,
+  };
+  const doc = {
+    id,
+    campaign_id: campaign.id,
+    source_id: normalized.id,
+    label: normalized.label,
+    url: normalized.url,
+    adapter_kind: patch.adapter_kind || normalized.adapterKind,
+    target_key: patch.target_key || normalized.targetKey,
+    status: patch.status || existing?.status || normalized.adapterStatus || 'active',
+    enabled: patch.enabled ?? normalized.enabled,
+    tier: normalized.tier,
+    countries: normalized.countries,
+    field_keys: patch.field_keys || existing?.field_keys || [],
+    requires_credential: patch.requires_credential ?? normalized.requiresCredential,
+    credential_secret_name: patch.credential_secret_name ?? normalized.credentialSecretName,
+    auth_mode: patch.auth_mode || normalized.authMode,
+    auth_status: patch.auth_status || existing?.auth_status || normalized.authStatus || (normalized.requiresCredential ? 'credential_ref' : 'not_required'),
+    scrape_status: patch.scrape_status || existing?.scrape_status || normalized.scrapeStatus,
+    last_run_id: patch.last_run_id || existing?.last_run_id || normalized.lastRunId || '',
+    last_success_at_ms: patch.last_success_at_ms || existing?.last_success_at_ms || normalized.lastSuccessAtMs || 0,
+    last_error: patch.last_error ?? existing?.last_error ?? normalized.lastError ?? '',
+    payload: mergedPayload,
+    created_at_ms: existing?.created_at_ms || now,
+    updated_at_ms: now,
+  };
+  if (existingDoc) {
+    await existingDoc.incrementalPatch(doc);
+  } else {
+    await collection.insert(doc);
+  }
+  state.researchAdapters = [
+    doc,
+    ...(state.researchAdapters || []).filter((item) => item.id !== doc.id),
+  ];
+  return doc;
+}
+
+function researchAdapterId(campaign, source) {
+  const scope = slugifyFileName(campaign?.id || 'global');
+  const sourceKey = slugifyFileName(source?.id || source?.url || 'source');
+  return `adapter_${scope}_${sourceKey}`;
+}
+
+function researchSourceFromRow(row) {
+  return normalizeResearchSource({
+    id: row?.dataset.sourceId || '',
+    url: row?.querySelector('[data-research-source-url]')?.value?.trim() || '',
+    enabled: Boolean(row?.querySelector('[data-research-source-enabled]')?.checked),
+    requiresCredential: Boolean(row?.querySelector('[data-research-source-requires-credential]')?.checked),
+    credentialSecretName: row?.querySelector('[data-research-source-secret]')?.value?.trim() || '',
+  });
+}
+
 function getCampaignResearchSettings(campaign) {
   return normalizeResearchSettings(campaign?.payload?.research_settings || {});
 }
@@ -4713,6 +5104,8 @@ function normalizeResearchSettings(raw = {}) {
     ? (raw.contactFieldsCompact || raw.contact_fields_compact).filter((id) => knownContact.has(id))
     : [...DEFAULT_CONTACT_FIELD_IDS_COMPACT, ...customContactFields.map((field) => field.id)];
 
+  const researchSources = normalizeResearchSources(raw.researchSources || raw.research_sources || raw.sources);
+
   return {
     fields: fields.length ? fields : DEFAULT_RESEARCH_FIELD_IDS,
     fieldsCompact: fieldsCompact.length ? fieldsCompact : DEFAULT_RESEARCH_FIELD_IDS_COMPACT,
@@ -4720,6 +5113,7 @@ function normalizeResearchSettings(raw = {}) {
     contactFieldsCompact: contactFieldsCompact.length ? contactFieldsCompact : DEFAULT_CONTACT_FIELD_IDS_COMPACT,
     customFields,
     customContactFields,
+    researchSources,
     columnLabels,
     fieldPrompts,
     customInstruction: String(raw.customInstruction || raw.custom_instruction || '').trim(),
@@ -4730,6 +5124,283 @@ function normalizeResearchSettings(raw = {}) {
     icpPromptTemplate: String(raw.icpPromptTemplate || raw.icp_prompt_template || ICP_PROMPT_TEMPLATE).trim(),
     messagePromptTemplate: String(raw.messagePromptTemplate || raw.message_prompt_template || MESSAGE_PROMPT_TEMPLATE).trim(),
     extractEmailPrompt: String(raw.extractEmailPrompt || raw.extract_email_prompt || EXTRACT_EMAIL_PROMPT).trim(),
+  };
+}
+
+function researchSourcesForSettings(settings, campaign = selectedCampaign()) {
+  return normalizeResearchSources(settings?.researchSources)
+    .map((source) => mergeResearchSourceAdapter(source, researchAdapterForSource(source, campaign)));
+}
+
+function researchAdapterForSource(source, campaign = selectedCampaign()) {
+  const sourceId = source?.id || normalizeResearchSourceId(source?.url || '');
+  if (!sourceId) return null;
+  const campaignId = campaign?.id || '';
+  const adapters = state.researchAdapters || [];
+  return adapters.find((adapter) => (
+    adapter.campaign_id === campaignId
+    && (adapter.source_id === sourceId || adapter.id === source.adapterId)
+  )) || adapters.find((adapter) => (
+    !adapter.campaign_id
+    && adapter.source_id === sourceId
+  )) || null;
+}
+
+function mergeResearchSourceAdapter(source, adapter) {
+  if (!adapter) return source;
+  return normalizeResearchSource({
+    ...source,
+    id: adapter.source_id || source.id,
+    label: adapter.label || source.label,
+    url: adapter.url || source.url,
+    tier: adapter.tier || source.tier,
+    countries: Array.isArray(adapter.countries) && adapter.countries.length ? adapter.countries : source.countries,
+    enabled: adapter.enabled ?? source.enabled,
+    requiresCredential: adapter.requires_credential ?? source.requiresCredential,
+    credentialSecretName: adapter.credential_secret_name || source.credentialSecretName,
+    adapterKind: adapter.adapter_kind || source.adapterKind,
+    targetKey: adapter.target_key || source.targetKey,
+    authMode: adapter.auth_mode || source.authMode,
+    authStatus: adapter.auth_status || source.authStatus,
+    scrapeStatus: adapter.scrape_status || source.scrapeStatus,
+    adapterStatus: adapter.status || source.adapterStatus,
+    lastRunId: adapter.last_run_id || source.lastRunId,
+    lastSuccessAtMs: adapter.last_success_at_ms || source.lastSuccessAtMs,
+    lastError: adapter.last_error || source.lastError,
+    adapterId: adapter.id,
+    builtin: source.builtin,
+  });
+}
+
+function normalizeResearchSources(rawSources) {
+  const saved = Array.isArray(rawSources) ? rawSources : [];
+  const savedById = new Map();
+  const custom = [];
+  for (const source of saved) {
+    const normalized = normalizeResearchSource(source);
+    if (!normalized.id) continue;
+    if (OUTBOUND_RESEARCH_SOURCE_DEFS.some((def) => def.id === normalized.id)) {
+      savedById.set(normalized.id, normalized);
+    } else {
+      custom.push(normalized);
+    }
+  }
+  const defaults = OUTBOUND_RESEARCH_SOURCE_DEFS.map((def) => ({
+    ...def,
+    ...(savedById.get(def.id) || {}),
+    builtin: true,
+  }));
+  return [...defaults, ...custom.map((source) => ({ ...source, builtin: false }))];
+}
+
+function normalizeResearchSource(source = {}) {
+  const rawUrl = String(source.url || source.source_url || source.href || '').trim();
+  const id = normalizeResearchSourceId(source.id || source.source_id || rawUrl);
+  const def = OUTBOUND_RESEARCH_SOURCE_DEFS.find((item) => item.id === id);
+  const fallbackUrl = def?.url || rawUrl || (id ? `https://${id}/` : '');
+  const requiresCredential = source.requiresCredential ?? source.requires_credential ?? source.private ?? source.tier_c ?? def?.requiresCredential ?? false;
+  const adapterKind = String(source.adapterKind || source.adapter_kind || def?.adapterKind || 'custom_url').trim();
+  const targetKey = String(source.targetKey || source.target_key || source.scrapeTargetKey || source.scrape_target_key || def?.targetKey || defaultTargetKeyForSource(id, adapterKind)).trim();
+  const credentialSecretName = String(
+    source.credentialSecretName
+      || source.credential_secret_name
+      || source.secretName
+      || source.secret_name
+      || def?.credentialSecretName
+      || '',
+  ).trim();
+  return {
+    id,
+    label: String(source.label || source.title || def?.label || id || rawUrl).trim(),
+    url: fallbackUrl,
+    tier: String(source.tier || def?.tier || (requiresCredential ? 'C' : 'custom')).trim(),
+    countries: Array.isArray(source.countries) ? source.countries : (def?.countries || ['DE', 'AT', 'CH']),
+    adapterKind,
+    targetKey,
+    requiresCredential: Boolean(requiresCredential),
+    credentialSecretName,
+    authMode: String(source.authMode || source.auth_mode || def?.authMode || (requiresCredential ? 'browser_or_token' : 'none')).trim(),
+    authStatus: String(source.authStatus || source.auth_status || '').trim(),
+    scrapeStatus: String(source.scrapeStatus || source.scrape_status || def?.scrapeStatus || (targetKey ? 'target_not_registered' : 'not_applicable')).trim(),
+    adapterStatus: String(source.adapterStatus || source.adapter_status || source.status || 'draft').trim(),
+    lastRunId: String(source.lastRunId || source.last_run_id || '').trim(),
+    lastSuccessAtMs: Number(source.lastSuccessAtMs || source.last_success_at_ms || 0),
+    lastError: String(source.lastError || source.last_error || '').trim(),
+    adapterId: String(source.adapterId || source.adapter_id || '').trim(),
+    enabled: source.enabled !== false,
+    builtin: Boolean(def),
+  };
+}
+
+function defaultTargetKeyForSource(sourceId, adapterKind) {
+  if (!sourceId || !['scrape_target', 'custom_url'].includes(adapterKind)) return '';
+  return sourceId
+    .replace(/^www\./, '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
+function normalizeResearchSourceId(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase().replace(/\/+$/, '');
+  if (OUTBOUND_RESEARCH_SOURCE_ALIASES[lower]) return OUTBOUND_RESEARCH_SOURCE_ALIASES[lower];
+  if (OUTBOUND_RESEARCH_SOURCE_DEFS.some((def) => def.id === lower)) return lower;
+  let host = lower;
+  try {
+    const parsed = new URL(lower.includes('://') ? lower : `https://${lower}`);
+    host = parsed.hostname.toLowerCase();
+  } catch (_error) {
+    host = lower.split('/')[0] || lower;
+  }
+  host = host.replace(/^www\./, '').replace(/^app\./, '').replace(/^api\./, '');
+  if (OUTBOUND_RESEARCH_SOURCE_ALIASES[host]) return OUTBOUND_RESEARCH_SOURCE_ALIASES[host];
+  const bySuffix = OUTBOUND_RESEARCH_SOURCE_DEFS.find((def) => host === def.id || host.endsWith(`.${def.id}`));
+  return bySuffix?.id || host;
+}
+
+function defaultResearchSources() {
+  return normalizeResearchSources([]);
+}
+
+function adapterToResearchSource(adapter) {
+  return normalizeResearchSource({
+    id: adapter?.source_id || '',
+    label: adapter?.label || '',
+    url: adapter?.url || '',
+    tier: adapter?.tier || '',
+    countries: adapter?.countries || [],
+    enabled: adapter?.enabled !== false,
+    requiresCredential: adapter?.requires_credential === true,
+    credentialSecretName: adapter?.credential_secret_name || '',
+    adapterKind: adapter?.adapter_kind || '',
+    targetKey: adapter?.target_key || '',
+    authMode: adapter?.auth_mode || '',
+    authStatus: adapter?.auth_status || '',
+    scrapeStatus: adapter?.scrape_status || '',
+    adapterStatus: adapter?.status || '',
+    lastRunId: adapter?.last_run_id || '',
+    lastSuccessAtMs: adapter?.last_success_at_ms || 0,
+    lastError: adapter?.last_error || '',
+    adapterId: adapter?.id || '',
+  });
+}
+
+function researchVerificationPolicy() {
+  return {
+    min_independent_sources: 2,
+    conflict_strategy: 'continue_until_redundant_or_flag_conflict',
+    allow_generic_web_fallback: true,
+  };
+}
+
+function researchSourcePolicyForPrompt(settings) {
+  const sources = researchSourcesForSettings(settings).filter((source) => source.enabled);
+  const sourceAdapters = sources.map(researchSourceAdapterPolicy);
+  return {
+    sources: sources.map((source) => ({
+      id: source.id,
+      label: source.label,
+      url: source.url,
+      tier: source.tier,
+      countries: source.countries,
+      enabled: source.enabled,
+      adapter_kind: source.adapterKind,
+      target_key: source.targetKey,
+      scrape_target_key: source.targetKey,
+      scrape_status: source.scrapeStatus,
+      adapter_status: source.adapterStatus,
+      auth_mode: source.authMode,
+      auth_status: source.authStatus,
+      requires_credential: source.requiresCredential,
+      credential_secret_name: source.credentialSecretName,
+      secret_value_in_payload: false,
+    })),
+    source_adapters: sourceAdapters,
+    preferred_sources: sources.map((source) => source.id || source.url).filter(Boolean),
+    source_urls: sources.map((source) => source.url).filter(Boolean),
+    include_private: sources
+      .filter((source) => source.requiresCredential)
+      .map((source) => source.id || source.url)
+      .filter(Boolean),
+    ...researchVerificationPolicy(),
+    secret_value_in_payload: false,
+  };
+}
+
+function researchSourceAdapterPolicy(source) {
+  return {
+    id: source.adapterId || '',
+    source_id: source.id,
+    label: source.label,
+    url: source.url,
+    adapter_kind: source.adapterKind,
+    target_key: source.targetKey,
+    tier: source.tier,
+    countries: source.countries,
+    requires_credential: source.requiresCredential,
+    credential_secret_name: source.credentialSecretName,
+    auth_mode: source.authMode,
+    auth_status: source.authStatus,
+    scrape_status: source.scrapeStatus,
+    status: source.adapterStatus,
+    scrape_contract: researchSourceScrapeContract(source),
+    target_manifest: researchSourceTargetManifest(source),
+    secret_value_in_payload: false,
+  };
+}
+
+function researchSourceScrapeContract(source) {
+  const targetKey = source.targetKey || defaultTargetKeyForSource(source.id, source.adapterKind);
+  return {
+    skill: 'universal-scraping',
+    target_key: targetKey,
+    source_id: source.id,
+    adapter_kind: source.adapterKind,
+    output_schema: 'prospect.v1',
+    primary_artifact_kind: 'field_records_json',
+    record_key_fields: ['field', 'source_url'],
+    app_api: {
+      execute: `ctox scrape execute --target-key ${targetKey} --allow-heal`,
+      query_records: `ctox scrape query-records --target-key ${targetKey}`,
+      show_api: `ctox scrape show-api --target-key ${targetKey}`,
+    },
+    fallback: {
+      allow_generic_web_search: true,
+      allow_browser_assist: true,
+    },
+  };
+}
+
+function researchSourceTargetManifest(source) {
+  const targetKey = source.targetKey || defaultTargetKeyForSource(source.id, source.adapterKind);
+  return {
+    target_key: targetKey,
+    display_name: source.label || source.id,
+    start_url: source.url,
+    target_kind: 'prospect-research',
+    status: source.enabled ? 'active' : 'disabled',
+    config: {
+      expected_provider: source.id,
+      country_hints: source.countries || [],
+      tier: source.tier || 'custom',
+      expected_min_records: 1,
+      record_key_fields: ['field', 'source_url'],
+      requires_credential: source.requiresCredential,
+      credential_secret_name: source.credentialSecretName,
+      auth_mode: source.authMode,
+      api: {
+        semantic: {
+          source_fields: ['value', 'note'],
+        },
+      },
+    },
+    output_schema: {
+      schema_key: 'prospect.v1',
+      primary_artifact_kind: 'field_records_json',
+      record_key_fields: ['field', 'source_url'],
+    },
   };
 }
 
@@ -4951,7 +5622,7 @@ function sourceImportCommandStatus(source) {
 
 function isCompanyResearchDone(company) {
   const status = String(company?.research_status || '').toLowerCase();
-  return ['researched', 'completed', 'done'].includes(status)
+  return ['researched', 'validated', 'completed', 'done'].includes(status)
     || ['qualified', 'rejected'].includes(String(company?.qualification_status || '').toLowerCase());
 }
 
@@ -4960,7 +5631,7 @@ function isQueuedStatus(value) {
 }
 
 function isDoneLikeStatus(value) {
-  return ['researched', 'qualified', 'completed', 'done', 'handled', 'lead_qualified'].includes(String(value || '').toLowerCase());
+  return ['researched', 'validated', 'qualified', 'completed', 'done', 'handled', 'lead_qualified'].includes(String(value || '').toLowerCase());
 }
 
 function isAutomationActive(value) {
@@ -4984,7 +5655,7 @@ function automationStatusKind(value) {
   if (['failed', 'error', 'pending_sync_failed'].includes(status)) return 'failed';
   if (['blocked', 'stale_missing_native'].includes(status)) return 'blocked';
   if (['cancelled', 'canceled'].includes(status)) return 'cancelled';
-  if (['completed', 'done', 'handled', 'researched', 'qualified'].includes(status)) return 'done';
+  if (['completed', 'done', 'handled', 'researched', 'validated', 'qualified'].includes(status)) return 'done';
   return 'idle';
 }
 
@@ -5110,7 +5781,7 @@ function renderCompanyWorkbench() {
 
 function renderCompanyRow(company) {
   return `
-    <div class="outbound-company-row" data-action="select-company" data-id="${escapeHtml(company.id)}" aria-current="${company.id === state.selectedCompanyId}">
+    <div class="outbound-company-row" data-action="select-company" data-id="${escapeHtml(company.id)}" data-context-record-id="${escapeHtml(company.id)}" data-context-record-type="outbound_company" data-context-label="${escapeHtml(company.name)}" aria-current="${company.id === state.selectedCompanyId}">
       <div>
         <div class="outbound-title">${escapeHtml(company.name)}</div>
         <div class="outbound-muted">${escapeHtml(company.domain || company.website || 'Website offen')}</div>
@@ -5123,6 +5794,8 @@ function renderCompanyRow(company) {
       </div>
       <div class="outbound-row-actions">
         <button class="outbound-button" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Research</button>
+        <button class="outbound-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Validiert</button>
+        <button class="outbound-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Log</button>
         <button class="outbound-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
         <button class="outbound-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>
       </div>
@@ -5198,6 +5871,8 @@ function renderCompanyDetail() {
       <div class="outbound-detail-block">
         <div class="outbound-row-actions">
           <button class="outbound-button primary" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Unternehmen recherchieren</button>
+          <button class="outbound-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Recherche validiert</button>
+          <button class="outbound-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Run-Log</button>
           <button class="outbound-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
           <button class="outbound-button" type="button" data-action="reject-company" data-id="${escapeHtml(company.id)}">Ablehnen</button>
           <button class="outbound-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">In Pipeline</button>
@@ -5265,8 +5940,10 @@ function companyDiagnostics(company, source, item, runs) {
     ['Datenquelle', source ? `${source.source_type || 'Quelle'} · ${source.status || 'offen'}` : 'keine Quelle'],
     ['Import-Command', sourceCommand || source?.payload?.task_status || 'kein Status'],
     ['Research-Status', companyResearchStatus(company) || company.research_status || 'nicht gestartet'],
+    ['Kontrolle', companyValidationLabel(company)],
     ['Pipeline-Eintrag', item ? `${item.stage || 'Pipeline'} · ${item.contact_research_status || 'offen'}` : 'noch nicht übernommen'],
     ['Letzter Run', latestRun ? `${latestRun.run_type || 'Run'} · ${latestRun.status || 'offen'}` : 'kein Run'],
+    ['Run-Log', latestRun?.log_path || latestRun?.log_manifest_path || 'noch kein Log'],
   ];
 }
 
@@ -5279,16 +5956,11 @@ function renderDiagnosticsList(items) {
 }
 
 async function createCampaign() {
-  const name = await showBusinessPrompt(t('campaignNamePrompt', 'Name der Outbound Campaign'), {
-    title: t('createCampaignTitle', 'Campaign anlegen'),
-    defaultValue: t('defaultCampaignName', 'Neue Outbound Campaign'),
-  });
-  if (!name) return;
   const now = Date.now();
-  const id = `camp_${crypto.randomUUID()}`;
-  const campaign = {
+  const id = `draft_campaign_${crypto.randomUUID()}`;
+  const draft = {
     id,
-    name,
+    name: t('defaultCampaignName', 'Neue Outbound Campaign'),
     objective: t('campaignObjectiveDefault', 'Outbound Firmenqualifizierung'),
     market: 'DACH',
     status: 'active',
@@ -5299,6 +5971,9 @@ async function createCampaign() {
     pipeline_count: 0,
     payload: {
       outbound_only: true,
+      create_draft: true,
+      subtitle: 'DACH · active',
+      scope: '',
       briefing: '',
       briefing_template_id: '',
       briefing_language: campaignTemplateLanguage(),
@@ -5306,18 +5981,19 @@ async function createCampaign() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  await outboundCollection('outbound_campaigns').insert(campaign);
+  state.campaignCreateDraft = draft;
   state.selectedCampaignId = id;
   state.editingCampaignId = id;
-  await loadAll();
   render();
 }
 
 async function saveCampaignInlineEdit(campaignId) {
-  const campaign = state.campaigns.find((item) => item.id === campaignId);
+  const campaign = state.campaigns.find((item) => item.id === campaignId)
+    || (state.campaignCreateDraft?.id === campaignId ? state.campaignCreateDraft : null);
   if (!campaign) return;
   const editor = state.ctx?.host?.querySelector(`.outbound-campaign-edit[data-id="${cssEscape(campaign.id)}"]`);
   if (!editor) return;
+  const isCreateDraft = Boolean(campaign.payload?.create_draft);
   const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || '';
   if (!name) {
     updateCampaignEditSaveState(editor);
@@ -5345,6 +6021,7 @@ async function saveCampaignInlineEdit(campaignId) {
     briefing_template_id: templateId === 'custom' ? '' : templateId,
     briefing_language: campaignTemplateLanguage(),
   };
+  delete payload.create_draft;
   if (setupRequired) {
     payload.campaign_setup_task = {
       command_id: setupCommandId,
@@ -5358,11 +6035,28 @@ async function saveCampaignInlineEdit(campaignId) {
   const objective = scope || campaignBriefingSummary({ payload: { briefing } }) || t('campaignObjectiveDefault', 'Outbound Firmenqualifizierung');
   const nextCampaign = {
     ...campaign,
+    id: isCreateDraft ? `camp_${crypto.randomUUID()}` : campaign.id,
     name,
     objective,
     payload,
+    owner_id: campaign.owner_id || state.ctx?.session?.user?.id || '',
+    source_count: Number(campaign.source_count || 0),
+    company_count: Number(campaign.company_count || 0),
+    qualified_count: Number(campaign.qualified_count || 0),
+    pipeline_count: Number(campaign.pipeline_count || 0),
+    created_at_ms: Number(campaign.created_at_ms || updatedAtMs),
     updated_at_ms: updatedAtMs,
   };
+  if (isCreateDraft) {
+    await outboundCollection('outbound_campaigns').insert(nextCampaign);
+    state.campaignCreateDraft = null;
+    state.campaignEditDrafts.delete(campaign.id);
+    state.selectedCampaignId = nextCampaign.id;
+    state.editingCampaignId = '';
+    await loadAll();
+    render();
+    return;
+  }
   const updateCommand = {
     id: updateCommandId,
     command_id: updateCommandId,
@@ -5546,6 +6240,7 @@ async function deleteCampaign(campaignId) {
   await removeWhere(outboundCollection('outbound_companies'), (item) => item.campaign_id === campaign.id);
   await removeWhere(outboundCollection('outbound_pipeline_items'), (item) => item.campaign_id === campaign.id);
   await removeWhere(outboundCollection('outbound_research_runs'), (item) => item.campaign_id === campaign.id);
+  await removeWhere(outboundCollection('outbound_research_adapters'), (item) => item.campaign_id === campaign.id);
   await removeDoc(outboundCollection('outbound_campaigns'), campaign.id);
   state.selectedCampaignId = '';
   await ensureDefaultCampaign();
@@ -5662,67 +6357,7 @@ function validateOutboundImportPayload(payload) {
 
 const OUTBOUND_IMPORT_SYNC_COLLECTIONS = ['outbound_campaigns', 'outbound_sources', 'outbound_companies'];
 
-async function prepareOutboundImportSync(timeoutMs = 8000) {
-  const sync = state.ctx?.sync;
-  if (!sync?.startCollection) {
-    throw new Error('Outbound Import benötigt aktive RxDB/WebRTC-Synchronisation.');
-  }
-  return Promise.all(OUTBOUND_IMPORT_SYNC_COLLECTIONS.map(async (collection) => {
-    const bridge = await withTimeoutReject(
-      sync.startCollection(collection),
-      timeoutMs,
-      `RxDB/WebRTC Sync für ${collection} wurde nicht rechtzeitig gestartet.`,
-    );
-    await waitForOutboundSyncBridge(bridge, collection, timeoutMs, { allowPush: false });
-    return { collection, bridge };
-  }));
-}
-
-async function flushOutboundImportSync(bridges, timeoutMs = 12000) {
-  await Promise.all((bridges || []).map(async ({ collection, bridge }) => {
-    await waitForOutboundSyncBridge(bridge, collection, timeoutMs, { allowPush: true });
-  }));
-}
-
-async function waitForOutboundSyncBridge(bridge, collection, timeoutMs, options = {}) {
-  const bridgeState = bridge?.state;
-  if (!bridgeState) return;
-  const initial = bridgeState.awaitInitialReplication?.() || bridgeState.awaitInSync?.();
-  if (initial) {
-    await withTimeoutReject(
-      Promise.resolve(initial).catch((error) => {
-        throw error;
-      }),
-      timeoutMs,
-      `RxDB/WebRTC Initial-Sync für ${collection} wurde nicht rechtzeitig bestätigt.`,
-    );
-  }
-  if (options.allowPush && typeof bridgeState.pushToRemotePeers === 'function') {
-    await withTimeoutReject(
-      bridgeState.pushToRemotePeers(),
-      timeoutMs,
-      `RxDB/WebRTC Push für ${collection} wurde nicht rechtzeitig bestätigt.`,
-    );
-    return;
-  }
-  if (options.allowPush && typeof bridgeState.awaitInSync === 'function') {
-    await withTimeoutReject(
-      bridgeState.awaitInSync(),
-      timeoutMs,
-      `RxDB/WebRTC Sync für ${collection} wurde nicht rechtzeitig abgeschlossen.`,
-    );
-  }
-}
-
-function withTimeoutReject(promise, timeoutMs, message) {
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => window.setTimeout(() => reject(new Error(message)), timeoutMs)),
-  ]);
-}
-
 async function importCompaniesFromPayload(campaign, payload) {
-  const syncBridges = await prepareOutboundImportSync();
   const now = Date.now();
   const sourceId = `src_${crypto.randomUUID()}`;
   const rows = await extractRowsFromPayload(payload);
@@ -5744,7 +6379,6 @@ async function importCompaniesFromPayload(campaign, payload) {
     updated_at_ms: now,
   });
   if (!rows.length) {
-    await flushOutboundImportSync(syncBridges);
     runOutboundImportInBackground(campaign, payload, sourceId);
     return {
       status: sourceStatus,
@@ -5755,7 +6389,6 @@ async function importCompaniesFromPayload(campaign, payload) {
   }
   if (!filteredRows.length) {
     await updateCampaignCounts(campaign.id);
-    await flushOutboundImportSync(syncBridges);
     await loadAll({ skipImportRecovery: true });
     render();
     return {
@@ -5778,7 +6411,6 @@ async function importCompaniesFromPayload(campaign, payload) {
     updated_at_ms: Date.now(),
   });
   await updateCampaignCounts(campaign.id);
-  await flushOutboundImportSync(syncBridges);
   await loadAll({ skipImportRecovery: true });
   render();
   ensureCampaignKnowledge(campaign)
@@ -5965,6 +6597,9 @@ function companyStatusKnowledgeRow(campaign, company, now) {
     country: company.country || '',
     qualification_status: company.qualification_status || 'new',
     research_status: company.research_status || 'pending',
+    validation_status: company.research_validation_status || company.payload?.research_validation?.status || '',
+    validated_at_ms: Number(company.validated_at_ms || company.payload?.research_validation?.validated_at_ms || 0),
+    validated_by_user_id: company.validated_by_user_id || company.payload?.research_validation?.validated_by_user_id || '',
     pipeline_status: company.pipeline_status || 'not_started',
     fit_score: Number(company.fit_score || 0),
     fit_status: company.fit_status || 'unqualified',
@@ -6061,6 +6696,7 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
     type: 'outbound.source.import',
     record_id: commandId,
     inbound_channel: 'business_os.outbound',
+    sync_collections: OUTBOUND_IMPORT_SYNC_COLLECTIONS,
     payload: {
       ...payload,
       source_id: sourceId,
@@ -6143,6 +6779,8 @@ async function queueCompanyResearch(companyId, options = {}) {
   const refs = await ensureCampaignKnowledge(campaign).catch(() => campaignKnowledgeRefs(campaign));
   const researchSettings = options.forceSettings || getCampaignResearchSettings(campaign);
   const researchFields = options.fieldsOverride || researchFieldsForPrompt(researchSettings);
+  const sourcePolicy = researchSourcePolicyForPrompt(researchSettings);
+  const verificationPolicy = researchVerificationPolicy();
   const runId = `run_${crypto.randomUUID()}`;
   const command = {
     id: `cmd_${runId}`,
@@ -6151,6 +6789,7 @@ async function queueCompanyResearch(companyId, options = {}) {
     record_id: company.id,
     inbound_channel: 'business_os.outbound',
     payload: {
+      run_id: runId,
       title: t('researchCompanyDataTitle', 'Unternehmensdaten recherchieren: {0}', company.name),
       instruction: options.reason === 'custom_fields_added'
         ? t('researchCompanyDataNew', 'Recherchiere die neu hinzugefügten Unternehmensdaten-Kategorien für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.')
@@ -6165,8 +6804,13 @@ async function queueCompanyResearch(companyId, options = {}) {
           researchSettings.customInstruction,
           options.reason === 'custom_fields_added' ? t('researchMissingOrNew', 'Nur fehlende oder neue Kategorien nachrecherchieren und bestehende Unternehmensdaten nicht entfernen.') : '',
         ].filter(Boolean).join('\n'),
-        include_private: [],
+        include_private: sourcePolicy.include_private,
+        preferred_sources: sourcePolicy.preferred_sources,
+        source_policy: sourcePolicy,
+        verification_policy: verificationPolicy,
       },
+      source_policy: sourcePolicy,
+      verification_policy: verificationPolicy,
       company: serializeCompany(company),
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective },
       writeback_contract: researchWritebackContract(campaign, refs, 'company_research', company, researchFields),
@@ -6186,6 +6830,11 @@ async function queueCompanyResearch(companyId, options = {}) {
       knowledge_domain: refs.domain,
       knowledge_table_key: refs.companiesKey,
       knowledge_runbook_id: refs.runbookId,
+      research_sources: sourcePolicy.preferred_sources,
+      research_source_urls: sourcePolicy.source_urls,
+      research_source_adapters: sourcePolicy.source_adapters,
+      min_independent_sources: sourcePolicy.min_independent_sources,
+      conflict_strategy: sourcePolicy.conflict_strategy,
     },
   };
   const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
@@ -6225,8 +6874,12 @@ async function queueContactResearch(pipelineId) {
   const item = state.pipeline.find((entry) => entry.id === pipelineId);
   if (!item) return;
   const campaign = state.campaigns.find((entry) => entry.id === item.campaign_id);
+  const company = state.companies.find((entry) => entry.id === item.company_id);
   const researchSettings = getCampaignResearchSettings(campaign);
   const contactFields = contactFieldsForPrompt(researchSettings);
+  const sourcePolicy = researchSourcePolicyForPrompt(researchSettings);
+  const verificationPolicy = researchVerificationPolicy();
+  const country = company?.country || item.country || 'DE';
   const refs = campaign
     ? await ensureCampaignKnowledge(campaign).catch(() => campaignKnowledgeRefs(campaign))
     : campaignKnowledgeRefs({ id: item.campaign_id, name: item.company_name });
@@ -6238,11 +6891,15 @@ async function queueContactResearch(pipelineId) {
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {
+      run_id: runId,
       title: `Ansprechpartner recherchieren: ${item.company_name}`,
       instruction: 'Jetzt beginnt die Pipeline-Stufe: Recherchiere relevante öffentlich belegbare Ansprechpartner und Rollen für eine spätere Ansprache. Schreibe Kontakte ausschließlich in den angegebenen Knowledge Contacts DataFrame.',
       company_id: item.company_id,
       pipeline_id: item.id,
+      country,
       contact_fields: contactFields,
+      source_policy: sourcePolicy,
+      verification_policy: verificationPolicy,
       custom_instruction: researchSettings.customInstruction || '',
       writeback_contract: researchWritebackContract(campaign || { id: item.campaign_id, name: item.company_name }, refs, 'contact_research', item),
       knowledge: {
@@ -6261,6 +6918,12 @@ async function queueContactResearch(pipelineId) {
       knowledge_domain: refs.domain,
       knowledge_table_key: refs.contactsKey,
       knowledge_runbook_id: refs.runbookId,
+      country,
+      research_sources: sourcePolicy.preferred_sources,
+      research_source_urls: sourcePolicy.source_urls,
+      research_source_adapters: sourcePolicy.source_adapters,
+      min_independent_sources: sourcePolicy.min_independent_sources,
+      conflict_strategy: sourcePolicy.conflict_strategy,
     },
   };
   const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
@@ -6312,6 +6975,7 @@ async function queueLeadQualification(pipelineId) {
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {
+      run_id: runId,
       title: `Lead qualifizieren: ${item.company_name}`,
       instruction: 'Qualifiziere die recherchierten Ansprechpartner gegen den Campaign Scope/ICP. Schreibe die Lead-Qualifikation ausschließlich in den Knowledge Contacts DataFrame. Keine Outreach-Nachricht senden.',
       company_id: item.company_id,
@@ -6399,6 +7063,119 @@ async function setCompanyQualification(companyId, status) {
     });
   }
   await updateCampaignCounts(campaign?.id || state.selectedCampaignId);
+}
+
+async function validateCompanyResearch(companyId) {
+  const company = state.companies.find((item) => item.id === companyId);
+  const campaign = state.campaigns.find((item) => item.id === company?.campaign_id) || selectedCampaign();
+  if (!company || !campaign) return;
+  const now = Date.now();
+  const userId = state.ctx?.session?.user?.id || state.ctx?.session?.user?.email || 'business-os-user';
+  const latestRun = latestCompanyResearchRun(company.id);
+  const validation = {
+    status: 'validated',
+    validated_at_ms: now,
+    validated_by_user_id: userId,
+    run_id: latestRun?.id || '',
+    command_id: latestRun?.command_id || '',
+  };
+  const patch = {
+    research_status: 'validated',
+    research_validation_status: 'validated',
+    validated_at_ms: now,
+    validated_by_user_id: userId,
+    payload: {
+      ...(company.payload || {}),
+      research_validation: validation,
+    },
+    updated_at_ms: now,
+  };
+  await patchDoc(outboundCollection('outbound_companies'), company.id, patch);
+  const nextCompany = { ...company, ...patch };
+  const refs = campaignKnowledgeRefs(campaign);
+  await appendKnowledgeRows(campaign, refs.companiesKey, [companyStatusKnowledgeRow(campaign, nextCompany, now)]).catch((error) => {
+    console.warn('[outbound] knowledge validation append failed', error);
+  });
+  state.companies = state.companies.map((item) => (item.id === company.id ? nextCompany : item));
+  render();
+}
+
+function latestCompanyResearchRun(companyId) {
+  return (state.runs || [])
+    .filter((run) => run.company_id === companyId || run.record_id === companyId)
+    .slice()
+    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0] || null;
+}
+
+function downloadCompanyResearchLog(companyId) {
+  const company = state.companies.find((item) => item.id === companyId);
+  if (!company) return;
+  const campaign = state.campaigns.find((item) => item.id === company.campaign_id) || selectedCampaign();
+  const source = state.sources.find((item) => item.id === company.source_id);
+  const run = latestCompanyResearchRun(company.id);
+  const commandIds = [run?.command_id, run?.id].filter(Boolean);
+  const command = (state.commands || []).find((item) => commandIds.includes(item.command_id) || commandIds.includes(item.id));
+  const result = run?.result || {};
+  const payload = {
+    exported_at: new Date().toISOString(),
+    campaign: campaign ? { id: campaign.id, name: campaign.name, objective: campaign.objective } : null,
+    company: serializeCompany(company),
+    source: source ? {
+      id: source.id,
+      title: source.title,
+      source_type: source.source_type,
+      status: source.status,
+    } : null,
+    validation: company.payload?.research_validation || {
+      status: company.research_validation_status || '',
+      validated_at_ms: company.validated_at_ms || 0,
+      validated_by_user_id: company.validated_by_user_id || '',
+    },
+    run: run ? {
+      id: run.id,
+      command_id: run.command_id,
+      run_type: run.run_type,
+      status: run.status,
+      created_at_ms: run.created_at_ms,
+      updated_at_ms: run.updated_at_ms,
+      log_path: run.log_path || '',
+      log_manifest_path: run.log_manifest_path || '',
+      log_continuation_path: run.log_continuation_path || '',
+      workspace: run.workspace || {},
+      request: run.request || {},
+      result,
+    } : null,
+    command: command ? {
+      id: command.id,
+      command_id: command.command_id,
+      command_type: command.command_type || command.type,
+      status: command.status,
+      payload: command.payload || {},
+      client_context: command.client_context || {},
+    } : null,
+    evidence: company.evidence || [],
+    web_stack_runs: {
+      search_runs: Array.isArray(result.search_runs) ? result.search_runs : [],
+      read_runs: Array.isArray(result.read_runs) ? result.read_runs : [],
+      scrape_runs: Array.isArray(result.scrape_runs) ? result.scrape_runs : [],
+      browser_extract_runs: Array.isArray(result.browser_extract_runs) ? result.browser_extract_runs : [],
+      browser_assist_tasks: Array.isArray(result.browser_assist_tasks) ? result.browser_assist_tasks : [],
+    },
+  };
+  downloadJson(`${slugifyFileName(company.name || company.id)}-research-log.json`, payload);
+}
+
+function downloadJson(fileName, payload) {
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
 async function sendCompanyToPipeline(companyId, options = {}) {
@@ -6620,6 +7397,8 @@ function tableColumnValue(row, columnId) {
   if (columnId === 'company.name') return row.company.name;
   if (columnId === 'company.domain') return row.company.domain || domainFromUrl(row.company.website) || '';
   if (columnId?.startsWith('field.')) return companyResearchValue(row.company, columnId.slice(6));
+  if (columnId === 'company.research') return labelResearch(companyResearchStatus(row.company));
+  if (columnId === 'company.validation') return companyValidationLabel(row.company);
   if (columnId === 'company.qualification') return labelQualification(row.company.qualification_status);
   if (columnId?.startsWith('contact.') || columnId?.startsWith('lead.')) return contactColumnValue(row.item, columnId);
   return '';
@@ -6778,7 +7557,17 @@ function renderEvidence(company) {
 
 function labelResearch(value) {
   if (isAutomationActive(value) || isFailedStatus(value) || isCancelledStatus(value)) return automationStatusLabel(value);
+  if (value === 'validated') return 'validiert';
   if (value === 'researched') return 'recherchiert';
+  return 'offen';
+}
+
+function companyValidationLabel(company) {
+  const status = company?.research_validation_status || company?.payload?.research_validation?.status || (company?.research_status === 'validated' ? 'validated' : '');
+  if (status === 'validated') {
+    const timestamp = Number(company?.validated_at_ms || company?.payload?.research_validation?.validated_at_ms || 0);
+    return timestamp ? `validiert ${new Date(timestamp).toLocaleDateString()}` : 'validiert';
+  }
   return 'offen';
 }
 
@@ -7355,9 +8144,8 @@ async function loadMailserverConfig() {
 
   try {
     const commandId = `cmd_mailserver_get_config_${crypto.randomUUID()}`;
-    const startedAtMs = Date.now();
-    
-    const dispatched = await state.ctx.commandBus.dispatch({
+
+    const result = await state.ctx.commandBus.dispatch({
       id: commandId,
       module: 'ctox',
       type: 'ctox.mailserver.get_config',
@@ -7368,11 +8156,6 @@ async function loadMailserverConfig() {
         source_module: 'outbound',
       },
     });
-
-    let result = dispatched;
-    if (!dispatched?.status || dispatched.status === 'pending_sync') {
-      result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-    }
 
     if (result && (result.status === 'completed' || result.result)) {
       const outcome = result.result || result.payload?.outcome || result;
@@ -7486,6 +8269,19 @@ function saveResearchSettingsTemporaryState(drawer) {
 
   const extractEmailPromptTextarea = drawer.querySelector('[data-prompt-setting="extractEmailPrompt"]');
   if (extractEmailPromptTextarea) state.tempResearchSettings.extractEmailPrompt = extractEmailPromptTextarea.value.trim();
+
+  const sourceRows = Array.from(drawer.querySelectorAll('[data-research-source-row]'));
+  if (sourceRows.length) {
+    state.tempResearchSettings.researchSources = sourceRows
+      .map((node) => normalizeResearchSource({
+        id: node.dataset.sourceId || '',
+        url: node.querySelector('[data-research-source-url]')?.value?.trim() || '',
+        enabled: Boolean(node.querySelector('[data-research-source-enabled]')?.checked),
+        requiresCredential: Boolean(node.querySelector('[data-research-source-requires-credential]')?.checked),
+        credentialSecretName: node.querySelector('[data-research-source-secret]')?.value?.trim() || '',
+      }))
+      .filter((source) => source.id || source.url);
+  }
 }
 
 async function generateOutreachForContact(itemId, contactIndex) {
@@ -7729,5 +8525,11 @@ export const __outboundTestHooks = {
   campaignIdeaTemplates,
   campaignScopedRows,
   extractRowsFromPayload,
+  normalizeResearchSourceId,
+  normalizeResearchSources,
+  researchAdapterFromCommandResult,
+  researchAdapterPatchFromServer,
+  researchSourcePolicyForPrompt,
+  researchVerificationPolicy,
   validateOutboundImportPayload,
 };
