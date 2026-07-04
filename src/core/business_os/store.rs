@@ -32708,6 +32708,20 @@ fn handle_appsec_business_command(
                 "expires_at",
                 "--expires-at",
             );
+            push_optional_appsec_string_arg(
+                &command.payload,
+                &mut args,
+                "review_mode",
+                "--review-mode",
+            );
+            if let Some(required_approvers) =
+                appsec_payload_u64(&command.payload, "required_approvers")
+            {
+                args.extend([
+                    "--required-approvers".to_string(),
+                    required_approvers.to_string(),
+                ]);
+            }
             if let Some(max_rate) =
                 appsec_payload_u64(&command.payload, "max_request_rate_per_second")
             {
@@ -33384,6 +33398,19 @@ fn project_appsec_approvals(
             "grant_review": sanitize_appsec_projection_json(
                 payload.get("grant_review").cloned().unwrap_or(Value::Null),
             ),
+            "review_policy": sanitize_appsec_projection_json(
+                payload.get("review_policy").cloned().unwrap_or(Value::Null),
+            ),
+            "board_review": sanitize_appsec_projection_json(
+                payload.get("board_review").cloned().unwrap_or(Value::Null),
+            ),
+            "board_reviews": sanitize_appsec_projection_json(
+                payload.get("board_reviews").cloned().unwrap_or(Value::Array(Vec::new())),
+            ),
+            "approved_by_operators": payload
+                .get("approved_by_operators")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new())),
             "policy": sanitize_appsec_projection_json(payload.get("policy").cloned().unwrap_or(Value::Null)),
             "updated_at": updated_at,
             "source": "ctox-appsec-core-projection",
