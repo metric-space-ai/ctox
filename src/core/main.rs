@@ -2532,6 +2532,9 @@ fn appsec_authz_candidate_from_object(value: &Value) -> Option<Value> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|item| !item.is_empty())?;
+    if appsec_authz_endpoint_is_static_asset(endpoint) {
+        return None;
+    }
     let method = value
         .get("method")
         .and_then(Value::as_str)
@@ -2542,19 +2545,96 @@ fn appsec_authz_candidate_from_object(value: &Value) -> Option<Value> {
     if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
         return None;
     }
+    let object_ref = value
+        .get("object")
+        .or_else(|| value.get("object_ref"))
+        .or_else(|| value.get("object_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty());
+    let owner_object_refs = appsec_authz_string_array(
+        value
+            .get("owner_object_refs")
+            .or_else(|| value.get("object_refs")),
+    );
+    let owner_subject = value
+        .get("owner_subject")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty());
+    let owner_body_hash = value
+        .get("owner_body_hash")
+        .or_else(|| value.get("body_hash"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty());
+    let explicit_expected = value
+        .get("expected")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|item| item.to_ascii_lowercase())
+        .is_some_and(|item| matches!(item.as_str(), "allow" | "deny"));
+    let authz_scoped = explicit_expected
+        || object_ref.is_some()
+        || !owner_object_refs.is_empty()
+        || (owner_subject.is_some() && owner_body_hash.is_some());
+    if !authz_scoped {
+        return None;
+    }
     let mut candidate = json!({
         "endpoint": endpoint,
         "method": method,
         "expected": value.get("expected").and_then(Value::as_str).unwrap_or("deny"),
     });
     if let Some(object) = candidate.as_object_mut() {
-        for key in ["object", "object_ref", "object_type", "owner_subject"] {
+        for key in [
+            "object",
+            "object_ref",
+            "object_type",
+            "object_source",
+            "owner_subject",
+            "owner_body_hash",
+            "owner_body_length",
+            "body_class",
+        ] {
             if let Some(value) = value.get(key).cloned() {
                 object.insert(key.to_string(), value);
             }
         }
+        if !owner_object_refs.is_empty() {
+            object.insert("owner_object_refs".to_string(), json!(owner_object_refs));
+        }
     }
     Some(candidate)
+}
+
+fn appsec_authz_endpoint_is_static_asset(endpoint: &str) -> bool {
+    let path = endpoint
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(endpoint)
+        .to_ascii_lowercase();
+    [
+        ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+        ".avif", ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".webm", ".pdf", ".zip",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+}
+
+fn appsec_authz_string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn execute_appsec_business_os_cli_command(root: &Path, args: &[String]) -> anyhow::Result<Value> {
@@ -4935,8 +5015,29 @@ mod tests {
             serde_json::to_string_pretty(&serde_json::json!({
                 "version": "ctox.appsec_pentest.web_stack_evidence.v1",
                 "result": {
+                    "api_requests": [{
+                        "endpoint": "/assets/app.8f3c1a2b.js",
+                        "method": "GET",
+                        "status": 200
+                    }],
+                    "visible_links": [{
+                        "endpoint": "/pricing",
+                        "method": "GET"
+                    }],
                     "replay_candidates": [{
                         "endpoint": "/api/projects/123",
+                        "method": "GET",
+                        "expected": "deny",
+                        "object": "123",
+                        "object_source": "url",
+                        "owner_body_hash": "abc123",
+                        "owner_object_refs": ["123"]
+                    }, {
+                        "endpoint": "/api/projects",
+                        "method": "GET",
+                        "expected": "inconclusive"
+                    }, {
+                        "endpoint": "/assets/project-123.css",
                         "method": "GET",
                         "expected": "deny",
                         "object": "123"
@@ -4968,6 +5069,11 @@ mod tests {
         let source = browser_automation_source_from_stage_command(&state, &command).unwrap();
         assert!(source.starts_with("globalThis.ctoxAuthzReplayCandidates = "));
         assert!(source.contains("/api/projects/123"));
+        assert!(source.contains("owner_body_hash"));
+        assert!(!source.contains("/assets/app.8f3c1a2b.js"));
+        assert!(!source.contains("/assets/project-123.css"));
+        assert!(!source.contains("\"endpoint\":\"/api/projects\""));
+        assert!(!source.contains("/pricing"));
         assert!(source.contains("return { count: globalThis.ctoxAuthzReplayCandidates.length };"));
 
         cleanup_test_dir(&root);
