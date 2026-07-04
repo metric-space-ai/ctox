@@ -72,9 +72,7 @@ export async function openReactSettings({
     },
     mcp: {
       loading: false,
-      issuing: false,
       info: null,
-      tokenIssue: null,
       error: '',
       copied: '',
     },
@@ -248,7 +246,6 @@ export async function openReactSettings({
         ...settingsState.mcp,
         loading: false,
         info: await loadMcpConnectInfo(),
-        tokenIssue: null,
         error: '',
         copied: '',
       };
@@ -256,37 +253,6 @@ export async function openReactSettings({
       settingsState.mcp = {
         ...settingsState.mcp,
         loading: false,
-        error: String(error?.message || error),
-      };
-    }
-    render();
-  };
-  const issueManagedMcpClientToken = async () => {
-    if (!isAdmin) return;
-    settingsState.mcp = {
-      ...settingsState.mcp,
-      issuing: true,
-      error: '',
-      copied: '',
-    };
-    render();
-    try {
-      const payload = await createManagedMcpClientToken();
-      settingsState.mcp = {
-        ...settingsState.mcp,
-        issuing: false,
-        info: {
-          ...(settingsState.mcp.info || {}),
-          managed: payload.managed || settingsState.mcp.info?.managed || null,
-        },
-        tokenIssue: payload,
-        error: '',
-        copied: '',
-      };
-    } catch (error) {
-      settingsState.mcp = {
-        ...settingsState.mcp,
-        issuing: false,
         error: String(error?.message || error),
       };
     }
@@ -479,10 +445,9 @@ export async function openReactSettings({
     });
     body.querySelector('[data-activity-refresh]')?.addEventListener('click', refreshActivity);
     body.querySelector('[data-mcp-refresh]')?.addEventListener('click', refreshMcpConnectInfo);
-    body.querySelector('[data-mcp-issue-managed]')?.addEventListener('click', issueManagedMcpClientToken);
     body.querySelectorAll('[data-mcp-copy]').forEach((button) => {
       button.addEventListener('click', async () => {
-        const value = mcpCopyValue(button.dataset.mcpCopy, settingsState.mcp.info, settingsState.mcp.tokenIssue);
+        const value = mcpCopyValue(button.dataset.mcpCopy, settingsState.mcp.info);
         if (!value) return;
         try {
           await navigator.clipboard?.writeText?.(value);
@@ -1068,9 +1033,6 @@ function mcpPanel(mcp = {}) {
   const codexConfig = info ? JSON.stringify(info.codex || {}, null, 2) : '';
   const claudeConfig = info ? JSON.stringify(info.claude || {}, null, 2) : '';
   const managed = info?.managed || null;
-  const tokenIssue = mcp.tokenIssue || null;
-  const managedCodexConfig = tokenIssue ? JSON.stringify(tokenIssue.codex || {}, null, 2) : '';
-  const managedClaudeConfig = tokenIssue ? JSON.stringify(tokenIssue.claude || {}, null, 2) : '';
   const copied = mcp.copied || '';
   const managedStatus = managed?.status || 'nicht geladen';
   const managedReady = managedStatus === 'ready';
@@ -1095,30 +1057,11 @@ function mcpPanel(mcp = {}) {
       <div class="runtime-actions">
         <button class="text-button settings-primary" type="button" data-mcp-refresh ${mcp.loading ? 'disabled' : ''}>MCP Status laden</button>
         ${info ? `<button class="text-button" type="button" data-mcp-copy="managedEndpoint">Managed Endpoint kopieren</button>` : ''}
-        ${info ? `<button class="text-button" type="button" data-mcp-issue-managed ${mcp.issuing ? 'disabled' : ''}>${escapeHtml(mcp.issuing ? 'Token wird erstellt...' : 'Agent Token erstellen')}</button>` : ''}
       </div>
       ${mcp.error ? `<p class="settings-note">${escapeHtml(mcp.error)}</p>` : ''}
       ${copied ? `<p class="settings-note">${escapeHtml(copied === 'failed' ? 'Kopieren fehlgeschlagen.' : 'In die Zwischenablage kopiert.')}</p>` : ''}
-      ${managed && !managedReady ? `<p class="settings-note">Managed MCP ist ${escapeHtml(managedStatus)}. Ein neuer Agent Token aktiviert die ctox.dev MCP-Konfiguration fuer diese Instanz.</p>` : ''}
+      ${managed && !managedReady ? `<p class="settings-note">Managed MCP ist ${escapeHtml(managedStatus)}. Agent Tokens werden im ctox.dev Dashboard rotiert.</p>` : ''}
     </section>
-    ${tokenIssue ? `
-      <section class="settings-section">
-        <header><h3>Managed Agent Config</h3><span>Bearer wird nur jetzt angezeigt.</span></header>
-        <div class="settings-grid is-one">
-          <label><span>Managed Bearer Token</span><input type="password" readonly value="${escapeAttr(tokenIssue.token || '')}" /></label>
-          <label><span>Managed MCP Endpoint</span><input readonly value="${escapeAttr(tokenIssue.endpoint || managed?.endpoint || '')}" /></label>
-          <label><span>Codex JSON</span><textarea readonly rows="8">${escapeHtml(managedCodexConfig)}</textarea></label>
-          <label><span>Claude JSON</span><textarea readonly rows="8">${escapeHtml(managedClaudeConfig)}</textarea></label>
-        </div>
-        <div class="runtime-actions">
-          <button class="text-button settings-primary" type="button" data-mcp-copy="managedCodex">Codex Config kopieren</button>
-          <button class="text-button" type="button" data-mcp-copy="managedClaude">Claude Config kopieren</button>
-          <button class="text-button" type="button" data-mcp-copy="managedAuthHeader">Authorization Header kopieren</button>
-          <button class="text-button" type="button" data-mcp-copy="managedToken">Bearer Token kopieren</button>
-        </div>
-        <p class="settings-note">Diesen Bearer jetzt in den Coding Agent eintragen. Nach dem Schliessen bleibt nur der Hash im Audit, nicht der Token selbst.</p>
-      </section>
-    ` : ''}
     ${info ? `
       <section class="settings-section">
         <header><h3>Lokale Codex / Claude Config</h3><span>Nur fuer Agenten mit Zugriff auf 127.0.0.1 dieser Instanz.</span></header>
@@ -1132,7 +1075,7 @@ function mcpPanel(mcp = {}) {
           <button class="text-button" type="button" data-mcp-copy="claude">Claude Config kopieren</button>
           <button class="text-button" type="button" data-mcp-copy="authHeader">Authorization Header kopieren</button>
         </div>
-        <p class="settings-note">Dieser lokale Token ist nicht der mcp.ctox.dev Bearer. Fuer beliebige Coding Agents oben einen Managed Agent Token erstellen.</p>
+        <p class="settings-note">Dieser lokale Token ist nicht der mcp.ctox.dev Bearer. Managed Agent Tokens werden im ctox.dev Dashboard rotiert.</p>
       </section>
     ` : ''}
   `;
@@ -1155,7 +1098,7 @@ function mcpStatusLabel(info, error) {
   return info.status === 'ready' ? 'Bereit fuer externe MCP Clients.' : String(info.status || 'Status unbekannt.');
 }
 
-function mcpCopyValue(kind, info, tokenIssue = null) {
+function mcpCopyValue(kind, info) {
   if (!info) return '';
   if (kind === 'endpoint') return info.endpoint || '';
   if (kind === 'managedEndpoint') return info.managed?.endpoint || '';
@@ -1163,10 +1106,6 @@ function mcpCopyValue(kind, info, tokenIssue = null) {
   if (kind === 'authHeader') return info.authorization_header || (info.token ? `Bearer ${info.token}` : '');
   if (kind === 'codex') return JSON.stringify(info.codex || {}, null, 2);
   if (kind === 'claude') return JSON.stringify(info.claude || {}, null, 2);
-  if (kind === 'managedToken') return tokenIssue?.token || '';
-  if (kind === 'managedAuthHeader') return tokenIssue?.authorization_header || (tokenIssue?.token ? `Bearer ${tokenIssue.token}` : '');
-  if (kind === 'managedCodex') return JSON.stringify(tokenIssue?.codex || {}, null, 2);
-  if (kind === 'managedClaude') return JSON.stringify(tokenIssue?.claude || {}, null, 2);
   return '';
 }
 
@@ -2697,35 +2636,6 @@ async function loadMcpConnectInfo() {
   }
   if (!payload?.ok) {
     throw new Error(payload?.message || payload?.error || 'MCP Status konnte nicht geladen werden.');
-  }
-  return payload;
-}
-
-async function createManagedMcpClientToken() {
-  const response = await fetch('/api/business-os/mcp/client-token', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    cache: 'no-store',
-    body: JSON.stringify({
-      label: 'Business OS Coding Agent',
-      expiresInDays: 90,
-    }),
-  });
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = null;
-  }
-  if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || text || `Managed MCP Token konnte nicht erstellt werden (${response.status}).`);
-  }
-  if (!payload?.ok || !payload?.token) {
-    throw new Error(payload?.message || payload?.error || 'Managed MCP Token konnte nicht erstellt werden.');
   }
   return payload;
 }

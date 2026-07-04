@@ -47,7 +47,7 @@ function baseTemplate(overrides = {}) {
       error: '',
       canManage: true,
     },
-    mcp: { loading: false, issuing: false, info: null, tokenIssue: null, error: '', copied: '' },
+    mcp: { loading: false, info: null, error: '', copied: '' },
     editingModuleId: '',
     governance: {
       founders: {
@@ -96,6 +96,34 @@ test('settings appearance tab hides when branding permission is absent', () => {
   });
   assert.doesNotMatch(html, /data-settings-tab="appearance"/);
   assert.doesNotMatch(html, /data-branding-save/);
+});
+
+test('settings MCP panel does not expose unsupported native managed token issuance', () => {
+  const html = baseTemplate({
+    tab: 'mcp',
+    mcp: {
+      loading: false,
+      error: '',
+      copied: '',
+      info: {
+        ok: true,
+        status: 'local_ready_managed_not_connected',
+        mode: 'local',
+        server_name: 'workspace-business-os-local',
+        endpoint: 'http://127.0.0.1:8788/mcp',
+        managed: {
+          status: 'not_connected',
+          endpoint: 'https://mcp.ctox.dev/mcp/workspace',
+        },
+      },
+    },
+  });
+
+  assert.match(html, /Managed Endpoint kopieren/);
+  assert.match(html, /Agent Tokens werden im ctox\.dev Dashboard rotiert/);
+  assert.doesNotMatch(html, /data-mcp-issue-managed/);
+  assert.doesNotMatch(html, /Agent Token erstellen/);
+  assert.doesNotMatch(reactSettingsSource, /\/api\/business-os\/mcp\/client-token/);
 });
 
 test('settings user form keeps owner transfer owner-only', () => {
