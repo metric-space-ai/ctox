@@ -737,6 +737,7 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
   const module = fixture?.module || {};
   const id = String(module.id || '').trim();
   if (!id) throw new Error('agent scope fixture needs a module id');
+  const hiddenId = 'phase12-hidden-agent-scope-app';
   const installedModulesRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules');
   fs.mkdirSync(installedModulesRoot, { recursive: true });
   const targetRealPath = fs.realpathSync(installedModulesRoot);
@@ -745,11 +746,20 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
     throw new Error('agent scope fixture would write into the real Business OS source tree');
   }
 
+  const writeFixtureIcon = (moduleRoot, label) => {
+    fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="${label}">
+  <rect width="64" height="64" rx="14" fill="#23665f"/>
+  <text x="32" y="39" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" font-weight="700" fill="#ffffff">${label}</text>
+</svg>
+`);
+  };
+
   const moduleRoot = path.join(installedModulesRoot, id);
   fs.mkdirSync(moduleRoot, { recursive: true });
   fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-agent-scope-fixture>Phase 12 Agent Scope fixture</section>\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
+  writeFixtureIcon(moduleRoot, '12');
   fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
   const host = ctx.host || document.body;
   const marker = document.createElement('section');
@@ -769,6 +779,23 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
       delete globalThis.__ctoxAgentScopeFixture;
     }
   };
+}
+`);
+
+  const hiddenModuleRoot = path.join(installedModulesRoot, hiddenId);
+  fs.mkdirSync(hiddenModuleRoot, { recursive: true });
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'index.html'), '<section data-agent-scope-hidden-fixture>Phase 12 hidden Agent Scope fixture</section>\n');
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'index.css'), ':host { display: block; }\n');
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'schema.js'), 'export const collections = {};\n');
+  writeFixtureIcon(hiddenModuleRoot, 'H12');
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'index.js'), `export async function mount(ctx) {
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.agentScopeHiddenFixture = ctx.module?.id || '';
+  marker.dataset.moduleRoot = ctx.module?.id || '';
+  marker.innerHTML = '<h2>Phase 12 Hidden Agent Scope App</h2><p>Hidden agent scope browser fixture</p>';
+  host.replaceChildren(marker);
+  return () => {};
 }
 `);
 }
