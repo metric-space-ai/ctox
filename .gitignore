@@ -34,6 +34,10 @@ old-legacy-for-transplation-only/
 /.claude/
 /.playwright-cli/
 /.remote_import/
+/.pentest/
+/.wrangler/
+/**/.wrangler/
+/src/apps/business-os/modules/sellify/
 
 
 # Dev-only files
