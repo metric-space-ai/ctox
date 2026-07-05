@@ -6083,6 +6083,68 @@ function ensureCtoxSmokeBinary() {
         })}`);
       }
 
+      async function waitForFileViaDemandFetch(id, ms = 30000, expectedPayload = null) {
+        const deadline = Date.now() + ms;
+        let lastSeen = null;
+        while (Date.now() < deadline) {
+          const fileDoc = await db.desktop_files.findOne(id).exec();
+          const file = fileDoc?.toJSON?.() || fileDoc;
+          const loader = appFileReplicationState?.demandFileLoader || null;
+          if (file && loader?.fetchFile) {
+            try {
+              const demandChunks = (await loader.fetchFile(id))
+                .filter((chunk) => chunk && chunk.cancelled !== true)
+                .filter((chunk) => typeof (chunk.bytesBase64 ?? chunk.bytes_base64) === 'string')
+                .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+              const contiguous = demandChunks.length > 0
+                && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
+              if (contiguous) {
+                const payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                lastSeen = {
+                  file,
+                  chunks: demandChunks,
+                  payload,
+                  generationId: file.content_generation_id || '',
+                  demandFetch: true,
+                };
+                const payloadMatches = expectedPayload === null || payload === expectedPayload;
+                const metadataReady = expectedPayload === null || file.content_state === 'available';
+                if (payloadMatches && metadataReady) return lastSeen;
+              } else {
+                lastSeen = {
+                  file,
+                  demandChunkCount: demandChunks.length,
+                  demandFetch: true,
+                  reason: 'non-contiguous-demand-chunks',
+                };
+              }
+            } catch (error) {
+              lastSeen = {
+                file,
+                demandFetch: true,
+                error: error?.message || String(error),
+              };
+            }
+          } else {
+            lastSeen = {
+              hasFile: Boolean(file),
+              hasDemandFileLoader: Boolean(loader?.fetchFile),
+              demandFetch: false,
+            };
+          }
+          await delay(500);
+        }
+        throw new Error(`browser did not receive rust-side file through demand fetch ${id}: ${JSON.stringify({
+          expectedPayload: expectedPayload === null ? null : {
+            length: expectedPayload.length,
+            prefix: expectedPayload.slice(0, 80),
+          },
+          lastSeen,
+          syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
+          syncConfig: globalThis.ctoxBusinessOsSmoke?.state?.sync?.config || null,
+        })}`);
+      }
+
       async function waitForWorkspaceArtifacts(expectedFiles, ms = 60000) {
         const expected = Array.isArray(expectedFiles) ? expectedFiles : [];
         const deadline = Date.now() + ms;
@@ -12305,6 +12367,9 @@ function ensureCtoxSmokeBinary() {
               } finally {
                 setupPhaseTimings.initialMetadataMs = Date.now() - initialMetadataStartedAt;
               }
+            }
+            if (smokeMode === 'business-os-restore-resync-ui') {
+              return waitForFileViaDemandFetch(rustSeed.id, 60000, rustSeed.content);
             }
             return waitForFile(rustSeed.id);
           })();
