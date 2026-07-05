@@ -677,8 +677,7 @@ export async function mount(ctx) {
 
   function isDatabaseClosingError(error) {
     const message = String(error?.message || error || '');
-    return error?.name === 'InvalidStateError'
-      && /IDBDatabase.*closing|database connection is closing/i.test(message);
+    return /IDBDatabase.*closing|database connection is closing/i.test(message);
   }
 
   function subscribeCommandStream() {

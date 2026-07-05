@@ -86,6 +86,10 @@ assert.ok(
   desktopSource.includes('icon seed skipped during database restart'),
   'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'
 );
+assert.ok(
+  desktopSource.includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);'),
+  'Desktop transient IndexedDB shutdown detection must not depend on DOMException prototype shape'
+);
 
 for (const requiredSnippet of [
   'isLaunchableModule',
