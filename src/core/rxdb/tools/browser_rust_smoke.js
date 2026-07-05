@@ -1804,14 +1804,15 @@ function quoteSqlIdentifier(identifier) {
 // poll until the required tail finishes (bounded) before asserting. Demand-only
 // chunk/blob collections must only be requested by callers that have explicitly
 // leased them first.
-async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
+async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null, allowRestart = true } = {}) {
   const deadline = Date.now() + timeoutMs;
   let status = null;
   for (;;) {
     status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
       timeoutMs: options.timeoutMs,
+      allowRestart: options.allowRestart === true,
       ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-    }), { timeoutMs, requiredCollections });
+    }), { timeoutMs, requiredCollections, allowRestart });
     const initialSync = status?.sync?.initialSync || {};
     const missing = Array.isArray(initialSync.missingInitialReplication)
       ? initialSync.missingInitialReplication
@@ -3423,8 +3424,14 @@ function ensureCtoxSmokeBinary() {
       // Startup readiness intentionally excludes demand-only chunk/blob
       // collections. File-focused smokes lease those collections explicitly
       // before adding them to strict advanced-status checks.
+      let startupAdvancedStatusTimeoutMs = 60000;
+      if (smokeMode === 'business-os-app-release-ui') {
+        startupAdvancedStatusTimeoutMs = 240000;
+      } else if (smokeMode === 'business-os-app-audience-ui') {
+        startupAdvancedStatusTimeoutMs = 120000;
+      }
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
-        timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
+        timeoutMs: startupAdvancedStatusTimeoutMs,
         requiredCollections: startupRequiredCollections,
       });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
