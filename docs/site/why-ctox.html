@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Why CTOX exists: one controlled backend for many real web apps, shared data, files, commands, permissions, and browser sync."
+    />
+    <title>Why CTOX</title>
+    <link rel="icon" href="assets/ctox-app-icon.png" />
+    <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #151515;
+        --muted: #646b75;
+        --line: #d9dfe8;
+        --surface: #f5f7fb;
+        --panel: #ffffff;
+        --code: #0f141a;
+        --cyan: #00a8df;
+        --magenta: #ec2b87;
+        --green: #0f8d5f;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      code {
+        padding: 0.12em 0.32em;
+        background: #edf2f8;
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.92em;
+      }
+
+      .topline {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-bottom: 1px solid var(--line);
+        background: rgba(245, 247, 251, 0.94);
+        backdrop-filter: blur(14px);
+      }
+
+      .topline-inner,
+      .shell,
+      footer .inner {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topline-inner {
+        display: flex;
+        min-height: 72px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .topline img {
+        display: block;
+        width: 128px;
+        height: auto;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .top-actions a {
+        text-decoration: none;
+      }
+
+      .nav-cta {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+      }
+
+      .shell {
+        padding: 64px 0 88px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.94fr) minmax(320px, 1.06fr);
+        gap: 54px;
+        align-items: end;
+        padding-bottom: 64px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .kicker {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 780px;
+        margin: 0;
+        font-size: clamp(44px, 6vw, 78px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        max-width: 820px;
+        margin: 0;
+        font-size: clamp(30px, 4vw, 46px);
+        line-height: 1.04;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.25;
+      }
+
+      p,
+      li {
+        color: #3f4650;
+        font-size: 17px;
+        line-height: 1.62;
+      }
+
+      p {
+        max-width: 880px;
+      }
+
+      .lead {
+        max-width: 860px;
+        margin: 24px 0 0;
+        color: #343c46;
+        font-size: clamp(18px, 2.2vw, 23px);
+        line-height: 1.42;
+      }
+
+      .hero-note {
+        margin: 0;
+        padding: 28px;
+        border-left: 5px solid var(--cyan);
+        background: #fff;
+        box-shadow: 0 18px 48px rgba(16, 22, 34, 0.08);
+      }
+
+      section {
+        padding: 58px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-lead {
+        margin: 18px 0 0;
+      }
+
+      .comparison {
+        display: grid;
+        gap: 1px;
+        margin-top: 32px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .comparison-row {
+        display: grid;
+        grid-template-columns: 190px minmax(0, 1fr) minmax(0, 1fr);
+        gap: 28px;
+        padding: 24px;
+        background: #fff;
+      }
+
+      .comparison-row b {
+        font-size: 18px;
+      }
+
+      .comparison-row span {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 32px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .flow div {
+        min-height: 138px;
+        padding: 22px;
+        background: #fff;
+      }
+
+      .flow b {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 18px;
+        line-height: 1.2;
+      }
+
+      .flow span {
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .image-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+        margin: 34px 0 0;
+      }
+
+      figure {
+        margin: 0;
+        border: 1px solid var(--line);
+        background: #fff;
+        box-shadow: 0 18px 48px rgba(16, 22, 34, 0.08);
+      }
+
+      figure img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9.7;
+        object-fit: cover;
+        object-position: top left;
+        background: #f7f9fd;
+      }
+
+      figcaption {
+        padding: 16px 18px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .two-column {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+        gap: 54px;
+        align-items: start;
+      }
+
+      .plain-list {
+        display: grid;
+        gap: 18px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .plain-list li {
+        padding: 18px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .plain-list li:last-child {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .plain-list b {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--ink);
+        font-size: 17px;
+      }
+
+      .engine {
+        border-left: 5px solid var(--magenta);
+        padding: 30px;
+        background: #fff;
+        box-shadow: 0 18px 48px rgba(16, 22, 34, 0.08);
+      }
+
+      .engine p:first-child {
+        margin-top: 0;
+      }
+
+      .engine p:last-child {
+        margin-bottom: 0;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin-top: 32px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        min-width: 820px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--ink);
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      td {
+        color: #3f4650;
+        line-height: 1.5;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .sources {
+        font-size: 14px;
+      }
+
+      footer {
+        border-top: 1px solid var(--line);
+        background: #fff;
+      }
+
+      footer .inner {
+        display: flex;
+        min-height: 82px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      footer a {
+        color: var(--ink);
+        font-weight: 650;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+
+      @media (max-width: 900px) {
+        .hero,
+        .two-column {
+          grid-template-columns: 1fr;
+        }
+
+        .comparison-row {
+          grid-template-columns: 1fr;
+        }
+
+        .flow,
+        .image-strip {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 680px) {
+        .topline-inner,
+        .shell,
+        footer .inner {
+          width: min(100% - 28px, 1180px);
+        }
+
+        .topline-inner {
+          min-height: 66px;
+        }
+
+        .topline img {
+          width: 104px;
+        }
+
+        .top-actions {
+          gap: 12px;
+          font-size: 13px;
+        }
+
+        .top-actions a[href*="github"] {
+          display: none;
+        }
+
+        .nav-cta {
+          min-height: 36px;
+          padding: 0 12px;
+        }
+
+        .shell {
+          padding: 42px 0 64px;
+        }
+
+        .hero {
+          padding-bottom: 46px;
+        }
+
+        section {
+          padding: 46px 0;
+        }
+
+        .flow div,
+        .comparison-row,
+        .engine,
+        .hero-note {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topline" aria-label="Site header">
+      <div class="topline-inner">
+        <a href="index.html" aria-label="CTOX home">
+          <img src="assets/ctox-full-logo.png" alt="CTOX" />
+        </a>
+        <div class="top-actions">
+          <a href="index.html">Overview</a>
+          <a href="docs.html">Docs</a>
+          <a href="cli.html">CLI</a>
+          <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+          <a class="nav-cta" href="index.html#install">Install</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="kicker">Why CTOX</p>
+          <h1 id="hero-title">One controlled backend for many real web apps.</h1>
+          <p class="lead">
+            CTOX is for teams, companies, families, and individual operators who
+            need their own web apps without turning every use case into a
+            separate SaaS product.
+          </p>
+        </div>
+        <p class="hero-note">
+          Put one computer online, install CTOX, install apps into it, and let
+          known users open those apps in a browser. The computer can be a cloud
+          VM, a network server, an office machine, or another host you control.
+        </p>
+      </section>
+
+      <section aria-labelledby="gap-title">
+        <p class="kicker">The gap</p>
+        <h2 id="gap-title">Many useful apps are too shared for a desktop tool and too private for a SaaS product.</h2>
+        <p class="section-lead">
+          A desktop app is simple until more than one person needs the same
+          state. A SaaS stack is powerful, but it makes every app carry hosting,
+          auth, database, storage, operations, and integration work. CTOX targets
+          the space between those two ends.
+        </p>
+
+        <div class="comparison" aria-label="Desktop, SaaS, and CTOX comparison">
+          <div class="comparison-row">
+            <b>Desktop app</b>
+            <span>The app works on one profile, one machine, and one local data set.</span>
+            <span>Good for one person. Painful when colleagues need shared state.</span>
+          </div>
+          <div class="comparison-row">
+            <b>SaaS product</b>
+            <span>The app is built for public access, customer accounts, billing, scale, and platform operations.</span>
+            <span>Good for a product business. Heavy when the users are already known.</span>
+          </div>
+          <div class="comparison-row">
+            <b>CTOX</b>
+            <span>One backend you control runs many web apps for your own users.</span>
+            <span>Good when you want browser access, shared state, permissions, and app installs without a new cloud setup for every app.</span>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="flow-title">
+        <p class="kicker">How it works</p>
+        <h2 id="flow-title">The app builder works on the app. CTOX already owns the repeated backend work.</h2>
+        <div class="flow" aria-label="CTOX app flow">
+          <div>
+            <b>1. Run CTOX</b>
+            <span>Install CTOX on one host that you control.</span>
+          </div>
+          <div>
+            <b>2. Build an app</b>
+            <span>Create a focused app for one use case, by hand or with AI.</span>
+          </div>
+          <div>
+            <b>3. Install it</b>
+            <span>The app is installed into the CTOX system that is already running.</span>
+          </div>
+          <div>
+            <b>4. Users open it</b>
+            <span>Known users open a real web app in a browser, not a streamed desktop.</span>
+          </div>
+          <div>
+            <b>5. Apps share state</b>
+            <span>Apps meet in the same users, files, commands, permissions, and database.</span>
+          </div>
+        </div>
+
+        <div class="image-strip" aria-label="Business OS screenshots">
+          <figure>
+            <img src="assets/business-os-leads.png" alt="CTOX Business OS leads app screen" />
+            <figcaption>Focused Business OS app screens can be built for one concrete workflow.</figcaption>
+          </figure>
+          <figure>
+            <img src="assets/business-os-knowledge.png" alt="CTOX Business OS knowledge app screen" />
+            <figcaption>Apps can read and write shared CTOX state instead of becoming isolated tools.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section aria-labelledby="ai-title">
+        <div class="two-column">
+          <div>
+            <p class="kicker">AI-generated apps</p>
+            <h2 id="ai-title">AI makes one app per use case practical.</h2>
+            <p class="section-lead">
+              A small team can create apps for customer intake, quotes, file
+              review, reporting, approvals, field work, agent supervision, or a
+              company-specific process. Each app can stay focused on its users
+              instead of becoming a general platform.
+            </p>
+          </div>
+          <ul class="plain-list">
+            <li>
+              <b>No separate hosted prototype for every idea.</b>
+              An AI-generated CTOX app is installed into the CTOX backend that
+              already exists.
+            </li>
+            <li>
+              <b>No per-app user system.</b>
+              Apps use the users and permissions that CTOX already manages.
+            </li>
+            <li>
+              <b>No manual interface work between sibling apps.</b>
+              Apps can share records, files, commands, and status through CTOX.
+            </li>
+            <li>
+              <b>Usability gets the attention.</b>
+              The app builder can spend time on screens, flow, records, and
+              actions instead of repeating setup work.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section aria-labelledby="engine-title">
+        <div class="two-column">
+          <div>
+            <p class="kicker">The critical engine</p>
+        <h2 id="engine-title">This direction depends on <code>ctox-rxdb</code> being robust, quiet, and fast.</h2>
+          </div>
+          <div class="engine">
+            <p>
+              <code>ctox-rxdb</code> connects browser apps to the CTOX backend.
+              Browser data lives in IndexedDB. Native state lives in SQLite.
+              The sync path runs over WebRTC.
+            </p>
+            <p>
+              Business app records, commands, file metadata, query results,
+              checkpoints, and file chunks must not fall back to an HTTP data
+              proxy. HTTP can serve shell files and bootstrap information; app
+              data belongs on the <code>ctox-rxdb</code> path.
+            </p>
+            <p>
+              That means idle CPU must stay low, reconnects must be boring,
+              large files must load only when needed, the backend must remain
+              the source of truth for permissions, and the JavaScript and Rust
+              behavior must not drift. A single Rust core with a WebAssembly
+              browser build is the natural long-term direction, with thin
+              browser adapters for IndexedDB and browser APIs.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="compare-title">
+        <p class="kicker">Compared with common web paths</p>
+        <h2 id="compare-title">Vercel, Neon, AWS, and Azure solve a different problem.</h2>
+        <p class="section-lead">
+          Those platforms are good choices when you are building a public web
+          product or a cloud system you intend to operate. CTOX is for a
+          different starting point: you have known users, you can run one host,
+          and you want many real web apps without a new paid cloud setup for
+          every internal use case.
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>SaaS stack</th>
+                <th>Cloud platform</th>
+                <th>CTOX</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Who is the app for?</td>
+                <td>Public customers or a market.</td>
+                <td>Users of a cloud system you design.</td>
+                <td>Your own known users.</td>
+              </tr>
+              <tr>
+                <td>What do you set up first?</td>
+                <td>Hosting, database, auth, deploys, and project accounts.</td>
+                <td>Compute, network, identity, storage, database, monitoring, and security.</td>
+                <td>One CTOX host.</td>
+              </tr>
+              <tr>
+                <td>What does a new app require?</td>
+                <td>Another app deployment and another integration surface.</td>
+                <td>More cloud design and operational choices.</td>
+                <td>Install the app into CTOX.</td>
+              </tr>
+              <tr>
+                <td>How do apps work together?</td>
+                <td>APIs, events, webhooks, and shared services.</td>
+                <td>Designed cloud integrations.</td>
+                <td>The same CTOX users, files, commands, permissions, and database.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="not-title">
+        <p class="kicker">Boundaries</p>
+        <h2 id="not-title">CTOX is not a remote desktop and not a replacement for every cloud platform.</h2>
+        <p class="section-lead">
+          Users open web apps. CTOX can use WebRTC and managed access paths so
+          users do not need a per-app VPN. The backend can still run wherever it
+          makes sense: cloud VM, network server, office computer, or another
+          controlled host.
+        </p>
+        <p>
+          If you are selling a public SaaS product to thousands of customers,
+          a SaaS hosting stack can be the right tool. If you are building apps
+          for your own team, company, family, or private workflow, CTOX gives
+          you a more direct path: one running system, many browser apps, shared
+          state, and less repeated setup work.
+        </p>
+      </section>
+
+      <section aria-labelledby="sources-title">
+        <p class="kicker">References</p>
+        <h2 id="sources-title">Sources used for the comparison</h2>
+        <p class="sources">
+          CTOX architecture: <a href="../ctox-rxdb.md">docs/ctox-rxdb.md</a>.
+          External platform references:
+          <a href="https://vercel.com/docs/frameworks/full-stack/nextjs">Next.js on Vercel</a>,
+          <a href="https://vercel.com/docs/deployments">Vercel Deployments</a>,
+          <a href="https://neon.com/docs/introduction/architecture-overview">Neon architecture</a>,
+          <a href="https://neon.com/docs/introduction/branching">Neon branching</a>,
+          <a href="https://docs.aws.amazon.com/solutions/building-a-containerized-and-scalable-web-application-on-aws/">AWS containerized web app guidance</a>,
+          and
+          <a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/deploy-a-react-based-single-page-application-to-amazon-s3-and-cloudfront.html">AWS SPA on S3 and CloudFront</a>.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <div class="inner">
+        <span>CTOX project page</span>
+        <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>
