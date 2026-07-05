@@ -178,6 +178,12 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --check
 
+      - name: Installer script checks
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          bash -n install.sh
+          bash tests/install_grepplus_shim_smoke.sh
+
       - name: AppSec non-network fixture gates
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
