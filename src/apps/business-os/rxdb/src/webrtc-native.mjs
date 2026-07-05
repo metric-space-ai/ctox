@@ -29,6 +29,7 @@ import {
   MAX_INLINE_FRAME_BYTES,
   MAX_TRANSFER_BYTES,
 } from './frame-contract.generated.mjs';
+import { CTOX_PRESENCE_RPC } from './protocol-contract.generated.mjs';
 
 const SEND_BUFFER_HIGH_WATER = 512 * 1024;
 const SEND_BUFFER_LOW_WATER = 128 * 1024;
@@ -967,6 +968,17 @@ export class CtoxWebRtcNativePeer {
         peerId,
         result: payload.result,
         collection: masterChangeCollection || payload.collection || null,
+      });
+      return;
+    }
+    // Presence push (ctox-presence-v1): the native hub pushes the aggregate of
+    // the OTHER peers' presence entries as a response frame with the reserved
+    // `presence$` id. It is a server push, not a reply — intercept it before
+    // the pending-response correlation (which would drop the unknown id).
+    if (payload?.id === CTOX_PRESENCE_RPC.streamId) {
+      this.events.emit('presence', {
+        peerId,
+        entries: Array.isArray(payload?.result?.entries) ? payload.result.entries : [],
       });
       return;
     }

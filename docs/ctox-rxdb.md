@@ -114,6 +114,7 @@ All descriptions verified against the file headers.
 | `replication-webrtc.mjs` | `replicateWebRTC`: shared room peer plus per-collection replication states (pull/push, checkpoints, master handler). |
 | `webrtc-native.mjs` | Native `RTCPeerConnection`/`WebSocket` peer: signaling, framed transport, prioritised send queue, request/response RPC. |
 | `active-collections.mjs` | Registry of "active" (foreground) collections, derived from real subscriptions and recent `.exec()` reads; feeds the `rxdb.activeCollections` control frame. |
+| `presence.mjs` | Ephemeral presence registry (ctox-presence-v1): per-owner local "who is viewing/editing what" entries feed the `rxdb.presence.update` control frame; remote aggregates arrive via the `presence$` push. Never persisted, never authoritative. |
 | `frame-contract.generated.mjs` | GENERATED frame-protocol constants (do not edit; see §7). |
 | `protocol-contract.generated.mjs` | GENERATED protocol/capability/error-code constants (do not edit; see §7). |
 | `demand-loading-transport.mjs` | Turns the bidirectional `peer.request` channel into a `rxdb.query.fetch` / `rxdb.file.fetch` request/response layer, correlating pushed chunk frames. |
@@ -452,6 +453,33 @@ asynchronously and correlated by `requestId`
 `demand-loading-transport.mjs`). Capability gate:
 `ctox-rxdb-query-fetch-v1`.
 
+### 6.5 Presence (ctox-presence-v1)
+
+Ephemeral "who is viewing/editing what" hints between browser peers, relayed
+through the native peer. Presence is **advisory UX state only**: it is held in
+memory on every side (no collection, no IndexedDB, no SQLite — idle stays
+idle), and it must never gate an action; policy stays server-side.
+
+- Browser → native: `rxdb.presence.update` control frame (like
+  `rxdb.activeCollections`), params `[[entryObject, …]]`. Entries are opaque
+  JSON objects, conventionally `{ collection, recordId, actorId, actorName,
+  mode }`; the shell facade stamps the actor from the session. Capped at
+  `maxEntriesPerPeer` (32) native-side.
+- Native → browsers: the connection handler keeps the last report per peer and
+  pushes each open peer the aggregate of every OTHER peer's live entries as a
+  response frame with the reserved id `presence$` — on change, on peer close,
+  and once after the TTL sweep (`ttlMs` 45 s). Entry-identical refreshes
+  re-stamp the TTL clock without broadcasting.
+- Idle discipline: the browser refresh timer (`refreshMs` 20 s) exists only
+  while local entries exist; the native TTL sweep task exists only while any
+  presence is stored. No presence ⇒ no timers, no frames.
+- Capability-gated: both sides advertise `ctox-presence-v1`; the browser never
+  sends the method to a peer that did not advertise it. Constants live in the
+  protocol fixture (§7): `presenceRpc` + `optionalCapabilities.presence`.
+- Shell surface: modules get `ctx.presence` (`set`/`clear`/`subscribe`) from
+  the Business OS shell (`app.js::createModulePresenceFacade`), scoped per
+  module and actor-stamped.
+
 `desktop_file_chunks` is not a normal background-pull surface for browser file
 reads. The browser disables pull and query-demand loading for chunk collections;
 the file viewer opens `desktop_files`, then uses `rxdb.file.fetch` against the
@@ -569,7 +597,7 @@ A mismatch makes the browser load a **second copy of the bundle** — two
 module graphs, two shared-room-peer registries, duplicate peers in the room.
 After any `src/` change: rebuild dist with the command above **and** bump the
 buster in both files (current value at the time of writing:
-`20260617-support-schema`).
+`20260706-presence-v1`).
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
@@ -612,6 +640,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `multi-tab-broker-smoke` | BroadcastChannel leader election (and absence of BroadcastChannel). |
 | `no-package-manager-import-smoke` | Bundle imports with no package manager present. |
 | `orphan-cleanup-smoke` | Aborted fetches leave no partial documents/windows behind. |
+| `presence-smoke` | Presence (ctox-presence-v1): registry union/debounce/refresh-only-while-nonempty, capability gate (no `rxdb.presence.update` toward pre-presence peers), `presence$` push routing, teardown clears remote hints. |
 | `primary-store-eviction-smoke` | Eviction deletes documents from the primary store, not just sidecar metadata. |
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |

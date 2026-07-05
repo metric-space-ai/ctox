@@ -40,6 +40,14 @@ var CTOX_FILE_RPC = Object.freeze({
   cancel: "rxdb.file.cancel",
   maxBytesPerChunk: 262144
 });
+var CTOX_PRESENCE_CAPABILITY = "ctox-presence-v1";
+var CTOX_PRESENCE_RPC = Object.freeze({
+  update: "rxdb.presence.update",
+  streamId: "presence$",
+  ttlMs: 45e3,
+  refreshMs: 2e4,
+  maxEntriesPerPeer: 32
+});
 
 // src/apps/business-os/rxdb/src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
@@ -2501,6 +2509,13 @@ var CtoxWebRtcNativePeer = class {
         peerId,
         result: payload.result,
         collection: masterChangeCollection || payload.collection || null
+      });
+      return;
+    }
+    if (payload?.id === CTOX_PRESENCE_RPC.streamId) {
+      this.events.emit("presence", {
+        peerId,
+        entries: Array.isArray(payload?.result?.entries) ? payload.result.entries : []
       });
       return;
     }
@@ -5774,6 +5789,138 @@ function createActiveCollectionRegistry(options = {}) {
   return new ActiveCollectionRegistry(options);
 }
 
+// src/apps/business-os/rxdb/src/presence.mjs
+var PRESENCE_NOTIFY_DEBOUNCE_MS = 100;
+var PresenceRegistry = class {
+  constructor({
+    clock = () => Date.now(),
+    refreshMs = Number(CTOX_PRESENCE_RPC.refreshMs) || 2e4
+  } = {}) {
+    this.clock = clock;
+    this.refreshMs = refreshMs;
+    this.localByOwner = /* @__PURE__ */ new Map();
+    this.remoteEntries = [];
+    this.localListeners = /* @__PURE__ */ new Set();
+    this.remoteListeners = /* @__PURE__ */ new Set();
+    this.notifyTimer = null;
+    this.refreshTimer = null;
+    this.lastNotifiedKey = null;
+  }
+  // Replace ONE owner's local entries (empty array or null clears them).
+  // Owners are module/app surfaces; the wire set is the union of all owners.
+  setLocal(ownerKey, entries) {
+    const key = String(ownerKey || "default");
+    const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+    if (list.length === 0) this.localByOwner.delete(key);
+    else this.localByOwner.set(key, list);
+    this.scheduleNotify();
+    this.armRefreshTimer();
+  }
+  clearLocal(ownerKey) {
+    this.setLocal(ownerKey, []);
+  }
+  // The union of every owner's local entries, deterministic order.
+  localEntries() {
+    const out = [];
+    for (const list of this.localByOwner.values()) out.push(...list);
+    out.sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+    return out;
+  }
+  // Transport hook: fires with the local entry union whenever it changes, and
+  // once per refresh window while non-empty (`{ refresh: true }`) so the
+  // native TTL clock keeps getting re-stamped. Fires immediately on
+  // subscribe. Returns an unsubscribe function.
+  onLocalChange(listener) {
+    if (typeof listener !== "function") return () => {
+    };
+    this.localListeners.add(listener);
+    try {
+      listener(this.localEntries(), { refresh: false });
+    } catch {
+    }
+    return () => {
+      this.localListeners.delete(listener);
+    };
+  }
+  // App hook: fires with the remote aggregate (other peers' entries) whenever
+  // the native hub pushes a new one. Fires immediately on subscribe.
+  onRemoteChange(listener) {
+    if (typeof listener !== "function") return () => {
+    };
+    this.remoteListeners.add(listener);
+    try {
+      listener(this.remoteEntries.slice());
+    } catch {
+    }
+    return () => {
+      this.remoteListeners.delete(listener);
+    };
+  }
+  // Transport hook: a `presence$` push replaces the remote aggregate
+  // wholesale (the hub always sends the full set, never deltas).
+  applyRemote(entries) {
+    this.remoteEntries = (Array.isArray(entries) ? entries : []).filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+    for (const listener of this.remoteListeners) {
+      try {
+        listener(this.remoteEntries.slice());
+      } catch {
+      }
+    }
+  }
+  scheduleNotify() {
+    if (this.notifyTimer != null) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      const entries = this.localEntries();
+      const key = JSON.stringify(entries);
+      if (key === this.lastNotifiedKey) return;
+      this.lastNotifiedKey = key;
+      for (const listener of this.localListeners) {
+        try {
+          listener(entries, { refresh: false });
+        } catch {
+        }
+      }
+    }, PRESENCE_NOTIFY_DEBOUNCE_MS);
+    this.notifyTimer.unref?.();
+  }
+  // Idle discipline: the refresh timer exists ONLY while local entries exist.
+  // An idle tab with no presence publishes nothing and keeps no timer.
+  armRefreshTimer() {
+    const hasLocal = this.localByOwner.size > 0;
+    if (!hasLocal) {
+      if (this.refreshTimer != null) {
+        clearInterval(this.refreshTimer);
+        this.refreshTimer = null;
+      }
+      return;
+    }
+    if (this.refreshTimer != null) return;
+    this.refreshTimer = setInterval(() => {
+      if (this.localByOwner.size === 0) {
+        clearInterval(this.refreshTimer);
+        this.refreshTimer = null;
+        return;
+      }
+      for (const listener of this.localListeners) {
+        try {
+          listener(this.localEntries(), { refresh: true });
+        } catch {
+        }
+      }
+    }, this.refreshMs);
+    this.refreshTimer.unref?.();
+  }
+};
+var SINGLETON2 = null;
+function getPresenceRegistry() {
+  if (!SINGLETON2) SINGLETON2 = new PresenceRegistry();
+  return SINGLETON2;
+}
+function createPresenceRegistry(options = {}) {
+  return new PresenceRegistry(options);
+}
+
 // src/apps/business-os/rxdb/src/v1_5_status.mjs
 var V1_5_QUERY_FETCH_CAPABILITY = CTOX_QUERY_FETCH_CAPABILITY;
 var V1_5_QUERY_RPC = CTOX_QUERY_RPC;
@@ -5874,8 +6021,14 @@ var BROWSER_CAPABILITIES = [
   "ctox-schema-hash-v1",
   "ctox-peer-session-v1",
   "ctox-checkpoint-epoch-v1",
-  CTOX_QUERY_FETCH_CAPABILITY
+  CTOX_QUERY_FETCH_CAPABILITY,
+  CTOX_PRESENCE_CAPABILITY
 ];
+function remoteSupportsPresence(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_PRESENCE_CAPABILITY);
+}
 function remoteSupportsQueryFetch(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
   const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
@@ -5964,6 +6117,9 @@ var SharedRoomPeer = class {
     this.activeRegistryUnsub = null;
     this.lastActiveCollectionsSent = null;
     this.lastActiveCollectionsSet = null;
+    this.presenceRegistry = getPresenceRegistry();
+    this.presenceUnsub = null;
+    this.presenceCapable = false;
   }
   representativeCollection() {
     const first = this.collections.keys().next();
@@ -6042,6 +6198,18 @@ var SharedRoomPeer = class {
         }
         this.activeRegistryUnsub = null;
       }
+      if (this.presenceUnsub) {
+        try {
+          this.presenceUnsub();
+        } catch {
+        }
+        this.presenceUnsub = null;
+      }
+      this.presenceCapable = false;
+      try {
+        this.presenceRegistry.applyRemote([]);
+      } catch {
+      }
     }
   }
   abortPeerRequests(peerId, reason = "peer-close") {
@@ -6091,6 +6259,11 @@ var SharedRoomPeer = class {
       }
       if (this.activeRemotePeerId === event.detail?.peerId) {
         this.activeRemotePeerId = null;
+        this.presenceCapable = false;
+        try {
+          this.presenceRegistry.applyRemote([]);
+        } catch {
+        }
       }
       this.fanout("peer-close", event.detail);
     });
@@ -6099,6 +6272,18 @@ var SharedRoomPeer = class {
       const collection = event.detail?.collection || event.collection || null;
       this.fanoutMasterChange(collection);
     });
+    this.peer.on("presence", (event) => {
+      const entries = event.detail?.entries ?? event.entries ?? [];
+      try {
+        this.presenceRegistry.applyRemote(entries);
+      } catch {
+      }
+    });
+    if (!this.presenceUnsub) {
+      this.presenceUnsub = this.presenceRegistry.onLocalChange((entries) => {
+        this.sendPresenceUpdate(entries);
+      });
+    }
     if (!this.activeRegistryUnsub) {
       this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
         const previous = this.lastActiveCollectionsSet || /* @__PURE__ */ new Set();
@@ -6116,6 +6301,25 @@ var SharedRoomPeer = class {
       });
     }
     return this.peer;
+  }
+  // Presence: send `rxdb.presence.update` (fire-and-forget) to the active
+  // native peer. Gated on the handshake capability so a pre-presence native
+  // peer never sees the unknown method. No-op until a peer is open; resent on
+  // (re)handshake because the native hub drops per-peer presence on
+  // disconnect.
+  sendPresenceUpdate(entries) {
+    if (!this.presenceCapable) return;
+    const peerId = this.activeRemotePeerId;
+    if (!peerId || !this.peer) return;
+    const list = Array.isArray(entries) ? entries : this.presenceRegistry.localEntries();
+    try {
+      this.peer.send(peerId, {
+        id: `presence-update|${Date.now()}`,
+        method: CTOX_PRESENCE_RPC.update,
+        params: [list]
+      });
+    } catch {
+    }
   }
   // Phase 2: send `rxdb.activeCollections` (fire-and-forget) to the active
   // native peer. No-op until a peer is open. Resent on (re)handshake because
@@ -6323,6 +6527,8 @@ var SharedRoomPeer = class {
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     this.sendActiveCollections();
+    this.presenceCapable = remoteSupportsPresence(normalizedRemoteProtocol);
+    this.sendPresenceUpdate();
     this.negotiated = { peerId, remoteProtocol: normalizedRemoteProtocol, queryFetchCapable };
     return this.negotiated;
   }
@@ -7355,6 +7561,7 @@ function rxdbCore() {
     createRxDatabase,
     getCtoxIndexedDbStorage,
     getConnectionHandlerSimplePeer,
+    getPresenceRegistry,
     replicateWebRTC,
     removeRxDatabase,
     RxDBMigrationSchemaPlugin,
@@ -8231,6 +8438,7 @@ export {
   DEFAULT_WINDOW_LIMIT,
   FILE_CHUNK_PRESENCE_KEY,
   OBSERVABLE_DEBOUNCE_MS,
+  PRESENCE_NOTIFY_DEBOUNCE_MS,
   QueryMetaStorage,
   RECENT_EXEC_ACTIVE_MS,
   RxDBMigrationSchemaPlugin,
@@ -8255,6 +8463,7 @@ export {
   createIndexedDbMetaBackend,
   createMemoryBroker,
   createMemoryMetaBackend,
+  createPresenceRegistry,
   createQueryDemandLoader,
   createRxDatabase,
   createSidecarWithMemoryBackend,
@@ -8265,6 +8474,7 @@ export {
   getActiveCollectionRegistry,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
+  getPresenceRegistry,
   normalizeSignalingControlPlaneError,
   openCtoxIndexedDbStorage,
   projectStatusFromSidecar,

@@ -19,6 +19,7 @@ import {
   replicateWebRTC,
 } from './replication-webrtc.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
+import { getPresenceRegistry } from './presence.mjs';
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -76,6 +77,7 @@ export function rxdbCore() {
     createRxDatabase,
     getCtoxIndexedDbStorage,
     getConnectionHandlerSimplePeer,
+    getPresenceRegistry,
     replicateWebRTC,
     removeRxDatabase,
     RxDBMigrationSchemaPlugin,

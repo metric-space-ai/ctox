@@ -29,6 +29,10 @@ use webrtc::peer_connection::{
 };
 use webrtc::runtime::default_runtime;
 
+use crate::plugins::replication_webrtc::protocol_contract_generated::{
+    CTOX_PRESENCE_MAX_ENTRIES_PER_PEER, CTOX_PRESENCE_RPC_UPDATE, CTOX_PRESENCE_STREAM_ID,
+    CTOX_PRESENCE_TTL_MS,
+};
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::signaling_protocol::{PeerId, RoomId, ServerToClient};
 use crate::plugins::replication_webrtc::webrtc_types::{
@@ -76,6 +80,17 @@ pub type WebRTCRsPeer = PeerId;
 
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type DocumentReadAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
+
+/// One peer's last presence report (ctox-presence-v1). Entries are opaque JSON
+/// objects the browser sent (`{collection, recordId, actor, …}`); the hub only
+/// relays them, it never interprets or persists them. `updated_at_ms` is
+/// re-stamped on every report — including an entry-identical refresh — so the
+/// TTL measures silence, not change.
+#[derive(Clone, Debug, PartialEq)]
+struct PeerPresenceReport {
+    entries: Vec<Value>,
+    updated_at_ms: u64,
+}
 
 #[derive(Clone)]
 pub struct WebRTCRsConfig {
@@ -380,6 +395,18 @@ pub struct WebRTCRsConnectionHandler {
     /// in this set are sent at High priority so the foreground collection's
     /// data jumps ahead of background bulk transfers on the shared DataChannel.
     active_collections: Arc<Mutex<HashMap<WebRTCRsPeer, HashSet<String>>>>,
+    /// Presence hub (ctox-presence-v1): the last `rxdb.presence.update` report
+    /// per peer, IN MEMORY ONLY. Presence is advisory UX state ("X is editing
+    /// this record"), never persisted, never authoritative for policy, and
+    /// must not touch SQLite — idle stays idle. Aggregates of all OTHER peers'
+    /// live entries are pushed as `presence$` response frames on change,
+    /// on peer close, and once after the TTL sweep.
+    presence: Arc<Mutex<HashMap<WebRTCRsPeer, PeerPresenceReport>>>,
+    /// Generation guard for the one-shot TTL sweep task: each presence update
+    /// bumps it, and a sleeping sweep task that wakes on a stale generation
+    /// exits without broadcasting (a newer task has the duty). No presence =>
+    /// no live sweep task.
+    presence_sweep_generation: Arc<AtomicU64>,
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
@@ -437,6 +464,8 @@ impl WebRTCRsConnectionHandler {
             pending_frame_acks: Arc::new(Mutex::new(HashMap::new())),
             send_queues: Arc::new(Mutex::new(HashMap::new())),
             active_collections: Arc::new(Mutex::new(HashMap::new())),
+            presence: Arc::new(Mutex::new(HashMap::new())),
+            presence_sweep_generation: Arc::new(AtomicU64::new(0)),
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
@@ -1078,6 +1107,137 @@ impl WebRTCRsConnectionHandler {
         }
         self.refresh_send_queue_status();
         newly_activated
+    }
+
+    /// Apply an inbound `rxdb.presence.update` control frame (params:
+    /// `[[entryObject, …]]`). Stores the report in the in-memory presence map
+    /// and returns whether the peer's visible entry set CHANGED (an
+    /// entry-identical refresh re-stamps the TTL clock but does not warrant a
+    /// broadcast). Non-object entries are dropped; the entry count is capped
+    /// at the contract's `maxEntriesPerPeer`.
+    fn apply_presence(&self, peer: &WebRTCRsPeer, message: &WebRTCMessage) -> bool {
+        let entries: Vec<Value> = message
+            .params
+            .first()
+            .and_then(Value::as_array)
+            .map(|arr: &Vec<Value>| {
+                arr.iter()
+                    .filter(|value| value.is_object())
+                    .take(CTOX_PRESENCE_MAX_ENTRIES_PER_PEER)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut presence = self.presence.lock();
+        if entries.is_empty() {
+            return presence
+                .remove(peer)
+                .is_some_and(|report| !report.entries.is_empty());
+        }
+        let changed = presence
+            .get(peer)
+            .map(|report| report.entries != entries)
+            .unwrap_or(true);
+        presence.insert(
+            peer.clone(),
+            PeerPresenceReport {
+                entries,
+                updated_at_ms: now_ms(),
+            },
+        );
+        changed
+    }
+
+    /// The aggregate presence a recipient should see: every OTHER peer's
+    /// entries whose report is within the TTL. Sorted by serialized form so
+    /// the payload is deterministic (the map iteration order is not).
+    fn presence_entries_excluding(&self, recipient: &WebRTCRsPeer, now_ms: u64) -> Vec<Value> {
+        let presence = self.presence.lock();
+        let mut out: Vec<Value> = Vec::new();
+        for (peer, report) in presence.iter() {
+            if peer == recipient {
+                continue;
+            }
+            if now_ms.saturating_sub(report.updated_at_ms) > CTOX_PRESENCE_TTL_MS {
+                continue;
+            }
+            out.extend(report.entries.iter().cloned());
+        }
+        out.sort_by_cached_key(|entry| entry.to_string());
+        out
+    }
+
+    /// Drop reports past the TTL. Returns whether anything was removed (the
+    /// sweep only broadcasts when it actually pruned something).
+    fn prune_expired_presence(&self, now_ms: u64) -> bool {
+        let mut presence = self.presence.lock();
+        let before = presence.len();
+        presence.retain(|_, report| {
+            now_ms.saturating_sub(report.updated_at_ms) <= CTOX_PRESENCE_TTL_MS
+        });
+        presence.len() != before
+    }
+
+    /// Remove ONE peer's presence (channel close / peer removal). Returns
+    /// whether it had visible entries, i.e. whether the remaining peers need
+    /// a broadcast to drop its hints.
+    fn remove_peer_presence(&self, peer: &WebRTCRsPeer) -> bool {
+        self.presence
+            .lock()
+            .remove(peer)
+            .is_some_and(|report| !report.entries.is_empty())
+    }
+
+    /// Push the current presence aggregate to every open peer as a
+    /// `presence$` response frame. Each recipient gets everyone's entries but
+    /// its own. Best-effort: a send failure surfaces through the normal
+    /// transport error path and must not stall the loop.
+    async fn broadcast_presence(self: &Arc<Self>) {
+        let now = now_ms();
+        let recipients: Vec<WebRTCRsPeer> = self
+            .peers
+            .lock()
+            .iter()
+            .filter(|(_, entry)| entry.data_channel_open)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        for recipient in recipients {
+            let entries = self.presence_entries_excluding(&recipient, now);
+            let response = WebRTCResponse {
+                id: CTOX_PRESENCE_STREAM_ID.to_string(),
+                result: serde_json::json!({ "entries": entries }),
+                error: None,
+                collection: None,
+            };
+            let _ = self
+                .send(&recipient, WebRTCWireFrame::Response(response))
+                .await;
+        }
+    }
+
+    /// Arm the one-shot TTL sweep. Idle discipline: the task exists only
+    /// while presence entries exist; each update supersedes the previous
+    /// task via the generation counter, and a sweep that finds nothing to
+    /// prune re-arms without broadcasting. An empty map arms nothing.
+    fn schedule_presence_sweep(self: &Arc<Self>) {
+        if self.presence.lock().is_empty() {
+            return;
+        }
+        let generation = self
+            .presence_sweep_generation
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        let handler = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(CTOX_PRESENCE_TTL_MS + 1_000)).await;
+            if handler.presence_sweep_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if handler.prune_expired_presence(now_ms()) {
+                handler.broadcast_presence().await;
+            }
+            handler.schedule_presence_sweep();
+        });
     }
 
     async fn send_queued_text(
@@ -2035,6 +2195,22 @@ fn install_data_channel(
                                             }
                                         });
                                     }
+                                } else if message.method == CTOX_PRESENCE_RPC_UPDATE {
+                                    // Presence is a transport-control frame like
+                                    // `rxdb.activeCollections`: apply it to the
+                                    // in-memory hub and do NOT forward it to the
+                                    // pool's message stream. Broadcast only on a
+                                    // visible change (refreshes just re-stamp
+                                    // the TTL clock).
+                                    let changed =
+                                        handler_for_task.apply_presence(&peer_for_task, &message);
+                                    if changed {
+                                        let handler_presence = Arc::clone(&handler_for_task);
+                                        tokio::spawn(async move {
+                                            handler_presence.broadcast_presence().await;
+                                        });
+                                    }
+                                    handler_for_task.schedule_presence_sweep();
                                 } else {
                                     message_subject.next(PeerWithMessage {
                                         peer: peer_for_task.clone(),
@@ -2064,6 +2240,15 @@ fn install_data_channel(
                     // stale pc and could never converge.
                     if let Some(entry) = handler_for_task.peers.lock().get_mut(&peer_for_task) {
                         entry.data_channel_open = false;
+                    }
+                    // A closed tab's presence hints must not linger on the
+                    // other peers until the TTL sweep — drop them now and
+                    // push the reduced aggregate.
+                    if handler_for_task.remove_peer_presence(&peer_for_task) {
+                        let handler_presence = Arc::clone(&handler_for_task);
+                        tokio::spawn(async move {
+                            handler_presence.broadcast_presence().await;
+                        });
                     }
                     disconnect_subject.next(peer_for_task.clone());
                     break;
@@ -2099,6 +2284,10 @@ fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
         // Phase 2: drop the per-peer active-collection set so it cannot leak
         // across reconnects (a new connection re-reports its active set).
         handler.active_collections.lock().remove(peer);
+        // Drop any presence report the same way. The broadcast to survivors
+        // happens on the OnClose path; here it is pure cleanup so a
+        // reconnecting peer starts presence-blank.
+        handler.presence.lock().remove(peer);
         // #12c: drop the captured capability token so a reconnect re-presents
         // (and re-verifies) its identity rather than inheriting a stale one.
         handler.peer_capability_tokens.lock().remove(peer);
@@ -2852,6 +3041,94 @@ mod tests {
             &report(serde_json::json!(["business_commands", "desktop_files"])),
         );
         assert_eq!(reactivated, vec!["business_commands".to_string()]);
+    }
+
+    fn presence_report(entries: serde_json::Value) -> WebRTCMessage {
+        WebRTCMessage {
+            id: "pr".to_string(),
+            method: CTOX_PRESENCE_RPC_UPDATE.to_string(),
+            params: vec![entries],
+            collection: None,
+        }
+    }
+
+    #[test]
+    fn apply_presence_stores_caps_and_detects_change() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+
+        // First report with entries: a visible change.
+        let entry = serde_json::json!({
+            "collection": "customer_accounts",
+            "recordId": "acct-1",
+            "actorId": "user-a",
+        });
+        assert!(handler.apply_presence(&peer, &presence_report(serde_json::json!([entry]))));
+
+        // Entry-identical refresh: TTL clock re-stamped, but NOT a change —
+        // refreshes must not fan a broadcast to every peer every refresh tick.
+        assert!(!handler.apply_presence(&peer, &presence_report(serde_json::json!([entry]))));
+
+        // Non-object entries are dropped; the count is capped at the contract
+        // maximum so a hostile peer cannot balloon the aggregate frame.
+        let mut many = Vec::new();
+        for index in 0..(CTOX_PRESENCE_MAX_ENTRIES_PER_PEER + 8) {
+            many.push(serde_json::json!({ "recordId": format!("r-{index}") }));
+        }
+        many.push(serde_json::json!("not-an-object"));
+        assert!(handler.apply_presence(&peer, &presence_report(serde_json::json!(many))));
+        let stored = handler.presence.lock().get(&peer).cloned().unwrap();
+        assert_eq!(stored.entries.len(), CTOX_PRESENCE_MAX_ENTRIES_PER_PEER);
+        assert!(stored.entries.iter().all(Value::is_object));
+
+        // An empty report clears the peer's presence (tab navigated away).
+        assert!(handler.apply_presence(&peer, &presence_report(serde_json::json!([]))));
+        assert!(handler.presence.lock().get(&peer).is_none());
+        // Clearing an already-clear peer is not a change.
+        assert!(!handler.apply_presence(&peer, &presence_report(serde_json::json!([]))));
+    }
+
+    #[test]
+    fn presence_aggregate_excludes_recipient_and_expired_reports() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer_a = "peer-a".to_string();
+        let peer_b = "peer-b".to_string();
+        let peer_c = "peer-c".to_string();
+        let entry = |actor: &str| serde_json::json!({ "actorId": actor, "recordId": "r-1" });
+
+        assert!(handler.apply_presence(&peer_a, &presence_report(serde_json::json!([entry("a")]))));
+        assert!(handler.apply_presence(&peer_b, &presence_report(serde_json::json!([entry("b")]))));
+        assert!(handler.apply_presence(&peer_c, &presence_report(serde_json::json!([entry("c")]))));
+        let now = now_ms();
+
+        // Each recipient sees everyone's entries but its own.
+        let for_a = handler.presence_entries_excluding(&peer_a, now);
+        assert_eq!(for_a.len(), 2);
+        assert!(!for_a.iter().any(|e| e["actorId"] == "a"));
+
+        // A report older than the TTL is invisible to recipients...
+        handler
+            .presence
+            .lock()
+            .get_mut(&peer_b)
+            .unwrap()
+            .updated_at_ms = now - CTOX_PRESENCE_TTL_MS - 1;
+        let for_a = handler.presence_entries_excluding(&peer_a, now);
+        assert_eq!(for_a.len(), 1);
+        assert_eq!(for_a[0]["actorId"], "c");
+
+        // ...and the sweep prunes it; a second sweep finds nothing.
+        assert!(handler.prune_expired_presence(now));
+        assert!(!handler.prune_expired_presence(now));
+        assert!(handler.presence.lock().get(&peer_b).is_none());
+
+        // Peer close drops presence and reports whether survivors need a push.
+        assert!(handler.remove_peer_presence(&peer_c));
+        assert!(!handler.remove_peer_presence(&peer_c));
+        assert!(handler
+            .presence_entries_excluding(&peer_b, now)
+            .iter()
+            .all(|e| e["actorId"] == "a"));
     }
 
     #[test]

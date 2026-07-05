@@ -40,3 +40,11 @@ export const CTOX_FILE_RPC = Object.freeze({
   cancel: "rxdb.file.cancel",
   maxBytesPerChunk: 262144
 });
+export const CTOX_PRESENCE_CAPABILITY = "ctox-presence-v1";
+export const CTOX_PRESENCE_RPC = Object.freeze({
+  update: "rxdb.presence.update",
+  streamId: "presence$",
+  ttlMs: 45000,
+  refreshMs: 20000,
+  maxEntriesPerPeer: 32
+});

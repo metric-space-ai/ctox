@@ -63,6 +63,12 @@ export {
   getActiveCollectionRegistry,
 } from './active-collections.mjs';
 
+export {
+  PRESENCE_NOTIFY_DEBOUNCE_MS,
+  createPresenceRegistry,
+  getPresenceRegistry,
+} from './presence.mjs';
+
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';
 export { CtoxSubject } from './observable.mjs';
 

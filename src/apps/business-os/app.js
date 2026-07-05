@@ -4110,6 +4110,7 @@ function createModuleContext(mod) {
     sync: createLiveSyncFacade(),
     commandBus: createLiveCommandBusFacade(),
     businessChat: createLiveBusinessChatFacade(mod),
+    presence: createModulePresenceFacade(mod),
     syncConfig: state.sync?.config,
     session: state.session,
     actor,
@@ -4746,6 +4747,42 @@ function createLiveBusinessChatFacade(moduleLike = null) {
   return {
     open: (detail = {}) => openBusinessChat(detail),
     submitTask: (options = {}) => submitBusinessChatTask(moduleLike, options),
+  };
+}
+
+// Presence (ctox-presence-v1): advisory "who is viewing/editing what" hints
+// between browser peers, relayed in-memory through the native CTOX peer.
+// NEVER authoritative — it must not gate any action; policy stays server-side.
+// Each module publishes under its own owner key; the actor identity is
+// stamped from the session so apps cannot impersonate other users' hints.
+function createModulePresenceFacade(moduleLike = null) {
+  const ownerKey = moduleLike?.id || 'shell';
+  const registry = () => state.db?.rxdb?.getPresenceRegistry?.() || null;
+  const stampEntries = (entries) => {
+    const actor = actorContext(state.session);
+    return (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+      .map((entry) => ({
+        ...entry,
+        module: entry.module || ownerKey,
+        actorId: actor.id,
+        actorName: actor.display_name,
+      }));
+  };
+  return {
+    // Replace this module's presence hints, e.g.
+    // `ctx.presence.set([{ collection, recordId, mode: 'editing' }])`.
+    set(entries) {
+      registry()?.setLocal(ownerKey, stampEntries(entries));
+    },
+    clear() {
+      registry()?.clearLocal(ownerKey);
+    },
+    // Listener receives the OTHER peers' entries (this tab's own are not
+    // echoed back). Fires immediately; returns an unsubscribe function.
+    subscribe(listener) {
+      return registry()?.onRemoteChange(listener) || (() => {});
+    },
   };
 }
 

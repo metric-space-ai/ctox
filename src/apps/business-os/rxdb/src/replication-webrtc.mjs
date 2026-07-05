@@ -28,7 +28,11 @@ import {
   schemaHash,
   schemaHashSource,
 } from './schema.mjs';
-import { CTOX_QUERY_FETCH_CAPABILITY } from './protocol-contract.generated.mjs';
+import {
+  CTOX_PRESENCE_CAPABILITY,
+  CTOX_PRESENCE_RPC,
+  CTOX_QUERY_FETCH_CAPABILITY,
+} from './protocol-contract.generated.mjs';
 import { createDemandLoadingTransport } from './demand-loading-transport.mjs';
 import { createQueryDemandLoader } from './query-demand-loader.mjs';
 import { createFileDemandLoader } from './file-demand-loader.mjs';
@@ -36,6 +40,7 @@ import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
+import { getPresenceRegistry } from './presence.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 
 // Phase 2: the wire method the browser uses to tell the native peer which
@@ -58,7 +63,17 @@ const BROWSER_CAPABILITIES = [
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
   CTOX_QUERY_FETCH_CAPABILITY,
+  CTOX_PRESENCE_CAPABILITY,
 ];
+
+// Presence is optional on the wire: a native peer that predates
+// ctox-presence-v1 must never receive `rxdb.presence.update` frames (it would
+// route them into the replication message stream as an unknown method).
+export function remoteSupportsPresence(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_PRESENCE_CAPABILITY);
+}
 
 export function remoteSupportsQueryFetch(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
@@ -187,6 +202,12 @@ class SharedRoomPeer {
     this.activeRegistryUnsub = null;
     this.lastActiveCollectionsSent = null;
     this.lastActiveCollectionsSet = null;
+    // Presence (ctox-presence-v1): local entries flow registry -> wire via
+    // `rxdb.presence.update`; remote aggregates flow wire -> registry via the
+    // `presence$` push. Capability-gated per handshake.
+    this.presenceRegistry = getPresenceRegistry();
+    this.presenceUnsub = null;
+    this.presenceCapable = false;
   }
 
   representativeCollection() {
@@ -280,6 +301,14 @@ class SharedRoomPeer {
         try { this.activeRegistryUnsub(); } catch {}
         this.activeRegistryUnsub = null;
       }
+      // Presence: stop forwarding local changes and drop remote hints — a
+      // torn-down room has no live aggregate.
+      if (this.presenceUnsub) {
+        try { this.presenceUnsub(); } catch {}
+        this.presenceUnsub = null;
+      }
+      this.presenceCapable = false;
+      try { this.presenceRegistry.applyRemote([]); } catch {}
     }
   }
 
@@ -333,6 +362,10 @@ class SharedRoomPeer {
       }
       if (this.activeRemotePeerId === event.detail?.peerId) {
         this.activeRemotePeerId = null;
+        // The native hub is gone — its last aggregate is stale. Clear the
+        // remote hints; the post-reconnect handshake re-seeds them.
+        this.presenceCapable = false;
+        try { this.presenceRegistry.applyRemote([]); } catch {}
       }
       this.fanout('peer-close', event.detail);
     });
@@ -343,6 +376,20 @@ class SharedRoomPeer {
       const collection = event.detail?.collection || event.collection || null;
       this.fanoutMasterChange(collection);
     });
+    // Presence push from the native hub: the aggregate of every OTHER peer's
+    // entries. Replace the registry's remote state wholesale.
+    this.peer.on('presence', (event) => {
+      const entries = event.detail?.entries ?? event.entries ?? [];
+      try { this.presenceRegistry.applyRemote(entries); } catch {}
+    });
+    // Forward local presence changes to the native hub. Fires immediately
+    // with the current set; refresh ticks re-stamp the native TTL clock while
+    // local entries exist (no entries -> no timer -> no traffic).
+    if (!this.presenceUnsub) {
+      this.presenceUnsub = this.presenceRegistry.onLocalChange((entries) => {
+        this.sendPresenceUpdate(entries);
+      });
+    }
     // Phase 2: forward the RxDB layer's active-collection set to the native
     // peer whenever it changes. The listener fires immediately with the current
     // set and on every subsequent change (debounced inside the registry).
@@ -370,6 +417,27 @@ class SharedRoomPeer {
       });
     }
     return this.peer;
+  }
+
+  // Presence: send `rxdb.presence.update` (fire-and-forget) to the active
+  // native peer. Gated on the handshake capability so a pre-presence native
+  // peer never sees the unknown method. No-op until a peer is open; resent on
+  // (re)handshake because the native hub drops per-peer presence on
+  // disconnect.
+  sendPresenceUpdate(entries) {
+    if (!this.presenceCapable) return;
+    const peerId = this.activeRemotePeerId;
+    if (!peerId || !this.peer) return;
+    const list = Array.isArray(entries) ? entries : this.presenceRegistry.localEntries();
+    try {
+      this.peer.send(peerId, {
+        id: `presence-update|${Date.now()}`,
+        method: CTOX_PRESENCE_RPC.update,
+        params: [list],
+      });
+    } catch {
+      // Best-effort UX hint; the next change/refresh tick retries.
+    }
   }
 
   // Phase 2: send `rxdb.activeCollections` (fire-and-forget) to the active
@@ -603,6 +671,10 @@ class SharedRoomPeer {
     // disconnect — re-send the current foreground set now that the handshake
     // completed so priority is correct from the first frame.
     this.sendActiveCollections();
+    // Presence: same re-seed logic — the native hub dropped this peer's
+    // presence on disconnect, so re-publish the local set (if any) now.
+    this.presenceCapable = remoteSupportsPresence(normalizedRemoteProtocol);
+    this.sendPresenceUpdate();
     // Retain the negotiated handshake so collections that register later catch
     // up immediately (see `register`).
     this.negotiated = { peerId, remoteProtocol: normalizedRemoteProtocol, queryFetchCapable };
