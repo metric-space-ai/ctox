@@ -7444,8 +7444,17 @@ function ensureCtoxSmokeBinary() {
 
         const { BusinessOsPermissions } = await import('/shared/permissions.js');
         const targetModule = {
-          id: 'ctox',
-          title: 'CTOX',
+          id: 'phase12-agent-scope-app',
+          title: 'Phase 12 Agent Scope App',
+          glyph: '12',
+          version: '1.0.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase12-agent-scope-app/index.js',
+          editable: true,
+          layout: { shell: 'full-workspace' },
+          collections: ['business_commands'],
+          lifecycle: { runtime_installed: true },
         };
         const hiddenModule = {
           id: 'phase12-hidden-agent-scope-app',
@@ -7519,6 +7528,59 @@ function ensureCtoxSmokeBinary() {
           bodyAuthState: document.body?.dataset?.authState || '',
         };
         const insertedIds = new Set([targetModule.id, hiddenModule.id]);
+        let agentScopeCatalogSeedCount = 0;
+        let lastAgentScopeCatalogSeedAt = 0;
+        const seedAgentScopeModuleCatalog = async ({ force = false } = {}) => {
+          const now = Date.now();
+          if (!force && now - lastAgentScopeCatalogSeedAt < 500) return true;
+          const collection = state.db?.collection?.('business_module_catalog');
+          if (!collection) return false;
+          const doc = await collection.findOne('module-catalog').exec().catch(() => null);
+          const existing = doc?.toJSON?.() || {
+            id: 'module-catalog',
+            ok: true,
+            modules: [],
+            templates: [],
+            governance: null,
+          };
+          const {
+            _rev,
+            _attachments,
+            ...catalog
+          } = existing;
+          void _rev;
+          void _attachments;
+          const modules = Array.isArray(catalog.modules) ? catalog.modules : [];
+          const nextCatalog = {
+            ...catalog,
+            id: 'module-catalog',
+            ok: catalog.ok !== false,
+            modules: [
+              ...modules.filter((mod) => !insertedIds.has(mod?.id)),
+              targetModule,
+              hiddenModule,
+            ],
+            updated_at_ms: now,
+            source: catalog.source || 'business-os-agent-scope-smoke',
+          };
+          if (Array.isArray(catalog.allowed_module_ids)) {
+            nextCatalog.allowed_module_ids = [...new Set([
+              ...catalog.allowed_module_ids.map((id) => String(id || '').trim()).filter(Boolean),
+              targetModule.id,
+              hiddenModule.id,
+            ])];
+          }
+          if (typeof collection.upsert === 'function') {
+            await collection.upsert(nextCatalog);
+          } else if (doc && typeof doc.incrementalPatch === 'function') {
+            await doc.incrementalPatch(nextCatalog);
+          } else if (!doc) {
+            await collection.insert(nextCatalog);
+          }
+          agentScopeCatalogSeedCount += 1;
+          lastAgentScopeCatalogSeedAt = now;
+          return true;
+        };
         const applyAgentScopeState = () => {
           state.session = actorSession;
           state.governance = governance;
@@ -7609,6 +7671,11 @@ function ensureCtoxSmokeBinary() {
           const form = menu?.querySelector('form');
           const textarea = menu?.querySelector('textarea');
           if (!form || !textarea) throw new Error('agent scope context form is missing');
+          const askInput = menu.querySelector('input[name="contextMode"][value="ask"]');
+          askInput?.closest('label')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
           textarea.value = 'Bitte prüfe den sichtbaren Agent Scope.';
           form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
           try {
@@ -7621,6 +7688,7 @@ function ensureCtoxSmokeBinary() {
           }
         };
         const openAppStoreContextMenu = async () => {
+          await seedAgentScopeModuleCatalog({ force: true });
           applyAgentScopeState();
           await state.openModule('app-store', { force: true, asModule: true });
           await waitFor(() => ({
@@ -7641,24 +7709,56 @@ function ensureCtoxSmokeBinary() {
               activeModule: state.activeModule?.id || '',
             };
           }, 15000, 'agent scope App Store card');
-          const card = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
-          if (!card) throw new Error(`agent scope App Store card missing after wait: ${JSON.stringify(cardState)}`);
-          const rect = card.getBoundingClientRect();
-          card.dispatchEvent(new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            button: 2,
-            clientX: Math.max(24, Math.round(rect.left + 18)),
-            clientY: Math.max(24, Math.round(rect.top + 18)),
-          }));
-          return waitFor(() => {
-            const menu = document.querySelector('.app-store-context-menu:not([hidden])');
-            const panel = menu?.querySelector('.ctox-agent-scope') || null;
-            const rows = scopeRowsFromPanel(panel);
+          let contextMenuDispatchCount = 0;
+          let lastContextMenuEventPrevented = false;
+          return waitFor(async () => {
+            let menu = document.querySelector('.app-store-context-menu:not([hidden])');
+            let panel = menu?.querySelector('.ctox-agent-scope') || null;
+            let rows = scopeRowsFromPanel(panel);
+            if (!(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || ''))) {
+              let currentCard = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
+              if (!currentCard) {
+                await seedAgentScopeModuleCatalog();
+                document.querySelector('[data-app-store-root] [data-scope="installed"]')?.dispatchEvent(new MouseEvent('click', {
+                  bubbles: true,
+                  cancelable: true,
+                }));
+                currentCard = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
+              }
+              if (currentCard) {
+                const rect = currentCard.getBoundingClientRect();
+                lastContextMenuEventPrevented = !currentCard.dispatchEvent(new MouseEvent('contextmenu', {
+                  bubbles: true,
+                  cancelable: true,
+                  button: 2,
+                  buttons: 2,
+                  composed: true,
+                  clientX: Math.max(24, Math.round(rect.left + 18)),
+                  clientY: Math.max(24, Math.round(rect.top + 18)),
+                }));
+                contextMenuDispatchCount += 1;
+                menu = document.querySelector('.app-store-context-menu:not([hidden])');
+                panel = menu?.querySelector('.ctox-agent-scope') || null;
+                rows = scopeRowsFromPanel(panel);
+              }
+            }
+            const allMenus = [...document.querySelectorAll('.app-store-context-menu')];
+            const currentCard = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
+            const host = document.querySelector('[data-module-content]') || document.querySelector('[data-module-root]');
             return {
               ok: Boolean(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || '')),
               rows,
               text: panel?.textContent?.trim() || '',
+              eventPrevented: lastContextMenuEventPrevented,
+              dispatchCount: contextMenuDispatchCount,
+              activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+              menuCount: allMenus.length,
+              menuHidden: allMenus.map((entry) => entry.hidden),
+              menuText: allMenus.map((entry) => entry.textContent?.trim?.().slice(0, 500) || ''),
+              cardConnected: Boolean(currentCard?.isConnected),
+              hostHasCard: Boolean(host && currentCard && host.contains(currentCard)),
+              hostLocalContextMenu: host?.getAttribute?.('data-ctox-local-context-menu') || '',
+              catalogSeedCount: agentScopeCatalogSeedCount,
             };
           }, 5000, 'agent scope App Store context menu');
         };
@@ -7740,6 +7840,7 @@ function ensureCtoxSmokeBinary() {
         };
 
         try {
+          await seedAgentScopeModuleCatalog({ force: true });
           applyAgentScopeState();
           await state.openModule(targetModule.id, { force: true, asModule: true });
           await waitFor(() => ({

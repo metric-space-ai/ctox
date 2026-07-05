@@ -26,6 +26,7 @@ import {
   buildModuleWhyDiagnosticsView,
   buildModuleTargetContextItems,
   renderBusinessUserDatalistOptions,
+  renderGlobalCtoxAgentScopeHtml,
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
@@ -8818,6 +8819,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
           },
         })}
       </div>
+      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <p class="ctox-context-mode-help" data-ctox-context-mode-help></p>
       <label class="ctox-context-user-row" hidden>
         <span class="ctox-context-user-label">${escapeHtml(reviewerLabel)}</span>

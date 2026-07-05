@@ -2165,17 +2165,13 @@ function initAppStoreContextMenu(state) {
   const host = state.ctx.host;
   const previousLocalContextMenu = host?.getAttribute('data-ctox-local-context-menu') ?? null;
   host?.setAttribute('data-ctox-local-context-menu', 'app-store');
-  const menu = document.createElement('div');
-  menu.className = 'ctox-context-menu app-store-context-menu';
-  menu.hidden = true;
-  document.body.append(menu);
-  state.contextMenu = menu;
+  ensureAppStoreContextMenuElement(state);
 
   const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'app-store') return;
     const context = appStoreCommandContextFromElement(state, event.target);
     event.preventDefault();
     event.stopPropagation();
+    ensureAppStoreContextMenuElement(state);
     renderAppStoreContextMenu(state, context, event.clientX, event.clientY);
   };
   const handleOutsideClick = (event) => {
@@ -2203,6 +2199,16 @@ function initAppStoreContextMenu(state) {
     state.contextMenu?.remove();
     state.contextMenu = null;
   };
+}
+
+function ensureAppStoreContextMenuElement(state) {
+  if (state.contextMenu?.isConnected) return state.contextMenu;
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu app-store-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+  return menu;
 }
 
 function hideAppStoreContextMenu(state) {
@@ -2337,7 +2343,8 @@ function renderAppStoreContextMenu(state, context, x, y) {
   ensureCtoxContextMenuStyles();
   const canModifyApp = canModifyAppStoreContext(state, context);
   const agentScope = buildAppStoreAgentScopeView(state, context, canModifyApp ? 'app' : 'data');
-  state.contextMenu.innerHTML = `
+  const menu = ensureAppStoreContextMenuElement(state);
+  menu.innerHTML = `
     <form class="app-store-context-chat" data-app-store-context-chat-form>
       <header>
         <div>
@@ -2360,19 +2367,19 @@ function renderAppStoreContextMenu(state, context, x, y) {
       </footer>
     </form>
   `;
-  state.contextMenu.hidden = false;
-  state.contextMenu.style.left = '0px';
-  state.contextMenu.style.top = '0px';
-  const rect = state.contextMenu.getBoundingClientRect();
+  menu.hidden = false;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const rect = menu.getBoundingClientRect();
   const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
   const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
   const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+  menu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  menu.style.top = `${clampNumber(y, 8, maxTop)}px`;
 
-  const form = state.contextMenu.querySelector('[data-app-store-context-chat-form]');
-  const textarea = state.contextMenu.querySelector('[data-app-store-context-message]');
-  state.contextMenu.querySelector('[data-app-store-context-close]')?.addEventListener('click', () => hideAppStoreContextMenu(state));
+  const form = menu.querySelector('[data-app-store-context-chat-form]');
+  const textarea = menu.querySelector('[data-app-store-context-message]');
+  menu.querySelector('[data-app-store-context-close]')?.addEventListener('click', () => hideAppStoreContextMenu(state));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
