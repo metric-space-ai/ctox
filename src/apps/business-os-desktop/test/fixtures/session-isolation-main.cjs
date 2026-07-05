@@ -38,15 +38,10 @@ app.whenReady().then(async () => {
     windows.push(alphaWindow, betaWindow);
     const alphaWrite = await withTimeout(writeAndRead(alphaWindow.webContents, "alpha"), "write alpha state");
     const betaWrite = await withTimeout(writeAndRead(betaWindow.webContents, "beta"), "write beta state");
-    const alphaRead = await withTimeout(readState(alphaWindow.webContents), "read alpha state");
-    const betaRead = await withTimeout(readState(betaWindow.webContents), "read beta state");
+    const alphaRead = await withTimeout(readExpectedState(alphaWindow.webContents, "alpha"), "read alpha state");
+    const betaRead = await withTimeout(readExpectedState(betaWindow.webContents, "beta"), "read beta state");
     const result = {
-      ok: alphaRead.localStorage === "alpha"
-        && betaRead.localStorage === "beta"
-        && alphaRead.indexedDb === "alpha"
-        && betaRead.indexedDb === "beta"
-        && alphaRead.cookie.includes("ctoxSmoke=alpha")
-        && betaRead.cookie.includes("ctoxSmoke=beta"),
+      ok: stateMatches(alphaRead, "alpha") && stateMatches(betaRead, "beta"),
       partitions: [sessionPartitionFor(alpha), sessionPartitionFor(beta)],
       alphaWrite,
       betaWrite,
@@ -136,13 +131,19 @@ function writeAndRead(webContents, value) {
           tx.onerror = () => reject(tx.error);
         };
       });
-      return (${readStateScript})();
+      return (${waitForExpectedStateScript})(value);
     })();
   `, true);
 }
 
-function readState(webContents) {
-  return webContents.executeJavaScript(`(${readStateScript})();`, true);
+function readExpectedState(webContents, value) {
+  return webContents.executeJavaScript(`(${waitForExpectedStateScript})(${JSON.stringify(value)});`, true);
+}
+
+function stateMatches(state, expected) {
+  return state?.localStorage === expected
+    && state?.indexedDb === expected
+    && String(state?.cookie || "").includes(`ctoxSmoke=${expected}`);
 }
 
 function withTimeout(promise, label, timeoutMs = 5000) {
@@ -182,4 +183,21 @@ const readStateScript = `async () => {
     localStorage: localStorage.getItem("ctoxSmoke") || "",
     indexedDb,
   };
+}`;
+
+const waitForExpectedStateScript = `async (expected) => {
+  const deadline = Date.now() + 2000;
+  let state = null;
+  for (;;) {
+    state = await (${readStateScript})();
+    if (state.localStorage === expected
+      && state.indexedDb === expected
+      && String(state.cookie || "").includes("ctoxSmoke=" + expected)) {
+      return state;
+    }
+    if (Date.now() > deadline) {
+      return { ...state, expected, matched: false };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }`;

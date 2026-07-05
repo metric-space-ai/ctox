@@ -13,8 +13,8 @@ async function main() {
   const userDataPath = path.join(tempRoot, "userData");
   const fixture = path.join(__dirname, "fixtures/session-isolation-main.cjs");
   const result = await runElectron(electronPath, [fixture, outputPath, userDataPath], outputPath);
-  assert.equal(result.code, 0, result.stderr || result.stdout);
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+  assert.equal(result.code, 0, JSON.stringify(payload, null, 2) || result.stderr || result.stdout);
   assert.equal(payload.ok, true, JSON.stringify(payload, null, 2));
   assert.notEqual(payload.partitions[0], payload.partitions[1]);
   assert.equal(payload.alphaRead.localStorage, "alpha");
