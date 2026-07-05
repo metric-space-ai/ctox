@@ -74,6 +74,18 @@ assert.ok(
   desktopSource.includes('!launcher.knows(doc.target_module)'),
   'Desktop icons must not render persisted targets outside the current launcher scope'
 );
+assert.ok(
+  desktopSource.includes('icon read skipped during database restart'),
+  'Desktop initial icon rendering must tolerate transient IndexedDB connection shutdown'
+);
+assert.ok(
+  desktopSource.includes('layout read skipped during database restart'),
+  'Desktop initial layout loading must tolerate transient IndexedDB connection shutdown'
+);
+assert.ok(
+  desktopSource.includes('icon seed skipped during database restart'),
+  'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'
+);
 
 for (const requiredSnippet of [
   'isLaunchableModule',

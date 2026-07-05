@@ -359,7 +359,14 @@ export async function mount(ctx) {
 
   async function renderIcons() {
     if (disposed) return;
-    const docs = iconsCollection ? await iconsCollection.find().exec() : [];
+    let docs = [];
+    try {
+      docs = iconsCollection ? await iconsCollection.find().exec() : fallbackIconDocs(launcher);
+    } catch (error) {
+      if (!isDatabaseClosingError(error)) throw error;
+      console.info('[desktop] icon read skipped during database restart; rendering default launcher icons');
+      docs = fallbackIconDocs(launcher);
+    }
     if (disposed) return;
     refs.icons.innerHTML = '';
     if (!docs.length) {
@@ -708,15 +715,21 @@ export async function mount(ctx) {
 
   async function ensureLayout(collection, launcherRef) {
     if (!collection) return defaultLayout(launcherRef);
-    const existing = await collection.findOne(LAYOUT_DOC_ID).exec();
-    if (existing) return existing.toJSON();
-    const seed = {
-      id: LAYOUT_DOC_ID,
-      ...defaultLayout(launcherRef),
-      updated_at_ms: Date.now(),
-    };
-    await upsertSeed(collection, seed.id, seed);
-    return seed;
+    try {
+      const existing = await collection.findOne(LAYOUT_DOC_ID).exec();
+      if (existing) return existing.toJSON();
+      const seed = {
+        id: LAYOUT_DOC_ID,
+        ...defaultLayout(launcherRef),
+        updated_at_ms: Date.now(),
+      };
+      await upsertSeed(collection, seed.id, seed);
+      return seed;
+    } catch (error) {
+      if (!isDatabaseClosingError(error)) throw error;
+      console.info('[desktop] layout read skipped during database restart; using default layout');
+      return defaultLayout(launcherRef);
+    }
   }
 
   function defaultLayout(launcherRef) {
@@ -756,26 +769,36 @@ export async function mount(ctx) {
 
   async function ensureIcons(collection, launcherRef, { force = false } = {}) {
     if (!collection) return;
-    const existing = await collection.find().exec();
-    const grid = currentGrid();
-    const entries = launcherRef.entries();
-    const existingById = new Map(existing.map((doc) => [doc.id, doc]));
-    const visibleLauncherIcons = existing.filter((doc) => !doc.hidden && launcherRef.knows(doc.target_module));
-    const shouldUnhideDefaults = force || !visibleLauncherIcons.length;
-    const seeds = entries.map((entry, index) => ({
-      ...iconSeedForEntry(entry, index, grid, launcherRef),
-      hidden: shouldUnhideDefaults ? false : undefined,
-    }));
-    for (const seed of seeds) {
-      const existingDoc = existingById.get(seed.id);
-      if (existingDoc && !force) {
-        const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
-        if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
-        continue;
+    try {
+      const existing = await collection.find().exec();
+      const grid = currentGrid();
+      const entries = launcherRef.entries();
+      const existingById = new Map(existing.map((doc) => [doc.id, doc]));
+      const visibleLauncherIcons = existing.filter((doc) => !doc.hidden && launcherRef.knows(doc.target_module));
+      const shouldUnhideDefaults = force || !visibleLauncherIcons.length;
+      const seeds = entries.map((entry, index) => ({
+        ...iconSeedForEntry(entry, index, grid, launcherRef),
+        hidden: shouldUnhideDefaults ? false : undefined,
+      }));
+      for (const seed of seeds) {
+        const existingDoc = existingById.get(seed.id);
+        if (existingDoc && !force) {
+          const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
+          if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
+          continue;
+        }
+        await upsertSeed(collection, seed.id, { ...seed, hidden: false });
       }
-      await upsertSeed(collection, seed.id, { ...seed, hidden: false });
+      await normalizeIconLayoutIfNeeded(collection, launcherRef);
+    } catch (error) {
+      if (!isDatabaseClosingError(error)) throw error;
+      console.info('[desktop] icon seed skipped during database restart; using transient launcher icons');
     }
-    await normalizeIconLayoutIfNeeded(collection, launcherRef);
+  }
+
+  function fallbackIconDocs(launcherRef) {
+    const grid = currentGrid();
+    return launcherRef.entries().map((entry, index) => iconSeedForEntry(entry, index, grid, launcherRef));
   }
 
   function iconSeedForEntry(entry, index, grid, launcherRef) {
