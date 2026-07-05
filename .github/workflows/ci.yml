@@ -164,7 +164,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
 
       - name: Business OS JS dependency bootstrap
         if: matrix.target == 'x86_64-unknown-linux-gnu'

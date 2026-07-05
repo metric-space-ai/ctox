@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev sqlite3
 
       - name: Business OS JS dependency bootstrap
         run: |

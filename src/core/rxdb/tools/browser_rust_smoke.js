@@ -1688,24 +1688,65 @@ async function waitForNativePeerSyncConfig(ms = 60000) {
   throw new Error(`timeout waiting for native RxDB peer sync config: ${JSON.stringify(lastConfig)}`);
 }
 
+let cachedSqliteProgram = null;
+
+function isExecutableFile(candidate) {
+  try {
+    const stat = fs.statSync(candidate);
+    if (!stat.isFile()) return false;
+    if (process.platform === 'win32') return true;
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveSqliteProgram() {
+  if (cachedSqliteProgram) return cachedSqliteProgram;
+  const candidates = process.platform === 'win32'
+    ? []
+    : ['/usr/bin/sqlite3', '/opt/homebrew/bin/sqlite3', '/usr/local/bin/sqlite3'];
+  const pathExts = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of pathExts) {
+      candidates.push(path.join(dir, `sqlite3${ext}`));
+    }
+  }
+  for (const candidate of candidates) {
+    if (isExecutableFile(candidate)) {
+      cachedSqliteProgram = candidate;
+      return cachedSqliteProgram;
+    }
+  }
+  throw new Error('sqlite failed: sqlite3 executable not found in PATH or standard install locations');
+}
+
 function sqlite(statement, targetPath = sqlitePath) {
   const deadline = Date.now() + 20000;
   let lastOutput = '';
+  const sqliteProgram = resolveSqliteProgram();
   while (Date.now() <= deadline) {
-    const result = spawnSync('/usr/bin/sqlite3', [
+    const result = spawnSync(sqliteProgram, [
       '-cmd',
       '.timeout 10000',
       targetPath,
-      statement,
-    ], { encoding: 'utf8' });
+    ], {
+      encoding: 'utf8',
+      input: statement,
+      maxBuffer: 16 * 1024 * 1024,
+    });
     if (result.status === 0) return result.stdout;
-    lastOutput = result.stderr || result.stdout || '';
+    lastOutput = result.error?.message || result.stderr || result.stdout || '';
     if (!/database is locked|SQLITE_BUSY/i.test(lastOutput)) {
-      throw new Error(`sqlite failed: ${lastOutput}`);
+      const status = result.signal ? `signal ${result.signal}` : `status ${result.status}`;
+      throw new Error(`sqlite failed (${sqliteProgram}, ${status}): ${lastOutput}`);
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   }
-  throw new Error(`sqlite failed: ${lastOutput}`);
+  throw new Error(`sqlite failed (${sqliteProgram}): ${lastOutput}`);
 }
 
 async function waitForSqliteTables(tableNames, ms = 30000) {
