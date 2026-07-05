@@ -1848,10 +1848,20 @@ fn execute_appsec_stage_commands(
             }));
             continue;
         }
-        match execute_appsec_ctox_cli_command(root, state_dir, &command, &argv_strings) {
+        let execution_output = match appsec_reusable_expected_artifact_output(state_dir, &command)?
+        {
+            Some(reused) => Ok(reused),
+            None => execute_appsec_ctox_cli_command(root, state_dir, &command, &argv_strings)
+                .map(|output| (output, None)),
+        };
+        match execution_output {
             Ok(output) => {
-                let persisted_artifact =
-                    persist_appsec_command_expected_artifact(state_dir, &command, &output)?;
+                let (output, reused_artifact) = output;
+                let persisted_artifact = if reused_artifact.is_some() {
+                    reused_artifact
+                } else {
+                    persist_appsec_command_expected_artifact(state_dir, &command, &output)?
+                };
                 let session_bindings =
                     record_appsec_stage_session_bindings(&mut execution_context, &command, &output);
                 let artifact_bindings = record_appsec_stage_artifact_bindings(
@@ -2657,6 +2667,116 @@ fn parse_optional_u64_arg(args: &[String], flag: &str) -> anyhow::Result<Option<
                 .with_context(|| format!("failed to parse {flag}"))
         })
         .transpose()
+}
+
+fn appsec_reusable_expected_artifact_output(
+    state_dir: &Path,
+    command: &Value,
+) -> anyhow::Result<Option<(Value, Option<String>)>> {
+    if !appsec_command_can_reuse_expected_artifact(command) {
+        return Ok(None);
+    }
+    let Some(expected) = command
+        .get("expected_artifact")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let artifact_path = appsec_expected_artifact_path(state_dir, expected);
+    if !artifact_path.is_file() {
+        return Ok(None);
+    }
+    let artifact: Value = serde_json::from_slice(&fs::read(&artifact_path).with_context(|| {
+        format!(
+            "failed to read existing AppSec expected artifact {}",
+            artifact_path.display()
+        )
+    })?)
+    .with_context(|| {
+        format!(
+            "failed to parse existing AppSec expected artifact {}",
+            artifact_path.display()
+        )
+    })?;
+    if appsec_value_contains_forbidden_authz_evidence_key(&artifact) {
+        return Ok(Some((
+            json!({
+                "ok": false,
+                "status": "blocked-secret-artifact",
+                "artifact": artifact_path.to_string_lossy(),
+                "reused_existing_artifact": true,
+                "error": "existing expected AppSec artifact contains secret-like material keys",
+            }),
+            Some(artifact_path.to_string_lossy().to_string()),
+        )));
+    }
+    let ok = appsec_artifact_bool(&artifact, "ok").unwrap_or(true);
+    let status = appsec_artifact_string(&artifact, "status")
+        .unwrap_or_else(|| if ok { "completed" } else { "failed" }.to_string());
+    Ok(Some((
+        json!({
+            "ok": ok,
+            "status": status,
+            "artifact": artifact_path.to_string_lossy(),
+            "reused_existing_artifact": true,
+            "result": artifact,
+        }),
+        Some(artifact_path.to_string_lossy().to_string()),
+    )))
+}
+
+fn appsec_command_can_reuse_expected_artifact(command: &Value) -> bool {
+    if command.pointer("/produces/artifact/placeholder").is_some() {
+        return false;
+    }
+    matches!(
+        command.get("tool").and_then(Value::as_str),
+        Some(
+            "ctox_web_auth_assist_request"
+                | "ctox_web_auth_assist_signup"
+                | "ctox_web_auth_assist_login"
+                | "ctox_browser_automation"
+                | "ctox_browser_context_capture"
+                | "ctox_browser_context_extract"
+        )
+    )
+}
+
+fn appsec_artifact_bool(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool).or_else(|| {
+        value
+            .get("result")
+            .and_then(|result| result.get(key))
+            .and_then(Value::as_bool)
+    })
+}
+
+fn appsec_artifact_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("result")
+                .and_then(|result| result.get(key))
+                .and_then(Value::as_str)
+        })
+        .map(ToString::to_string)
+}
+
+fn appsec_value_contains_forbidden_authz_evidence_key(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, child)| {
+            appsec_authz_evidence_forbidden_key(key)
+                || appsec_value_contains_forbidden_authz_evidence_key(child)
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(appsec_value_contains_forbidden_authz_evidence_key),
+        _ => false,
+    }
 }
 
 fn appsec_stage_command_plan(stage: &Value) -> Value {
@@ -4532,6 +4652,330 @@ mod tests {
             )
             .unwrap();
         assert_eq!(proof_count, 1);
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_pipeline_worker_completes_authz_stage_from_redacted_web_stack_evidence() {
+        let root = make_fake_ctox_root("appsec-pipeline-authz-e2e");
+        let state = root.join("runtime/appsec/default");
+        let authz_dir = state.join("authz");
+        fs::create_dir_all(&authz_dir).unwrap();
+        let target = "https://example.test/app";
+        let write_json_file = |path: PathBuf, value: serde_json::Value| {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        };
+
+        run_projected_appsec_command(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "init".to_string(),
+                "--url".to_string(),
+                target.to_string(),
+            ],
+        )
+        .unwrap();
+        write_json_file(
+            authz_dir.join("authz-subjects.json"),
+            serde_json::json!({
+                "version": "ctox.appsec_pentest.authz_subjects.v1",
+                "subjects": [
+                    {
+                        "id": "user-a",
+                        "role": "customer",
+                        "login_hint": "user-a@example.test",
+                        "credential_ref": "ctox-secret://appsec/user-a",
+                        "verify_selector": "[data-testid='account-shell']"
+                    },
+                    {
+                        "id": "user-b",
+                        "role": "customer",
+                        "login_hint": "user-b@example.test",
+                        "credential_ref": "ctox-secret://appsec/user-b",
+                        "verify_selector": "[data-testid='account-shell']"
+                    }
+                ]
+            }),
+        );
+        for (subject, object_ref) in [("user-a", "tenant-a"), ("user-b", "tenant-b")] {
+            write_json_file(
+                authz_dir.join(subject).join("auth-assist-redacted.json"),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_web_auth_assist_request",
+                    "phase": "subject-auth",
+                    "subject_id": subject,
+                    "ok": true,
+                    "status": "pending_sync",
+                    "session_id": format!("browser_session_{subject}"),
+                    "redacted": true
+                }),
+            );
+            write_json_file(
+                authz_dir.join(subject).join("auth-login-redacted.json"),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_web_auth_assist_login",
+                    "phase": "subject-auth-login",
+                    "subject_id": subject,
+                    "ok": true,
+                    "status": "completed",
+                    "login_state": "authenticated",
+                    "mfa_required": false,
+                    "login_error_detected": false,
+                    "verify_selector_found": true,
+                    "session_id": format!("browser_session_{subject}"),
+                    "redacted": true
+                }),
+            );
+            write_json_file(
+                authz_dir.join(subject).join("same-origin-api-map.json"),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_browser_automation",
+                    "phase": "subject-crawl",
+                    "subject_id": subject,
+                    "ok": true,
+                    "status": "completed",
+                    "result": {
+                        "source": "ctox_browser_automation",
+                        "task_type": "same-origin-api-map",
+                        "subject_id": subject,
+                        "objects": [{
+                            "object_ref": object_ref,
+                            "object_type": "tenant",
+                            "owner_subject": subject
+                        }],
+                        "replay_candidates": [{
+                            "endpoint": format!("/api/instances/{object_ref}/health"),
+                            "method": "GET",
+                            "status": 200,
+                            "resource_type": "fetch",
+                            "body_class": "tenant-json",
+                            "owner_body_hash": format!("{object_ref}-owner-body-hash"),
+                            "owner_body_length": 128,
+                            "owner_object_refs": [object_ref],
+                            "object": object_ref,
+                            "object_type": "tenant",
+                            "object_source": "url",
+                            "owner_subject": subject,
+                            "expected": "deny"
+                        }]
+                    },
+                    "redacted": true
+                }),
+            );
+            write_json_file(
+                authz_dir
+                    .join(subject)
+                    .join("browser-context-reference.json"),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_browser_context_capture",
+                    "phase": "subject-context-capture",
+                    "subject_id": subject,
+                    "ok": true,
+                    "status": "pending_sync",
+                    "result": {
+                        "ok": true,
+                        "status": "pending_sync",
+                        "browser_context_artifact": "redacted-reference"
+                    },
+                    "redacted": true
+                }),
+            );
+            write_json_file(
+                authz_dir
+                    .join(subject)
+                    .join("browser-context-extract-redacted.json"),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_browser_context_extract",
+                    "phase": "subject-context-extract",
+                    "subject_id": subject,
+                    "ok": true,
+                    "status": "pending_sync",
+                    "result": {
+                        "ok": true,
+                        "status": "pending_sync",
+                        "browser_context_artifact": "redacted-reference"
+                    },
+                    "redacted": true
+                }),
+            );
+        }
+        for (owner, actor, object_ref, actual_status, result, leak) in [
+            ("user-a", "user-b", "tenant-a", 200, "fail", true),
+            ("user-b", "user-a", "tenant-b", 404, "pass", false),
+        ] {
+            write_json_file(
+                authz_dir
+                    .join("replay")
+                    .join(format!("{owner}-as-{actor}.json")),
+                serde_json::json!({
+                    "version": "ctox.appsec_pentest.web_stack_evidence.v1",
+                    "source_tool": "ctox_browser_automation",
+                    "phase": "cross-subject-replay",
+                    "owner_subject": owner,
+                    "actor_subject": actor,
+                    "ok": true,
+                    "status": "completed",
+                    "result": {
+                        "source": "ctox_browser_automation",
+                        "task_type": "cross-subject-replay",
+                        "owner_subject": owner,
+                        "actor_subject": actor,
+                        "objects": [{
+                            "object_ref": object_ref,
+                            "object_type": "tenant",
+                            "owner_subject": owner
+                        }],
+                        "cases": [{
+                            "actor_subject": actor,
+                            "owner_subject": owner,
+                            "object_ref": object_ref,
+                            "object_type": "tenant",
+                            "endpoint": format!("/api/instances/{object_ref}/health"),
+                            "method": "GET",
+                            "expected": "deny",
+                            "actual_status": actual_status,
+                            "result": result,
+                            "body_class": if leak { "tenant-json" } else { "not-found" },
+                            "leak": leak,
+                            "mutation": false,
+                            "evidence_artifact": format!("authz/replay/{owner}-as-{actor}.json")
+                        }]
+                    },
+                    "redacted": true
+                }),
+            );
+        }
+        write_json_file(
+            state.join("assessment-pipeline.json"),
+            serde_json::json!({
+                "version": "ctox.appsec_pentest.assessment_pipeline.v1",
+                "generated_at": "test",
+                "profile": "standard",
+                "active": false,
+                "stages": [{
+                    "id": "stage-1-authenticated-multi-user-authz",
+                    "order": 1,
+                    "phase": "authenticated-multi-user-authz",
+                    "target": target,
+                    "tools": ["ctox-web-stack", "ctox_browser_automation"],
+                    "active_required": false,
+                    "readiness_blockers": [],
+                    "completion_gate": "imported authz matrix with redacted browser evidence"
+                }]
+            }),
+        );
+        write_json_file(
+            state.join("coverage.json"),
+            serde_json::json!({
+                "version": "ctox.appsec_pentest.coverage.v1",
+                "workstreams": [{
+                    "id": "ws-authz",
+                    "phase": "authenticated-multi-user-authz",
+                    "target": target,
+                    "status": "planned",
+                    "tools": ["ctox-web-stack", "ctox_browser_automation"]
+                }]
+            }),
+        );
+
+        let enqueue = run_projected_appsec_command(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "enqueue".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--workspace-root".to_string(),
+                root.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            enqueue
+                .pointer("/ctox_queue_enqueue/created_or_updated")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+
+        let worker = handle_appsec_pipeline_work(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "work".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--limit".to_string(),
+                "1".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            worker
+                .pointer("/summary/handled")
+                .and_then(serde_json::Value::as_u64),
+            Some(1),
+            "{worker:#}"
+        );
+        assert!(worker
+            .pointer("/tasks/0/execution/commands")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|command| {
+                command
+                    .pointer("/output/reused_existing_artifact")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                    && command
+                        .pointer("/output/result/source_tool")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("ctox_web_auth_assist_login")
+            }));
+        assert_eq!(
+            worker
+                .pointer("/tasks/0/execution/artifact_bindings/authz-run")
+                .and_then(serde_json::Value::as_str)
+                .map(|value| value.contains("authz-run-")),
+            Some(true)
+        );
+        let coverage: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(state.join("coverage.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            coverage
+                .pointer("/workstreams/0/status")
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        let findings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(state.join("findings.json")).unwrap())
+                .unwrap();
+        assert!(findings.as_array().unwrap().iter().any(|finding| {
+            finding
+                .get("source_tool")
+                .and_then(serde_json::Value::as_str)
+                == Some("ctox-web-stack-authz")
+                && finding.get("category").and_then(serde_json::Value::as_str) == Some("idor")
+        }));
+        let message_key = worker
+            .pointer("/tasks/0/message_key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        let task = crate::channels::load_queue_task(&root, message_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.route_status, "handled");
 
         cleanup_test_dir(&root);
     }
