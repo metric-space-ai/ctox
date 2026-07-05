@@ -355,6 +355,22 @@ if (businessOsProductionSmokeModeSet.has(smokeMode) && !implementedBusinessOsPro
   throw new Error(`SMOKE_MODE=${smokeMode} is registered for Business OS production coverage but the browser story is not implemented yet. Complete the matching Phase 10-14 slice before using it as a release gate.`);
 }
 
+const BUSINESS_OS_CORE_STATUS_COLLECTIONS = Object.freeze([
+  'business_module_catalog',
+  'ctox_runtime_settings',
+]);
+const BUSINESS_OS_SHELL_STATUS_COLLECTIONS = Object.freeze([
+  ...BUSINESS_OS_CORE_STATUS_COLLECTIONS,
+  'business_commands',
+  'ctox_queue_tasks',
+  'desktop_files',
+]);
+const BUSINESS_OS_COMMAND_STATUS_COLLECTIONS = Object.freeze([
+  ...BUSINESS_OS_CORE_STATUS_COLLECTIONS,
+  'business_commands',
+  'ctox_queue_tasks',
+]);
+
 function parsePositiveIntegerEnv(name, value, options = {}) {
   const parsed = Number(value);
   const min = options.min ?? 1;
@@ -1783,11 +1799,11 @@ function quoteSqlIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
-// waitForHealthy reports ok as soon as the SHELL is healthy; lazily started
-// collections (desktop_file_chunks since the lazy-file-sync change) may still
-// be inside their first catch-up. The strict contract requires COMPLETE
-// initial sync, so poll until the lazy tail finishes (bounded) before
-// asserting. Returns the last observed status either way.
+// waitForHealthy reports ok as soon as the SHELL is healthy. The strict
+// contract requires COMPLETE initial sync for the requested collection set, so
+// poll until the required tail finishes (bounded) before asserting. Demand-only
+// chunk/blob collections must only be requested by callers that have explicitly
+// leased them first.
 async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   let status = null;
@@ -2842,7 +2858,6 @@ function ensureCtoxSmokeBinary() {
     const largeFileMaterializeSmokeMode = smokeMode === 'workspace-large-materialize-rust-to-browser'
       || smokeMode === 'workspace-large-file-viewer-rust-to-browser'
       || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
-    const threadsRightClickUiSmokeMode = smokeMode === 'business-os-threads-rightclick-ui';
     const deferredFileCollectionStartupMode = backgroundIndexerSmokeMode
       || smokeMode === 'file-chunk-tombstone-error-browser-status'
       || smokeMode === 'business-os-app-release-ui';
@@ -3401,34 +3416,13 @@ function ensureCtoxSmokeBinary() {
         }, waitError).catch((evalError) => ({ evaluateError: String(evalError?.message || evalError) }));
         throw new Error(`Business OS shell did not become ready: ${JSON.stringify(startupState, null, 2)}`);
       }
-      const startupRequiredCollections = threadsRightClickUiSmokeMode
-        ? [
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ]
-        : deferredFileCollectionStartupMode
-        || largeFileMaterializeSmokeMode
-        ? [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-          ]
-        : [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ];
+      const startupRequiredCollections = deferredFileCollectionStartupMode || largeFileMaterializeSmokeMode
+        ? BUSINESS_OS_CORE_STATUS_COLLECTIONS
+        : BUSINESS_OS_SHELL_STATUS_COLLECTIONS;
       const startupAdvancedStatusStartedAt = Date.now();
-      // waitForHealthy reports ok as soon as the SHELL is healthy; lazy
-      // collections (desktop_file_chunks since the lazy-file-sync change) may
-      // still be inside their first catch-up for a few hundred ms. The strict
-      // contract below requires COMPLETE initial sync, so poll the status
-      // until the lazy tail finishes (bounded) before asserting.
+      // Startup readiness intentionally excludes demand-only chunk/blob
+      // collections. File-focused smokes lease those collections explicitly
+      // before adding them to strict advanced-status checks.
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
         timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
         requiredCollections: startupRequiredCollections,
@@ -3443,14 +3437,7 @@ function ensureCtoxSmokeBinary() {
       advancedStatusEvidenceVersion = advancedStatus.version || '';
       advancedStatusEvidenceRuntime = advancedStatus.rxdbRuntime || null;
       if (smokeMode === 'business-os-auth-scope-ui') {
-        const requiredCollections = [
-          'business_module_catalog',
-          'ctox_runtime_settings',
-          'business_commands',
-          'ctox_queue_tasks',
-          'desktop_files',
-          'desktop_file_chunks',
-        ];
+        const requiredCollections = BUSINESS_OS_SHELL_STATUS_COLLECTIONS;
         const authSnapshot = async () => page.evaluate(async () => {
           const smoke = globalThis.ctoxBusinessOsSmoke;
           const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
@@ -4272,14 +4259,7 @@ function ensureCtoxSmokeBinary() {
         }
         const status = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 60000,
-          requiredCollections: [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ],
+          requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
         });
         if (!status?.ok) {
           throw new Error(`Business OS fresh-profile advanced status unhealthy: ${JSON.stringify(status, null, 2)}`);
@@ -4362,17 +4342,10 @@ function ensureCtoxSmokeBinary() {
         return;
       }
       if (smokeMode === 'native-schema-drift-browser-status') {
-        const driftStatus = await page.evaluate(() => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+        const driftStatus = await page.evaluate((requiredCollections) => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,
-          requiredCollections: [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ],
-        }));
+          requiredCollections,
+        }), Array.from(BUSINESS_OS_SHELL_STATUS_COLLECTIONS));
         assertHealthyAdvancedStatusContract(driftStatus);
         const nativePeer = driftStatus?.sync?.nativePeer || {};
         const degraded = Array.isArray(nativePeer.degradedOptionalCollections)
@@ -4417,14 +4390,7 @@ function ensureCtoxSmokeBinary() {
         await cdp.detach().catch(() => {});
         const resumedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 60000,
-          requiredCollections: [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ],
+          requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
         });
         if (!resumedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after tab freeze resume: ${JSON.stringify(resumedStatus, null, 2)}`);
@@ -4439,14 +4405,7 @@ function ensureCtoxSmokeBinary() {
         await page.context().setOffline(false);
         const resumedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 90000,
-          requiredCollections: [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ],
+          requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
         });
         if (!resumedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after browser network flap: ${JSON.stringify(resumedStatus, null, 2)}`);
@@ -5474,12 +5433,7 @@ function ensureCtoxSmokeBinary() {
         }, null, { timeout: 60000 });
         const reloadedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 60000,
-          requiredCollections: [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-          ],
+          requiredCollections: BUSINESS_OS_COMMAND_STATUS_COLLECTIONS,
         });
         if (!reloadedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after command reload: ${JSON.stringify(reloadedStatus, null, 2)}`);
