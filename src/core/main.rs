@@ -2086,7 +2086,12 @@ fn execute_appsec_stage_commands(
                 );
                 insert_non_empty_array(&mut command_result, "session_bindings", session_bindings);
                 insert_non_empty_array(&mut command_result, "artifact_bindings", artifact_bindings);
+                let stop_on_failure =
+                    command.get("stop_on_failure").and_then(Value::as_bool) == Some(true);
                 command_results.push(command_result);
+                if stop_on_failure && !ok {
+                    break;
+                }
             }
             Err(err) => {
                 command_results.push(json!({
@@ -5525,6 +5530,78 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(task.route_status, "blocked");
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_worker_stops_authz_web_stack_chain_after_failed_gate_command() {
+        let root = make_fake_ctox_root("appsec-pipeline-authz-stop-on-failure");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        run_projected_appsec_command(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "init".to_string(),
+                "--url".to_string(),
+                "https://example.test/app".to_string(),
+            ],
+        )
+        .unwrap();
+        let stage = serde_json::json!({
+            "run_commands": [
+                {
+                    "kind": "ctox-cli",
+                    "tool": "ctox_appsec_authz_run",
+                    "stop_on_failure": true,
+                    "ctox_cli": {
+                        "program": "ctox",
+                        "args": [
+                            "appsec",
+                            "authz",
+                            "run",
+                            "--state-dir",
+                            state.to_string_lossy(),
+                            "--target",
+                            "https://example.test/app"
+                        ]
+                    }
+                },
+                {
+                    "kind": "ctox-cli",
+                    "tool": "ctox_browser_automation",
+                    "ctox_cli": {
+                        "program": "ctox",
+                        "args": ["web", "browser-automation", "--timeout-ms", "1000"],
+                        "stdin": "harness_tool.freeform_source"
+                    },
+                    "harness_tool": {
+                        "kind": "freeform",
+                        "name": "ctox_browser_automation",
+                        "freeform_source": "return { ok: true, should_not_run: true };"
+                    }
+                }
+            ]
+        });
+
+        let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
+        let commands = execution
+            .get("commands")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert_eq!(commands.len(), 1, "{execution:#}");
+        assert_eq!(
+            commands[0].get("ok").and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            commands[0]
+                .pointer("/output/command")
+                .and_then(serde_json::Value::as_str),
+            Some("authz run")
+        );
 
         cleanup_test_dir(&root);
     }
