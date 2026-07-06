@@ -220,6 +220,13 @@
   background: var(--danger-soft);
 }
 
+.ctox-input:disabled,
+.ctox-select:disabled,
+.ctox-textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .ctox-field-label {
   display: block;
   margin-bottom: 4px;
@@ -294,6 +301,34 @@
 .ctox-icon-button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Compact density for tight table rows and dense action cells. */
+.ctox-button--sm,
+.ctox-icon-button--sm {
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.ctox-button--sm {
+  padding: 0 8px;
+}
+
+.ctox-icon-button--sm {
+  width: 24px;
+}
+
+.ctox-icon-button.is-danger,
+.ctox-pane-icon.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
+  color: var(--danger);
+}
+
+.ctox-icon-button.is-danger:hover,
+.ctox-pane-icon.is-danger:hover {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+  color: var(--danger);
 }
 
 /* ----------------------------------------------------------------------------
