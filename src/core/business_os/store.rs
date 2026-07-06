@@ -33285,6 +33285,9 @@ fn handle_appsec_business_command(
             }
             args.push("--json".to_string());
         }
+        "ctox.appsec.authz.status" => {
+            args.extend(["authz", "status", "--json"].map(str::to_string));
+        }
         "ctox.appsec.authz.preflight" => {
             let target = appsec_payload_string(&command.payload, "target")
                 .or_else(|| appsec_payload_string(&command.payload, "url"))

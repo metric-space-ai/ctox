@@ -1224,6 +1224,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("credential_proof"),
             ]),
         ),
+        read_tool(
+            "appsec_authz_status",
+            "Use this when an external agent needs the current AppSec authz readiness, latest preflight/run/matrix artifacts, and next commands before or after a live authenticated run.",
+            object_schema(vec![optional_string("state_dir")]),
+        ),
         write_tool(
             "appsec_authz_build_matrix",
             "Use this when an authorized external agent needs to normalize redacted CTOX web-stack evidence into an AppSec authz matrix and optionally import it into coverage/findings.",
@@ -2437,6 +2442,9 @@ fn call_tool_inner(
             serde_json::to_value(appsec_authz_preflight(root, &context, &arguments)?)?
         }
         "appsec_authz_run" => serde_json::to_value(appsec_authz_run(root, &context, &arguments)?)?,
+        "appsec_authz_status" => {
+            serde_json::to_value(appsec_authz_status(root, &context, &arguments)?)?
+        }
         "appsec_authz_build_matrix" => {
             serde_json::to_value(appsec_authz_build_matrix(root, &context, &arguments)?)?
         }
@@ -2875,6 +2883,40 @@ fn appsec_authz_run(
         object.insert(
             "mcp_tool".to_string(),
             Value::String("appsec_authz_run".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
+    }
+    Ok(output)
+}
+
+fn appsec_authz_status(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(root, context, "appsec_authz_status", arguments)?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let mut output = crate::run_projected_appsec_command(
+        root,
+        &[
+            "--state-dir".to_string(),
+            path_string(&state_dir),
+            "authz".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ],
+    )?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_status".to_string()),
         );
         object.insert(
             "module_id".to_string(),
@@ -4578,6 +4620,7 @@ fn business_os_mcp_policy_decision(
         "appsec_assessment_status"
         | "appsec_completion_review"
         | "appsec_tools_doctor"
+        | "appsec_authz_status"
         | "appsec_report_get"
         | "appsec_finding_get" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
@@ -5020,6 +5063,7 @@ fn enforce_argument_scope_policy(
         | "appsec_authz_credential_proof_template"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
+        | "appsec_authz_status"
         | "appsec_authz_build_matrix"
         | "appsec_pipeline_rework"
         | "appsec_report_get"
@@ -6435,6 +6479,7 @@ mod tests {
             .iter()
             .any(|tool| tool.name == "appsec_authz_preflight"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_run"));
+        assert!(tools.iter().any(|tool| tool.name == "appsec_authz_status"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_authz_build_matrix"));
@@ -6678,6 +6723,29 @@ mod tests {
             .pointer("/run/web_stack_tasks")
             .and_then(Value::as_array)
             .is_some_and(|tasks| !tasks.is_empty()));
+        let authz_status = call_tool(
+            root,
+            "appsec_authz_status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            authz_status.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_authz_status")
+        );
+        assert_eq!(authz_status.get("ok").and_then(Value::as_bool), Some(true));
+        assert!(authz_status
+            .get("runs")
+            .and_then(Value::as_array)
+            .is_some_and(|runs| !runs.is_empty()));
+        assert!(authz_status
+            .get("preflights")
+            .and_then(Value::as_array)
+            .is_some_and(|preflights| !preflights.is_empty()));
 
         let authz_evidence_dir = root.join("runtime/appsec/default/authz/mcp-evidence");
         fs::create_dir_all(&authz_evidence_dir)?;
