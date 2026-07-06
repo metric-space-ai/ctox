@@ -19,5 +19,6 @@
   "approvalReviewerShort": "Reviewer",
   "approvalCommand": "Command",
   "approvalTask": "Task",
-  "approvalHeadingPrefix": "CTOX approval"
+  "approvalHeadingPrefix": "CTOX approval",
+  "presenceViewing": "is viewing this thread right now"
 }

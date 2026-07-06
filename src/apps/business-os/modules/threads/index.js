@@ -63,6 +63,16 @@ export async function mount(ctx) {
   wireUi();
   await startSync();
   state.cleanup.push(wireRealtime());
+  // Presence (advisory UX): publish which thread this user has open and show
+  // who else is looking at the same thread. Cleared on unmount.
+  state.presenceRemote = [];
+  if (ctx.presence?.subscribe) {
+    state.cleanup.push(ctx.presence.subscribe((entries) => {
+      state.presenceRemote = Array.isArray(entries) ? entries : [];
+      updateThreadPresenceHint(state.data.threads.find((item) => item.id === state.selectedId) || null);
+    }));
+    state.cleanup.push(() => { try { ctx.presence.clear(); } catch {} });
+  }
   await refresh();
 
   return () => {
@@ -367,6 +377,13 @@ function renderList(threads) {
 
 function renderDetail(threads) {
   const thread = threads.find((item) => item.id === state.selectedId) || null;
+  // Publish the open thread as an advisory presence entry (id only).
+  try {
+    state.ctx?.presence?.set(thread
+      ? [{ collection: 'user_threads', recordId: thread.id, mode: 'viewing' }]
+      : []);
+  } catch {}
+  updateThreadPresenceHint(thread);
   if (!thread) {
     if (els.title) els.title.textContent = state.t('noSelection', 'Kein Thread ausgewählt.');
     if (els.source) els.source.textContent = 'Threads';
@@ -384,6 +401,34 @@ function renderDetail(threads) {
   setThreadActionState(thread);
   renderTimeline(thread);
   renderContext(thread);
+}
+
+// Presence hint next to the thread status: other users with the same thread
+// open right now. Advisory only.
+function updateThreadPresenceHint(thread) {
+  let hint = els.root?.querySelector('[data-threads-presence-hint]') || null;
+  const ownActorId = state.ctx?.actor?.id || '';
+  const peers = thread
+    ? (state.presenceRemote || []).filter((entry) => entry
+      && entry.collection === 'user_threads'
+      && entry.recordId === thread.id
+      && entry.actorId
+      && entry.actorId !== ownActorId)
+    : [];
+  if (!peers.length) {
+    hint?.remove();
+    return;
+  }
+  if (!hint && els.status) {
+    hint = document.createElement('span');
+    hint.className = 'threads-presence-hint';
+    hint.setAttribute('data-threads-presence-hint', '');
+    els.status.insertAdjacentElement('afterend', hint);
+  }
+  if (!hint) return;
+  const names = [...new Set(peers.map((entry) => entry.actorName || entry.actorId))].join(', ');
+  hint.textContent = `👁 ${names}`;
+  hint.title = `${names} ${state.t('presenceViewing', 'sieht sich diesen Thread gerade an')}`;
 }
 
 function renderTimeline(thread) {

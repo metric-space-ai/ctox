@@ -19,5 +19,6 @@
   "approvalReviewerShort": "Reviewer",
   "approvalCommand": "Befehl",
   "approvalTask": "Aufgabe",
-  "approvalHeadingPrefix": "CTOX Freigabe"
+  "approvalHeadingPrefix": "CTOX Freigabe",
+  "presenceViewing": "sieht sich diesen Thread gerade an"
 }
