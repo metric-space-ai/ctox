@@ -35,9 +35,6 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
   Checkpoint-Alter in die Diagnose aufnehmen (browser: `createDiagnostics`
   in sync.js hat `remoteCheckpoint`, aber kein Alter/Lag; nativ:
   Status-Snapshot). Sichtbar im ctox-Modul / `business-os-advanced-status`.
-- **OS-A4 (S): Diagnose-CLI.** `ctox business-os sync-status` (o. ä.) gegen
-  den Status-Snapshot des nativen Peers — für Harness und Operator, gemäß
-  Regel "Capabilities dienen Apps UND Harness".
 
 ## Cluster B — Konnektivität (Kernversprechen: Zugriff ohne VPN-Planung)
 
@@ -187,3 +184,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-X2 (lokal) Wire-Daemon gebaut, Suite erstmals vollständig:
   55 pass / 0 fail / 0 skip inkl. beider Cross-Process-E2E-Smokes;
   CI-Verdrahtung als OS-X2b offen.
+- OS-A4 Diagnose-CLI `ctox business-os rxdb status [--json]` (Heartbeat,
+  replicationUp, Loop-Ticks, External-Poll-Wakeups; liest die
+  Heartbeat-Statusdatei, prozessübergreifend): `8bc1c7c4`
