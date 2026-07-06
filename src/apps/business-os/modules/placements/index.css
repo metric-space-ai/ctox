@@ -1,24 +1,133 @@
-.ats-placements { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
-.ats-placements .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
-.ats-placements .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
-.ats-placements .ats-count { font-size: 13px; opacity: .8; }
-.ats-placements .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
-.ats-placements .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
-.ats-placements .ats-gate { font-size: 13px; }
-.ats-placements .ats-gate:empty { display: none; }
-.ats-placements .ats-gate { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-.ats-placements .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
-.ats-placements .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
-.ats-placements .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
-.ats-placements .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
-.ats-placements .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.ats-placements .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
-.ats-placements .ats-item--rich { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px; }
-.ats-placements .ats-item-main { grid-column: 1; }
-.ats-placements .ats-item-meta { grid-column: 1; font-size: 12px; opacity: .75; }
-.ats-placements .ats-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); vertical-align: middle; }
-.ats-placements .ats-badge--confirmed { border-color: color-mix(in srgb, green 45%, transparent); }
-.ats-placements .ats-badge--early_leave { border-color: color-mix(in srgb, orange 50%, transparent); }
-.ats-placements .ats-badge--cancelled { border-color: color-mix(in srgb, red 45%, transparent); opacity: .8; }
-.ats-placements .ats-action { grid-column: 2; grid-row: 1 / span 2; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; cursor: pointer; }
-.ats-placements .ats-action:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+/* placements/index.css — module-specific styling on top of shared/base.css.
+   Header, inputs, buttons, badges and empty state come from the kit
+   (.ctox-pane-*, .ctox-input/.ctox-select, .ctox-button, .ctox-badge,
+   .ctox-empty); only the placements frame, rich list rows and gate/result
+   rows live here. */
+
+.ats-placements {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  color: var(--text);
+}
+
+.ats-placements .ats-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ats-placements .ats-sub:empty {
+  display: none;
+}
+
+.ats-placements .ats-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ats-placements .ats-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ats-placements .ats-form .ctox-input {
+  width: auto;
+  flex: 1 1 160px;
+}
+
+.ats-placements .ats-form .ctox-select {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.ats-placements .ats-count {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Gate (result / blockers) — shared class names with intake. */
+.ats-placements .ats-gate {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.ats-placements .ats-gate:empty {
+  display: none;
+}
+
+.ats-placements .ats-gate--ok {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: var(--success-soft);
+}
+
+.ats-placements .ats-gate--block {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: var(--danger-soft);
+}
+
+.ats-placements .ats-gate--offline {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: var(--warning-soft);
+}
+
+.ats-placements .ats-gate .ats-result-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ats-placements .ats-gate .ats-blockers {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ats-placements .ats-gate .ats-blockers li {
+  font-size: 12px;
+  margin: 2px 0;
+}
+
+/* Rich list rows (variable content — module-owned card list on kit tokens). */
+.ats-placements .ats-item {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.ats-placements .ats-item--rich {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.ats-placements .ats-item-main {
+  grid-column: 1;
+}
+
+.ats-placements .ats-item-meta {
+  grid-column: 1;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Grid placement only — the button itself is a kit .ctox-button. */
+.ats-placements .ats-action {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}

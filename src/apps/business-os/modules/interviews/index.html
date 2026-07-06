@@ -1,20 +1,30 @@
 <section class="ats-module ats-interviews" data-ats-root>
-  <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
-  <form class="ats-form" data-ats-form>
-    <input type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f />
-    <input type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f />
-    <input type="text" name="parties" placeholder="Parteien (Komma-getrennt)" data-f />
-    <input type="datetime-local" name="start" data-f />
-    <input type="number" name="duration_min" placeholder="Dauer (Min)" data-f />
-    <select name="location_mode" data-f>
-      <option value="video">Video</option>
-      <option value="onsite">Vor Ort</option>
-      <option value="phone">Telefon</option>
-    </select>
-    <input type="text" name="video_link" placeholder="Video-Link" data-f />
-    <button type="submit">Termin anlegen</button>
-  </form>
-  <div class="ats-gate" data-ats-gate></div>
-  <div class="ats-count" data-ats-count></div>
-  <div class="ats-list" data-ats-list></div>
+  <header class="ctox-pane-header ctox-pane-band ats-head">
+    <div class="ctox-pane-title-row">
+      <div class="ctox-pane-titles">
+        <span class="ctox-pane-kicker">Interviews</span>
+        <h1 class="ctox-pane-title" data-ats-title></h1>
+      </div>
+    </div>
+    <p class="ats-sub" data-ats-sub></p>
+  </header>
+  <div class="ats-body">
+    <form class="ats-form" data-ats-form>
+      <input class="ctox-input" type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f />
+      <input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f />
+      <input class="ctox-input" type="text" name="parties" placeholder="Parteien (Komma-getrennt)" data-f />
+      <input class="ctox-input" type="datetime-local" name="start" data-f />
+      <input class="ctox-input" type="number" name="duration_min" placeholder="Dauer (Min)" data-f />
+      <select class="ctox-select" name="location_mode" data-f>
+        <option value="video">Video</option>
+        <option value="onsite">Vor Ort</option>
+        <option value="phone">Telefon</option>
+      </select>
+      <input class="ctox-input" type="text" name="video_link" placeholder="Video-Link" data-f />
+      <button class="ctox-button is-primary" type="submit">Termin anlegen</button>
+    </form>
+    <div class="ats-gate" data-ats-gate></div>
+    <div class="ats-count" data-ats-count></div>
+    <div class="ats-list" data-ats-list></div>
+  </div>
 </section>

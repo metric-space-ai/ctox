@@ -1,7 +1,7 @@
 import { isMeetingState, isNoShow } from './core/scheduling.js';
 import { scoreScorecard, isScorecardComplete } from './core/scorecard.js';
 
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'interviews';
 // Interview coordination has two record families, both plain RxDB collection
 // writes (there is no native `ats.interview.*` business command — STT
@@ -57,7 +57,7 @@ export async function mount(ctx) {
       parts.push('<div class="ats-group-head">Scorecards</div>');
       parts.push(scorecards.map((r) => scorecardRow(r)).join(''));
     }
-    if (listEl) listEl.innerHTML = parts.length ? parts.join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = parts.length ? parts.join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   // Meeting state transitions are plain RxDB writes — the scheduling engine owns
@@ -162,6 +162,22 @@ export async function mount(ctx) {
   };
 }
 
+// Maps a meeting/scorecard state onto the kit badge states
+// (completed/success, no_show/danger, waiting/warning, confirmed/info,
+// cancelled/neutral).
+function statusBadgeClass(state) {
+  if (state === 'completed') return 'is-success';
+  if (state === 'no_show') return 'is-danger';
+  if (state === 'proposed' || state === 'rescheduled') return 'is-warning';
+  if (state === 'confirmed') return 'is-info';
+  return '';
+}
+
+function badgeSpan(state, label) {
+  const cls = ('ctox-badge ' + statusBadgeClass(state)).trim();
+  return '<span class="' + cls + '" data-status="' + esc(state) + '">' + esc(label == null ? state : label) + '</span>';
+}
+
 function meetingRow(r, nowMs) {
   let state = String(r.state || 'proposed');
   if (isNoShow(r, nowMs) && state !== 'no_show' && state !== 'cancelled') state = 'no_show';
@@ -188,7 +204,7 @@ function meetingRow(r, nowMs) {
   return ''
     + '<div class="ats-item ats-item--rich">'
     + '<div class="ats-item-body">'
-    + '<div class="ats-item-main"><span class="ats-badge ats-badge--' + esc(badge) + '">' + esc(badge) + '</span> ' + cand + vac + '</div>'
+    + '<div class="ats-item-main">' + badgeSpan(badge) + ' ' + cand + vac + '</div>'
     + '<div class="ats-item-meta">' + metaBits.map(esc).join(' · ') + '</div>'
     + '</div>'
     + (actions.length ? '<div class="ats-actions">' + actions.join('') + '</div>' : '')
@@ -216,7 +232,7 @@ function scorecardRow(r) {
   return ''
     + '<div class="ats-item ats-item--rich">'
     + '<div class="ats-item-body">'
-    + '<div class="ats-item-main"><span class="ats-badge ats-badge--' + esc(badge) + '">' + (complete ? 'vollständig' : 'offen') + '</span> ' + cand + vac + '</div>'
+    + '<div class="ats-item-main">' + badgeSpan(badge, complete ? 'vollständig' : 'offen') + ' ' + cand + vac + '</div>'
     + '<div class="ats-item-meta">' + metaBits.map(esc).join(' · ') + '</div>'
     + '</div>'
     + '<div class="ats-score">' + overall + '</div>'
@@ -224,7 +240,7 @@ function scorecardRow(r) {
 }
 
 function actionBtn(meetingId, action, label) {
-  return '<button type="button" class="ats-action" data-meeting-action="' + esc(action) + '" data-meeting-id="' + esc(meetingId || '') + '">' + esc(label) + '</button>';
+  return '<button type="button" class="ctox-button" data-meeting-action="' + esc(action) + '" data-meeting-id="' + esc(meetingId || '') + '">' + esc(label) + '</button>';
 }
 
 function fmtTime(ms) {

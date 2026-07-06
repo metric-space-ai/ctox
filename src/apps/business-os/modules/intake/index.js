@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'intake';
 const PRIMARY = 'applications';
 const TITLE = 'intake';
@@ -39,7 +39,7 @@ export async function mount(ctx) {
     rows.sort((a, b) => (Number(b.received_at_ms || b.created_at_ms || 0) - Number(a.received_at_ms || a.created_at_ms || 0)));
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => applicationRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => applicationRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   // Delegated row-action handler. The intake capture engine exposes no
@@ -137,6 +137,16 @@ export async function mount(ctx) {
   };
 }
 
+// Maps an application status onto the kit badge states
+// (hired/success, rejected/danger, in-flight/warning, new/info).
+function statusBadgeClass(status) {
+  if (status === 'hired') return 'is-success';
+  if (status === 'rejected') return 'is-danger';
+  if (status === 'screening' || status === 'duplicate') return 'is-warning';
+  if (status === 'new') return 'is-info';
+  return '';
+}
+
 function applicationRow(r) {
   const candidate = r && typeof r.candidate === 'object' && r.candidate ? r.candidate : {};
   const name = candidate.name || r.name || '(ohne Namen)';
@@ -166,7 +176,7 @@ function applicationRow(r) {
     + ' data-context-label="' + esc(label) + '">'
     + '<div class="ats-item-body">'
     + '<div class="ats-item-main">'
-    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'
+    + '<span class="' + ('ctox-badge ' + statusBadgeClass(status)).trim() + '" data-status="' + esc(status) + '">' + esc(status) + '</span>'
     + '<span class="ats-channel">' + esc(channel) + '</span>'
     + '<span class="ats-name">' + esc(name) + '</span>'
     + '</div>'

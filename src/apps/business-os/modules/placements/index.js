@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
 const TITLE = 'placements';
@@ -40,7 +40,7 @@ export async function mount(ctx) {
     if (countEl) countEl.textContent = rows.length + ' Einträge';
     if (listEl) listEl.innerHTML = rows.length
       ? rows.map((r) => placementRow(r)).join('')
-      : '<div class="ats-empty">Noch keine Einträge.</div>';
+      : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   async function onListClick(event) {
@@ -157,20 +157,30 @@ async function loadMarkup() {
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;
 }
+// Maps a placement status onto the kit badge states
+// (confirmed/success, early_leave/warning, cancelled/danger, sonst neutral).
+function statusBadgeClass(status) {
+  if (status === 'confirmed') return 'is-success';
+  if (status === 'early_leave') return 'is-warning';
+  if (status === 'cancelled') return 'is-danger';
+  return '';
+}
+
 function placementRow(r) {
   const status = String(r.status || 'confirmed');
   const active = status !== 'early_leave' && status !== 'cancelled';
   const fee = r.fee == null ? '—' : esc(String(r.fee));
+  const badgeClass = ('ctox-badge ' + statusBadgeClass(status)).trim();
   return '<div class="ats-item ats-item--rich" data-id="' + esc(r.id || '') + '">'
     + '<div class="ats-item-main">'
-    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span> '
+    + '<span class="' + badgeClass + '" data-status="' + esc(status) + '">' + esc(status) + '</span> '
     + '<strong>' + esc(r.candidate_id || '—') + '</strong> &rarr; ' + esc(r.client_account_id || '—')
     + '</div>'
     + '<div class="ats-item-meta">Honorar: ' + fee + ' &middot; Garantie: ' + esc(String(r.guarantee_days ?? '—')) + ' Tage'
     + (r.fee_invoice_id ? ' &middot; Rechnung: ' + esc(r.fee_invoice_id) : '')
     + (r.storno_credit_note_id ? ' &middot; Storno: ' + esc(r.storno_credit_note_id) : '')
     + '</div>'
-    + (active ? '<button type="button" class="ats-action" data-early-leave="' + esc(r.id || '') + '">Fr&uuml;hausstieg</button>' : '')
+    + (active ? '<button type="button" class="ctox-button ats-action" data-early-leave="' + esc(r.id || '') + '">Fr&uuml;hausstieg</button>' : '')
     + '</div>';
 }
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
