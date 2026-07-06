@@ -500,7 +500,7 @@ function renderObjectsEdits() {
     card.innerHTML = `
       <div class="object-head">
         <div class="object-avatar-wrap">
-          <div class="avatar" style="width:40px;height:40px;border-radius:10px;overflow:hidden;border:1px solid var(--stroke)">
+          <div class="avatar" style="width:40px;height:40px;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
             ${safeImgHtml({
               src: avatarSrc,
               fallbackSrc: fallbackAvatar,
@@ -951,6 +951,30 @@ const MATCHING_SYNC_COLLECTIONS = Object.freeze([
   { name: 'matching_objects', label: 'Objekte' },
   { name: 'matching_results', label: 'Matches' }
 ]);
+
+// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
+// the module runs without the shell ctx (standalone boot); the normal path is
+// ctx.getActionIcon from mountMatchingDashboard(ctx).
+const FALLBACK_ACTION_ICON_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  close: 'M6 6l12 12M18 6L6 18',
+  check: 'M4.5 12.5l5 5L19.5 7',
+  trash: 'M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5',
+  open: 'M14 5h5v5M19 5l-8 8M11 5H5v14h14v-6',
+  eye: 'M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z',
+  file: 'M7 3h7l4 4v14H7V3ZM14 3v4h4',
+  link: 'M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.6-5.6L12 7.2M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.6 5.6L12 16.8',
+  play: 'M8 5.5v13l10-6.5-10-6.5Z',
+  pause: 'M8 5h3v14H8zM13 5h3v14h-3z',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+});
+
+function actionIcon(name, size = 16, strokeWidth = 1.8) {
+  const fromCtx = matchingRuntimeCtx?.getActionIcon?.(name, size, strokeWidth);
+  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
+  const path = FALLBACK_ACTION_ICON_PATHS[name] || FALLBACK_ACTION_ICON_PATHS.more;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ctox-action-icon ctox-action-${name}"><path d="${path}"></path></svg>`;
+}
 
 function hasUnsyncedMatchingData() {
   // True when the RxDB collections hold records but the aggregated UI arrays
@@ -1955,7 +1979,8 @@ function __setUserInteracting() {
 
 function __objectUiIsBusy() {
   const objectSearch = document.getElementById('objectSearch');
-  const noteOpen = document.getElementById('noteModal')?.classList.contains('open');
+  const noteModalEl = document.getElementById('noteModal');
+  const noteOpen = !!noteModalEl && !noteModalEl.hidden;
   const objectOpen = document.getElementById('objectPanel')?.classList.contains('open');
   const focusedInObject = objectSearch && document.activeElement === objectSearch;
   return __userInteracting || noteOpen || focusedInObject || objectOpen;
@@ -4288,13 +4313,14 @@ function isCtoxQueuedCommandError(error) {
 // Hilfsfunktion: beliebiges gerade offenes "normales" Modal schließen
 function closeOpenTransientModal() {
   // Wir schließen nur Modale, die nicht Note/Rel sind
-  const openModal = getMatchingModuleHost().querySelector('.modal.open');
+  const openModal = getMatchingModuleHost().querySelector('.ctox-modal:not([hidden])');
   if (!openModal) return;
 
   if (openModal.id === 'noteModal' || openModal.id === 'relModal') {
     return; // diese Modale lassen wir in Ruhe
   }
-  openModal.classList.remove('open');
+  openModal.hidden = true;
+  openModal.setAttribute('aria-hidden', 'true');
 }
 
 // Hilfsfunktion: Score-Bubble für bestimmtes Requirement/Objekt-Paar auf "Loading" setzen
@@ -4451,19 +4477,18 @@ function ensureBulkMatchFilterModal() {
 
   modal = document.createElement('div');
   modal.id = 'bulkMatchFilterModal';
-  modal.className = 'modal';
+  modal.className = 'ctox-modal';
+  modal.hidden = true;
   modal.setAttribute('aria-hidden', 'true');
   modal.innerHTML = `
-    <div class="modal-card match-filter-modal" role="dialog" aria-modal="true" aria-labelledby="bulkMatchFilterTitle">
-      <div class="modal-header">
-        <div class="modal-title" id="bulkMatchFilterTitle">Match-Filter für Matching-Auswahl</div>
-        <div class="modal-close">
-          <button class="icon-btn" type="button" data-match-filter-close title="Schließen">
-            <svg viewBox="0 0 24 24"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="modal-body">
+    <div class="ctox-modal-card match-filter-modal" role="dialog" aria-modal="true" aria-labelledby="bulkMatchFilterTitle">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="bulkMatchFilterTitle">Match-Filter für Matching-Auswahl</h3>
+        <button class="ctox-pane-icon" type="button" data-match-filter-close aria-label="Schließen" title="Schließen">
+          ${actionIcon('close')}
+        </button>
+      </header>
+      <div class="ctox-modal-body">
         <label class="match-filter-toggle">
           <input type="checkbox" data-match-filter-enabled>
           <span>Nur Shortlist-Einträge ab Mindestscore hinzufügen</span>
@@ -4472,16 +4497,16 @@ function ensureBulkMatchFilterModal() {
           <span>Mindestscore <strong data-match-filter-value>70%</strong></span>
           <input type="range" min="0" max="100" step="5" data-match-filter-min-score>
         </label>
-        <div class="modal-row" style="justify-content:flex-end;margin-top:14px">
-          <button class="btn-pill" type="button" data-match-filter-save>Übernehmen</button>
-        </div>
       </div>
+      <footer class="ctox-modal-footer">
+        <button class="ctox-button is-primary" type="button" data-match-filter-save>Übernehmen</button>
+      </footer>
     </div>
   `;
   appendMatchingLayer(modal);
 
   const close = () => {
-    modal.classList.remove('open');
+    modal.hidden = true;
     modal.setAttribute('aria-hidden', 'true');
   };
 
@@ -4514,7 +4539,7 @@ function openBulkMatchFilterModal() {
   if (enabled) enabled.checked = settings.enabled;
   if (minScore) minScore.value = String(settings.minScore);
   if (value) value.textContent = `${settings.minScore}%`;
-  modal.classList.add('open');
+  modal.hidden = false;
   modal.setAttribute('aria-hidden', 'false');
 }
 
@@ -4524,22 +4549,21 @@ function ensureMatchFilterModal() {
 
   modal = document.createElement('div');
   modal.id = 'matchFilterModal';
-  modal.className = 'modal';
+  modal.className = 'ctox-modal';
+  modal.hidden = true;
   modal.setAttribute('aria-hidden', 'true');
   modal.innerHTML = `
-    <div class="modal-card match-filter-modal" role="dialog" aria-modal="true" aria-labelledby="matchFilterTitle">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title" id="matchFilterTitle">Match-Filter</div>
+    <div class="ctox-modal-card match-filter-modal" role="dialog" aria-modal="true" aria-labelledby="matchFilterTitle">
+      <header class="ctox-modal-header">
+        <div style="min-width:0">
+          <h3 class="ctox-modal-title" id="matchFilterTitle">Match-Filter</h3>
           <div class="muted" data-requirement-filter-subtitle style="font-size:12px;margin-top:2px"></div>
         </div>
-        <div class="modal-close">
-          <button class="icon-btn" type="button" data-requirement-filter-close title="Schließen">
-            <svg viewBox="0 0 24 24"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="modal-body">
+        <button class="ctox-pane-icon" type="button" data-requirement-filter-close aria-label="Schließen" title="Schließen">
+          ${actionIcon('close')}
+        </button>
+      </header>
+      <div class="ctox-modal-body">
         <label class="match-filter-toggle">
           <input type="checkbox" data-requirement-filter-enabled>
           <span>Filter für sichtbare Matches aktivieren</span>
@@ -4562,11 +4586,11 @@ function ensureMatchFilterModal() {
         </label>
         <div class="match-filter-statuses" data-requirement-filter-statuses></div>
         <div class="match-filter-result muted" data-requirement-filter-result></div>
-        <div class="modal-row" style="justify-content:flex-end;margin-top:14px">
-          <button class="btn-pill" type="button" data-requirement-filter-save>Ansicht speichern</button>
-          <button class="btn-pill danger" type="button" data-requirement-filter-remove-hidden>Filter übernehmen</button>
-        </div>
       </div>
+      <footer class="ctox-modal-footer">
+        <button class="ctox-button" type="button" data-requirement-filter-save>Ansicht speichern</button>
+        <button class="ctox-button is-danger" type="button" data-requirement-filter-remove-hidden>Filter übernehmen</button>
+      </footer>
     </div>
   `;
   appendMatchingLayer(modal);
@@ -4582,7 +4606,7 @@ function ensureMatchFilterModal() {
   }
 
   const close = () => {
-    modal.classList.remove('open');
+    modal.hidden = true;
     modal.setAttribute('aria-hidden', 'true');
     modal.dataset.requirementId = '';
   };
@@ -4648,7 +4672,7 @@ function openMatchFilterModal(requirementId) {
   modal.querySelectorAll('[data-requirement-filter-statuses] input').forEach((input) => {
     input.checked = selectedStatuses.has(input.value);
   });
-  modal.classList.add('open');
+  modal.hidden = false;
   modal.setAttribute('aria-hidden', 'false');
   modal.querySelector('[data-requirement-filter-min-score]')?.dispatchEvent(new Event('input'));
 }
@@ -5330,10 +5354,8 @@ function renderSources(){
           </div>
         </div>
         <span class="total" title="Gesamt offene Anforderungn">${total}</span>
-        <button class="icon-btn" data-del-comp title="Quellen löschen">
-          <svg viewBox="0 0 24 24">
-            <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-          </svg>
+        <button class="icon-btn" data-del-comp title="Quellen löschen" aria-label="Quellen löschen">
+          ${actionIcon('trash')}
         </button>
       </div>
       <div class="locations" data-id="${c.id}"></div>
@@ -5521,18 +5543,16 @@ function renderRequirements(){
       const head = el('div','requirement-top');
 
       head.innerHTML = `
-        <button class="requirement-link" title="Anforderung öffnen/schließen">
-          <svg viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z"/></svg>
+        <button class="requirement-link" title="Anforderung öffnen/schließen" aria-label="Anforderung öffnen/schließen">
+          ${actionIcon('open', 18)}
         </button>
         <div>
           <div class="requirement-title">${j.title}</div>
           <div class="requirement-meta">${selectedComp ? '' : `${rowComp.name} · `}${j.location} · ${j.level || 'Mid'} · ${j.type || 'Vollzeit'}</div>
         </div>
         <div class="space"></div>
-        <button class="icon-btn" data-del-requirement title="Anforderung löschen">
-          <svg viewBox="0 0 24 24">
-            <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-          </svg>
+        <button class="icon-btn" data-del-requirement title="Anforderung löschen" aria-label="Anforderung löschen">
+          ${actionIcon('trash')}
         </button>`;
 
       wrap.appendChild(head);
@@ -5678,20 +5698,18 @@ function renderRequirements(){
               </div>
 
               <div class="badge-actions" style="margin-top:2px;">
-                <button class="icon-btn ${state.active?'active':''}" title="${state.active?'Prozess pausieren':'Prozess aktivieren'}" data-play>
-                  ${state.active
-                    ? '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
-                    : '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'}
+                <button class="icon-btn ${state.active?'active':''}" title="${state.active?'Prozess pausieren':'Prozess aktivieren'}" aria-label="${state.active?'Prozess pausieren':'Prozess aktivieren'}" data-play>
+                  ${state.active ? actionIcon('pause') : actionIcon('play')}
                 </button>
                 <button class="icon-btn notes-action-btn" title="Notizen und Fortschritt bearbeiten" aria-label="Notizen und Fortschritt bearbeiten" data-notes>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h9.5L19 8.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm8.5 1.8V10h4.2L13.5 5.8zM7 13h6v2H7v-2zm0 4h8v2H7v-2z"/></svg>
+                  ${actionIcon('file')}
                 </button>
                 <button class="icon-btn match-open-btn" title="Match anzeigen" aria-label="Match anzeigen" data-object>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5.2 0 8.6 4.1 10 7-1.4 2.9-4.8 7-10 7S3.4 14.9 2 12c1.4-2.9 4.8-7 10-7zm0 2C8.3 7 5.6 9.4 4.3 12c1.3 2.6 4 5 7.7 5s6.4-2.4 7.7-5C18.4 9.4 15.7 7 12 7zm0 2.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6z"/></svg>
+                  ${actionIcon('eye', 18)}
                 </button>
 
-                <button class="icon-btn danger" title="Matching entfernen" data-remove>
-                  <svg viewBox="0 0 24 24"><path d="M6 7h12l-1 14H7L6 7zm3-4h6l1 2H8l1-2z"/></svg>
+                <button class="icon-btn danger" title="Matching entfernen" aria-label="Matching entfernen" data-remove>
+                  ${actionIcon('trash')}
                 </button>
               </div>
 
@@ -5826,7 +5844,7 @@ function ensureNoteMatchDetailHost(){
   let host = document.getElementById('noteMatchDetail');
   if (host) return host;
 
-  const body = noteModal.querySelector('.modal-body');
+  const body = noteModal.querySelector('.ctox-modal-body');
   if (!body) return null;
 
   const saveRow = body.querySelector('.row:last-of-type') || null;
@@ -6066,7 +6084,7 @@ function openNoteModal(requirementId, objectId){
   setNoteSaveButtonVisible(false);
 
   // Modal sichtbar + für Screenreader einblenden
-  noteModal.classList.add('open');
+  noteModal.hidden = false;
   noteModal.setAttribute('aria-hidden', 'false');
 
   // Fokus explizit ins Textfeld setzen
@@ -6081,7 +6099,7 @@ function openNoteModal(requirementId, objectId){
 
 function closeNoteModal(){
   if (!noteModal) return;
-  noteModal.classList.remove('open');
+  noteModal.hidden = true;
   noteModal.setAttribute('aria-hidden', 'true');
   modalCtx = null;
   noteInitialText = '';
@@ -6115,21 +6133,19 @@ function ensureMatchModal(){
   if (matchModalEl) return;
 
   matchModalEl = document.createElement('div');
-  matchModalEl.className = 'modal';
+  matchModalEl.className = 'ctox-modal';
   matchModalEl.id = 'matchModal';
+  matchModalEl.hidden = true;
+  matchModalEl.setAttribute('aria-hidden', 'true');
   matchModalEl.innerHTML = `
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title" id="matchTitle">Objekt matchen</div>
-        <div class="modal-close">
-          <button class="icon-btn" data-match-close>
-            <svg viewBox="0 0 24 24">
-              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="modal-body">
+    <div class="ctox-modal-card" role="dialog" aria-modal="true" aria-labelledby="matchTitle">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="matchTitle">Objekt matchen</h3>
+        <button class="ctox-pane-icon" type="button" data-match-close aria-label="Schließen" title="Schließen">
+          ${actionIcon('close')}
+        </button>
+      </header>
+      <div class="ctox-modal-body">
         <div class="modal-row">
           <label class="muted" style="min-width:110px">Quellen</label>
           <select id="matchSourceSelect" class="range"></select>
@@ -6138,15 +6154,10 @@ function ensureMatchModal(){
           <label class="muted" style="min-width:110px">Anforderung</label>
           <select id="matchRequirementSelect" class="range"></select>
         </div>
-        <div class="row" style="margin-top:10px">
-          <div class="space"></div>
-          <button class="icon-btn" id="matchConfirm" title="Matching anlegen">
-            <svg viewBox="0 0 24 24">
-              <path d="M9 16.17 4.83 12 3.41 13.41 9 19l12-12-1.41-1.41z"/>
-            </svg>
-          </button>
-        </div>
       </div>
+      <footer class="ctox-modal-footer">
+        <button class="ctox-button is-primary" type="button" id="matchConfirm" title="Matching anlegen">Matching anlegen</button>
+      </footer>
     </div>`;
   appendMatchingLayer(matchModalEl);
 
@@ -6155,7 +6166,7 @@ function ensureMatchModal(){
   matchConfirmBtn = matchModalEl.querySelector('#matchConfirm');
 
   const closeBtn = matchModalEl.querySelector('[data-match-close]');
-  const close = ()=> matchModalEl.classList.remove('open');
+  const close = ()=> { matchModalEl.hidden = true; matchModalEl.setAttribute('aria-hidden', 'true'); };
 
   closeBtn.addEventListener('click', close);
   matchModalEl.addEventListener('click', (e)=>{ if (e.target === matchModalEl) close(); });
@@ -6182,7 +6193,8 @@ function ensureMatchModal(){
       });
 
     // Popup SOFORT schließen
-    matchModalEl.classList.remove('open');
+    matchModalEl.hidden = true;
+    matchModalEl.setAttribute('aria-hidden', 'true');
   });
 
 
@@ -6229,7 +6241,8 @@ function openMatchModalForObject(objectId){
     matchRequirementSelect.innerHTML = '';
   }
 
-  matchModalEl.classList.add('open');
+  matchModalEl.hidden = false;
+  matchModalEl.setAttribute('aria-hidden', 'false');
 }
 
 /* --------- Modal: Kontaktstatus (Quelle/Objekt) --------- */
@@ -6324,7 +6337,7 @@ if (relPhotoEl){
     src,
     fallbackSrc: fb,
     alt: name,
-    style: 'width:120px;height:120px;border-radius:20px;object-fit:cover;border:1px solid var(--stroke)'
+    style: 'width:120px;height:120px;border-radius:20px;object-fit:cover;border:1px solid var(--line)'
   });
 
   hydrateImages(relPhotoEl);
@@ -6352,14 +6365,14 @@ if (relPhotoEl){
     r.checked = (r.value === (hasRel ? '1' : '0'));
   });
 
-  relModal.classList.add('open');
+  relModal.hidden = false;
   relModal.setAttribute('aria-hidden','false');
 }
 
 
 function closeRelationModal(){
   if (!relModal) return;
-  relModal.classList.remove('open');
+  relModal.hidden = true;
   relModal.setAttribute('aria-hidden','true');
   closeImageLightbox();
   relCtx = null;
@@ -6569,7 +6582,7 @@ function openObject(objectId){
       </div>
     </section>
 
-    <hr style="border:none;border-top:1px solid var(--stroke);margin:6px 0 12px"/>
+    <hr style="border:none;border-top:1px solid var(--line);margin:6px 0 12px"/>
 
     <section style="margin-bottom:14px">
       <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.experience', 'Berufserfahrung')}</div>
@@ -7039,18 +7052,14 @@ function createObjectCard(objectUi){
       <div class="object-actions" style="margin-left:auto;display:flex;align-items:center;gap:8px;flex:0 0 auto;">
         <button type="button" class="icon-btn match-action-btn" data-role="match-btn"
                 title="${__objectEscapeAttr(defText('labels.matchActionTitle', 'Objekt matchen'))}" aria-label="${__objectEscapeAttr(defText('labels.matchActionAria', 'Objekt matchen'))}">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3a9 9 0 0 1 8.95 8H23v2h-2.05A9 9 0 0 1 13 20.95V23h-2v-2.05A9 9 0 0 1 3.05 13H1v-2h2.05A9 9 0 0 1 11 3.05V1h2v2.05A9 9 0 0 1 12 3Zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm0 3.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>
-          </svg>
+          ${actionIcon('link', 15)}
           <span>${__objectEscapeHtml(defText('labels.matchAction', 'Matchen'))}</span>
         </button>
 
         <button type="button" class="icon-btn" data-role="del-btn"
                 title="Objekt löschen" aria-label="Löschen"
                 style="height:30px;width:30px;display:inline-flex;align-items:center;justify-content:center;">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-          </svg>
+          ${actionIcon('trash')}
         </button>
 
         <button type="button" class="view-object btn-pill" data-role="object-btn"
@@ -7465,7 +7474,7 @@ function ensureMatchOverlay(){
   s.boxShadow = '0 10px 30px rgba(0,0,0,.5)';
   s.padding = '8px 10px';
   s.fontSize = '11px';
-  s.border = '1px solid var(--stroke, #374151)';
+  s.border = '1px solid var(--line)';
   s.display = 'none';
 
   appendMatchingLayer(matchOverlayEl);
@@ -8132,10 +8141,10 @@ function renderMap() {
   rightHead.style.alignItems = 'center';
   rightHead.style.gap = '8px';
   rightHead.innerHTML = `
-    <span class="tag" style="font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--stroke, #374151);">
+    <span class="tag" style="font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--line);">
       ${sourcesWithMatches.length} Quellen
     </span>
-    ${selectedObjectForMatrix ? `<span class="tag" style="font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--stroke, #374151);">${escapeHtml(selectedObjectForMatrix.name)}</span>` : ''}
+    ${selectedObjectForMatrix ? `<span class="tag" style="font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--line);">${escapeHtml(selectedObjectForMatrix.name)}</span>` : ''}
   `;
 
   globalHeader.appendChild(leftHead);
@@ -8222,7 +8231,7 @@ function renderMap() {
 
     // Layout-Berechnung
     const section = document.createElement('section');
-    section.style.border = '1px solid var(--stroke, #374151)';
+    section.style.border = '1px solid var(--line)';
     section.style.borderRadius = '12px';
     section.style.background = 'var(--surface, #020617)';
     section.style.padding = '10px';
@@ -8254,7 +8263,7 @@ function renderMap() {
     const left = document.createElement('div');
     left.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;">
-        <div class="logo" style="width:28px;height:28px;border-radius:8px;border:1px solid var(--stroke);display:flex;align-items:center;justify-content:center;overflow:hidden;">
+        <div class="logo" style="width:28px;height:28px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;">
           ${
             comp.logoUrl
               ? `<img src="${comp.logoUrl}" alt="${escapeHtml(comp.name)} Logo" style="width:100%;height:100%;object-fit:cover"/>`
@@ -8281,7 +8290,7 @@ function renderMap() {
       badge.style.fontSize = '11px';
       badge.style.padding = '4px 8px';
       badge.style.borderRadius = '999px';
-      badge.style.border = '1px solid var(--stroke, #374151)';
+      badge.style.border = '1px solid var(--line)';
       badge.style.background = selectedCount > 0 ? 'rgba(61,220,151,.12)' : 'rgba(255,255,255,.04)';
       badge.textContent = selectedCount > 0
         ? `✅ ${selectedCount} Match(es) für Auswahl`
@@ -8300,7 +8309,7 @@ function renderMap() {
     scroll.style.overflowY = 'auto';
     scroll.style.maxHeight = '520px';
     scroll.style.borderRadius = '10px';
-    scroll.style.border = '1px solid var(--stroke, #374151)';
+    scroll.style.border = '1px solid var(--line)';
 
     const table = document.createElement('table');
     table.className = 'matrix-table';

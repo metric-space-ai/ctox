@@ -1,7 +1,7 @@
 <div class="app">
     <!-- LEFT: Anforderungen -->
     <section class="panel" id="left">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker">Matching-Engine</span>
@@ -9,16 +9,16 @@
           </div>
           <div class="ctox-pane-actions">
             <button class="ctox-pane-icon" type="button" id="createRequirementBtn" aria-label="Anforderung anlegen" title="Anforderung anlegen">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Anforderungen konfigurieren" title="Anforderungen konfigurieren" data-column="requirements" data-column-action="configure" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Anforderungen importieren" title="Anforderungen importieren" data-column="requirements" data-column-action="import" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Anforderungen exportieren" title="Anforderungen exportieren" data-column="requirements" data-column-action="export" data-drawer-side="left">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
             </button>
           </div>
         </div>
@@ -30,7 +30,7 @@
             <option value="recent">Neueste zuerst</option>
           </select>
           <button class="ctox-pane-icon" type="button" aria-label="Anforderungen Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
           </button>
         </div>
       </header>
@@ -42,7 +42,7 @@
 
     <!-- MIDDLE: Matches -->
     <section class="panel requirements-wrap" id="center">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker">Kompilierung</span>
@@ -54,13 +54,13 @@
               <button class="ctox-pane-tab" type="button" id="tabMap" role="tab" aria-selected="false" aria-pressed="false">Tabelle</button>
             </div>
             <button class="ctox-pane-icon" type="button" aria-label="Matches konfigurieren" title="Matches konfigurieren" data-column="matches" data-column-action="configure" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Matches importieren" title="Matches importieren" data-column="matches" data-column-action="import" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Matches exportieren" title="Matches exportieren" data-column="matches" data-column-action="export" data-drawer-side="bottom">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4-1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
             </button>
           </div>
         </div>
@@ -70,7 +70,7 @@
             <option value="all">Alle Matches</option>
           </select>
           <button class="ctox-pane-icon" type="button" aria-label="Matches Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
           </button>
           <div class="space" style="display:none"></div>
           <span class="muted" id="sourceName" style="display:none">—</span>
@@ -86,7 +86,7 @@
 
     <!-- RIGHT: Objekte -->
     <section class="panel object-panel" id="right">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker">Kandidaten</span>
@@ -94,13 +94,13 @@
           </div>
           <div class="ctox-pane-actions">
             <button class="ctox-pane-icon" type="button" aria-label="Objekte konfigurieren" title="Objekte konfigurieren" data-column="objects" data-column-action="configure" data-drawer-side="right">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren" data-column="objects" data-column-action="import" data-drawer-side="right">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
             </button>
             <button class="ctox-pane-icon" type="button" aria-label="Objekte exportieren" title="Objekte exportieren" data-column="objects" data-column-action="export" data-drawer-side="right">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg>
             </button>
           </div>
         </div>
@@ -114,7 +114,7 @@
             <option value="tax">Sortieren: Taxonomie</option>
           </select>
           <button class="ctox-pane-icon" type="button" aria-label="Objekte Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="objects" data-column-action="search-sort" data-drawer-side="right">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
           </button>
         </div>
       </header>
@@ -133,34 +133,25 @@
   <aside class="column-drawer column-drawer-right" data-column-drawer="right" aria-hidden="true"></aside>
 
   <!-- Modal: Notizen & Fortschritt (pro Objekt & Anforderung) -->
-  <div class="modal" id="noteModal" aria-hidden="true">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title" id="noteTitle">Notizen</div>
-        <div class="modal-close">
-          <button class="icon-btn" data-close-modal>
-            <svg viewBox="0 0 24 24">
-              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="modal-body">
+  <div class="ctox-modal" id="noteModal" hidden role="dialog" aria-modal="true" aria-labelledby="noteTitle" aria-hidden="true">
+    <div class="ctox-modal-card">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="noteTitle">Notizen</h3>
+        <button class="ctox-pane-icon" type="button" data-close-modal aria-label="Schließen" title="Schließen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="ctox-modal-body">
         <div class="modal-row">
           <label class="muted" style="min-width:110px">Fortschritt</label>
           <input id="noteProgress" class="range" type="range" min="0" max="100" step="5" />
           <span id="noteProgressVal">0%</span>
         </div>
         <textarea id="noteText" placeholder="Notizen zum Matchingprozess…"></textarea>
-        <div class="row" style="margin-top:10px">
-          <div class="space"></div>
-          <button class="icon-btn" id="saveNote" title="Speichern">
-            <svg viewBox="0 0 24 24">
-              <path d="M17 3H5a2 2 0 0 0-2 2v14l4-4h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/>
-            </svg>
-          </button>
-        </div>
       </div>
+      <footer class="ctox-modal-footer">
+        <button class="ctox-button is-primary" type="button" id="saveNote" title="Speichern">Speichern</button>
+      </footer>
     </div>
   </div>
 
@@ -170,9 +161,7 @@
       <strong id="objectTitle">Objekt</strong>
       <div class="space"></div>
       <button class="icon-btn" id="objectClose" title="Schließen">
-        <svg viewBox="0 0 24 24">
-          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
     <div class="object-body" id="objectBody"></div>
@@ -181,31 +170,25 @@
   <aside class="jp" id="requirementPanel" aria-hidden="true">
     <div class="jp-header">
       <button class="icon-btn" id="jpClose" title="Schließen">
-        <svg viewBox="0 0 24 24" style="transform:rotate(180deg)">
-          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
       <strong id="jpTitle" style="margin-left:6px">Anforderung</strong>
       <div class="space"></div>
-      <span class="hdr-badge" id="jpMeta"></span>
+      <span class="ctox-badge" id="jpMeta"></span>
     </div>
     <div class="jp-body" id="jpBody"></div>
   </aside>
 
     <!-- Modal: Kontaktstatus (Quelle/Objekt) -->
-  <div class="modal" id="relModal" aria-hidden="true">
-    <div class="modal-card rel-modal-card">
-      <div class="modal-header">
-        <div class="modal-title" id="relTitle">Kontaktstatus</div>
-        <div class="modal-close">
-          <button class="icon-btn" data-close-rel-modal>
-            <svg viewBox="0 0 24 24">
-              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="modal-body">
+  <div class="ctox-modal" id="relModal" hidden role="dialog" aria-modal="true" aria-labelledby="relTitle" aria-hidden="true">
+    <div class="ctox-modal-card rel-modal-card">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="relTitle">Kontaktstatus</h3>
+        <button class="ctox-pane-icon" type="button" data-close-rel-modal aria-label="Schließen" title="Schließen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="ctox-modal-body">
 
         <!-- NEU: großer Portrait-Platzhalter -->
         <div id="relPhoto" class="rel-photo"></div>
@@ -213,15 +196,15 @@
         <p class="muted" style="font-size:12px;margin:0 0 8px">
           Hier kannst du markieren, ob bereits ein persönlicher Kontakt besteht.
         </p>
-        <div class="rel-options" id="relOptions">
-          <label class="rel-option">
+        <div class="ctox-choice-group" id="relOptions" role="radiogroup" aria-label="Kontaktstatus">
+          <label class="ctox-choice">
             <input type="radio" name="relState" value="1" />
             <span>
               <span class="lg-dot requirement" style="margin-right:6px"></span>
               <span data-rel-label="exists">Kontakt besteht</span>
             </span>
           </label>
-          <label class="rel-option">
+          <label class="ctox-choice">
             <input type="radio" name="relState" value="0" />
             <span>
               <span class="lg-dot" style="margin-right:6px; background:var(--none)"></span>
@@ -229,23 +212,16 @@
             </span>
           </label>
         </div>
-        <div class="row" style="margin-top:12px">
-          <div class="space"></div>
-          <button class="icon-btn" id="relSave" title="Kontaktstatus speichern">
-            <svg viewBox="0 0 24 24">
-              <path d="M9 16.17 4.83 12 3.41 13.41 9 19l12-12-1.41-1.41z"/>
-            </svg>
-          </button>
-        </div>
       </div>
+      <footer class="ctox-modal-footer">
+        <button class="ctox-button is-primary" type="button" id="relSave" title="Kontaktstatus speichern">Speichern</button>
+      </footer>
     </div>
   </div>
 
   <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
     <button class="icon-btn image-lightbox-close" id="imageLightboxClose" title="Schließen">
-      <svg viewBox="0 0 24 24">
-        <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-      </svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
     <img id="imageLightboxImg" alt="Bildvorschau" />
   </div>
@@ -265,9 +241,7 @@
         </div>
         <div class="match-bar-score" id="matchBarScore">–</div>
         <button class="icon-btn" id="matchBarClose" title="Details schließen">
-          <svg viewBox="0 0 24 24">
-            <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </header>
 

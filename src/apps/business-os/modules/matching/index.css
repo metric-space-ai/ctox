@@ -33,9 +33,6 @@
   --txt-2:#a3afbd;
   --txt-dim:#7c8997;
 
-  /* accents (default; wird von data-engine überschrieben) */
-  --accent-600:#43cfe4;
-
   /* borders & shadows */
   --bd-hair:rgba(255,255,255,.06);
   --bd-soft:rgba(255,255,255,.08);
@@ -91,11 +88,13 @@
 
 .module-root[data-module-root="matching"] img{ max-width:100%; display:block; }
 
-.module-root[data-module-root="matching"] button, .module-root[data-module-root="matching"] input, .module-root[data-module-root="matching"] select, .module-root[data-module-root="matching"] textarea{ font:inherit; color:inherit; line-height:inherit; }
-.module-root[data-module-root="matching"] button{ cursor:pointer; background:none; border:0; padding:0; }
+/* Broad element resets stay away from the shared kit classes (ctox-*):
+   base.css owns their look; the module must not re-style them. */
+.module-root[data-module-root="matching"] button:not([class*="ctox-"]), .module-root[data-module-root="matching"] input:not([class*="ctox-"]), .module-root[data-module-root="matching"] select:not([class*="ctox-"]), .module-root[data-module-root="matching"] textarea:not([class*="ctox-"]){ font:inherit; color:inherit; line-height:inherit; }
+.module-root[data-module-root="matching"] button:not([class*="ctox-"]){ cursor:pointer; background:none; border:0; padding:0; }
 
 /* ---- Inputs (flat) ---- */
-.module-root[data-module-root="matching"] select, .module-root[data-module-root="matching"] input, .module-root[data-module-root="matching"] textarea,
+.module-root[data-module-root="matching"] select:not([class*="ctox-"]), .module-root[data-module-root="matching"] input:not([class*="ctox-"]), .module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
 .module-root[data-module-root="matching"] .input-text, .module-root[data-module-root="matching"] .input-select, .module-root[data-module-root="matching"] .input-textarea{
   background:linear-gradient(180deg,#161c22 0%, #12171d 100%);
   color:var(--txt-1);
@@ -109,10 +108,10 @@
 .module-root[data-module-root="matching"] .input-textarea{ resize:vertical; min-height:60px; }
 .module-root[data-module-root="matching"] .input-select-xs{ font-size:var(--text-size-xs); padding:4px 6px; }
 
-.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):focus-visible{
+.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):not([class*="ctox-"]):focus-visible{
   outline:none;
-  box-shadow:0 0 0 3px color-mix(in oklab, var(--km-accent) 24%, transparent) inset;
-  border-color:color-mix(in oklab, var(--km-accent) 38%, transparent);
+  box-shadow:0 0 0 3px color-mix(in oklab, var(--accent) 24%, transparent) inset;
+  border-color:color-mix(in oklab, var(--accent) 38%, transparent);
   transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
 
@@ -152,11 +151,11 @@
 }
 
 .module-root[data-module-root="matching"] .footer-update-btn{
-  border:1px solid color-mix(in oklab, var(--km-accent) 55%, transparent);
+  border:1px solid color-mix(in oklab, var(--accent) 55%, transparent);
   border-radius:999px;
   padding:4px 9px;
   color:#06131a;
-  background:var(--km-accent);
+  background:var(--accent);
   font-size:var(--text-size-xs);
   font-weight:800;
   line-height:1.2;
@@ -165,8 +164,8 @@
   box-shadow:0 0 0 1px rgba(255,255,255,.16) inset, 0 0 0 3px rgba(103,232,249,.12);
 }
 .module-root[data-module-root="matching"] .footer-update-btn:hover{
-  background:color-mix(in oklab, var(--km-accent) 86%, white);
-  border-color:color-mix(in oklab, var(--km-accent) 68%, transparent);
+  background:color-mix(in oklab, var(--accent) 86%, white);
+  border-color:color-mix(in oklab, var(--accent) 68%, transparent);
 }
 .module-root[data-module-root="matching"] .footer-update-btn.is-idle{
   color:var(--txt-2);
@@ -280,16 +279,16 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .bubble-user{
   align-self:flex-end;
-  border-color: color-mix(in oklab, var(--km-accent) 22%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
   background:
-    radial-gradient(90% 90% at 20% -20%, color-mix(in oklab, var(--km-accent) 12%, transparent) 0%, transparent 60%),
+    radial-gradient(90% 90% at 20% -20%, color-mix(in oklab, var(--accent) 12%, transparent) 0%, transparent 60%),
     linear-gradient(180deg,#152a2f 0%, #101e22 100%);
   color:#e8fbff;
   transition: border-color var(--snap-ms) var(--snappy), background var(--snap-ms) var(--snappy);
 }
 .module-root[data-module-root="matching"] .bubble-assistant{ align-self:flex-start; }
 .module-root[data-module-root="matching"] .bubble-role{ font-size:var(--text-size-xs); font-weight:700; color:var(--txt-dim); margin-bottom:4px; letter-spacing:.2px; }
-.module-root[data-module-root="matching"] .bubble-user .bubble-role{ color:color-mix(in oklab, var(--km-accent) 70%, #bdf6ff); }
+.module-root[data-module-root="matching"] .bubble-user .bubble-role{ color:color-mix(in oklab, var(--accent) 70%, #bdf6ff); }
 .module-root[data-module-root="matching"] .bubble-body{ font-size:var(--text-size-sm); line-height:var(--lh-relaxed); }
 .module-root[data-module-root="matching"] .bubble-meta{ font-size:var(--text-size-xs); color:var(--txt-dim); margin-top:6px; text-align:right; }
 
@@ -322,7 +321,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   margin-bottom:6px;
   padding:4px 6px;
   border-radius:8px;
-  border:1px solid color-mix(in oklab, var(--km-accent) 20%, var(--bd-hair));
+  border:1px solid color-mix(in oklab, var(--accent) 20%, var(--bd-hair));
   background:linear-gradient(180deg,#123037 0%, #10262d 100%);
 }
 .module-root[data-module-root="matching"] .assist-item-body{
@@ -336,9 +335,9 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .chat-input{ width:100%; resize:none; font-size:var(--text-size-sm); line-height:var(--lh-normal);
   padding:10px 12px; min-height:52px; max-height:110px; }
 .module-root[data-module-root="matching"] .chat-input:focus{
-  border-color: color-mix(in oklab, var(--km-accent) 35%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 35%, transparent);
   box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--km-accent) 14%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--accent) 14%, transparent),
     0 8px 24px rgba(0,0,0,.22);
   transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
@@ -393,8 +392,8 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .slash-item:hover,
 .module-root[data-module-root="matching"] .slash-item.is-active{
-  border-color:color-mix(in oklab, var(--km-accent) 35%, transparent);
-  background:linear-gradient(180deg, color-mix(in oklab, var(--km-accent) 10%, #1a222b) 0%, #141c24 100%);
+  border-color:color-mix(in oklab, var(--accent) 35%, transparent);
+  background:linear-gradient(180deg, color-mix(in oklab, var(--accent) 10%, #1a222b) 0%, #141c24 100%);
 }
 .module-root[data-module-root="matching"] .slash-item-main{
   display:flex;
@@ -451,8 +450,8 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .session-indicator .dot{ width:8px; height:8px; border-radius:50%; background:#6b7785; }
 .module-root[data-module-root="matching"] .session-indicator.is-active .dot{
-  background: var(--km-accent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--km-accent) 18%, transparent);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 18%, transparent);
   transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy);
 }
 
@@ -469,25 +468,25 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .btn:hover{ transform:translateY(-1px); }
 .module-root[data-module-root="matching"] .btn:active{ transform:none; box-shadow:0 2px 8px rgba(0,0,0,.34) inset; }
 .module-root[data-module-root="matching"] .btn:focus-visible{
-  outline:2px solid color-mix(in oklab, var(--km-accent) 70%, transparent);
+  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
   outline-offset:2px;
-  box-shadow:0 0 0 4px color-mix(in oklab, var(--km-accent) 20%, transparent);
+  box-shadow:0 0 0 4px color-mix(in oklab, var(--accent) 20%, transparent);
 }
 
 .module-root[data-module-root="matching"] .btn-primary{
-  border-color: color-mix(in oklab, var(--km-accent) 28%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 28%, transparent);
   background:
-    radial-gradient(90% 90% at 50% -30%, color-mix(in oklab, var(--km-accent) 14%, transparent) 0%, transparent 55%),
-    linear-gradient(180deg, color-mix(in oklab, var(--km-accent) 30%, #0f2327) 0%, #0f2327 100%);
+    radial-gradient(90% 90% at 50% -30%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 55%),
+    linear-gradient(180deg, color-mix(in oklab, var(--accent) 30%, #0f2327) 0%, #0f2327 100%);
   color:#eafcff;
   box-shadow:
-    0 10px 26px color-mix(in oklab, var(--km-accent) 20%, transparent),
+    0 10px 26px color-mix(in oklab, var(--accent) 20%, transparent),
     0 4px 14px rgba(0,0,0,.28);
   transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
 .module-root[data-module-root="matching"] .btn-primary:hover{
   box-shadow:
-    0 16px 40px color-mix(in oklab, var(--km-accent) 28%, transparent),
+    0 16px 40px color-mix(in oklab, var(--accent) 28%, transparent),
     0 6px 16px rgba(0,0,0,.3);
 }
 .module-root[data-module-root="matching"] .btn-secondary{ --btn-bg:#1a2129; }
@@ -551,7 +550,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   transition:background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
 }
 .module-root[data-module-root="matching"] #history-items > li:hover{
-  background:#131920; border-color:color-mix(in oklab, var(--km-accent) 18%, transparent);
+  background:#131920; border-color:color-mix(in oklab, var(--accent) 18%, transparent);
   box-shadow: inset 0 6px 18px rgba(0,0,0,.18);
 }
 
@@ -566,7 +565,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .busy-spinner{
   width:24px;height:24px;border:3px solid rgba(255,255,255,.15);
-  border-top-color:var(--km-accent);
+  border-top-color:var(--accent);
   border-radius:50%;animation:busy-spin 1s linear infinite;margin:auto;
 }
 .module-root[data-module-root="matching"] .busy-text{ font-size:.95rem; color:#dffaff; }
@@ -599,11 +598,11 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   color:var(--txt-2);
 }
 .module-root[data-module-root="matching"] .icon-pill:hover{
-  background: color-mix(in oklab, var(--km-accent) 6%, #151b21);
-  border-color: color-mix(in oklab, var(--km-accent) 22%, transparent);
+  background: color-mix(in oklab, var(--accent) 6%, #151b21);
+  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
 }
 .module-root[data-module-root="matching"] .icon-pill:active{ transform:translateY(1px); }
-.module-root[data-module-root="matching"] .icon-pill:focus-visible{ outline:2px solid var(--km-accent); outline-offset:2px; }
+.module-root[data-module-root="matching"] .icon-pill:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 
 /* ---- Quickbar sichtbar & positioniert, wenn geöffnet ---- */
 .module-root[data-module-root="matching"] #execution-quickbar-body[aria-hidden="false"]{
@@ -628,7 +627,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .module-root[data-module-root="matching"] .muted{ color:var(--txt-dim); font-weight:400; }
 .module-root[data-module-root="matching"] :where(.btn, .icon-pill, .pill, .assist-item, .dropdown, .chat-log):focus-visible{
-  outline:2px solid color-mix(in oklab, var(--km-accent) 70%, transparent);
+  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
   outline-offset:2px;
 }
 
@@ -649,49 +648,12 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   .module-root[data-module-root="matching"]{ transition:none !important; }
 }
 
-/* ---------- Accent as Custom Properties (animierbar) ---------- */
-@property --accent {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: #67e8f9;
-}
-@property --accent-600 {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: #43cfe4;
-}
-
-/* sanfter Wechsel global */
-.module-root[data-module-root="matching"]{
-  transition:
-    --accent var(--snap-ms) var(--snappy),
-    --accent-600 var(--snap-ms) var(--snappy);
-}
-
-
-
-/* ---------- Engine-Themes (per <html|body data-engine="…">) ---------- */
-/* Passe Farben je nach Dropdown-Wert an */
-:root[data-engine="leadgen"] .module-root[data-module-root="matching"]  { --km-accent:#67e8f9; --accent-600:#43cfe4; } /* cyan */
-:root[data-engine="research"] .module-root[data-module-root="matching"] { --km-accent:#a78bfa; --accent-600:#8b5cf6; } /* violet */
-:root[data-engine="code"] .module-root[data-module-root="matching"]     { --km-accent:#22d3ee; --accent-600:#06b6d4; } /* teal */
-:root[data-engine="finance"] .module-root[data-module-root="matching"]  { --km-accent:#34d399; --accent-600:#10b981; } /* green */
-:root[data-engine="vision"] .module-root[data-module-root="matching"]   { --km-accent:#f472b6; --accent-600:#ec4899; } /* pink */
-:root[data-engine="qa"] .module-root[data-module-root="matching"]       { --km-accent:#f59e0b; --accent-600:#d97706; } /* amber */
-/* Agent – setze hier deine Wunschfarbe; aktuell neutral-blue */
-:root[data-engine="agent"] .module-root[data-module-root="matching"]    { --km-accent:#60a5fa; --accent-600:#3b82f6; } /* blue */
-
-/* Optional: Fallback für unbekannte Werte */
-:root[data-engine="default"] .module-root[data-module-root="matching"]  { --km-accent:#67e8f9; --accent-600:#43cfe4; }
-
 /* Requirement matching view */
 .module-root[data-module-root="matching"]{
   --panel:var(--surf-1);
-  --panel-2:#1a2129;
-  --primary:var(--km-accent);
+  --primary:var(--accent);
   --primary-2:#9fdfff;
   --badge:#1b2430;
-  --stroke:var(--bd-hair);
   --chip:#111923;
   --overlay: rgba(2,8,12,.65);
   --good:#34d399;
@@ -774,7 +736,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .col-resizer:hover::before,
 .module-root[data-module-root="matching"] .col-resizer.is-active::before{
   opacity:1;
-  background:var(--km-accent);
+  background:var(--accent);
   box-shadow:0 0 0 2px rgba(255,255,255,.05);
 }
 body.is-col-resizing .module-root[data-module-root="matching"],
@@ -787,7 +749,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 
 .module-root[data-module-root="matching"] .panel{
   background:var(--panel);
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:14px;
   overflow:hidden;
   display:flex;
@@ -796,149 +758,24 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   min-height:0
 }
 
-.module-root[data-module-root="matching"] .ctox-pane-header{
-  display:flex;
-  flex-direction:column;
-  flex:0 0 auto;
-  min-width:0;
-  border-bottom:1px solid var(--bo-border, var(--stroke));
-  background:var(--bo-surface, var(--panel));
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-title-row{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-  min-width:0;
-  min-height:46px;
-  padding:8px 12px;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-titles{
-  display:flex;
-  flex-direction:column;
-  min-width:0;
-  gap:3px;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-kicker{
-  color:var(--bo-muted, var(--muted));
-  font-size:10px;
-  font-weight:760;
-  line-height:1;
-  text-transform:uppercase;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-actions{
-  display:flex;
-  align-items:center;
-  justify-content:flex-end;
-  gap:5px;
-  flex:0 0 auto;
-  min-width:max-content;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-tools{
-  display:grid;
-  grid-template-columns:minmax(0, 1fr) minmax(110px, 132px) 32px;
-  gap:8px;
-  align-items:center;
-  min-width:0;
-  min-height:48px;
-  padding:8px 12px;
-  border-top:1px solid var(--bo-border, var(--stroke));
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-search,
-.module-root[data-module-root="matching"] .ctox-pane-filter{
-  width:100% !important;
-  min-width:0;
-  height:32px !important;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-icon{
-  display:inline-grid;
-  place-items:center;
-  flex:0 0 30px;
-  width:30px;
-  min-width:30px;
-  height:30px;
-  min-height:30px;
-  padding:0;
-  border:1px solid var(--bo-border, var(--stroke)) !important;
-  border-radius:var(--radius-control, 8px);
-  background:var(--bo-surface-muted, var(--panel-2)) !important;
-  color:var(--bo-muted, var(--muted)) !important;
-  box-shadow:none !important;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-icon svg{
-  width:15px;
-  height:15px;
-  fill:currentColor;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-icon:hover,
-.module-root[data-module-root="matching"] .ctox-pane-icon:focus-visible{
-  color:var(--bo-accent, var(--km-accent)) !important;
-  border-color:var(--bo-accent, var(--km-accent)) !important;
-  outline:none;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-tabs{
-  display:inline-flex;
-  align-items:center;
-  gap:2px;
-  min-width:max-content;
-  min-height:30px;
-  padding:2px;
-  border:1px solid var(--bo-border, var(--stroke));
-  border-radius:var(--radius-control, 8px);
-  background:var(--bo-surface-muted, var(--panel-2));
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-tab{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-width:54px;
-  height:24px;
-  padding:0 9px;
-  border:1px solid transparent;
-  border-radius:calc(var(--radius-control, 8px) - 2px);
-  color:var(--bo-muted, var(--muted));
-  font-size:11px;
-  font-weight:800;
-  line-height:1;
-  white-space:nowrap;
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-tab.active,
-.module-root[data-module-root="matching"] .ctox-pane-tab[aria-selected="true"]{
-  border-color:color-mix(in oklab, var(--bo-accent, var(--km-accent)) 48%, transparent);
-  background:color-mix(in oklab, var(--bo-accent, var(--km-accent)) 16%, var(--bo-surface, var(--panel)));
-  color:var(--bo-text, var(--text));
-}
-
-.module-root[data-module-root="matching"] .ctox-pane-tab:focus-visible{
-  outline:2px solid var(--bo-accent, var(--km-accent));
-  outline-offset:2px;
-}
+/* Pane header building blocks (.ctox-pane-header/-band/-actions/-icon/-tools/
+   -search/-filter/-tabs/-tab/-kicker) come from shared/base.css + app.css. */
 
 .module-root[data-module-root="matching"] .collection-empty-state{
   padding:10px 12px;
   line-height:1.45;
 }
 
-.module-root[data-module-root="matching"] .panel h2{
+/* Legacy direct-child panel headings only — the standard pane header h2
+   (.ctox-pane-title) is owned by app.css/base.css. */
+.module-root[data-module-root="matching"] .panel > h2{
   margin:0;
   padding:14px 16px;
   font-size:14px;
   letter-spacing:.4px;
   text-transform:uppercase;
   color:var(--muted);
-  border-bottom:1px solid var(--stroke);
+  border-bottom:1px solid var(--line);
   display:flex;
   align-items:center;
   gap:10px
@@ -971,7 +808,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:16px;
   border-radius:999px;
   background:#161c22;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   padding:1px;
   cursor:pointer;
   flex-shrink:0;
@@ -1010,7 +847,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   width:10px;
   height:10px;
   border-radius:50%;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:var(--none);
   box-shadow:0 0 0 2px var(--panel)
 }
@@ -1021,14 +858,14 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   display:flex;
   gap:8px;
   padding:10px 12px;
-  border-bottom:1px solid var(--stroke);
+  border-bottom:1px solid var(--line);
 }
 .module-root[data-module-root="matching"] .source-tools input{
   width:100%;
   min-width:0;
   height:38px;
   background:#121a24;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--text);
   border-radius:8px;
   padding:0 12px;
@@ -1037,7 +874,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .sources{padding:12px; overflow:auto}
 .module-root[data-module-root="matching"] .source-grid{display:grid; grid-template-columns: 1fr; gap:10px}
 .module-root[data-module-root="matching"] .source-card{
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:linear-gradient(180deg, #12171d 0%, #161c22 100%);
   border-radius:12px;
   padding:12px;
@@ -1059,10 +896,10 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   width:16px;
   height:16px;
   fill:currentColor;
-  color:var(--bo-accent, var(--primary-2));
+  color:var(--accent);
 }
 .module-root[data-module-root="matching"] .area-source-summary{
-  color:var(--bo-muted, var(--muted));
+  color:var(--muted);
   font-size:11px;
   line-height:1.3;
   white-space:nowrap;
@@ -1079,9 +916,9 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:2px;
   min-width:0;
   padding:7px 8px;
-  border:1px solid var(--bo-border, var(--stroke));
+  border:1px solid var(--line);
   border-radius:var(--radius-control, 8px);
-  background:var(--bo-surface-muted, var(--panel-2));
+  background:var(--surface-2);
 }
 .module-root[data-module-root="matching"] .area-requirement-row span,
 .module-root[data-module-root="matching"] .area-requirement-row small{
@@ -1091,12 +928,12 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   white-space:nowrap;
 }
 .module-root[data-module-root="matching"] .area-requirement-row span{
-  color:var(--bo-text, var(--text));
+  color:var(--text);
   font-size:12px;
   font-weight:700;
 }
 .module-root[data-module-root="matching"] .area-requirement-row small{
-  color:var(--bo-muted, var(--muted));
+  color:var(--muted);
   font-size:11px;
 }
 .module-root[data-module-root="matching"] .source-head{display:flex; align-items:flex-start; gap:10px}
@@ -1113,7 +950,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   place-items:center;
   overflow:hidden;
   background:var(--chip);
-  border:1px solid var(--stroke)
+  border:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .logo img{width:100%; height:100%; object-fit:cover}
 .module-root[data-module-root="matching"] .cname{font-weight:600; font-size:14px}
@@ -1123,7 +960,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   padding:3px 8px;
   border-radius:999px;
   background:var(--badge);
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--primary-2)
 }
 .module-root[data-module-root="matching"] .locations{margin-top:10px; display:flex; flex-wrap:wrap; gap:6px}
@@ -1132,7 +969,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   padding:5px 8px;
   border-radius:999px;
   background:var(--chip);
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--muted)
 }
 .module-root[data-module-root="matching"] .loc b{color:var(--text); font-weight:700}
@@ -1157,13 +994,13 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:10px;
   padding:10px 12px;
   align-items:center;
-  border-bottom:1px solid var(--stroke)
+  border-bottom:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .toolbar input,
 .module-root[data-module-root="matching"] .toolbar select{
   height:38px;
   background:#121a24;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--text);
   border-radius:8px;
   padding:0 12px;
@@ -1172,7 +1009,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 .module-root[data-module-root="matching"] .requirement-list{padding:10px; overflow:auto}
 .module-root[data-module-root="matching"] .requirement{
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:12px;
   padding:12px;
   background:linear-gradient(180deg,#161c22 0%,#12171d 100%);
@@ -1195,7 +1032,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   margin-top:2px;
   margin-right:6px;
 }
-.module-root[data-module-root="matching"] .requirement-link svg{width:18px; height:18px; fill:currentColor; color:var(--primary-2)}
+.module-root[data-module-root="matching"] .requirement-link svg{width:18px; height:18px; color:var(--primary-2)}
 
 .module-root[data-module-root="matching"] .tag-row{margin-top:6px; display:flex; flex-wrap:wrap; gap:6px}
 .module-root[data-module-root="matching"] .tag{
@@ -1203,7 +1040,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   padding:4px 8px;
   border-radius:999px;
   background:var(--chip);
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--primary-2)
 }
 
@@ -1224,7 +1061,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:10px;
   padding:10px;
   border-radius:12px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:var(--chip);
   min-width:0;
   overflow:hidden;
@@ -1240,7 +1077,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:44px;
   border-radius:10px;
   overflow:hidden;
-  border:1px solid var(--stroke)
+  border:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .object-photo img{width:100%; height:100%; object-fit:cover; object-position:center}
 .module-root[data-module-root="matching"] .object-info{min-width:0}
@@ -1265,7 +1102,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   font-weight:900;
   font-size:14px;
   background:#111923;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   padding:0 10px;
   margin:0 8px
 }
@@ -1284,14 +1121,14 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   display:grid;
   place-items:center;
   border-radius:8px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:var(--panel);
   color:var(--primary-2);
   cursor:pointer
 }
 .module-root[data-module-root="matching"] .icon-btn.active{outline:2px solid var(--primary)}
 .module-root[data-module-root="matching"] .icon-btn.danger{color:var(--danger)}
-.module-root[data-module-root="matching"] .icon-btn svg{width:16px; height:16px; fill:currentColor}
+.module-root[data-module-root="matching"] .icon-btn svg{width:16px; height:16px}
 .module-root[data-module-root="matching"] .match-action-btn{
   width:auto;
   min-width:96px;
@@ -1301,7 +1138,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   justify-content:center;
   gap:6px;
   padding:0 10px;
-  border-color:color-mix(in oklab, var(--primary) 70%, var(--stroke));
+  border-color:color-mix(in oklab, var(--primary) 70%, var(--line));
   background:color-mix(in oklab, var(--primary) 16%, var(--panel));
   color:var(--primary-2);
   font-weight:850;
@@ -1343,7 +1180,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   grid-column: 2 / span 2;
   height:8px;
   background:#111923;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:999px;
   overflow:hidden;
   cursor:pointer;
@@ -1369,7 +1206,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   font-size:10px;
   padding:2px 6px;
   border-radius:999px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:#111923;
   color:var(--muted);
   text-transform:uppercase;
@@ -1389,15 +1226,15 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:28px;
   padding:0 10px;
   border-radius:8px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:#121a24;
   color:var(--muted);
   cursor:pointer;
   font-size:12px
 }
-.module-root[data-module-root="matching"] .tab.active{color:var(--text); background:var(--panel-2)}
+.module-root[data-module-root="matching"] .tab.active{color:var(--text); background:var(--surface-2)}
 .module-root[data-module-root="matching"] .hdr-link.is-active{
-  background:var(--panel-2);
+  background:var(--surface-2);
   color:var(--text);
 }
 /* map-wrap muss in der Panel-Spalte den verfügbaren Platz einnehmen */
@@ -1418,7 +1255,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:8px;
   align-items:center;
   padding:8px 12px;
-  border-bottom:1px solid var(--stroke)
+  border-bottom:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .map{
   position:relative;
@@ -1436,7 +1273,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   right:10px;
   top:10px;
   background:var(--panel);
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:10px;
   padding:8px;
   font-size:12px
@@ -1461,13 +1298,13 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:8px;
   padding:10px;
   align-items:center;
-  border-bottom:1px solid var(--stroke)
+  border-bottom:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .object-tools input,
 .module-root[data-module-root="matching"] .object-tools select{
   height:38px;
   background:#121a24;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--text);
   border-radius:8px;
   padding:0 12px;
@@ -1479,7 +1316,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .object-tools select{flex:1 1 180px}
 .module-root[data-module-root="matching"] .object-list{padding:10px; overflow:auto}
 .module-root[data-module-root="matching"] .object-card{
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:linear-gradient(180deg,#161c22 0%,#12171d 100%);
   border-radius:12px;
   padding:10px;
@@ -1497,7 +1334,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:36px;
   border-radius:10px;
   overflow:hidden;
-  border:1px solid var(--stroke)
+  border:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .avatar img{width:100%; height:100%; object-fit:cover}
 .module-root[data-module-root="matching"] .c-tax{font-size:12px; color:var(--muted)}
@@ -1506,7 +1343,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   margin-left:auto;
   height:28px;
   background:transparent;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   color:var(--primary-2);
   border-radius:8px;
   padding:0 10px;
@@ -1514,33 +1351,13 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 .module-root[data-module-root="matching"] .selected{outline:2px solid var(--primary)}
 
-/* Modal (Basis-Stil für "normale" Modale wie Matching) */
-.module-root[data-module-root="matching"] .modal{
-  position:fixed;
-  inset:0;
-  display:none;
-  place-items:center;
-  background:var(--overlay);
-}
-.module-root[data-module-root="matching"] .modal.open{display:grid}
-.module-root[data-module-root="matching"] .modal-card{
-  width:520px;
-  max-width:90vw;
-  background:var(--panel);
-  border:1px solid var(--stroke);
-  border-radius:14px;
-  padding:14px
-}
-.module-root[data-module-root="matching"] .modal-header{display:flex; align-items:center}
-.module-root[data-module-root="matching"] .modal-title{font-weight:800}
-.module-root[data-module-root="matching"] .modal-close{margin-left:auto}
-.module-root[data-module-root="matching"] .modal-close .icon-btn{border-radius:999px}
-.module-root[data-module-root="matching"] .modal-body{margin-top:10px}
-.module-root[data-module-root="matching"] .modal-body textarea{
+/* Modals use the shared .ctox-modal building blocks (base.css §15); only
+   matching-specific card layouts stay local. */
+.module-root[data-module-root="matching"] .ctox-modal-body textarea{
   width:100%;
   min-height:140px;
-  background:#121a24;
-  border:1px solid var(--stroke);
+  background:var(--surface);
+  border:1px solid var(--line);
   color:var(--text);
   border-radius:10px;
   padding:10px
@@ -1589,7 +1406,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   display:inline-flex;
   align-items:center;
   gap:6px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:999px;
   padding:4px 8px;
   font-size:12px;
@@ -1601,16 +1418,17 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   font-size:12px;
 }
 
-/* Spezielles Layout für Notizen/Progress als mittlere Spalte */
+/* Spezielles Layout für Notizen/Progress als mittlere Spalte.
+   z-index:auto hält die alte Stapelreihenfolge: die Match-Bar (z:70) bleibt
+   über dem transparenten Overlay klickbar, die Karte selbst liegt auf z:60. */
 .module-root[data-module-root="matching"] #noteModal{
   background:transparent;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+  padding:0;
+  z-index:auto;
 }
-.module-root[data-module-root="matching"] #noteModal.open{
-  display:flex;
-  align-items:stretch;
-  justify-content:center;
-}
-.module-root[data-module-root="matching"] #noteModal .modal-card{
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-card{
   position:fixed;
   top:0;
   left:50%;
@@ -1618,84 +1436,47 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   width:var(--overlay-col-width);
   max-width:none;
   height:100vh;
+  max-height:none;
   border-radius:0;
   box-shadow:0 0 24px rgba(0,0,0,.45);
   display:flex;
   flex-direction:column;
   z-index:60;
 }
-.module-root[data-module-root="matching"] #noteModal .modal-header{
-  padding-bottom:4px;
-  border-bottom:1px solid var(--stroke);
-}
-.module-root[data-module-root="matching"] #noteModal .modal-body{
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-body{
   flex:1;
   display:flex;
   flex-direction:column;
 }
-.module-root[data-module-root="matching"] #noteModal .modal-body textarea{
+.module-root[data-module-root="matching"] #noteModal .ctox-modal-body textarea{
   flex:1;
 }
 
 /* Kontaktstatus-Modal klein und kompakt */
-.module-root[data-module-root="matching"] #relModal.open{
-  align-items:center;
-  justify-items:center;
-}
-
-.module-root[data-module-root="matching"] #relModal .rel-modal-card{
+.module-root[data-module-root="matching"] #relModal .ctox-modal-card{
   width:min(360px, calc(100vw - 28px));
   max-width:none;
-  padding:14px;
-  border-radius:14px;
 }
 
-.module-root[data-module-root="matching"] #relModal .modal-header{
-  align-items:flex-start;
-  gap:10px;
-}
-
-.module-root[data-module-root="matching"] #relModal .modal-title{
-  min-width:0;
+.module-root[data-module-root="matching"] #relModal .ctox-modal-title{
   font-size:16px;
   line-height:1.25;
+  white-space:normal;
   overflow-wrap:anywhere;
 }
 
-.module-root[data-module-root="matching"] #relModal .modal-body{
+.module-root[data-module-root="matching"] #relModal .ctox-modal-body{
   display:grid;
   gap:12px;
-  margin-top:12px;
 }
 
-.module-root[data-module-root="matching"] #relModal .modal-body > p{
+.module-root[data-module-root="matching"] #relModal .ctox-modal-body > p{
   margin:0;
   font-size:13px;
   line-height:1.45;
 }
 
-.module-root[data-module-root="matching"] #relModal .rel-options{
-  display:grid;
-  gap:8px;
-}
-
-.module-root[data-module-root="matching"] #relModal .rel-option{
-  display:grid;
-  grid-template-columns:18px 1fr;
-  align-items:center;
-  gap:10px;
-  min-height:32px;
-  font-size:13px;
-  line-height:1.25;
-}
-
-.module-root[data-module-root="matching"] #relModal .rel-option input{
-  width:16px;
-  height:16px;
-  margin:0;
-}
-
-.module-root[data-module-root="matching"] #relModal .rel-option > span{
+.module-root[data-module-root="matching"] #relModal .ctox-choice > span{
   display:inline-flex;
   align-items:center;
   gap:8px;
@@ -1715,7 +1496,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   place-items:center;
   padding:24px;
   background:rgba(2,6,23,.88);
-  z-index:80;
+  /* über .ctox-modal (240), unter Shell-Notifications (260) */
+  z-index:250;
 }
 .module-root[data-module-root="matching"] .image-lightbox.open{
   display:grid;
@@ -1726,7 +1508,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   max-width:100%;
   max-height:100%;
   object-fit:contain;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:12px;
   background:#111923;
   box-shadow:0 18px 36px rgba(0,0,0,.55);
@@ -1739,25 +1521,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   background:rgba(15,18,32,.8);
 }
 
-/* Optionen im Kontakt-Modal */
-.module-root[data-module-root="matching"] .rel-options{
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-  margin-top:4px;
-}
-
-.module-root[data-module-root="matching"] .rel-option{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  font-size:13px;
-  cursor:pointer;
-}
-
-.module-root[data-module-root="matching"] .rel-option input{
-  accent-color:var(--primary);
-}
+/* Optionen im Kontakt-Modal: .ctox-choice-group/.ctox-choice (base.css §17) */
 
 /* rel-dot als klickbarer Hotspot */
 .module-root[data-module-root="matching"] .rel-dot{
@@ -1772,7 +1536,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   width:10px;
   height:10px;
   border-radius:50%;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:var(--none);
   box-shadow:0 0 0 2px var(--panel)
 }
@@ -1789,7 +1553,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   max-width:100vw;
   min-width:260px;
   background:var(--panel);
-  border-left:1px solid var(--stroke);
+  border-left:1px solid var(--line);
   box-shadow:-8px 0 24px rgba(0,0,0,.4);
   transform:translateX(100%);
   transition:transform .25s ease;
@@ -1803,7 +1567,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   align-items:center;
   gap:10px;
   padding:12px;
-  border-bottom:1px solid var(--stroke)
+  border-bottom:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .object-body{padding:12px; overflow:auto}
 
@@ -1817,7 +1581,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   max-width:100vw;
   min-width:260px;
   background:var(--panel);
-  border-right:1px solid var(--stroke);
+  border-right:1px solid var(--line);
   box-shadow:8px 0 24px rgba(0,0,0,.4);
   transform:translateX(-100%);
   transition:transform .25s ease;
@@ -1831,7 +1595,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   align-items:center;
   gap:10px;
   padding:12px;
-  border-bottom:1px solid var(--stroke)
+  border-bottom:1px solid var(--line)
 }
 .module-root[data-module-root="matching"] .jp-body{padding:12px; overflow:auto}
 
@@ -1874,9 +1638,9 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 
 .module-root[data-module-root="matching"] .drawer-timeline-item{
-  border:1px solid color-mix(in oklab, var(--stroke) 82%, transparent);
+  border:1px solid color-mix(in oklab, var(--line) 82%, transparent);
   border-radius:8px;
-  background:color-mix(in oklab, var(--panel-2) 78%, transparent);
+  background:color-mix(in oklab, var(--surface-2) 78%, transparent);
   padding:8px 9px;
 }
 
@@ -1917,7 +1681,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   display:inline-flex;
   align-items:center;
   min-height:24px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-radius:999px;
   background:var(--chip);
   color:var(--text);
@@ -1926,18 +1690,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   line-height:1.25;
 }
 
-/* Small badges in headers */
-.module-root[data-module-root="matching"] .hdr-badge{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  font-size:11px;
-  padding:3px 8px;
-  border-radius:999px;
-  background:var(--chip);
-  border:1px solid var(--stroke);
-  color:var(--muted)
-}
+/* Small badges in headers: .ctox-badge (base.css §10) */
 
 /* etwas freundlichere Overlays auf sehr kleinen Screens */
 @media (max-width: 820px){
@@ -1988,7 +1741,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   max-height:min(380px, 46vh);
   overflow:auto;
   border-radius:10px 10px 0 0;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   border-bottom:none;
   background:linear-gradient(180deg,#151b21 0%, #12171d 100%);
   box-shadow:0 -14px 34px rgba(0,0,0,.58);
@@ -2030,7 +1783,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   min-width:64px;
   height:34px;
   border-radius:999px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   display:grid;
   place-items:center;
   font-size:17px;
@@ -2082,7 +1835,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   gap:6px;
   padding:3px 9px;
   border-radius:999px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:#111923;
   color:var(--muted);
   font-size:11px;
@@ -2132,7 +1885,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .match-pill.is-active{
   background:color-mix(in srgb, var(--matchColor) 18%, #111923);
   color:var(--text);
-  border-color:color-mix(in srgb, var(--matchColor) 60%, var(--stroke));
+  border-color:color-mix(in srgb, var(--matchColor) 60%, var(--line));
 }
 
 @media (max-width:900px){
@@ -2156,7 +1909,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] #noteModal .note-match-detail{
   margin-top:8px;
   padding-top:6px;
-  border-top:1px solid var(--stroke);
+  border-top:1px solid var(--line);
   max-height:40vh;
   overflow:auto;
   font-size:12px;
@@ -2173,7 +1926,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 /* Karten-Styling bleibt, wird aber nur in der Mittelsäule benutzt */
 .module-root[data-module-root="matching"] .match-item-card{
   border-radius:10px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:#121a24;
   padding:8px 9px;
   font-size:12px;
@@ -2212,7 +1965,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 .module-root[data-module-root="matching"] .match-snippet-block{
   border-radius:8px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:#0f1419;
   padding:4px 6px;
   font-size:11px;
@@ -2276,7 +2029,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   text-transform:none;
   padding:3px 8px;
   border-radius:999px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:transparent;
   color:var(--primary-2);
   text-decoration:none;
@@ -2365,7 +2118,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:96px !important;
   border-radius:18px !important;
   object-fit: cover;
-  box-shadow: 0 0 0 2px var(--stroke, #1f2933);
+  box-shadow: 0 0 0 2px var(--line);
   cursor: zoom-in;
 }
 
@@ -2375,7 +2128,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   height:28px;
   padding:0 10px;
   border-radius:10px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:linear-gradient(180deg, #121a24 0%, #111923 100%);
   color:var(--primary-2);
   font-weight:800;
@@ -2447,7 +2200,6 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 
 /* Panel color alignment: remove legacy blue tint */
 .module-root[data-module-root="matching"]{
-  --panel-2:#151b21;
   --chip:#111923;
   --badge:#1b2430;
 }
@@ -2461,7 +2213,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .toolbar select,
 .module-root[data-module-root="matching"] .object-tools input,
 .module-root[data-module-root="matching"] .object-tools select,
-.module-root[data-module-root="matching"] .modal-body textarea,
+.module-root[data-module-root="matching"] .ctox-modal-body textarea,
 .module-root[data-module-root="matching"] .match-item-card,
 .module-root[data-module-root="matching"] .match-snippet-block,
 .module-root[data-module-root="matching"] .match-bar-score,
@@ -2499,30 +2251,30 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   background:
     linear-gradient(
       90deg,
-      color-mix(in oklab, var(--km-accent) 28%, #131920),
+      color-mix(in oklab, var(--accent) 28%, #131920),
       color-mix(in oklab, var(--success) 22%, #131920)
     );
-  border-color:color-mix(in oklab, var(--km-accent) 34%, transparent);
+  border-color:color-mix(in oklab, var(--accent) 34%, transparent);
 }
 
 .module-root[data-module-root="matching"] .match-pill{
-  --matchColor:var(--km-accent);
+  --matchColor:var(--accent);
   background:#121a24;
 }
 
 .module-root[data-module-root="matching"] .match-pill.is-active{
   background:color-mix(in oklab, var(--matchColor) 18%, #111923);
-  border-color:color-mix(in oklab, var(--matchColor) 60%, var(--stroke));
+  border-color:color-mix(in oklab, var(--matchColor) 60%, var(--line));
 }
 
 .module-root[data-module-root="matching"] .match-highlight{
-  background:color-mix(in oklab, var(--matchColor, var(--km-accent)) 14%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--km-accent)) 26%, transparent);
+  background:color-mix(in oklab, var(--matchColor, var(--accent)) 14%, transparent);
+  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 26%, transparent);
 }
 
 .module-root[data-module-root="matching"] .match-highlight.is-active{
-  background:color-mix(in oklab, var(--matchColor, var(--km-accent)) 45%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--km-accent)) 70%, transparent);
+  background:color-mix(in oklab, var(--matchColor, var(--accent)) 45%, transparent);
+  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 70%, transparent);
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-host,
@@ -2541,7 +2293,7 @@ body > #sync-feedback-host-matching-view.sync-feedback-host{
 .module-root[data-module-root="matching"] .sync-feedback,
 body > #sync-feedback-host-matching-view .sync-feedback{
   border-radius:10px;
-  border:1px solid var(--stroke);
+  border:1px solid var(--line);
   background:rgba(18,26,36,.92);
   color:var(--text);
   padding:10px 12px;
@@ -2562,22 +2314,22 @@ body > #sync-feedback-host-matching-view .sync-feedback.is-visible{
 
 .module-root[data-module-root="matching"] .sync-feedback-success,
 body > #sync-feedback-host-matching-view .sync-feedback-success{
-  border-color:color-mix(in srgb, var(--success) 60%, var(--stroke));
+  border-color:color-mix(in srgb, var(--success) 60%, var(--line));
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-info,
 body > #sync-feedback-host-matching-view .sync-feedback-info{
-  border-color:color-mix(in srgb, var(--primary) 55%, var(--stroke));
+  border-color:color-mix(in srgb, var(--primary) 55%, var(--line));
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-warn,
 body > #sync-feedback-host-matching-view .sync-feedback-warn{
-  border-color:color-mix(in srgb, var(--warning) 60%, var(--stroke));
+  border-color:color-mix(in srgb, var(--warning) 60%, var(--line));
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-error,
 body > #sync-feedback-host-matching-view .sync-feedback-error{
-  border-color:color-mix(in srgb, var(--danger) 65%, var(--stroke));
+  border-color:color-mix(in srgb, var(--danger) 65%, var(--line));
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-progress,
@@ -2742,45 +2494,34 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
    literal values, with a dark override block below. Shell token names are
    never redefined here (module conformance guard). */
 .module-root[data-module-root="matching"] {
-  --bo-background: var(--bg);
-  --bo-surface: var(--surface);
-  --bo-surface-muted: var(--surface-2);
-  --bo-border: var(--line);
-  --bo-text: var(--text);
-  --bo-muted: var(--muted);
-  --bo-accent: var(--accent);
-  --background: var(--bo-background);
-  --surface-muted: var(--bo-surface-muted);
-  --border: var(--bo-border);
+  --background: var(--bg);
+  --surface-muted: var(--surface-2);
+  --border: var(--line);
   --radius-control: 6px;
   --radius-card: 8px;
-  --module-accent: var(--bo-accent);
-  --module-surface: var(--bo-surface);
-  --km-ink: var(--bo-text);
-  --km-muted: var(--bo-muted);
+  --module-accent: var(--accent);
+  --module-surface: var(--surface);
+  --km-ink: var(--text);
+  --km-muted: var(--muted);
   --km-faint: #8a999f;
-  --km-line: var(--bo-border);
+  --km-line: var(--line);
   --km-line-strong: #c8d4d9;
-  --km-accent: var(--bo-accent);
   --km-green: #0f6e49;
   --km-red: #a33b31;
-  --bg-app: var(--bo-background);
-  --surf-0: var(--bo-surface-muted);
-  --surf-1: var(--bo-surface);
-  --surf-2: var(--bo-surface-muted);
+  --bg-app: var(--bg);
+  --surf-0: var(--surface-2);
+  --surf-1: var(--surface);
+  --surf-2: var(--surface-2);
   --txt-1: var(--km-ink);
   --txt-2: var(--km-muted);
   --txt-dim: var(--km-faint);
-  --accent-600: #1b554f;
   --bd-hair: rgba(23, 33, 38, 0.12);
   --bd-soft: rgba(23, 33, 38, 0.16);
-  --panel: var(--bo-surface);
-  --panel-2: var(--bo-surface-muted);
-  --primary: var(--km-accent);
+  --panel: var(--surface);
+  --primary: var(--accent);
   --primary-2: #2e766e;
-  --badge: var(--bo-surface-muted);
-  --stroke: var(--km-line);
-  --chip: var(--bo-surface-muted);
+  --badge: var(--surface-2);
+  --chip: var(--surface-2);
   --overlay: rgba(23, 33, 38, 0.28);
   --good: var(--km-green);
   --none: var(--km-faint);
@@ -2789,12 +2530,11 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 :root[data-theme="dark"] .module-root[data-module-root="matching"] {
-  /* Dark-only specials; the derived --bo-* palette flips with the shell. */
+  /* Dark-only specials; the shell tokens flip with the shell theme. */
   --km-faint: #74848b;
   --km-line-strong: #3b484e;
   --km-green: #65c796;
   --km-red: #e06b60;
-  --accent-600: #5aa99c;
   --bd-hair: rgba(238, 244, 246, 0.08);
   --bd-soft: rgba(238, 244, 246, 0.12);
   --overlay: rgba(16, 20, 22, 0.68);
@@ -2850,8 +2590,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .control-group button[aria-pressed="true"] {
-  background: var(--bo-surface-muted) !important;
-  color: var(--bo-text) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
 }
 
 .module-root[data-module-root="matching"] .app {
@@ -2865,7 +2605,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .panel,
-.module-root[data-module-root="matching"] .modal-card,
+.module-root[data-module-root="matching"] .ctox-modal-card,
 .module-root[data-module-root="matching"] .object,
 .module-root[data-module-root="matching"] .jp,
 .module-root[data-module-root="matching"] .match-bar-inner {
@@ -2874,7 +2614,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .panel,
-.module-root[data-module-root="matching"] .modal-card,
+.module-root[data-module-root="matching"] .ctox-modal-card,
 .module-root[data-module-root="matching"] .object,
 .module-root[data-module-root="matching"] .jp,
 .module-root[data-module-root="matching"] .match-bar-inner,
@@ -2888,9 +2628,9 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   color: var(--text);
 }
 
-.module-root[data-module-root="matching"] select,
-.module-root[data-module-root="matching"] input,
-.module-root[data-module-root="matching"] textarea,
+.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
 .module-root[data-module-root="matching"] .input-text,
 .module-root[data-module-root="matching"] .input-select,
 .module-root[data-module-root="matching"] .input-textarea {
@@ -2907,9 +2647,9 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .object-tools input,
 .module-root[data-module-root="matching"] .object-tools select,
 .module-root[data-module-root="matching"] .object-import input,
-.module-root[data-module-root="matching"] .modal-card input,
-.module-root[data-module-root="matching"] .modal-card select,
-.module-root[data-module-root="matching"] .modal-card textarea,
+.module-root[data-module-root="matching"] .ctox-modal-card input,
+.module-root[data-module-root="matching"] .ctox-modal-card select,
+.module-root[data-module-root="matching"] .ctox-modal-card textarea,
 .module-root[data-module-root="matching"] .object input,
 .module-root[data-module-root="matching"] .object select,
 .module-root[data-module-root="matching"] .object textarea,
@@ -2925,14 +2665,14 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .source-tools input::placeholder,
 .module-root[data-module-root="matching"] .toolbar input::placeholder,
 .module-root[data-module-root="matching"] .object-tools input::placeholder,
-.module-root[data-module-root="matching"] .modal-card textarea::placeholder {
+.module-root[data-module-root="matching"] .ctox-modal-card textarea::placeholder {
   color: var(--muted) !important;
 }
 
 .module-root[data-module-root="matching"] .tab,
 .module-root[data-module-root="matching"] .hdr-link,
 .module-root[data-module-root="matching"] .icon-btn,
-.module-root[data-module-root="matching"] button {
+.module-root[data-module-root="matching"] button:not([class*="ctox-"]) {
   border-radius: var(--radius-control);
 }
 
@@ -2941,10 +2681,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .tab.active,
 .module-root[data-module-root="matching"] .score,
 .module-root[data-module-root="matching"] .score-badge {
-  color: var(--km-accent);
+  color: var(--accent);
 }
 
-.module-root[data-module-root="matching"] button,
+.module-root[data-module-root="matching"] button:not([class*="ctox-"]),
 .module-root[data-module-root="matching"] .icon-btn,
 .module-root[data-module-root="matching"] .tab,
 .module-root[data-module-root="matching"] .hdr-link {
@@ -2974,14 +2714,14 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   gap: 8px;
   min-height: 46px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--bo-border);
-  background: var(--bo-surface);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .module-root[data-module-root="matching"] .column-title {
   min-width: 0;
   overflow: hidden;
-  color: var(--bo-text);
+  color: var(--text);
   font-size: 13px;
   font-weight: 820;
   letter-spacing: 0.055em;
@@ -3003,10 +2743,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   display: inline-grid;
   place-items: center;
   min-height: 28px;
-  border: 1px solid var(--bo-border) !important;
+  border: 1px solid var(--line) !important;
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted) !important;
-  color: var(--bo-muted) !important;
+  background: var(--surface-2) !important;
+  color: var(--muted) !important;
   box-shadow: none !important;
   font-size: 11px;
   font-weight: 760;
@@ -3021,7 +2761,6 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .column-icon svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
 }
 
 .module-root[data-module-root="matching"] .column-action {
@@ -3031,8 +2770,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .column-icon:hover,
 .module-root[data-module-root="matching"] .column-action:hover {
-  color: var(--bo-accent) !important;
-  border-color: var(--bo-accent) !important;
+  color: var(--accent) !important;
+  border-color: var(--accent) !important;
 }
 
 .module-root[data-module-root="matching"] .column-tools,
@@ -3045,8 +2784,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   align-items: center;
   min-height: 48px;
   padding: 8px 12px !important;
-  border-bottom: 1px solid var(--bo-border) !important;
-  background: var(--bo-surface);
+  border-bottom: 1px solid var(--line) !important;
+  background: var(--surface);
 }
 
 .module-root[data-module-root="matching"] .column-tools input,
@@ -3060,10 +2799,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   width: 100%;
   height: 32px !important;
   min-width: 0;
-  border: 1px solid var(--bo-border) !important;
+  border: 1px solid var(--line) !important;
   border-radius: var(--radius-control) !important;
-  background: var(--bo-surface) !important;
-  color: var(--bo-text) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
   padding: 0 9px !important;
   font-size: 12px !important;
   box-shadow: none !important;
@@ -3087,7 +2826,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .source-tools input::placeholder,
 .module-root[data-module-root="matching"] .toolbar input::placeholder,
 .module-root[data-module-root="matching"] .object-tools input::placeholder {
-  color: var(--bo-muted) !important;
+  color: var(--muted) !important;
   opacity: 1;
 }
 
@@ -3131,17 +2870,17 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   display: grid;
   gap: 6px;
   min-width: 0;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-text);
+  background: var(--surface-2);
+  color: var(--text);
   cursor: pointer;
   padding: 9px 10px;
 }
 
 .module-root[data-module-root="matching"] .import-status-card:hover,
 .module-root[data-module-root="matching"] .import-status-card:focus-visible {
-  border-color: var(--bo-accent);
+  border-color: var(--accent);
   outline: none;
 }
 
@@ -3168,10 +2907,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .import-status-pill {
   flex: 0 0 auto;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--bo-surface);
-  color: var(--bo-muted);
+  background: var(--surface);
+  color: var(--muted);
   font-size: 10px;
   font-weight: 820;
   line-height: 1;
@@ -3180,8 +2919,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .import-status-queued {
-  border-color: var(--bo-accent);
-  color: var(--bo-accent);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .module-root[data-module-root="matching"] .import-status-running {
@@ -3211,17 +2950,17 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .import-status-source {
-  color: var(--bo-text);
+  color: var(--text);
   white-space: nowrap;
 }
 
 .module-root[data-module-root="matching"] .import-status-summary {
-  color: var(--bo-muted);
+  color: var(--muted);
 }
 
 .module-root[data-module-root="matching"] .import-status-meta {
   gap: 8px;
-  color: var(--bo-muted);
+  color: var(--muted);
   white-space: nowrap;
 }
 
@@ -3240,15 +2979,15 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 :root[data-theme="dark"] .module-root[data-module-root="matching"] .source-tools,
 :root[data-theme="dark"] .module-root[data-module-root="matching"] .toolbar,
 :root[data-theme="dark"] .module-root[data-module-root="matching"] .object-tools {
-  background: var(--bo-surface);
-  border-color: var(--bo-border) !important;
+  background: var(--surface);
+  border-color: var(--line) !important;
 }
 
 :root[data-theme="dark"] .module-root[data-module-root="matching"] .column-icon,
 :root[data-theme="dark"] .module-root[data-module-root="matching"] .column-action {
-  background: var(--bo-surface-muted) !important;
-  color: var(--bo-muted) !important;
-  border-color: var(--bo-border) !important;
+  background: var(--surface-2) !important;
+  color: var(--muted) !important;
+  border-color: var(--line) !important;
 }
 
 .module-root[data-module-root="matching"] .column-drawer-backdrop {
@@ -3268,9 +3007,9 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--bo-border);
-  background: var(--bo-surface);
-  color: var(--bo-text);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
   box-shadow: var(--sh-flat);
   transition: transform 180ms ease, opacity 180ms ease;
 }
@@ -3307,13 +3046,13 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   gap: 10px;
   min-height: 48px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--bo-border);
+  border-bottom: 1px solid var(--line);
 }
 
 .module-root[data-module-root="matching"] .column-drawer-header strong {
   min-width: 0;
   overflow: hidden;
-  color: var(--bo-text);
+  color: var(--text);
   font-size: 13px;
   font-weight: 800;
   text-overflow: ellipsis;
@@ -3330,7 +3069,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .drawer-field {
   display: grid;
   gap: 6px;
-  color: var(--bo-muted);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 760;
 }
@@ -3346,10 +3085,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .drawer-field textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-text);
+  background: var(--surface-2);
+  color: var(--text);
   padding: 8px 9px;
   font-size: 12px;
   font-weight: 500;
@@ -3370,10 +3109,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .import-source-button {
   min-width: 0;
   min-height: 32px;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-muted);
+  background: var(--surface-2);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 780;
   line-height: 1;
@@ -3382,9 +3121,9 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .import-source-button.is-active {
-  border-color: var(--bo-accent);
-  background: var(--bo-accent-soft);
-  color: var(--bo-accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .module-root[data-module-root="matching"] .import-panel {
@@ -3411,10 +3150,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .drawer-primary {
   min-height: 32px;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-text);
+  background: var(--surface-2);
+  color: var(--text);
   font-size: 12px;
   font-weight: 780;
   padding: 0 10px;
@@ -3425,10 +3164,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   z-index: 2000;
   min-width: 440px;
   max-width: min(620px, calc(100vw - 16px));
-  border: 1px solid var(--bo-border);
-  border-radius: var(--radius-panel);
-  background: var(--bo-surface);
-  box-shadow: var(--bo-shadow);
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
   padding: 6px;
 }
 
@@ -3452,13 +3191,13 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .matching-context-chat strong {
-  color: var(--bo-text);
+  color: var(--text);
   font-size: 13px;
   font-weight: 820;
 }
 
 .module-root[data-module-root="matching"] .matching-context-chat span {
-  color: var(--bo-muted);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -3472,10 +3211,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .matching-context-mode label,
 .module-root[data-module-root="matching"] .matching-context-chat button {
   min-height: 34px;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-text);
+  background: var(--surface-2);
+  color: var(--text);
   font-size: 12px;
   font-weight: 760;
 }
@@ -3490,10 +3229,10 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .matching-context-chat textarea {
   min-height: 120px;
   resize: vertical;
-  border: 1px solid var(--bo-border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bo-surface-muted);
-  color: var(--bo-text);
+  background: var(--surface-2);
+  color: var(--text);
   font: inherit;
   padding: 10px;
 }
@@ -3508,8 +3247,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .matching-context-chat button[type="submit"] {
   width: 100%;
-  background: color-mix(in srgb, var(--bo-accent) 18%, var(--bo-surface-muted));
-  color: var(--bo-text);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+  color: var(--text);
 }
 
 .module-root[data-module-root="matching"] .ctox-context-menu > button {
@@ -3519,7 +3258,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
-  color: var(--bo-text);
+  color: var(--text);
   font-size: 12px;
   font-weight: 650;
   padding: 0 8px;
@@ -3527,12 +3266,12 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] .ctox-context-menu > button:first-child {
-  color: var(--bo-accent);
+  color: var(--accent);
   font-weight: 820;
 }
 
 .module-root[data-module-root="matching"] .ctox-context-menu button:hover {
-  background: var(--bo-surface-muted);
+  background: var(--surface-2);
 }
 
 /* ==========================================================================
@@ -3588,11 +3327,11 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .btn:hover,
 .module-root[data-module-root="matching"] .btn-pill:hover {
   transform: translateY(-1.5px) scale(1.02) !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--km-accent)) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
 }
 
 .module-root[data-module-root="matching"] .btn-primary:hover {
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--km-accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
 }
 
 .module-root[data-module-root="matching"] .btn:active,
@@ -3600,21 +3339,21 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   transform: translateY(0) scale(0.97) !important;
 }
 
-/* Modern inputs focus behaviors */
-.module-root[data-module-root="matching"] select, 
-.module-root[data-module-root="matching"] input, 
-.module-root[data-module-root="matching"] textarea,
-.module-root[data-module-root="matching"] .input-text, 
-.module-root[data-module-root="matching"] .input-select, 
+/* Modern inputs focus behaviors (kit inputs keep base.css focus styling) */
+.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] .input-text,
+.module-root[data-module-root="matching"] .input-select,
 .module-root[data-module-root="matching"] .input-textarea {
-  transition: border-color 0.2s var(--spring-ease), 
-              box-shadow 0.2s var(--spring-ease), 
+  transition: border-color 0.2s var(--spring-ease),
+              box-shadow 0.2s var(--spring-ease),
               transform 0.2s var(--spring-ease) !important;
 }
 
-.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):focus-visible {
-  border-color: var(--km-accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--km-accent) 15%, transparent) !important;
+.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):not([class*="ctox-"]):focus-visible {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
   transform: translateY(-0.5px);
 }
 
@@ -3634,7 +3373,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .object-card:hover,
 .module-root[data-module-root="matching"] .import-status-card:hover {
   transform: translateY(-2px) scale(1.01) !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--km-accent)) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
 }
 
@@ -3647,8 +3386,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .match-item-card.is-active,
 .module-root[data-module-root="matching"] .object-card.is-active {
-  border-color: var(--km-accent) !important;
-  box-shadow: 0 0 0 1px var(--km-accent), 0 8px 24px rgba(0,0,0,.4) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 24px rgba(0,0,0,.4) !important;
 }
 
 /* PIPELINE-1 candidate Kanban board (candidateBoard.js) */

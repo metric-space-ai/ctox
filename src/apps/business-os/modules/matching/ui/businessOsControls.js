@@ -1457,7 +1457,7 @@ function renderColumnDrawer(button) {
     <div class="column-drawer-header">
       <strong data-column-drawer-title>${escapeDrawerHtml(title)}</strong>
       <button class="column-icon" type="button" data-column-drawer-close aria-label="Schließen" title="Schließen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4-6.3-6.3-6.3 6.3-1.4-1.4L9.2 12 2.9 5.7l1.4-1.4 6.3 6.3 6.3-6.3 1.4 1.4Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
     <div class="column-drawer-body">${body}</div>
