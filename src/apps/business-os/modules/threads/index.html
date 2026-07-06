@@ -1,50 +1,62 @@
 <main class="threads-module" data-threads-root>
   <section class="threads-pane threads-left" aria-label="Threads Navigation">
-    <header class="threads-pane-header">
-      <div>
-        <span class="threads-kicker" data-label="hubKicker">Business OS</span>
-        <h2 data-label="threadsTitle">Threads</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-label="hubKicker">Business OS</span>
+          <h2 class="ctox-pane-title" data-label="threadsTitle">Threads</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-refresh title="Aktualisieren" aria-label="Aktualisieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
+          </button>
+        </div>
       </div>
-      <button type="button" class="threads-icon-btn" data-refresh title="Aktualisieren" aria-label="Aktualisieren">
-        <span aria-hidden="true">↻</span>
-      </button>
+      <div class="ctox-pane-tools">
+        <input class="ctox-pane-search" type="search" data-thread-search placeholder="Threads suchen" aria-label="Threads suchen">
+      </div>
     </header>
-    <div class="threads-search-row">
-      <input type="search" data-thread-search placeholder="Threads suchen" aria-label="Threads suchen">
-    </div>
     <nav class="threads-filter-list" aria-label="Thread Filter">
-      <button type="button" data-filter="inbox" class="is-active">Inbox</button>
-      <button type="button" data-filter="mentions">Mentions</button>
-      <button type="button" data-filter="waiting">Wartet</button>
-      <button type="button" data-filter="approvals">Freigaben</button>
-      <button type="button" data-filter="delegated">Delegiert</button>
-      <button type="button" data-filter="running">CTOX läuft</button>
-      <button type="button" data-filter="failed">Blockiert</button>
-      <button type="button" data-filter="watching">Watching</button>
-      <button type="button" data-filter="snoozed">Snoozed</button>
-      <button type="button" data-filter="all">Alle</button>
-      <button type="button" data-filter="archived">Archiv</button>
+      <button type="button" class="ctox-chip is-active" data-filter="inbox">Inbox</button>
+      <button type="button" class="ctox-chip" data-filter="mentions">Mentions</button>
+      <button type="button" class="ctox-chip" data-filter="waiting">Wartet</button>
+      <button type="button" class="ctox-chip" data-filter="approvals">Freigaben</button>
+      <button type="button" class="ctox-chip" data-filter="delegated">Delegiert</button>
+      <button type="button" class="ctox-chip" data-filter="running">CTOX läuft</button>
+      <button type="button" class="ctox-chip" data-filter="failed">Blockiert</button>
+      <button type="button" class="ctox-chip" data-filter="watching">Watching</button>
+      <button type="button" class="ctox-chip" data-filter="snoozed">Snoozed</button>
+      <button type="button" class="ctox-chip" data-filter="all">Alle</button>
+      <button type="button" class="ctox-chip" data-filter="archived">Archiv</button>
     </nav>
     <div class="threads-list" data-thread-list></div>
   </section>
 
   <section class="threads-pane threads-center" aria-label="Thread Timeline">
-    <header class="threads-pane-header threads-detail-header">
-      <div>
-        <span class="threads-kicker" data-thread-source>Kontext</span>
-        <h2 data-thread-title>Kein Thread ausgewählt</h2>
-      </div>
-      <div class="threads-detail-actions">
-        <button type="button" data-thread-watch title="Watch">Watch</button>
-        <button type="button" data-thread-snooze title="Snooze">Snooze</button>
-        <button type="button" data-thread-archive title="Archivieren">Archiv</button>
-        <div class="threads-status-pill" data-thread-status>bereit</div>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-thread-source>Kontext</span>
+          <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <span class="ctox-badge" data-thread-status>bereit</span>
+          <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-thread-snooze title="Snooze" aria-label="Snooze">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 8v4.5l3 2"/></svg>
+          </button>
+          <button type="button" class="ctox-pane-icon" data-thread-archive title="Archivieren" aria-label="Archivieren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v4H4zM6 9v10h12V9M10 13h4"/></svg>
+          </button>
+        </div>
       </div>
     </header>
     <div class="threads-timeline" data-thread-timeline></div>
     <form class="threads-composer" data-message-form>
-      <textarea data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
-      <button type="submit" class="threads-primary-btn">Senden</button>
+      <textarea class="ctox-textarea" data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
+      <button type="submit" class="ctox-button is-primary">Senden</button>
     </form>
   </section>
 
@@ -53,14 +65,14 @@
       <h3>Neue Notiz</h3>
       <form data-note-form class="threads-form">
         <label>
-          <span>An User</span>
-          <input type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
+          <span class="ctox-field-label">An User</span>
+          <input class="ctox-input" type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
         </label>
         <label>
-          <span>Notiz</span>
-          <textarea data-note-body rows="4" placeholder="Kontext, Hinweis oder Bitte"></textarea>
+          <span class="ctox-field-label">Notiz</span>
+          <textarea class="ctox-textarea" data-note-body rows="4" placeholder="Kontext, Hinweis oder Bitte"></textarea>
         </label>
-        <button type="submit" class="threads-primary-btn">Notiz hinterlassen</button>
+        <button type="submit" class="ctox-button is-primary">Notiz hinterlassen</button>
       </form>
     </section>
 
@@ -68,14 +80,14 @@
       <h3>CTOX Freigabe</h3>
       <form data-approval-form class="threads-form">
         <label>
-          <span>Reviewer</span>
-          <input type="text" data-approval-reviewer placeholder="erfahrener-user-id">
+          <span class="ctox-field-label">Reviewer</span>
+          <input class="ctox-input" type="text" data-approval-reviewer placeholder="erfahrener-user-id">
         </label>
         <label>
-          <span>Prompt</span>
-          <textarea data-approval-prompt rows="5" placeholder="Was CTOX nach Freigabe tun soll"></textarea>
+          <span class="ctox-field-label">Prompt</span>
+          <textarea class="ctox-textarea" data-approval-prompt rows="5" placeholder="Was CTOX nach Freigabe tun soll"></textarea>
         </label>
-        <button type="submit" class="threads-primary-btn">Freigabe anfragen</button>
+        <button type="submit" class="ctox-button is-primary">Freigabe anfragen</button>
       </form>
     </section>
 

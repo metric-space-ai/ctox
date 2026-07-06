@@ -34,131 +34,12 @@
   background: var(--surface-2);
 }
 
-.threads-pane-header {
-  min-height: 64px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.threads-pane-header h2 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.2;
-  font-weight: 800;
-  color: var(--text-strong, var(--text));
-}
-
-.threads-kicker {
-  display: block;
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.threads-icon-btn,
-.threads-primary-btn,
-.threads-filter-list button,
-.threads-approval-actions button,
-.threads-detail-actions button {
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.threads-icon-btn {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.threads-primary-btn {
-  min-height: 34px;
-  padding: 0 14px;
-  border-color: var(--accent, #0f766e);
-  background: color-mix(in srgb, var(--accent, #0f766e) 12%, var(--surface));
-  color: var(--accent, #0f766e);
-}
-
-.threads-primary-btn:disabled,
-.threads-approval-actions button:disabled,
-.threads-detail-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.threads-detail-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.threads-detail-actions button {
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 11.5px;
-}
-
-.threads-search-row {
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.threads-search-row input,
-.threads-form input,
-.threads-form textarea,
-.threads-composer textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.4;
-  padding: 9px 10px;
-  outline: none;
-}
-
-.threads-search-row input:focus,
-.threads-form input:focus,
-.threads-form textarea:focus,
-.threads-composer textarea:focus {
-  border-color: var(--accent, #0f766e);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0f766e) 18%, transparent);
-}
-
 .threads-filter-list {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.threads-filter-list button {
-  min-height: 30px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.threads-filter-list button.is-active {
-  border-color: var(--accent, #0f766e);
-  color: var(--accent, #0f766e);
-  background: color-mix(in srgb, var(--accent, #0f766e) 10%, var(--surface));
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 .threads-list,
@@ -180,6 +61,7 @@
   border-radius: 8px;
   background: transparent;
   color: inherit;
+  font: inherit;
   padding: 10px;
   cursor: pointer;
 }
@@ -191,7 +73,7 @@
 }
 
 .threads-list-item.is-active {
-  border-color: var(--accent, #0f766e);
+  border-color: var(--accent);
 }
 
 .threads-list-title {
@@ -203,8 +85,7 @@
 
 .threads-list-meta,
 .threads-list-preview,
-.threads-message-meta,
-.threads-context-row {
+.threads-message-meta {
   font-size: 11.5px;
   line-height: 1.35;
   color: var(--muted);
@@ -212,20 +93,6 @@
 
 .threads-list-preview {
   color: var(--text);
-}
-
-.threads-status-pill,
-.threads-kind-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  background: var(--surface-2);
 }
 
 .threads-timeline {
@@ -246,7 +113,7 @@
 
 .threads-message.is-mine {
   align-self: flex-end;
-  background: color-mix(in srgb, var(--accent, #0f766e) 8%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
 .threads-message-body {
@@ -257,9 +124,9 @@
 }
 
 .threads-approval-card {
-  border: 1px solid color-mix(in srgb, var(--accent, #0f766e) 35%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #0f766e) 7%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
   padding: 12px;
   display: grid;
   gap: 10px;
@@ -269,16 +136,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.threads-approval-actions button {
-  min-height: 30px;
-  padding: 0 11px;
-}
-
-.threads-approval-actions [data-reject-approval] {
-  border-color: color-mix(in srgb, #b91c1c 45%, var(--line));
-  color: #b91c1c;
 }
 
 .threads-composer {
@@ -313,17 +170,10 @@
 .threads-form label {
   display: grid;
   gap: 5px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
 }
 
-.threads-empty,
-.threads-status {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-  padding: 14px;
+.threads-form .ctox-field-label {
+  margin-bottom: 0;
 }
 
 .threads-context {
@@ -331,24 +181,14 @@
   gap: 8px;
 }
 
-.threads-context-row {
-  display: grid;
-  gap: 2px;
-}
-
-.threads-context-row strong {
-  color: var(--text);
-  font-size: 12px;
-}
-
-.threads-context-row a {
-  color: var(--accent, #0f766e);
+.threads-context a {
+  color: var(--accent);
   font-weight: 700;
   text-decoration: none;
   overflow-wrap: anywhere;
 }
 
-.threads-context-row a:hover {
+.threads-context a:hover {
   text-decoration: underline;
 }
 
@@ -374,18 +214,6 @@
   gap: 6px;
 }
 
-.threads-notification-item button {
-  min-height: 26px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 @media (max-width: 980px) {
   .threads-module {
     grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
@@ -408,9 +236,8 @@
 
 /* Presence hint (advisory): another user has this thread open. */
 .threads-presence-hint {
-  margin-left: 8px;
   font-size: 11px;
   font-weight: 600;
-  color: #c45a1a;
+  color: var(--warning);
   white-space: nowrap;
 }

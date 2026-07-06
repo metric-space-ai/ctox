@@ -354,7 +354,7 @@ function syncSelection() {
 function renderList(threads) {
   if (!els.list) return;
   if (!threads.length) {
-    els.list.innerHTML = `<div class="threads-empty">${escapeHtml(state.t('noThreads', 'Keine relevanten Threads vorhanden.'))}</div>`;
+    els.list.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noThreads', 'Keine relevanten Threads vorhanden.'))}</div>`;
     return;
   }
   els.list.innerHTML = threads.map((thread) => {
@@ -388,7 +388,7 @@ function renderDetail(threads) {
     if (els.title) els.title.textContent = state.t('noSelection', 'Kein Thread ausgewählt.');
     if (els.source) els.source.textContent = 'Threads';
     if (els.status) els.status.textContent = state.status || 'bereit';
-    if (els.timeline) els.timeline.innerHTML = `<div class="threads-empty">${escapeHtml(state.t('noSelection', 'Kein Thread ausgewählt.'))}</div>`;
+    if (els.timeline) els.timeline.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noSelection', 'Kein Thread ausgewählt.'))}</div>`;
     if (els.context) els.context.innerHTML = '';
     if (els.messageBody) els.messageBody.disabled = true;
     setThreadActionState(null);
@@ -439,7 +439,7 @@ function renderTimeline(thread) {
     ...approvals.map((item) => ({ type: 'approval', at: Number(item.requested_at_ms || item.created_at_ms || 0), item })),
   ].sort((left, right) => left.at - right.at);
   if (!timeline.length) {
-    els.timeline.innerHTML = '<div class="threads-empty">Noch keine Nachrichten.</div>';
+    els.timeline.innerHTML = '<div class="ctox-empty">Noch keine Nachrichten.</div>';
     return;
   }
   const me = currentUserId();
@@ -471,9 +471,9 @@ function renderApproval(approval) {
       ${task ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
       ${canDecide ? `
         <div class="threads-approval-actions">
-          <button type="button" data-edit-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}</button>
-          <button type="button" data-approve-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalApprove', 'Freigeben'))}</button>
-          <button type="button" data-reject-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalReject', 'Ablehnen'))}</button>
+          <button type="button" class="ctox-button" data-edit-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}</button>
+          <button type="button" class="ctox-button" data-approve-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalApprove', 'Freigeben'))}</button>
+          <button type="button" class="ctox-button is-danger" data-reject-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalReject', 'Ablehnen'))}</button>
         </div>
       ` : ''}
     </article>
@@ -500,15 +500,15 @@ function renderContext(thread) {
     })),
   ].filter((row) => String(row.value || row.deepLink || '').trim());
   const rowHtml = rows.length
-    ? rows.map(renderContextRow).join('')
-    : '<div class="threads-empty">Kein verknüpfter App-Kontext.</div>';
+    ? `<dl class="ctox-fields ctox-fields--stacked">${rows.map(renderContextRow).join('')}</dl>`
+    : '<div class="ctox-empty">Kein verknüpfter App-Kontext.</div>';
   const notificationHtml = unread.length
     ? `<div class="threads-notification-list">${unread.map((item) => `
         <div class="threads-notification-item">
           <span>${escapeHtml(item.title || item.notification_type || 'Notification')}</span>
           <div>
-            <button type="button" data-mark-notification="${escapeAttr(item.id)}">Gelesen</button>
-            <button type="button" data-dismiss-notification="${escapeAttr(item.id)}">Ausblenden</button>
+            <button type="button" class="ctox-button" data-mark-notification="${escapeAttr(item.id)}">Gelesen</button>
+            <button type="button" class="ctox-button" data-dismiss-notification="${escapeAttr(item.id)}">Ausblenden</button>
           </div>
         </div>
       `).join('')}</div>`
@@ -720,7 +720,11 @@ function setThreadActionState(thread) {
     if (button) button.disabled = disabled;
   });
   if (els.watch && thread) {
-    els.watch.textContent = arrayField(thread.watcher_user_ids).includes(currentUserId()) ? 'Unwatch' : 'Watch';
+    const watching = arrayField(thread.watcher_user_ids).includes(currentUserId());
+    const label = watching ? 'Unwatch' : 'Watch';
+    els.watch.title = label;
+    els.watch.setAttribute('aria-label', label);
+    els.watch.setAttribute('aria-pressed', watching ? 'true' : 'false');
   }
 }
 
@@ -744,7 +748,7 @@ function renderContextRow(row) {
   const valueHtml = deepLink
     ? `<a href="${escapeAttr(deepLink)}" data-thread-deep-link="${escapeAttr(deepLink)}">${escapeHtml(value || deepLink)}</a>`
     : `<span>${escapeHtml(value)}</span>`;
-  return `<div class="threads-context-row"><strong>${escapeHtml(label)}</strong>${valueHtml}</div>`;
+  return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml}</dd>`;
 }
 
 function navigateDeepLink(value) {
