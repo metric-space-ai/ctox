@@ -6906,9 +6906,11 @@ function applyModuleAllowlist(modules, catalogAllowlist) {
 }
 
 function moduleBypassesInstanceAllowlist(mod) {
-  // Tenant allowlists scope packaged apps; native runtime-installed apps still
+  // Tenant allowlists scope packaged apps; native runtime-installed apps and
+  // operator-placed local modules (runtime local-modules/, git-ignored) still
   // need lifecycle/policy filtering so freshly created apps can open.
-  return mod?.instance_visible === true && isRuntimeInstalledModule(mod);
+  return mod?.instance_visible === true
+    && (isRuntimeInstalledModule(mod) || mod?.source === 'local');
 }
 
 function filterModulesForAppVersionVisibility(modules, governance = state.governance) {

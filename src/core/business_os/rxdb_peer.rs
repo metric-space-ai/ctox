@@ -11568,40 +11568,52 @@ fn collection_creators() -> HashMap<String, RxCollectionCreator> {
 fn runtime_installed_module_collection_creators(
     root: &Path,
 ) -> HashMap<String, RxCollectionCreator> {
-    let modules_root =
-        resolve_business_os_installed_app_root_for_native_peer(root).join("installed-modules");
+    let runtime_app_root = resolve_business_os_installed_app_root_for_native_peer(root);
     let mut creators = HashMap::new();
-    if !modules_root.is_dir() {
-        return creators;
-    }
-    let entries = match fs::read_dir(&modules_root) {
-        Ok(entries) => entries,
-        Err(err) => {
-            eprintln!(
-                "[business-os] could not read installed module schemas from {}: {err:#}",
-                modules_root.display()
-            );
-            return creators;
-        }
-    };
     let static_collections = business_os_schema_contract();
-    for entry in entries.flatten() {
-        let module_dir = entry.path();
-        if !module_dir.is_dir() {
+    // installed-modules/ carries API-installed apps (gated on the runtime
+    // installed manifest markers); local-modules/ carries operator-placed,
+    // git-ignored dev/customer apps — presence in the directory is the opt-in.
+    for (dir_name, require_installed_marker) in
+        [("installed-modules", true), ("local-modules", false)]
+    {
+        let modules_root = runtime_app_root.join(dir_name);
+        if !modules_root.is_dir() {
             continue;
         }
-        for (name, schema) in runtime_installed_module_collection_schemas(&module_dir) {
-            if static_collections.contains_key(&name) || creators.contains_key(&name) {
+        let entries = match fs::read_dir(&modules_root) {
+            Ok(entries) => entries,
+            Err(err) => {
+                eprintln!(
+                    "[business-os] could not read module schemas from {}: {err:#}",
+                    modules_root.display()
+                );
                 continue;
             }
-            creators.insert(
-                name,
-                RxCollectionCreator {
-                    schema,
-                    conflict_handler: None,
-                    options: HashMap::new(),
-                },
-            );
+        };
+        for entry in entries.flatten() {
+            let module_dir = entry.path();
+            if !module_dir.is_dir() {
+                continue;
+            }
+            let schemas = if require_installed_marker {
+                runtime_installed_module_collection_schemas(&module_dir)
+            } else {
+                local_module_collection_schemas(&module_dir)
+            };
+            for (name, schema) in schemas {
+                if static_collections.contains_key(&name) || creators.contains_key(&name) {
+                    continue;
+                }
+                creators.insert(
+                    name,
+                    RxCollectionCreator {
+                        schema,
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                );
+            }
         }
     }
     creators

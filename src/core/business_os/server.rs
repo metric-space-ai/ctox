@@ -2758,7 +2758,8 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     {
         return respond_status(request, 403, "forbidden");
     }
-    let static_root = if rel.starts_with("installed-modules/") {
+    let static_root = if rel.starts_with("installed-modules/") || rel.starts_with("local-modules/")
+    {
         resolve_business_os_installed_app_root(root)
     } else {
         app_root.to_path_buf()

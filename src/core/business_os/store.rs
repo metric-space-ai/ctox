@@ -302,6 +302,7 @@ pub(crate) struct BusinessRecordsProjectionStamp {
 pub(crate) struct ModuleCatalogProjectionStamp {
     source_modules: ModuleCatalogFileTreeStamp,
     installed_modules: ModuleCatalogFileTreeStamp,
+    local_modules: ModuleCatalogFileTreeStamp,
     templates: ModuleCatalogFileTreeStamp,
     store_hash: String,
     allowlist_hash: String,
@@ -1619,8 +1620,14 @@ fn augment_modules_with_instance_visibility(
             .and_then(|lifecycle| lifecycle.get("runtime_installed"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let visible =
-            legacy || is_core_module(&id) || runtime_installed || visible_set.contains(&id);
+        // Local (git-ignored, operator-placed) modules are always visible on
+        // their own instance: dropping the directory in place IS the install.
+        let local_module = module.get("source").and_then(Value::as_str) == Some("local");
+        let visible = legacy
+            || is_core_module(&id)
+            || runtime_installed
+            || local_module
+            || visible_set.contains(&id);
         if let Some(object) = module.as_object_mut() {
             object.insert("instance_visible".to_owned(), Value::Bool(visible));
         }
@@ -5662,6 +5669,7 @@ pub(crate) fn module_catalog_projection_stamp(
         installed_modules: module_catalog_file_tree_stamp(
             &installed_app_root.join("installed-modules"),
         )?,
+        local_modules: module_catalog_file_tree_stamp(&installed_app_root.join("local-modules"))?,
         templates: module_catalog_file_tree_stamp(&app_root.join("template-store"))?,
         store_hash: module_catalog_store_hash(root)?,
         allowlist_hash: module_catalog_allowlist_hash(root),
@@ -9226,6 +9234,12 @@ fn load_module_manifests(
         }
         manifests.push(manifest);
     }
+    for manifest in load_local_module_manifests(installed_app_root)? {
+        if manifests.iter().any(|existing| existing.id == manifest.id) {
+            continue;
+        }
+        manifests.push(manifest);
+    }
     manifests.sort_by(|a, b| match (a.id.as_str(), b.id.as_str()) {
         ("ctox", "ctox") => std::cmp::Ordering::Equal,
         ("ctox", _) => std::cmp::Ordering::Less,
@@ -9273,6 +9287,53 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
         manifest.core = false;
         manifest.editable = true;
         manifest.deletable = true;
+        manifests.push(manifest);
+    }
+    Ok(manifests)
+}
+
+/// Local modules live in `<runtime app root>/local-modules/` — a git-ignored
+/// directory for hand-developed test and customer apps (e.g. per-customer
+/// modules that must never land in the public repo). Dropping a module
+/// directory there is the whole install; the operator owns the files, so the
+/// app-store install/uninstall lifecycle does not manage them
+/// (`deletable = false`).
+fn load_local_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+    let modules_root = app_root.join("local-modules");
+    let mut manifests = Vec::new();
+    if !modules_root.is_dir() {
+        return Ok(manifests);
+    }
+    for entry in fs::read_dir(&modules_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("module.json");
+        if !path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+        let mut manifest: ModuleManifest = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.local_manifest_path = path.display().to_string();
+        augment_module_manifest_file_plane(&mut manifest, &entry.path());
+        backfill_local_module_icon(&mut manifest, &entry.path());
+        if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
+            continue;
+        }
+        if is_core_module(&manifest.id) {
+            continue;
+        }
+        manifest.entry = format!("local-modules/{}/index.html", manifest.id);
+        manifest.source = "local".to_owned();
+        manifest.install_scope = "local".to_owned();
+        manifest.default_installed = false;
+        manifest.core = false;
+        manifest.editable = true;
+        manifest.deletable = false;
         manifests.push(manifest);
     }
     Ok(manifests)

@@ -26,6 +26,36 @@ modules/<id>/
 - `store`: discoverable in the App Store and installed into `installed-modules/` on demand.
 - `internal`: shipped for shell-owned workflows but hidden from normal launchers.
 - `sample`: ignored by the runtime; used only for checked-in example `installed-modules/`.
+- `installed`: runtime-installed via the App Creator/App Store into
+  `runtime/business-os/installed-modules/` (git-ignored, survives upgrades).
+- `local`: operator-placed, git-ignored dev/customer modules (see below).
+
+### Local Modules (git-ignored dev and customer apps)
+
+`runtime/business-os/local-modules/<id>/` is the third module location:
+hand-developed apps that must never land in the public repo — private test
+modules or per-customer apps (e.g. a `sellify` app). `runtime/` is already
+git-ignored, so no `.gitignore` entry per app is needed. Dropping the module
+directory there IS the install: the runtime discovers it, projects it into
+the module catalog with `source: "local"` / `install_scope: "local"`, serves
+its files under `/local-modules/<id>/…`, registers its
+`collections.schema.json` collections, and shows it as a launcher tab on this
+instance. The app-store install/uninstall lifecycle does not manage local
+modules; deleting the directory removes the app.
+
+A local module uses the exact same contract as any other module
+(`module.json` with `entry: "local-modules/<id>/index.html"` and
+`install_scope: "local"`, `schema.js` + `collections.schema.json` with
+module-scoped collection names, `mount(ctx)`, kit classes, tokens). Validate
+with:
+
+```sh
+node src/apps/business-os/scripts/validate-app-module.mjs <id> --local
+```
+
+Local mode enforces the same structural, data-boundary, and design rules as
+installed mode; only the business-behavior requirements (mandatory automation
+command, create affordance) are relaxed for quick test apps.
 
 The shell loads module manifests through the native Rust API and mounts modules
 as plain browser modules. React may be embedded for menus, settings, and dense

@@ -8,9 +8,10 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
   return [
-    'Usage: node src/apps/business-os/scripts/validate-app-module.mjs <module> [--source|--installed] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]',
+    'Usage: node src/apps/business-os/scripts/validate-app-module.mjs <module> [--source|--installed|--local] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]',
     '',
-    'Validates a CTOX Business OS app module artifact in source or installed mode.',
+    'Validates a CTOX Business OS app module artifact in source, installed, or local mode.',
+    'Local mode targets runtime/business-os/local-modules/<module> (git-ignored dev/customer apps).',
   ].join('\n');
 }
 
@@ -29,6 +30,8 @@ function parseArgs(argv) {
       result.mode = 'source';
     } else if (arg === '--installed') {
       result.mode = 'installed';
+    } else if (arg === '--local') {
+      result.mode = 'local';
     } else if (arg === '--workspace') {
       const value = argv[idx + 1];
       if (!value) throw new Error('--workspace requires a path');
@@ -92,6 +95,9 @@ function installedAppRootFor(workspace) {
 function moduleDirFor(workspace, moduleId, mode) {
   if (mode === 'installed') {
     return join(installedAppRootFor(workspace), 'installed-modules', moduleId);
+  }
+  if (mode === 'local') {
+    return join(installedAppRootFor(workspace), 'local-modules', moduleId);
   }
   return join(workspace, 'src/apps/business-os/modules', moduleId);
 }
@@ -198,14 +204,18 @@ function validate(options) {
   const mode = options.mode || (
     existsSync(moduleDirFor(options.workspace, options.moduleId, 'source'))
       ? 'source'
-      : 'installed'
+      : existsSync(moduleDirFor(options.workspace, options.moduleId, 'installed'))
+        ? 'installed'
+        : existsSync(moduleDirFor(options.workspace, options.moduleId, 'local'))
+          ? 'local'
+          : 'installed'
   );
   const moduleDir = moduleDirFor(options.workspace, options.moduleId, mode);
   const failures = [];
   const checks = [];
 
   failures.push(...collectRootArtifactFailures(options.workspace));
-  if (mode === 'installed') {
+  if (mode === 'installed' || mode === 'local') {
     failures.push(...collectInstalledModuleRootEntryFailures(options.workspace, moduleDir));
   }
 
@@ -216,6 +226,7 @@ function validate(options) {
   } else {
     const args = [staticChecker, options.moduleId];
     if (mode === 'installed') args.push('--installed');
+    if (mode === 'local') args.push('--local');
     const run = runNode(args, options.workspace);
     const ok = run.status === 0;
     checks.push({

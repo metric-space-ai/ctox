@@ -7,10 +7,10 @@ const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
 
 if (!moduleId || moduleId.includes('/') || moduleId.includes('\\') || moduleId === '.' || moduleId === '..') {
-  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed]');
+  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed|--local]');
   process.exit(2);
 }
-if (modeArg && modeArg !== '--installed') {
+if (modeArg && modeArg !== '--installed' && modeArg !== '--local') {
   console.error(`Unknown option: ${modeArg}`);
   process.exit(2);
 }
@@ -25,12 +25,24 @@ function installedAppRootFor(workspace) {
 }
 
 const installedDir = join(installedAppRootFor(root), 'installed-modules', moduleId);
-const installedMode = modeArg === '--installed' || (!existsSync(sourceDir) && existsSync(installedDir));
-const moduleDir = installedMode ? installedDir : sourceDir;
-const expectedEntry = installedMode
-  ? `installed-modules/${moduleId}/index.html`
-  : `modules/${moduleId}/index.html`;
-const expectedInstallScope = installedMode ? 'installed' : 'store';
+const localDir = join(installedAppRootFor(root), 'local-modules', moduleId);
+const installedMode = modeArg === '--installed'
+  || (!modeArg && !existsSync(sourceDir) && existsSync(installedDir));
+// Local mode: git-ignored, operator-placed dev/customer modules under
+// runtime/business-os/local-modules/. Structural, data-boundary, and design
+// rules apply like installed mode; the business-behavior positives
+// (automation command, create affordance, mandatory persistence) do not.
+const localMode = modeArg === '--local'
+  || (!modeArg && !existsSync(sourceDir) && !existsSync(installedDir) && existsSync(localDir));
+// Runtime module mode = the module lives outside src/ (installed or local).
+const runtimeModuleMode = installedMode || localMode;
+const moduleDir = localMode ? localDir : installedMode ? installedDir : sourceDir;
+const expectedEntry = localMode
+  ? `local-modules/${moduleId}/index.html`
+  : installedMode
+    ? `installed-modules/${moduleId}/index.html`
+    : `modules/${moduleId}/index.html`;
+const expectedInstallScope = localMode ? 'local' : installedMode ? 'installed' : 'store';
 const registryPath = join(root, 'src/apps/business-os/modules/registry.json');
 const failures = [];
 
@@ -755,14 +767,14 @@ for (const file of requiredFiles) {
   if (!existsSync(join(moduleDir, file))) fail(`missing ${rel(join(moduleDir, file))}`);
 }
 
-if (installedMode && existsSync(moduleDir)) {
+if (runtimeModuleMode && existsSync(moduleDir)) {
   for (const name of readdirSync(moduleDir)) {
     const path = join(moduleDir, name);
     const stats = statSync(path);
     const allowed = stats.isDirectory()
       ? allowedInstalledRootDirs.has(name)
       : allowedInstalledRootFiles.has(name);
-    if (!allowed) fail(`unexpected installed-module root entry: ${rel(path)}`);
+    if (!allowed) fail(`unexpected runtime-module root entry: ${rel(path)}`);
   }
 }
 
@@ -771,16 +783,17 @@ const schemaDoc = existsSync(join(moduleDir, 'collections.schema.json'))
   ? readJson(join(moduleDir, 'collections.schema.json'))
   : null;
 const sourceInstallScope = String(manifest?.install_scope || '').trim().toLowerCase();
-const sourceShellModuleMode = !installedMode && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope);
+const sourceShellModuleMode = !runtimeModuleMode
+  && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope);
 
 if (manifest) {
   if (manifest.id !== moduleId) fail(`module.json id must be ${moduleId}`);
   if (manifest.entry !== expectedEntry) fail(`module.json entry must be ${expectedEntry}`);
-  if (installedMode && manifest.install_scope !== expectedInstallScope) {
+  if (runtimeModuleMode && manifest.install_scope !== expectedInstallScope) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
   }
   if (!Array.isArray(manifest.collections)) fail('module.json collections must be an array');
-  if (installedMode && Array.isArray(manifest.collections)) {
+  if (runtimeModuleMode && Array.isArray(manifest.collections)) {
     for (const name of manifest.collections) {
       if (shellCollections.has(name)) continue;
       if (!isModuleScopedCollectionName(name, moduleId)) {
@@ -842,7 +855,7 @@ if (schemaDoc) {
   if (!schemaDoc.collections || typeof schemaDoc.collections !== 'object' || Array.isArray(schemaDoc.collections)) {
     fail('collections.schema.json collections must be an object');
   }
-  if (installedMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
+  if (runtimeModuleMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
     for (const name of Object.keys(schemaDoc.collections)) {
       if (!isModuleScopedCollectionName(name, moduleId)) {
         fail(`collections.schema.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
@@ -870,7 +883,7 @@ if (existsSync(schemaJsPath)) {
     const pattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:['"]${collection}['"]|${collection})\s*:`, 'm');
     if (!sourceShellModuleMode && pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
   }
-  if (installedMode && schemaDoc?.collections) {
+  if (runtimeModuleMode && schemaDoc?.collections) {
     schemaJsCollections = await loadSchemaJsCollections(schemaJsPath);
     if (schemaJsCollections) {
       for (const message of collectSchemaJsParityFailures(schemaDoc, schemaJsCollections)) fail(message);
@@ -878,11 +891,11 @@ if (existsSync(schemaJsPath)) {
   }
 }
 
-if (installedMode && schemaDoc?.collections) {
+if (runtimeModuleMode && schemaDoc?.collections) {
   for (const message of await collectRecordHelperSchemaFailures(moduleDir, schemaDoc)) fail(message);
 }
 
-if (!installedMode && manifest && existsSync(registryPath)) {
+if (!runtimeModuleMode && manifest && existsSync(registryPath)) {
   const registry = readJson(registryPath);
   const entry = (registry?.modules || []).find((item) => item.id === moduleId);
   if (!entry) fail(`registry.json missing module ${moduleId}`);
@@ -957,10 +970,13 @@ if (!/\bctx\.host\b|\bhost\.innerHTML\b|\bhost\.append/.test(indexJs)) {
   fail('index.js must render into ctx.host');
 }
 
-if (installedMode) {
+if (runtimeModuleMode) {
   for (const message of collectThemeTokenFailures(indexCss)) fail(message);
   for (const message of collectHardcodedColorFailures(indexCss)) fail(message);
   for (const message of collectKitUsageFailures(runtimeText)) fail(message);
+}
+
+if (installedMode) {
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }
@@ -1009,7 +1025,7 @@ for (const path of runtimeFiles) {
       if (matched) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
     }
   }
-  if (installedMode && /\.(?:js|mjs)$/.test(path)) {
+  if (runtimeModuleMode && /\.(?:js|mjs)$/.test(path)) {
     for (const message of collectLegacyDbFacadeFailures(path, text)) fail(message);
   }
   if (/\.(?:js|mjs)$/.test(path)) {
@@ -1033,7 +1049,7 @@ for (const action of htmlDataActions(indexHtml)) {
   }
 }
 
-if (manifest && installedMode) {
+if (manifest && runtimeModuleMode) {
   const declaredCollections = new Set(Array.isArray(manifest.collections) ? manifest.collections : []);
   const schemaCollections = new Set(Object.keys(schemaDoc?.collections || {}));
   for (const path of runtimeFiles.filter((file) => /\.(?:js|mjs)$/.test(file))) {
@@ -1063,4 +1079,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`Business OS module static check OK: ${moduleId} (${installedMode ? 'installed' : 'source'} mode)`);
+console.log(`Business OS module static check OK: ${moduleId} (${localMode ? 'local' : installedMode ? 'installed' : 'source'} mode)`);
