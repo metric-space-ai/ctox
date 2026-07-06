@@ -1,5 +1,6 @@
 import { CtoxEventEmitter } from './event-target.mjs';
 import { sha256Hex } from './schema.mjs';
+import { normalizeConflictStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
 
 const DB_VERSION = 3;
 const DOCUMENT_STORE = 'documents';
@@ -24,11 +25,11 @@ export class CtoxIndexedDbStorage {
     this.db = db;
   }
 
-  collection(name, { schema = null } = {}) {
+  collection(name, { schema = null, conflictStrategy = 'lww' } = {}) {
     if (!name || typeof name !== 'string') {
       throw new TypeError('collection name must be a non-empty string');
     }
-    return new CtoxIndexedDbCollection(this.db, name, { schema });
+    return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
   }
 
   close() {
@@ -37,10 +38,14 @@ export class CtoxIndexedDbStorage {
 }
 
 export class CtoxIndexedDbCollection {
-  constructor(db, name, { schema = null } = {}) {
+  constructor(db, name, { schema = null, conflictStrategy = 'lww' } = {}) {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
+    // 'lww' (default) or 'field-merge' (see conflict-merge.mjs). Declared as
+    // a sibling of `schema` in the collection definition so schema hashes
+    // stay untouched.
+    this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -52,6 +57,56 @@ export class CtoxIndexedDbCollection {
 
   observe(listener) {
     return this.events.on('change', (event) => listener(event?.detail || event));
+  }
+
+  // Raw stored record (doc + base + replication flags) for one id. Used by
+  // the replication push path to fetch the merge base on masterWrite
+  // conflicts; not part of the query surface.
+  async getStoredRecord(id) {
+    if (!id) return null;
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const record = await idbRequest(store.get([this.name, id]));
+    return record || null;
+  }
+
+  // Field-merge + merge-base tracking for one incoming write that already
+  // passed `shouldAcceptDocumentWrite`. Decides what actually gets stored:
+  //
+  //   - LOCAL write on a field-merge collection: carry the merge base along
+  //     (the last master-confirmed doc, surviving consecutive local writes).
+  //   - Replication write over an UNSYNCED LOCAL row on a field-merge
+  //     collection: three-way merge. If local field changes survive, the
+  //     result is stored as a LOCAL (pushable) write — deliberately WITHOUT
+  //     the replication-origin stamp, because it still carries state the
+  //     master has not seen — with the incoming master doc as the new base.
+  //   - Everything else: unchanged pass-through (whole-doc LWW semantics).
+  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin }) {
+    const mergeEnabled = this.conflictStrategy === 'field-merge';
+    if (!replicationOrigin?.role) {
+      const base = mergeEnabled && previous
+        ? (previous.replicationOriginRole ? previous.doc : previous.base)
+        : undefined;
+      return { doc, lwt, replicationOrigin, base };
+    }
+    const existingIsLocalWrite = Boolean(previous) && !previous.doc?._meta?.ctoxReplicationOrigin;
+    if (!mergeEnabled || !existingIsLocalWrite) {
+      return { doc, lwt, replicationOrigin, base: undefined };
+    }
+    const { merged, identicalToMaster } = threeWayMergeDocuments(
+      previous.base,
+      previous.doc,
+      doc,
+      { primaryPath: this.primaryPath },
+    );
+    if (identicalToMaster) {
+      // No local-only change survived (e.g. the own push round-tripped):
+      // store the master row normally, which clears the base and leaves the
+      // push set.
+      return { doc, lwt, replicationOrigin, base: undefined };
+    }
+    const mergedLwt = Math.max(Number(lwt) || 0, Number(previous.lwt) || 0) + 1;
+    return { doc: merged, lwt: mergedLwt, replicationOrigin: null, base: doc };
   }
 
   async upsert(doc) {
@@ -94,17 +149,24 @@ export class CtoxIndexedDbCollection {
         if (previous?.doc) success[id] = previous.doc;
         continue;
       }
-      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
-        lwt = Number(previous.lwt) + 1;
+      const resolved = this.resolveIncomingWrite({
+        previous,
+        doc: nextDocument,
+        lwt,
+        replicationOrigin,
+      });
+      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
+        resolved.lwt = Number(previous.lwt) + 1;
       }
       const stored = storedRecordForWrite({
         collection: this.name,
         id,
-        doc: nextDocument,
-        lwt,
+        doc: resolved.doc,
+        lwt: resolved.lwt,
         indexes: this.indexes,
         indexSignature: this.indexSignature,
-        replicationOrigin,
+        replicationOrigin: resolved.replicationOrigin,
+        base: resolved.base,
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
@@ -151,20 +213,22 @@ export class CtoxIndexedDbCollection {
       if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
         continue;
       }
-      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
+      const resolved = this.resolveIncomingWrite({ previous, doc, lwt, replicationOrigin });
+      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
         // Accepted master state whose payload timestamp did not advance:
         // keep the stored lwt monotonic so local checkpoint consumers
         // (change feed, LWW comparisons) never see this row move backwards.
-        lwt = Number(previous.lwt) + 1;
+        resolved.lwt = Number(previous.lwt) + 1;
       }
       const stored = storedRecordForWrite({
         collection: this.name,
         id,
-        doc,
-        lwt,
+        doc: resolved.doc,
+        lwt: resolved.lwt,
         indexes: this.indexes,
         indexSignature: this.indexSignature,
-        replicationOrigin,
+        replicationOrigin: resolved.replicationOrigin,
+        base: resolved.base,
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
@@ -633,10 +697,10 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   return normalized;
 }
 
-function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null }) {
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = undefined }) {
   const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin);
   const replicationOriginRole = String(replicationOrigin?.role || '').slice(0, 64);
-  return {
+  const record = {
     collection,
     id,
     lwt,
@@ -648,6 +712,14 @@ function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignatur
     schemaIndexEntries: schemaIndexEntriesFor(indexes, doc, id, collection),
     doc: normalizedDoc,
   };
+  // Merge base (field-merge collections only): the last master-confirmed
+  // state a local edit diverged from. Lives on the record — never inside
+  // `doc` — so it stays off the wire. `put` replaces the whole record, so an
+  // absent base here clears any previous one.
+  if (base !== undefined && base !== null) {
+    record.base = base;
+  }
+  return record;
 }
 
 function migrateStoredReplicationFlags(store) {

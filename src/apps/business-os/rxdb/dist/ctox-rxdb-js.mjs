@@ -604,6 +604,76 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
   });
 }
 
+// src/apps/business-os/rxdb/src/conflict-merge.mjs
+var SYSTEM_FIELD_PREFIX = "_";
+function deepEqualJson(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  const aIsArray = Array.isArray(a);
+  if (aIsArray !== Array.isArray(b)) return false;
+  if (aIsArray) {
+    if (a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index += 1) {
+      if (!deepEqualJson(a[index], b[index])) return false;
+    }
+    return true;
+  }
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (!deepEqualJson(a[key], b[key])) return false;
+  }
+  return true;
+}
+function businessFieldKeys(...docs) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const doc of docs) {
+    if (!doc || typeof doc !== "object") continue;
+    for (const key of Object.keys(doc)) {
+      if (!key.startsWith(SYSTEM_FIELD_PREFIX)) keys.add(key);
+    }
+  }
+  return keys;
+}
+function threeWayMergeDocuments(base, local, master, { primaryPath = "id" } = {}) {
+  const safeBase = base && typeof base === "object" ? base : {};
+  const safeLocal = local && typeof local === "object" ? local : {};
+  const safeMaster = master && typeof master === "object" ? master : {};
+  if (safeMaster._deleted) {
+    return { merged: safeMaster, identicalToMaster: true };
+  }
+  if (safeLocal._deleted) {
+    return { merged: safeLocal, identicalToMaster: false };
+  }
+  const merged = {};
+  for (const key of Object.keys(safeMaster)) {
+    if (key.startsWith(SYSTEM_FIELD_PREFIX)) merged[key] = safeMaster[key];
+  }
+  merged[primaryPath] = safeMaster[primaryPath] ?? safeLocal[primaryPath];
+  let localOnlyChange = false;
+  for (const key of businessFieldKeys(safeBase, safeLocal, safeMaster)) {
+    if (key === primaryPath) continue;
+    const baseValue = safeBase[key];
+    const localValue = safeLocal[key];
+    const masterValue = safeMaster[key];
+    const localChanged = !deepEqualJson(localValue, baseValue);
+    const winner = localChanged ? localValue : masterValue;
+    if (localChanged && !deepEqualJson(localValue, masterValue)) {
+      localOnlyChange = true;
+    }
+    if (winner !== void 0) {
+      merged[key] = winner;
+    }
+  }
+  return { merged, identicalToMaster: !localOnlyChange };
+}
+function normalizeConflictStrategy(value) {
+  return value === "field-merge" ? "field-merge" : "lww";
+}
+
 // src/apps/business-os/rxdb/src/storage-indexeddb.mjs
 var DB_VERSION = 3;
 var DOCUMENT_STORE = "documents";
@@ -625,21 +695,22 @@ var CtoxIndexedDbStorage = class {
   constructor(db) {
     this.db = db;
   }
-  collection(name, { schema = null } = {}) {
+  collection(name, { schema = null, conflictStrategy = "lww" } = {}) {
     if (!name || typeof name !== "string") {
       throw new TypeError("collection name must be a non-empty string");
     }
-    return new CtoxIndexedDbCollection(this.db, name, { schema });
+    return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
   }
   close() {
     this.db.close();
   }
 };
 var CtoxIndexedDbCollection = class {
-  constructor(db, name, { schema = null } = {}) {
+  constructor(db, name, { schema = null, conflictStrategy = "lww" } = {}) {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
+    this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -650,6 +721,49 @@ var CtoxIndexedDbCollection = class {
   }
   observe(listener) {
     return this.events.on("change", (event) => listener(event?.detail || event));
+  }
+  // Raw stored record (doc + base + replication flags) for one id. Used by
+  // the replication push path to fetch the merge base on masterWrite
+  // conflicts; not part of the query surface.
+  async getStoredRecord(id) {
+    if (!id) return null;
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const record = await idbRequest(store.get([this.name, id]));
+    return record || null;
+  }
+  // Field-merge + merge-base tracking for one incoming write that already
+  // passed `shouldAcceptDocumentWrite`. Decides what actually gets stored:
+  //
+  //   - LOCAL write on a field-merge collection: carry the merge base along
+  //     (the last master-confirmed doc, surviving consecutive local writes).
+  //   - Replication write over an UNSYNCED LOCAL row on a field-merge
+  //     collection: three-way merge. If local field changes survive, the
+  //     result is stored as a LOCAL (pushable) write — deliberately WITHOUT
+  //     the replication-origin stamp, because it still carries state the
+  //     master has not seen — with the incoming master doc as the new base.
+  //   - Everything else: unchanged pass-through (whole-doc LWW semantics).
+  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin }) {
+    const mergeEnabled = this.conflictStrategy === "field-merge";
+    if (!replicationOrigin?.role) {
+      const base = mergeEnabled && previous ? previous.replicationOriginRole ? previous.doc : previous.base : void 0;
+      return { doc, lwt, replicationOrigin, base };
+    }
+    const existingIsLocalWrite = Boolean(previous) && !previous.doc?._meta?.ctoxReplicationOrigin;
+    if (!mergeEnabled || !existingIsLocalWrite) {
+      return { doc, lwt, replicationOrigin, base: void 0 };
+    }
+    const { merged, identicalToMaster } = threeWayMergeDocuments(
+      previous.base,
+      previous.doc,
+      doc,
+      { primaryPath: this.primaryPath }
+    );
+    if (identicalToMaster) {
+      return { doc, lwt, replicationOrigin, base: void 0 };
+    }
+    const mergedLwt = Math.max(Number(lwt) || 0, Number(previous.lwt) || 0) + 1;
+    return { doc: merged, lwt: mergedLwt, replicationOrigin: null, base: doc };
   }
   async upsert(doc) {
     const id = documentId(doc);
@@ -689,17 +803,24 @@ var CtoxIndexedDbCollection = class {
         if (previous?.doc) success[id] = previous.doc;
         continue;
       }
-      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
-        lwt = Number(previous.lwt) + 1;
+      const resolved = this.resolveIncomingWrite({
+        previous,
+        doc: nextDocument,
+        lwt,
+        replicationOrigin
+      });
+      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
+        resolved.lwt = Number(previous.lwt) + 1;
       }
       const stored = storedRecordForWrite({
         collection: this.name,
         id,
-        doc: nextDocument,
-        lwt,
+        doc: resolved.doc,
+        lwt: resolved.lwt,
         indexes: this.indexes,
         indexSignature: this.indexSignature,
-        replicationOrigin
+        replicationOrigin: resolved.replicationOrigin,
+        base: resolved.base
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
@@ -743,17 +864,19 @@ var CtoxIndexedDbCollection = class {
       if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
         continue;
       }
-      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
-        lwt = Number(previous.lwt) + 1;
+      const resolved = this.resolveIncomingWrite({ previous, doc, lwt, replicationOrigin });
+      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
+        resolved.lwt = Number(previous.lwt) + 1;
       }
       const stored = storedRecordForWrite({
         collection: this.name,
         id,
-        doc,
-        lwt,
+        doc: resolved.doc,
+        lwt: resolved.lwt,
         indexes: this.indexes,
         indexSignature: this.indexSignature,
-        replicationOrigin
+        replicationOrigin: resolved.replicationOrigin,
+        base: resolved.base
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
@@ -1188,10 +1311,10 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
 }
-function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null }) {
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = void 0 }) {
   const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin);
   const replicationOriginRole = String(replicationOrigin?.role || "").slice(0, 64);
-  return {
+  const record = {
     collection,
     id,
     lwt,
@@ -1203,6 +1326,10 @@ function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignatur
     schemaIndexEntries: schemaIndexEntriesFor(indexes, doc, id, collection),
     doc: normalizedDoc
   };
+  if (base !== void 0 && base !== null) {
+    record.base = base;
+  }
+  return record;
 }
 function migrateStoredReplicationFlags(store) {
   const request = store.openCursor();
@@ -6985,6 +7112,7 @@ var CtoxWebRtcReplicationState = class {
           return assumedMasterState ? { ...row, assumedMasterState } : null;
         }).filter(Boolean);
         if (!rows.length) break;
+        rows = await this.absorbMasterStateIntoConflictRows(rows);
       }
       if (rows.length) {
         throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
@@ -7005,6 +7133,39 @@ var CtoxWebRtcReplicationState = class {
     if (result?.scanLimitReached) {
       this.demandStatus.localPushChangedSinceScanLimitHits = Number(this.demandStatus.localPushChangedSinceScanLimitHits || 0) + 1;
     }
+  }
+  // Field-merge push repair: a masterWrite conflict means the master row
+  // moved while our local write was unsynced. For `field-merge` collections
+  // we three-way merge (stored base, local doc, master's conflict row),
+  // persist the merged doc locally as a LOCAL write (it still carries
+  // unsynced state), and retry the push with the merged doc + the master row
+  // as assumedMasterState. LWW collections pass through untouched and keep
+  // the existing local-wins force retry.
+  async absorbMasterStateIntoConflictRows(rows) {
+    const storage = this.collection?.storageCollection;
+    if (!rows.length || storage?.conflictStrategy !== "field-merge") return rows;
+    const primaryPath = this.collection.schema.primaryPath;
+    const mergedRows = [];
+    for (const row of rows) {
+      const id = primaryValue(row.newDocumentState, primaryPath);
+      let record = null;
+      try {
+        record = await storage.getStoredRecord?.(id);
+      } catch {
+      }
+      const { merged } = threeWayMergeDocuments(
+        record?.base,
+        row.newDocumentState,
+        row.assumedMasterState,
+        { primaryPath }
+      );
+      try {
+        await storage.bulkWrite([merged]);
+      } catch {
+      }
+      mergedRows.push({ newDocumentState: merged, assumedMasterState: row.assumedMasterState });
+    }
+    return mergedRows;
   }
   // ----- master handler (when CTOX picks the browser as fork's master) ----
   async masterChangesSince(params, peerId = "") {
@@ -7582,10 +7743,11 @@ var CtoxRxDatabase = class {
     for (const [name, definition] of Object.entries(collections || {})) {
       if (this.collections[name]) continue;
       const schema = definition?.schema || definition;
+      const conflictStrategy = definition?.conflictStrategy;
       const collection = new CtoxRxCollection({
         name,
         schema,
-        storageCollection: this.storage.collection(name, { schema })
+        storageCollection: this.storage.collection(name, { schema, conflictStrategy })
       });
       this.collections[name] = collection;
       this[name] = collection;
@@ -8471,10 +8633,12 @@ export {
   ctoxIndexedDbStorageTestInternals,
   ctoxRxdbTestInternals,
   decodeChunk,
+  deepEqualJson,
   getActiveCollectionRegistry,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
   getPresenceRegistry,
+  normalizeConflictStrategy,
   normalizeSignalingControlPlaneError,
   openCtoxIndexedDbStorage,
   projectStatusFromSidecar,
@@ -8489,5 +8653,6 @@ export {
   setV15LogSink,
   sha256Hex,
   snapshotV1_5Status,
+  threeWayMergeDocuments,
   waitForEvent
 };

@@ -441,13 +441,20 @@ const customerDedupeCandidateSchema = {
   additionalProperties: true,
 };
 
+// Record collections that several people edit concurrently opt into the
+// field-merge conflict strategy: concurrent edits to DIFFERENT fields of the
+// same record both survive (three-way merge in the browser store); true
+// same-field conflicts keep local-wins. `conflictStrategy` is a sibling of
+// `schema` — deliberately outside the schema object, so schema hashes are
+// unaffected (the shell, the hash generator, and the native peer all read
+// `definition.schema || definition`).
 export const collections = {
   business_commands: commandSchema,
-  customer_accounts: customerAccountSchema,
-  customer_contacts: customerContactSchema,
-  customer_opportunities: customerOpportunitySchema,
-  customer_tasks: customerTaskSchema,
-  customer_notes: customerNoteSchema,
+  customer_accounts: { schema: customerAccountSchema, conflictStrategy: 'field-merge' },
+  customer_contacts: { schema: customerContactSchema, conflictStrategy: 'field-merge' },
+  customer_opportunities: { schema: customerOpportunitySchema, conflictStrategy: 'field-merge' },
+  customer_tasks: { schema: customerTaskSchema, conflictStrategy: 'field-merge' },
+  customer_notes: { schema: customerNoteSchema, conflictStrategy: 'field-merge' },
   customer_activities: customerActivitySchema,
   customer_files: customerFileSchema,
   customer_views: customerViewSchema,

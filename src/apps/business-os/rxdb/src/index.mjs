@@ -69,6 +69,12 @@ export {
   getPresenceRegistry,
 } from './presence.mjs';
 
+export {
+  deepEqualJson,
+  normalizeConflictStrategy,
+  threeWayMergeDocuments,
+} from './conflict-merge.mjs';
+
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';
 export { CtoxSubject } from './observable.mjs';
 

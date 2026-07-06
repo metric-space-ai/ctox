@@ -115,6 +115,7 @@ All descriptions verified against the file headers.
 | `webrtc-native.mjs` | Native `RTCPeerConnection`/`WebSocket` peer: signaling, framed transport, prioritised send queue, request/response RPC. |
 | `active-collections.mjs` | Registry of "active" (foreground) collections, derived from real subscriptions and recent `.exec()` reads; feeds the `rxdb.activeCollections` control frame. |
 | `presence.mjs` | Ephemeral presence registry (ctox-presence-v1): per-owner local "who is viewing/editing what" entries feed the `rxdb.presence.update` control frame; remote aggregates arrive via the `presence$` push. Never persisted, never authoritative. |
+| `conflict-merge.mjs` | Opt-in field-merge conflict strategy (§8.2): three-way merge of base/local/master at top-level-field granularity for collections declaring `conflictStrategy: 'field-merge'`. |
 | `frame-contract.generated.mjs` | GENERATED frame-protocol constants (do not edit; see §7). |
 | `protocol-contract.generated.mjs` | GENERATED protocol/capability/error-code constants (do not edit; see §7). |
 | `demand-loading-transport.mjs` | Turns the bidirectional `peer.request` channel into a `rxdb.query.fetch` / `rxdb.file.fetch` request/response layer, correlating pushed chunk frames. |
@@ -568,6 +569,43 @@ that fails on the pre-fix code.
 
 ---
 
+### 8.2 Conflict strategies (per collection)
+
+Default semantics are whole-document LWW under the origin-aware gate above
+(§8.1 "Master pulls are authoritative…"). Collections whose records several
+people edit concurrently can opt into **field-merge** by declaring
+`conflictStrategy: 'field-merge'` as a **sibling of `schema`** in the
+collection definition (`schema.js`) — deliberately outside the schema object,
+so schema hashes are unaffected. Everything below is browser-side only; the
+native master needs no counterpart (the fork resolves conflicts in the RxDB
+replication model).
+
+- The storage layer tracks a **merge base** per locally-edited row: the last
+  master-confirmed doc before the local edit (`record.base`, never inside
+  `doc`, never on the wire). Consecutive local writes keep the original base.
+- A replication pull over an unsynced local row three-way merges
+  (base/local/master) at top-level business-field granularity: a field only
+  one side changed takes that side; a true same-field conflict keeps the
+  LOCAL value (it pushes and round-trips). The merged doc is stored as a
+  LOCAL (pushable) write — a deliberate, documented exception to the §8.1
+  origin-stamp rule, because it still carries state the master has not seen —
+  with the incoming master doc as the new base. Once no local-only change
+  survives, the master row lands origin-stamped and the base clears.
+- A `masterWrite` push conflict on a field-merge collection absorbs the
+  master's conflict row the same way before the retry
+  (`absorbMasterStateIntoConflictRows` in `replication-webrtc.mjs`) instead
+  of force-overwriting whole-doc. LWW collections keep the local-wins force
+  retry unchanged.
+- Deletions stay whole-doc: a master tombstone wins outright; an unsynced
+  local tombstone survives until it pushes.
+- Merge logic lives in `src/conflict-merge.mjs`
+  (`threeWayMergeDocuments`), storage integration in
+  `storage-indexeddb.mjs::resolveIncomingWrite`. Pinned by
+  `field-merge-conflict-smoke`. First consumers: the customers module's
+  record collections (`modules/customers/schema.js`).
+- Runtime-installed modules currently cannot declare the strategy through
+  `collections.schema.json`; extending that manifest is an open follow-up.
+
 ## 9. Build & release
 
 `dist/ctox-rxdb-js.mjs` is **built** from `src/index.mjs` with a pinned
@@ -597,7 +635,7 @@ A mismatch makes the browser load a **second copy of the bundle** — two
 module graphs, two shared-room-peer registries, duplicate peers in the room.
 After any `src/` change: rebuild dist with the command above **and** bump the
 buster in both files (current value at the time of writing:
-`20260706-presence-v1`).
+`20260706-fieldmerge-v1`).
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
@@ -634,6 +672,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `end-to-end-loop-smoke` | Full V1.5 demand-loading loop. |
 | `eviction-scheduler-smoke` | Sidecar eviction over budget. |
 | `feature-flag-handshake-smoke` | Query-fetch capability lights only with capability + flag. |
+| `field-merge-conflict-smoke` | Opt-in field-merge strategy (§8.2): three-way merge semantics, merge-base tracking, merged docs stored as local pushable writes, and untouched LWW pass-through for default collections. |
 | `file-demand-loader-smoke` | File chunk fetch, resume, concurrent dedup. |
 | `frame-chunking-smoke` | **Regression:** byte-correct (JSON-escaped) chunk budgeting vs the chars-vs-bytes channel-killer. |
 | `mixed-mode-handshake-smoke` | V1.5 browser vs V1 server handshake compatibility. |

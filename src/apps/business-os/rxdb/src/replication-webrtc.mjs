@@ -41,6 +41,7 @@ import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
+import { threeWayMergeDocuments } from './conflict-merge.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 
 // Phase 2: the wire method the browser uses to tell the native peer which
@@ -1198,6 +1199,10 @@ class CtoxWebRtcReplicationState {
           })
           .filter(Boolean);
         if (!rows.length) break;
+        // Field-merge collections: absorb the master's concurrent state into
+        // the retry rows instead of force-overwriting it whole-doc (the
+        // default LWW retry keeps its local-wins semantics unchanged).
+        rows = await this.absorbMasterStateIntoConflictRows(rows);
       }
       if (rows.length) {
         throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
@@ -1224,6 +1229,40 @@ class CtoxWebRtcReplicationState {
       this.demandStatus.localPushChangedSinceScanLimitHits =
         Number(this.demandStatus.localPushChangedSinceScanLimitHits || 0) + 1;
     }
+  }
+
+  // Field-merge push repair: a masterWrite conflict means the master row
+  // moved while our local write was unsynced. For `field-merge` collections
+  // we three-way merge (stored base, local doc, master's conflict row),
+  // persist the merged doc locally as a LOCAL write (it still carries
+  // unsynced state), and retry the push with the merged doc + the master row
+  // as assumedMasterState. LWW collections pass through untouched and keep
+  // the existing local-wins force retry.
+  async absorbMasterStateIntoConflictRows(rows) {
+    const storage = this.collection?.storageCollection;
+    if (!rows.length || storage?.conflictStrategy !== 'field-merge') return rows;
+    const primaryPath = this.collection.schema.primaryPath;
+    const mergedRows = [];
+    for (const row of rows) {
+      const id = primaryValue(row.newDocumentState, primaryPath);
+      let record = null;
+      try {
+        record = await storage.getStoredRecord?.(id);
+      } catch {}
+      const { merged } = threeWayMergeDocuments(
+        record?.base,
+        row.newDocumentState,
+        row.assumedMasterState,
+        { primaryPath },
+      );
+      try {
+        // Keep the local store in step with what we are about to push. A
+        // plain local write: stays pushable until the push round-trips.
+        await storage.bulkWrite([merged]);
+      } catch {}
+      mergedRows.push({ newDocumentState: merged, assumedMasterState: row.assumedMasterState });
+    }
+    return mergedRows;
   }
 
   // ----- master handler (when CTOX picks the browser as fork's master) ----

@@ -100,10 +100,14 @@ class CtoxRxDatabase {
     for (const [name, definition] of Object.entries(collections || {})) {
       if (this.collections[name]) continue;
       const schema = definition?.schema || definition;
+      // `conflictStrategy` is a SIBLING of `schema` in the collection
+      // definition ('lww' default, 'field-merge' opt-in) — outside the schema
+      // object on purpose, so schema hashes are unaffected.
+      const conflictStrategy = definition?.conflictStrategy;
       const collection = new CtoxRxCollection({
         name,
         schema,
-        storageCollection: this.storage.collection(name, { schema }),
+        storageCollection: this.storage.collection(name, { schema, conflictStrategy }),
       });
       this.collections[name] = collection;
       this[name] = collection;
