@@ -1,7 +1,11 @@
 /* Reference migration to the shared design system (shared/base.css):
    the module keeps its internal --customers-* names, but every value derives
    from the shell tokens. Light/dark/prefers-color-scheme variants come from
-   the shell automatically — no per-module theme blocks, no :root writes. */
+   the shell automatically — no per-module theme blocks, no :root writes.
+   Pane headers, tools, tabs, buttons, badges, fields, empty states and form
+   controls come from the shared kit (base.css / app.css); this file only owns
+   the module frame, the module-specific views (board, tables, timeline) and
+   small scoped add-ons to kit classes. */
 .customers-module {
   --customers-left-width: 292px;
   --customers-right-width: 340px;
@@ -66,71 +70,8 @@
   min-height: 0;
 }
 
-.customers-pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 58px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--customers-line);
-}
-
-.customers-title-group {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.customers-kicker {
-  display: block;
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.customers-title {
-  margin: 2px 0 0;
-  color: var(--customers-text);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.customers-button,
-.customers-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 32px;
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  background: var(--customers-pane);
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.customers-button:focus-visible,
-.customers-icon-button:focus-visible,
-.customers-mini-button:focus-visible,
-.customers-segmented button:focus-visible,
 .customers-scope:focus-visible,
-.customers-search:focus-visible,
-.customers-select:focus-visible,
-.customers-input:focus-visible,
-.customers-textarea:focus-visible,
 .customers-th-button:focus-visible,
-.customers-detail-tabs button:focus-visible,
-.customers-inline-select:focus-visible,
 .customers-account-row:focus-visible,
 .customers-board-card:focus-visible,
 .customers-mini-row:focus-visible {
@@ -138,80 +79,54 @@
   outline-offset: 2px;
 }
 
-.customers-button {
-  padding: 0 10px;
+/* --------------------------------------------------------------------------
+   Kit add-ons: module-scoped tweaks on top of shared/base.css. Density for
+   dense row/toolbar actions, danger tint for kit icon buttons, the accent
+   badge variant and the advisory presence badge. No kit rebuilds.
+   ------------------------------------------------------------------------ */
+.customers-module .ctox-button.customers-mini {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.customers-icon-button {
-  width: 32px;
-  padding: 0;
-}
-
-.customers-button.primary {
-  border-color: transparent;
-  background: var(--customers-accent);
-  color: var(--surface);
-}
-
-.customers-icon-button.small {
-  width: 28px;
-  min-height: 28px;
-}
-
-.customers-icon-button.danger {
+.customers-module .ctox-icon-button.customers-danger,
+.customers-module .ctox-pane-icon.customers-danger {
   color: var(--customers-danger);
 }
 
-.customers-button:disabled,
-.customers-icon-button:disabled,
-.customers-mini-button:disabled,
-.customers-inline-select:disabled {
+.customers-module .ctox-badge.customers-accent {
+  color: var(--customers-accent-strong);
+  border-color: color-mix(in srgb, var(--customers-accent-strong) 30%, var(--customers-line));
+}
+
+/* Presence hint (advisory): another user is viewing this record. The editing
+   variant uses the kit .is-danger badge directly. */
+.customers-module .ctox-badge.customers-presence {
+  color: var(--customers-accent-strong);
+  border-color: color-mix(in srgb, var(--customers-accent-strong) 45%, var(--customers-line));
+  background: color-mix(in srgb, var(--customers-accent-strong) 10%, transparent);
+}
+
+/* Inline stage select inside table rows / board cards. */
+.customers-module .ctox-select.customers-inline-select {
+  width: 124px;
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.customers-module .ctox-select.customers-inline-select:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-.customers-button:not(:disabled):hover,
-.customers-icon-button:not(:disabled):hover {
-  border-color: var(--customers-accent);
+/* The workbench toolbar hosts non-shrinkable .ctox-pane-tabs; let it scroll
+   instead of clipping on narrow panes. */
+.customers-module .customers-toolbar {
+  overflow-x: auto;
 }
 
-.customers-button.primary:not(:disabled):hover {
-  background: color-mix(in srgb, var(--customers-accent) 85%, var(--customers-accent-strong));
-}
-
-.customers-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--customers-line);
-  background: var(--customers-pane);
-}
-
-.customers-filter-bar {
-  display: flex;
-  align-items: end;
-  gap: 8px;
-  flex: 1 1 360px;
-  min-width: min(100%, 280px);
-}
-
-.customers-filter-bar label {
-  display: grid;
-  gap: 3px;
-  min-width: 124px;
-  color: var(--customers-muted);
-  font-size: 10px;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.customers-filter-bar .customers-select {
-  height: 30px;
-}
-
-.customers-header-actions,
 .customers-row-actions,
 .customers-chip-row,
 .customers-section-head {
@@ -220,14 +135,8 @@
   gap: 8px;
 }
 
-.customers-header-actions,
 .customers-row-actions {
   flex: 0 0 auto;
-}
-
-.customers-header-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .customers-section-head {
@@ -236,115 +145,10 @@
   min-width: 0;
 }
 
-.customers-mini-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 26px;
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  background: var(--customers-pane);
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 0 8px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.customers-mini-button:not(:disabled):hover {
-  border-color: var(--customers-accent);
-}
-
-.customers-mini-button.danger {
-  color: var(--customers-danger);
-}
-
 .customers-muted-row {
   min-height: 28px;
   color: var(--customers-muted);
   font-size: 12px;
-}
-
-.customers-segmented {
-  display: inline-grid;
-  grid-template-columns: repeat(3, minmax(82px, 1fr));
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--customers-pane);
-}
-
-.customers-segmented.compact {
-  grid-template-columns: repeat(2, minmax(62px, 1fr));
-}
-
-.customers-segmented.wide {
-  grid-template-columns: repeat(5, minmax(70px, 1fr));
-}
-
-.customers-segmented button {
-  min-width: 0;
-  min-height: 30px;
-  border: 0;
-  border-right: 1px solid var(--customers-line);
-  background: transparent;
-  color: var(--customers-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.customers-segmented button:last-child {
-  border-right: 0;
-}
-
-.customers-segmented button.active {
-  background: var(--customers-pane-subtle);
-  color: var(--customers-text);
-}
-
-.customers-search {
-  flex: 1 1 220px;
-  min-width: 160px;
-  height: 32px;
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  background: var(--customers-pane);
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 13px;
-  padding: 0 10px;
-}
-
-.customers-select,
-.customers-input,
-.customers-textarea {
-  width: 100%;
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  background: var(--customers-pane);
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.customers-select,
-.customers-input {
-  height: 32px;
-  padding: 0 9px;
-}
-
-.customers-textarea {
-  min-height: 80px;
-  resize: vertical;
-  padding: 8px 9px;
 }
 
 .customers-left-scroll,
@@ -551,17 +355,6 @@
   font-size: 11px;
 }
 
-.customers-inline-select {
-  width: 124px;
-  height: 28px;
-  border: 1px solid var(--customers-line-strong);
-  border-radius: 6px;
-  background: var(--customers-pane);
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 11px;
-}
-
 .customers-board {
   display: grid;
   grid-auto-flow: column;
@@ -686,100 +479,6 @@
   white-space: nowrap;
 }
 
-.customers-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--customers-accent) 14%, var(--customers-pane));
-  color: var(--customers-accent);
-  font-size: 11px;
-  font-weight: 800;
-  flex: 0 0 auto;
-}
-
-.customers-badge {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  height: 22px;
-  border: 1px solid var(--customers-line);
-  border-radius: 999px;
-  padding: 0 8px;
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.customers-badge.health-healthy,
-.customers-badge.stage-active {
-  color: var(--customers-success);
-  border-color: color-mix(in srgb, var(--customers-success) 30%, var(--customers-line));
-}
-
-.customers-badge.health-at_risk,
-.customers-badge.health-critical {
-  color: var(--customers-danger);
-  border-color: color-mix(in srgb, var(--customers-danger) 30%, var(--customers-line));
-}
-
-.customers-badge.stage-renewal,
-.customers-badge.stage-expansion {
-  color: var(--customers-accent-strong);
-  border-color: color-mix(in srgb, var(--customers-accent-strong) 30%, var(--customers-line));
-}
-
-/* Presence hint (advisory): another user is viewing/editing this record. */
-.customers-badge.presence {
-  color: var(--customers-accent-strong);
-  border-color: color-mix(in srgb, var(--customers-accent-strong) 45%, var(--customers-line));
-  background: color-mix(in srgb, var(--customers-accent-strong) 10%, transparent);
-}
-
-.customers-badge.presence.editing {
-  color: var(--customers-danger);
-  border-color: color-mix(in srgb, var(--customers-danger) 45%, var(--customers-line));
-  background: color-mix(in srgb, var(--customers-danger) 10%, transparent);
-}
-
-.customers-badge.stage-proposal,
-.customers-badge.stage-negotiation,
-.customers-badge.stage-committed {
-  color: var(--customers-accent-strong);
-  border-color: color-mix(in srgb, var(--customers-accent-strong) 30%, var(--customers-line));
-}
-
-.customers-empty,
-.customers-error {
-  display: grid;
-  align-content: center;
-  justify-items: start;
-  gap: 9px;
-  min-height: 220px;
-  padding: 28px;
-  color: var(--customers-muted);
-}
-
-.customers-empty strong,
-.customers-error strong {
-  color: var(--customers-text);
-  font-size: 15px;
-}
-
-.customers-empty.compact {
-  min-height: 110px;
-  padding: 14px 0;
-}
-
-.customers-error {
-  color: var(--customers-danger);
-}
-
 .customers-detail-block {
   padding: 14px;
   border-bottom: 1px solid var(--customers-line);
@@ -810,36 +509,10 @@
   line-height: 1.35;
 }
 
+/* Horizontal scroll wrapper around the kit .ctox-pane-tabs in the inspector. */
 .customers-detail-tabs {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  border-bottom: 1px solid var(--customers-line);
-  background: var(--customers-pane);
-}
-
-.customers-detail-tabs button {
-  min-width: 0;
-  height: 34px;
-  border: 0;
-  border-right: 1px solid var(--customers-line);
-  background: transparent;
-  color: var(--customers-muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 750;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.customers-detail-tabs button:last-child {
-  border-right: 0;
-}
-
-.customers-detail-tabs button.active {
-  background: var(--customers-pane-subtle);
-  color: var(--customers-text);
+  margin: 12px 14px 0;
+  overflow-x: auto;
 }
 
 .customers-detail-title {
@@ -854,37 +527,6 @@
   color: var(--customers-muted);
   font-size: 12px;
   overflow-wrap: anywhere;
-}
-
-.customers-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.customers-metric {
-  min-width: 0;
-  border: 1px solid var(--customers-line);
-  border-radius: 6px;
-  padding: 9px;
-}
-
-.customers-metric span {
-  display: block;
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.customers-metric strong {
-  display: block;
-  margin-top: 4px;
-  color: var(--customers-text);
-  font-size: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .customers-timeline {
@@ -1128,23 +770,6 @@
     display: none;
   }
 
-  .customers-pane-header {
-    align-items: flex-start;
-    min-height: 0;
-    flex-wrap: wrap;
-  }
-
-  .customers-toolbar {
-    align-items: stretch;
-  }
-
-  .customers-segmented.wide,
-  .customers-segmented.compact,
-  .customers-search {
-    flex: 1 1 100%;
-    width: 100%;
-  }
-
   .customers-center-scroll {
     overscroll-behavior: contain;
   }
@@ -1159,22 +784,8 @@
     padding: 8px;
   }
 
-  .customers-pane-header,
-  .customers-toolbar,
   .customers-detail-block {
     padding-inline: 10px;
-  }
-
-  .customers-segmented.wide {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .customers-detail-tabs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .customers-metrics {
-    grid-template-columns: 1fr;
   }
 
   .customers-record-row,
@@ -1189,10 +800,6 @@
 }
 
 @media (max-width: 480px) {
-  .customers-segmented.wide {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .customers-board {
     grid-auto-columns: minmax(220px, 86vw);
   }

@@ -6,7 +6,7 @@ import {
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260706-presence1';
+const BUILD = '20260706-kit1';
 const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',
@@ -1220,7 +1220,7 @@ function presenceChip(collection, recordId) {
   const key = editing.length ? 'presenceEditing' : 'presenceViewing';
   const names = [...new Set(shown.map((entry) => entry.actorName || entry.actorId))].join(', ');
   const label = state.t(key, labels.de[key], names);
-  return `<span class="customers-badge presence${editing.length ? ' editing' : ''}" title="${escapeAttribute(label)}">${escapeHtml(label)}</span>`;
+  return `<span class="ctox-badge ${editing.length ? 'is-danger' : 'customers-presence'}" title="${escapeAttribute(label)}">${escapeHtml(label)}</span>`;
 }
 
 function renderLeft() {
@@ -1232,12 +1232,16 @@ function renderLeft() {
   const dedupeRows = state.collections.customer_dedupe_candidates || [];
   const views = (state.collections.customer_views || []).filter((view) => view.object_type === 'account');
   target.innerHTML = `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">CRM</span>
-        <h2 class="customers-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">CRM</span>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-customers-action="refresh" title="${escapeAttribute(state.t('refresh', labels.de.refresh))}" aria-label="${escapeAttribute(state.t('refresh', labels.de.refresh))}">${actionIcon('refresh')}</button>
+        </div>
       </div>
-      <button class="customers-icon-button" type="button" data-customers-action="refresh" title="${escapeHtml(state.t('refresh', labels.de.refresh))}" aria-label="${escapeHtml(state.t('refresh', labels.de.refresh))}">${refreshIcon()}</button>
     </header>
     <div class="customers-left-scroll">
       ${renderPermissionNotice()}
@@ -1252,7 +1256,7 @@ function renderLeft() {
       <section class="customers-nav-section">
         <div class="customers-section-head">
           <h3 class="customers-section-label">${escapeHtml(state.t('savedViews', labels.de.savedViews))}</h3>
-          <button class="customers-mini-button" type="button" data-customers-action="save-view"${mutableDisabledAttr()}>${escapeHtml(state.t('saveView', labels.de.saveView))}</button>
+          <button class="ctox-button customers-mini" type="button" data-customers-action="save-view"${mutableDisabledAttr()}>${escapeHtml(state.t('saveView', labels.de.saveView))}</button>
         </div>
         ${views.length ? views.map(viewButton).join('') : `<div class="customers-muted-row">Keine Ansichten</div>`}
       </section>
@@ -1334,55 +1338,51 @@ function renderCenter() {
   const activeTitle = centerViewTitle();
   const primaryAction = centerPrimaryAction();
   target.innerHTML = `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(activeTitle)}</span>
-        <h2 class="customers-title">${summary.accounts} ${escapeHtml(state.t('accounts', labels.de.accounts))} · ${summary.opportunities} ${escapeHtml(state.t('opportunities', labels.de.opportunities))} · ${escapeHtml(formatMoney(pipeline.total_cents, pipeline.currency))}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(activeTitle)}</span>
+          <h2 class="ctox-pane-title">${summary.accounts} ${escapeHtml(state.t('accounts', labels.de.accounts))} · ${summary.opportunities} ${escapeHtml(state.t('opportunities', labels.de.opportunities))} · ${escapeHtml(formatMoney(pipeline.total_cents, pipeline.currency))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-customers-action="import-customers" aria-label="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}" title="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}"${mutableDisabledAttr()}>${actionIcon('upload')}</button>
+          <button class="ctox-pane-icon" type="button" data-customers-action="export-customers" aria-label="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}" title="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}">${actionIcon('export')}</button>
+          ${primaryAction ? `<button class="ctox-pane-icon" type="button" data-customers-action="${escapeAttribute(primaryAction.action)}"${primaryAction.recordAttr || ''} aria-label="${escapeAttribute(primaryAction.label)}" title="${escapeAttribute(primaryAction.label)}"${mutableDisabledAttr()}>${actionIcon(primaryAction.icon || 'add')}</button>` : ''}
+        </div>
       </div>
-      <div class="customers-header-actions">
-        <button class="customers-button" type="button" data-customers-action="import-customers"${mutableDisabledAttr()}>${importIcon()}<span>${escapeHtml(state.t('importCustomers', labels.de.importCustomers))}</span></button>
-        <button class="customers-button" type="button" data-customers-action="export-customers">${exportIcon()}<span>${escapeHtml(state.t('exportCustomers', labels.de.exportCustomers))}</span></button>
-        ${primaryAction ? `<button class="customers-button primary" type="button" data-customers-action="${escapeAttribute(primaryAction.action)}"${primaryAction.recordAttr || ''}${mutableDisabledAttr()}>${plusIcon()}<span>${escapeHtml(primaryAction.label)}</span></button>` : ''}
+      <div class="ctox-pane-tools">
+        ${renderCenterSearchInput()}
+        <select class="ctox-pane-filter" data-customers-stage-filter aria-label="${escapeAttribute(state.t('stage', labels.de.stage))}">
+          ${filterOption('all', state.t('allStages', labels.de.allStages), state.stage)}
+          ${Object.entries(STAGE_LABELS).filter(([key]) => key !== 'archived').map(([key, label]) => filterOption(key, label, state.stage)).join('')}
+        </select>
+        <select class="ctox-pane-filter" data-customers-health-filter aria-label="${escapeAttribute(state.t('health', labels.de.health))}">
+          ${filterOption('all', state.t('allHealth', labels.de.allHealth), state.health)}
+          ${Object.entries(HEALTH_LABELS).map(([key, label]) => filterOption(key, label, state.health)).join('')}
+        </select>
       </div>
     </header>
-    <div class="customers-toolbar">
-      <div class="customers-segmented wide" role="tablist" aria-label="${escapeAttribute(state.t('workbench', labels.de.workbench))}">
-        <button type="button" role="tab" aria-selected="${state.centerView === 'accounts' ? 'true' : 'false'}" class="${state.centerView === 'accounts' ? 'active' : ''}" data-customers-action="center-accounts">${escapeHtml(state.t('accounts', labels.de.accounts))}</button>
-        <button type="button" role="tab" aria-selected="${state.centerView === 'contacts' ? 'true' : 'false'}" class="${state.centerView === 'contacts' ? 'active' : ''}" data-customers-action="center-contacts">${escapeHtml(state.t('contacts', labels.de.contacts))}</button>
-        <button type="button" role="tab" aria-selected="${state.centerView === 'opportunities' ? 'true' : 'false'}" class="${state.centerView === 'opportunities' ? 'active' : ''}" data-customers-action="center-opportunities">${escapeHtml(state.t('opportunities', labels.de.opportunities))}</button>
-        <button type="button" role="tab" aria-selected="${state.centerView === 'handoff' ? 'true' : 'false'}" class="${state.centerView === 'handoff' ? 'active' : ''}" data-customers-action="center-handoff">${escapeHtml(state.t('handoff', labels.de.handoff))}</button>
-        <button type="button" role="tab" aria-selected="${state.centerView === 'dedupe' ? 'true' : 'false'}" class="${state.centerView === 'dedupe' ? 'active' : ''}" data-customers-action="center-dedupe">${escapeHtml(state.t('dedupe', labels.de.dedupe))}</button>
+    <div class="ctox-toolbar customers-toolbar">
+      <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('workbench', labels.de.workbench))}">
+        <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.centerView === 'accounts' ? 'true' : 'false'}" data-customers-action="center-accounts">${escapeHtml(state.t('accounts', labels.de.accounts))}</button>
+        <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.centerView === 'contacts' ? 'true' : 'false'}" data-customers-action="center-contacts">${escapeHtml(state.t('contacts', labels.de.contacts))}</button>
+        <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.centerView === 'opportunities' ? 'true' : 'false'}" data-customers-action="center-opportunities">${escapeHtml(state.t('opportunities', labels.de.opportunities))}</button>
+        <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.centerView === 'handoff' ? 'true' : 'false'}" data-customers-action="center-handoff">${escapeHtml(state.t('handoff', labels.de.handoff))}</button>
+        <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.centerView === 'dedupe' ? 'true' : 'false'}" data-customers-action="center-dedupe">${escapeHtml(state.t('dedupe', labels.de.dedupe))}</button>
       </div>
-      <div class="customers-filter-bar" aria-label="${escapeAttribute(state.t('filters', labels.de.filters))}">
-        <label>
-          <span>${escapeHtml(state.t('stage', labels.de.stage))}</span>
-          <select class="customers-select" data-customers-stage-filter>
-            ${filterOption('all', state.t('allStages', labels.de.allStages), state.stage)}
-            ${Object.entries(STAGE_LABELS).filter(([key]) => key !== 'archived').map(([key, label]) => filterOption(key, label, state.stage)).join('')}
-          </select>
-        </label>
-        <label>
-          <span>${escapeHtml(state.t('health', labels.de.health))}</span>
-          <select class="customers-select" data-customers-health-filter>
-            ${filterOption('all', state.t('allHealth', labels.de.allHealth), state.health)}
-            ${Object.entries(HEALTH_LABELS).map(([key, label]) => filterOption(key, label, state.health)).join('')}
-          </select>
-        </label>
-        ${(state.stage !== 'all' || state.health !== 'all' || state.search || state.contactSearch || state.opportunitySearch || state.outboundSearch || state.dedupeSearch)
-          ? `<button class="customers-mini-button" type="button" data-customers-action="clear-filters">${escapeHtml(state.t('clearFilters', labels.de.clearFilters))}</button>`
-          : ''}
-      </div>
-      ${renderCenterSearchInput()}
       ${state.centerView === 'opportunities' ? `
-        <div class="customers-segmented compact" role="tablist" aria-label="${escapeAttribute(state.t('opportunityView', labels.de.opportunityView))}">
-          <button type="button" role="tab" aria-selected="${state.opportunityMode === 'board' ? 'true' : 'false'}" class="${state.opportunityMode === 'board' ? 'active' : ''}" data-customers-action="opportunity-board">${escapeHtml(state.t('board', labels.de.board))}</button>
-          <button type="button" role="tab" aria-selected="${state.opportunityMode === 'table' ? 'true' : 'false'}" class="${state.opportunityMode === 'table' ? 'active' : ''}" data-customers-action="opportunity-table">${escapeHtml(state.t('table', labels.de.table))}</button>
+        <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('opportunityView', labels.de.opportunityView))}">
+          <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.opportunityMode === 'board' ? 'true' : 'false'}" data-customers-action="opportunity-board">${escapeHtml(state.t('board', labels.de.board))}</button>
+          <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.opportunityMode === 'table' ? 'true' : 'false'}" data-customers-action="opportunity-table">${escapeHtml(state.t('table', labels.de.table))}</button>
         </div>
       ` : ''}
-      <span class="customers-badge">${escapeHtml(state.t('visibleCount', labels.de.visibleCount, visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows })))}</span>
-      ${state.diagnostics.loading ? `<span class="customers-badge">${escapeHtml(state.t('loadingStatus', labels.de.loadingStatus))}</span>` : ''}
-      ${state.diagnostics.error ? `<span class="customers-badge">${escapeHtml(state.diagnostics.error)}</span>` : ''}
-      ${state.diagnostics.optionalDeniedCollections?.length ? `<span class="customers-badge">${escapeHtml(state.t('linkedDataLimited', labels.de.linkedDataLimited))}</span>` : ''}
+      ${(state.stage !== 'all' || state.health !== 'all' || state.search || state.contactSearch || state.opportunitySearch || state.outboundSearch || state.dedupeSearch)
+        ? `<button class="ctox-button customers-mini" type="button" data-customers-action="clear-filters">${escapeHtml(state.t('clearFilters', labels.de.clearFilters))}</button>`
+        : ''}
+      <span class="ctox-badge">${escapeHtml(state.t('visibleCount', labels.de.visibleCount, visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows })))}</span>
+      ${state.diagnostics.loading ? `<span class="ctox-badge">${escapeHtml(state.t('loadingStatus', labels.de.loadingStatus))}</span>` : ''}
+      ${state.diagnostics.error ? `<span class="ctox-badge is-danger">${escapeHtml(state.diagnostics.error)}</span>` : ''}
+      ${state.diagnostics.optionalDeniedCollections?.length ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('linkedDataLimited', labels.de.linkedDataLimited))}</span>` : ''}
     </div>
     <div class="customers-center-scroll">
       ${state.centerView === 'contacts'
@@ -1407,7 +1407,7 @@ function centerViewTitle() {
 }
 
 function centerPrimaryAction() {
-  if (state.centerView === 'opportunities') return { action: 'create-opportunity', label: state.t('newOpportunity', labels.de.newOpportunity), recordAttr: '' };
+  if (state.centerView === 'opportunities') return { action: 'create-opportunity', label: state.t('newOpportunity', labels.de.newOpportunity), recordAttr: '', icon: 'add' };
   if (state.centerView === 'handoff' && state.selectedOutboundCompanyId) {
     const row = outboundHandoffRowByCompanyId(state.selectedOutboundCompanyId);
     if (row?.status !== 'ready') return null;
@@ -1415,10 +1415,11 @@ function centerPrimaryAction() {
       action: 'import-outbound',
       label: state.t('importFromOutbound', labels.de.importFromOutbound),
       recordAttr: ` data-outbound-company-id="${escapeAttribute(state.selectedOutboundCompanyId)}"`,
+      icon: 'download',
     };
   }
   if (state.centerView === 'dedupe') return null;
-  return { action: 'create-account', label: state.t('newCustomer', labels.de.newCustomer), recordAttr: '' };
+  return { action: 'create-account', label: state.t('newCustomer', labels.de.newCustomer), recordAttr: '', icon: 'add' };
 }
 
 function visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows }) {
@@ -1431,24 +1432,24 @@ function visibleCenterCount({ accounts, contacts, opportunities, handoffRows, de
 
 function renderCenterSearchInput() {
   if (state.centerView === 'contacts') {
-    return `<input class="customers-search" type="search" data-customers-contact-search value="${escapeAttribute(state.contactSearch)}" placeholder="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}" aria-label="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}">`;
+    return `<input class="ctox-pane-search" type="search" data-customers-contact-search value="${escapeAttribute(state.contactSearch)}" placeholder="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}" aria-label="${escapeAttribute(state.t('searchContacts', labels.de.searchContacts))}">`;
   }
   if (state.centerView === 'opportunities') {
-    return `<input class="customers-search" type="search" data-customers-opportunity-search value="${escapeAttribute(state.opportunitySearch)}" placeholder="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}" aria-label="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}">`;
+    return `<input class="ctox-pane-search" type="search" data-customers-opportunity-search value="${escapeAttribute(state.opportunitySearch)}" placeholder="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}" aria-label="${escapeAttribute(state.t('searchOpportunities', labels.de.searchOpportunities))}">`;
   }
   if (state.centerView === 'handoff') {
-    return `<input class="customers-search" type="search" data-customers-outbound-search value="${escapeAttribute(state.outboundSearch)}" placeholder="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}" aria-label="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}">`;
+    return `<input class="ctox-pane-search" type="search" data-customers-outbound-search value="${escapeAttribute(state.outboundSearch)}" placeholder="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}" aria-label="${escapeAttribute(state.t('searchOutbound', labels.de.searchOutbound))}">`;
   }
   if (state.centerView === 'dedupe') {
-    return `<input class="customers-search" type="search" data-customers-dedupe-search value="${escapeAttribute(state.dedupeSearch)}" placeholder="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}" aria-label="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}">`;
+    return `<input class="ctox-pane-search" type="search" data-customers-dedupe-search value="${escapeAttribute(state.dedupeSearch)}" placeholder="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}" aria-label="${escapeAttribute(state.t('searchDedupe', labels.de.searchDedupe))}">`;
   }
-  return `<input class="customers-search" type="search" data-customers-search value="${escapeAttribute(state.search)}" placeholder="${escapeAttribute(state.t('search', labels.de.search))}" aria-label="${escapeAttribute(state.t('search', labels.de.search))}">`;
+  return `<input class="ctox-pane-search" type="search" data-customers-search value="${escapeAttribute(state.search)}" placeholder="${escapeAttribute(state.t('search', labels.de.search))}" aria-label="${escapeAttribute(state.t('search', labels.de.search))}">`;
 }
 
 function renderAccountTable(accounts) {
   if (!accounts.length) {
     return `
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('noCustomers', labels.de.noCustomers))}</strong>
         <span>${escapeHtml(state.t('noCustomersBody', labels.de.noCustomersBody))}</span>
       </div>
@@ -1474,7 +1475,7 @@ function renderAccountTable(accounts) {
 function renderContactTable(contacts) {
   if (!contacts.length) {
     return `
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('noContacts', labels.de.noContacts))}</strong>
         <span>${escapeHtml(state.t('noContactsBody', labels.de.noContactsBody))}</span>
       </div>
@@ -1500,7 +1501,7 @@ function renderContactTable(contacts) {
 function renderOpportunityWorkbench(opportunities) {
   if (!opportunities.length) {
     return `
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('noOpportunities', labels.de.noOpportunities))}</strong>
         <span>${escapeHtml(state.t('noOpportunitiesBody', labels.de.noOpportunitiesBody))}</span>
       </div>
@@ -1513,7 +1514,7 @@ function renderOpportunityWorkbench(opportunities) {
 function renderOutboundHandoffTable(rows) {
   if (!rows.length) {
     return `
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('noOutbound', labels.de.noOutbound))}</strong>
         <span>${escapeHtml(state.t('noOutboundBody', labels.de.noOutboundBody))}</span>
       </div>
@@ -1539,7 +1540,7 @@ function renderOutboundHandoffTable(rows) {
 function renderDedupeTable(rows) {
   if (!rows.length) {
     return `
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('noDedupe', labels.de.noDedupe))}</strong>
         <span>${escapeHtml(state.t('noDedupeBody', labels.de.noDedupeBody))}</span>
       </div>
@@ -1587,20 +1588,20 @@ function outboundHandoffRow(row) {
     <tr class="customers-account-row ${selected ? 'selected' : ''}" data-customers-outbound-company-id="${escapeAttribute(row.company.id)}" ${selectableAttrs('outbound', row.company.id, selected, row.company.name || row.company.id)}>
       <td>
         <div class="customers-name-cell">
-          <span class="customers-avatar">${escapeHtml(initials(row.company.name))}</span>
+          <span class="ctox-avatar">${escapeHtml(initials(row.company.name))}</span>
           <span>${escapeHtml(row.company.name || row.company.id)}</span>
         </div>
       </td>
       <td>${escapeHtml(row.domain || '')}</td>
-      <td><span class="customers-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span></td>
+      <td><span class="ctox-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span></td>
       <td>${Number(row.company.fit_score || 0) ? `${Number(row.company.fit_score)}%` : '—'}</td>
       <td>${escapeHtml(row.pipeline?.stage || row.pipeline?.outreach_status || '—')}</td>
       <td>
         ${row.status === 'imported'
-          ? `<span class="customers-badge health-healthy">${escapeHtml(state.t('imported', labels.de.imported))}</span>`
+          ? `<span class="ctox-badge is-success">${escapeHtml(state.t('imported', labels.de.imported))}</span>`
           : row.status === 'needs_review'
-            ? `<span class="customers-badge health-at_risk">${escapeHtml(state.t('needsReview', labels.de.needsReview))}</span>`
-            : `<button class="customers-mini-button" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('importFromOutbound', labels.de.importFromOutbound))}</button>`}
+            ? `<span class="ctox-badge is-danger">${escapeHtml(state.t('needsReview', labels.de.needsReview))}</span>`
+            : `<button class="ctox-button customers-mini" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('importFromOutbound', labels.de.importFromOutbound))}</button>`}
       </td>
     </tr>
   `;
@@ -1618,7 +1619,7 @@ function dedupeTableRow(candidate) {
       <td>${escapeHtml(candidate.source_record_id || '')}</td>
       <td>${escapeHtml(existing?.name || candidate.existing_record_id || '')}</td>
       <td>${Math.round(Number(candidate.confidence || 0) * 100)}%</td>
-      <td><span class="customers-badge">${escapeHtml(candidate.status || 'open')}</span></td>
+      <td><span class="ctox-badge">${escapeHtml(candidate.status || 'open')}</span></td>
       <td>${dedupeActions(candidate)}</td>
     </tr>
   `;
@@ -1626,14 +1627,14 @@ function dedupeTableRow(candidate) {
 
 function dedupeActions(candidate) {
   if (candidate.status === 'resolved') {
-    return `<span class="customers-badge">${escapeHtml(candidate.decision || 'resolved')}</span>`;
+    return `<span class="ctox-badge">${escapeHtml(candidate.decision || 'resolved')}</span>`;
   }
   return `
     <div class="customers-row-actions">
-      <button class="customers-mini-button" type="button" data-customers-action="dedupe-keep-existing" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('keepExisting', labels.de.keepExisting))}</button>
-      <button class="customers-mini-button" type="button" data-customers-action="dedupe-create-new" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('createNew', labels.de.createNew))}</button>
-      <button class="customers-mini-button" type="button" data-customers-action="dedupe-merge" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('merge', labels.de.merge))}</button>
-      <button class="customers-mini-button danger" type="button" data-customers-action="dedupe-skip" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('skip', labels.de.skip))}</button>
+      <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-keep-existing" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('keepExisting', labels.de.keepExisting))}</button>
+      <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-create-new" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('createNew', labels.de.createNew))}</button>
+      <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-merge" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('merge', labels.de.merge))}</button>
+      <button class="ctox-button customers-mini is-danger" type="button" data-customers-action="dedupe-skip" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('skip', labels.de.skip))}</button>
     </div>
   `;
 }
@@ -1670,7 +1671,7 @@ function opportunityTableRow(opportunity) {
     <tr class="customers-account-row ${selected ? 'selected' : ''}" data-customers-opportunity-id="${escapeAttribute(opportunity.id)}" ${selectableAttrs('opportunity', opportunity.id, selected, opportunity.name || opportunity.id)}>
       <td>${escapeHtml(opportunity.name || opportunity.id)}</td>
       <td>${escapeHtml(account?.name || opportunity.account_id || '')}</td>
-      <td><span class="customers-badge stage-${escapeAttribute(opportunity.stage || 'qualification')}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span></td>
+      <td><span class="ctox-badge${stageBadgeClass(opportunity.stage)}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span></td>
       <td>${escapeHtml(labelFor(OPPORTUNITY_TYPE_LABELS, opportunity.opportunity_type))}</td>
       <td>${escapeHtml(formatMoney(opportunity.amount_cents, opportunity.currency))}</td>
       <td>${escapeHtml(formatDate(opportunity.close_date_ms, state.lang))}</td>
@@ -1701,13 +1702,13 @@ function opportunityActions(opportunity) {
     .filter((stage) => !(opportunity.stage || '').startsWith('closed_') || stage.startsWith('closed_'));
   return `
     <div class="customers-row-actions">
-      <select class="customers-inline-select" data-opportunity-stage-select="${escapeAttribute(opportunity.id)}" aria-label="${escapeAttribute(state.t('moveTo', labels.de.moveTo))}"${isClosed ? ' disabled' : mutableDisabledAttr()}>
+      <select class="ctox-select customers-inline-select" data-opportunity-stage-select="${escapeAttribute(opportunity.id)}" aria-label="${escapeAttribute(state.t('moveTo', labels.de.moveTo))}"${isClosed ? ' disabled' : mutableDisabledAttr()}>
         <option value="">${escapeHtml(state.t('moveTo', labels.de.moveTo))}</option>
         ${nextStages.map((stage) => `<option value="${escapeAttribute(stage)}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, stage))}</option>`).join('')}
       </select>
-      <button class="customers-icon-button small" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(opportunity.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${editIcon()}</button>
-      ${isClosed ? '' : `<button class="customers-mini-button" type="button" data-customers-action="close-won" data-opportunity-id="${escapeAttribute(opportunity.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('closeWon', labels.de.closeWon))}</button>`}
-      ${isClosed ? '' : `<button class="customers-mini-button danger" type="button" data-customers-action="close-lost" data-opportunity-id="${escapeAttribute(opportunity.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('closeLost', labels.de.closeLost))}</button>`}
+      <button class="ctox-icon-button" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(opportunity.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+      ${isClosed ? '' : `<button class="ctox-button customers-mini" type="button" data-customers-action="close-won" data-opportunity-id="${escapeAttribute(opportunity.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('closeWon', labels.de.closeWon))}</button>`}
+      ${isClosed ? '' : `<button class="ctox-button customers-mini is-danger" type="button" data-customers-action="close-lost" data-opportunity-id="${escapeAttribute(opportunity.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('closeLost', labels.de.closeLost))}</button>`}
     </div>
   `;
 }
@@ -1738,12 +1739,12 @@ function accountRow(account) {
     <tr class="customers-account-row ${selected ? 'selected' : ''}" data-customers-account-id="${escapeAttribute(account.id)}" ${selectableAttrs('account', account.id, selected, account.name || account.id)}>
       <td>
         <div class="customers-name-cell">
-          <span class="customers-avatar">${escapeHtml(initials(account.name))}</span>
+          <span class="ctox-avatar">${escapeHtml(initials(account.name))}</span>
           <span>${escapeHtml(account.name || account.id)}</span>
         </div>
       </td>
-      <td><span class="customers-badge stage-${escapeAttribute(account.customer_stage || 'unknown')}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span></td>
-      <td><span class="customers-badge health-${escapeAttribute(account.health_status || 'unknown')}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span></td>
+      <td><span class="ctox-badge${stageBadgeClass(account.customer_stage)}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span></td>
+      <td><span class="ctox-badge${healthBadgeClass(account.health_status)}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span></td>
       <td>${escapeHtml(account.domain || account.website_url || '')}</td>
       <td>${escapeHtml(formatMoney(account.annual_recurring_revenue_cents, account.currency))}</td>
       <td>${escapeHtml(formatDate(account.last_activity_at_ms || account.updated_at_ms, state.lang))}</td>
@@ -1758,18 +1759,18 @@ function contactTableRow(contact) {
     <tr class="customers-account-row ${selected ? 'selected' : ''}" data-customers-contact-id="${escapeAttribute(contact.id)}" ${selectableAttrs('contact', contact.id, selected, contactDisplayName(contact))}>
       <td>
         <div class="customers-name-cell">
-          <span class="customers-avatar">${escapeHtml(initials(contactDisplayName(contact)))}</span>
+          <span class="ctox-avatar">${escapeHtml(initials(contactDisplayName(contact)))}</span>
           <span>${escapeHtml(contactDisplayName(contact))}</span>
         </div>
       </td>
       <td>${escapeHtml(account?.name || contact.account_id || '')}</td>
       <td>${escapeHtml(contact.job_title || '')}</td>
       <td>${escapeHtml(contact.email || '')}</td>
-      <td>${contact.is_primary_contact ? `<span class="customers-badge health-healthy">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}</td>
+      <td>${contact.is_primary_contact ? `<span class="ctox-badge is-success">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}</td>
       <td>
         <div class="customers-row-actions">
-          <button class="customers-icon-button small" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(contact.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${editIcon()}</button>
-          <button class="customers-icon-button small danger" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(contact.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${archiveIcon()}</button>
+          <button class="ctox-icon-button" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(contact.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+          <button class="ctox-icon-button customers-danger" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(contact.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
         </div>
       </td>
     </tr>
@@ -1794,13 +1795,15 @@ function renderRight() {
   const account = selectedAccount();
   if (!account) {
     target.innerHTML = `
-      <header class="customers-pane-header">
-        <div class="customers-title-group">
-          <span class="customers-kicker">Inspector</span>
-          <h2 class="customers-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+      <header class="ctox-pane-header ctox-pane-band">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker">Inspector</span>
+            <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+          </div>
         </div>
       </header>
-      <div class="customers-empty">
+      <div class="ctox-empty">
         <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
         <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
       </div>
@@ -1811,12 +1814,14 @@ function renderRight() {
   const title = context?.title || account.name || account.id;
   const subtitle = context?.subtitle || [account.domain, account.industry].filter(Boolean).join(' · ') || account.website_url || '';
   target.innerHTML = `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(context?.typeLabel || 'Inspector')}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(context?.typeLabel || 'Inspector')}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
+        ${renderRecordHeaderActions(context)}
       </div>
-      ${renderRecordHeaderActions(context)}
     </header>
     <div class="customers-right-scroll">
       ${renderPermissionNotice()}
@@ -1825,13 +1830,15 @@ function renderRight() {
         <p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>
         ${renderRecordChips(context)}
       </section>
-      <section class="customers-detail-tabs" role="tablist" aria-label="${escapeAttribute(state.t('recordDetails', labels.de.recordDetails))}">
+      <section class="customers-detail-tabs">
+        <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('recordDetails', labels.de.recordDetails))}">
         ${detailTabButton('overview', state.t('overview', labels.de.overview))}
         ${detailTabButton('tasks', state.t('tasks', labels.de.tasks))}
         ${detailTabButton('notes', state.t('notes', labels.de.notes))}
         ${detailTabButton('timeline', state.t('timeline', labels.de.timeline))}
         ${detailTabButton('files', state.t('files', labels.de.files))}
         ${detailTabButton('apps', state.t('apps', labels.de.apps))}
+        </div>
       </section>
       ${renderDetailTabContent(context)}
       ${renderOperationalAuditPanel(context)}
@@ -1844,12 +1851,14 @@ function renderOutboundInspector() {
   if (!row) return renderInspectorEmpty();
   const contacts = row.pipeline?.contacts || [];
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('handoff', labels.de.handoff))}</span>
-        <h2 class="customers-title">${escapeHtml(row.company.name || row.company.id)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('handoff', labels.de.handoff))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(row.company.name || row.company.id)}</h2>
+        </div>
+        ${row.status === 'ready' ? `<div class="ctox-pane-actions"><button class="ctox-pane-icon" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button></div>` : ''}
       </div>
-      ${row.status === 'ready' ? `<button class="customers-button primary" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}"${mutableDisabledAttr()}>${plusIcon()}<span>${escapeHtml(state.t('importFromOutbound', labels.de.importFromOutbound))}</span></button>` : ''}
     </header>
     <div class="customers-right-scroll">
       ${renderPermissionNotice()}
@@ -1857,18 +1866,18 @@ function renderOutboundInspector() {
         <h3 class="customers-detail-title">${escapeHtml(row.company.name || row.company.id)}</h3>
         <p class="customers-detail-subtitle">${escapeHtml([row.domain, row.company.city, row.company.country].filter(Boolean).join(' · '))}</p>
         <div class="customers-chip-row">
-          <span class="customers-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span>
-          <span class="customers-badge">${escapeHtml(row.company.research_status || 'research')}</span>
-          <span class="customers-badge">${escapeHtml(row.status)}</span>
+          <span class="ctox-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span>
+          <span class="ctox-badge">${escapeHtml(row.company.research_status || 'research')}</span>
+          <span class="ctox-badge">${escapeHtml(row.status)}</span>
         </div>
       </section>
       <section class="customers-detail-block">
-        <div class="customers-metrics">
+        <dl class="ctox-fields">
           ${metric('Fit', Number(row.company.fit_score || 0) ? `${Number(row.company.fit_score)}%` : '—')}
           ${metric('Pipeline', row.pipeline?.stage || row.pipeline?.outreach_status || '—')}
           ${metric(state.t('contacts', labels.de.contacts), contacts.length)}
           ${metric(state.t('domain', labels.de.domain), row.domain || '—')}
-        </div>
+        </dl>
       </section>
       <section class="customers-detail-block">
         <h3 class="customers-section-label">${escapeHtml(state.t('contacts', labels.de.contacts))}</h3>
@@ -1887,10 +1896,12 @@ function renderDedupeInspector() {
   const existing = accountById(candidate.existing_record_id);
   const outboundCompany = candidate.payload?.outbound_company || outboundCompanyById(candidate.source_record_id) || {};
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('dedupe', labels.de.dedupe))}</span>
-        <h2 class="customers-title">${escapeHtml(candidate.match_key || candidate.id)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('dedupe', labels.de.dedupe))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(candidate.match_key || candidate.id)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
@@ -1899,26 +1910,26 @@ function renderDedupeInspector() {
         <h3 class="customers-detail-title">${escapeHtml(candidate.match_key || candidate.id)}</h3>
         <p class="customers-detail-subtitle">${escapeHtml([candidate.object_type, candidate.match_type, `${Math.round(Number(candidate.confidence || 0) * 100)}%`].filter(Boolean).join(' · '))}</p>
         <div class="customers-chip-row">
-          <span class="customers-badge">${escapeHtml(candidate.status || 'open')}</span>
-          ${candidate.decision ? `<span class="customers-badge">${escapeHtml(candidate.decision)}</span>` : ''}
+          <span class="ctox-badge">${escapeHtml(candidate.status || 'open')}</span>
+          ${candidate.decision ? `<span class="ctox-badge">${escapeHtml(candidate.decision)}</span>` : ''}
         </div>
       </section>
       <section class="customers-detail-block">
-        <div class="customers-metrics">
+        <dl class="ctox-fields">
           ${metric(state.t('source', labels.de.source), outboundCompany.name || candidate.source_record_id || '—')}
           ${metric(state.t('existingRecord', labels.de.existingRecord), existing?.name || candidate.existing_record_id || '—')}
           ${metric(state.t('matchType', labels.de.matchType), candidate.match_type || '—')}
           ${metric(state.t('importBatch', labels.de.importBatch), candidate.import_batch_id || '—')}
-        </div>
+        </dl>
       </section>
       ${candidate.status === 'open' ? `
         <section class="customers-detail-block">
           <h3 class="customers-section-label">${escapeHtml(state.t('resolveDedupe', labels.de.resolveDedupe))}</h3>
           <div class="customers-command-grid">
-            <button class="customers-mini-button" type="button" data-customers-action="dedupe-keep-existing" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('keepExisting', labels.de.keepExisting))}</button>
-            <button class="customers-mini-button" type="button" data-customers-action="dedupe-create-new" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('createNew', labels.de.createNew))}</button>
-            <button class="customers-mini-button" type="button" data-customers-action="dedupe-merge" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('merge', labels.de.merge))}</button>
-            <button class="customers-mini-button danger" type="button" data-customers-action="dedupe-skip" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('skip', labels.de.skip))}</button>
+            <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-keep-existing" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('keepExisting', labels.de.keepExisting))}</button>
+            <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-create-new" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('createNew', labels.de.createNew))}</button>
+            <button class="ctox-button customers-mini" type="button" data-customers-action="dedupe-merge" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('merge', labels.de.merge))}</button>
+            <button class="ctox-button customers-mini is-danger" type="button" data-customers-action="dedupe-skip" data-dedupe-candidate-id="${escapeAttribute(candidate.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('skip', labels.de.skip))}</button>
           </div>
         </section>
       ` : ''}
@@ -1929,13 +1940,15 @@ function renderDedupeInspector() {
 
 function renderInspectorEmpty() {
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">Inspector</span>
-        <h2 class="customers-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Inspector</span>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
+        </div>
       </div>
     </header>
-    <div class="customers-empty">
+    <div class="ctox-empty">
       <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
       <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
     </div>
@@ -1946,23 +1959,23 @@ function renderRecordHeaderActions(context) {
   if (!context) return '';
   if (context.type === 'contact') {
     return `
-      <div class="customers-header-actions">
-        <button class="customers-icon-button" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${editIcon()}</button>
-        <button class="customers-icon-button danger" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${archiveIcon()}</button>
+      <div class="ctox-pane-actions">
+        <button class="ctox-pane-icon" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}" title="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon customers-danger" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}" title="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
       </div>
     `;
   }
   if (context.type === 'opportunity') {
     return `
-      <div class="customers-header-actions">
-        <button class="customers-icon-button" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${editIcon()}</button>
+      <div class="ctox-pane-actions">
+        <button class="ctox-pane-icon" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}" title="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
       </div>
     `;
   }
   return `
-    <div class="customers-header-actions">
-      <button class="customers-icon-button" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${editIcon()}</button>
-      <button class="customers-icon-button danger" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${archiveIcon()}</button>
+    <div class="ctox-pane-actions">
+      <button class="ctox-pane-icon" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+      <button class="ctox-pane-icon customers-danger" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
     </div>
   `;
 }
@@ -1973,9 +1986,9 @@ function renderRecordChips(context) {
     const opportunity = context.opportunity;
     return `
       <div class="customers-chip-row">
-        <span class="customers-badge stage-${escapeAttribute(opportunity.stage || 'qualification')}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span>
-        <span class="customers-badge">${escapeHtml(labelFor(OPPORTUNITY_TYPE_LABELS, opportunity.opportunity_type))}</span>
-        <span class="customers-badge">${escapeHtml(formatMoney(opportunity.amount_cents, opportunity.currency))}</span>
+        <span class="ctox-badge${stageBadgeClass(opportunity.stage)}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span>
+        <span class="ctox-badge">${escapeHtml(labelFor(OPPORTUNITY_TYPE_LABELS, opportunity.opportunity_type))}</span>
+        <span class="ctox-badge">${escapeHtml(formatMoney(opportunity.amount_cents, opportunity.currency))}</span>
         ${presenceChip('customer_opportunities', context.id)}
       </div>
     `;
@@ -1984,9 +1997,9 @@ function renderRecordChips(context) {
     const contact = context.contact;
     return `
       <div class="customers-chip-row">
-        ${contact.is_primary_contact ? `<span class="customers-badge health-healthy">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}
-        ${contact.email ? `<span class="customers-badge">${escapeHtml(contact.email)}</span>` : ''}
-        ${contact.phone ? `<span class="customers-badge">${escapeHtml(contact.phone)}</span>` : ''}
+        ${contact.is_primary_contact ? `<span class="ctox-badge is-success">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}
+        ${contact.email ? `<span class="ctox-badge">${escapeHtml(contact.email)}</span>` : ''}
+        ${contact.phone ? `<span class="ctox-badge">${escapeHtml(contact.phone)}</span>` : ''}
         ${presenceChip('customer_contacts', context.id)}
       </div>
     `;
@@ -1994,9 +2007,9 @@ function renderRecordChips(context) {
   const account = context.account;
   return `
     <div class="customers-chip-row">
-      <span class="customers-badge">${escapeHtml(labelFor(ACCOUNT_STATUS_LABELS, account.account_status))}</span>
-      <span class="customers-badge stage-${escapeAttribute(account.customer_stage || 'unknown')}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span>
-      <span class="customers-badge health-${escapeAttribute(account.health_status || 'unknown')}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span>
+      <span class="ctox-badge">${escapeHtml(labelFor(ACCOUNT_STATUS_LABELS, account.account_status))}</span>
+      <span class="ctox-badge${stageBadgeClass(account.customer_stage)}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span>
+      <span class="ctox-badge${healthBadgeClass(account.health_status)}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span>
       ${presenceChip('customer_accounts', context.id)}
     </div>
   `;
@@ -2004,7 +2017,7 @@ function renderRecordChips(context) {
 
 function detailTabButton(tab, label) {
   return `
-    <button type="button" role="tab" aria-selected="${state.detailTab === tab ? 'true' : 'false'}" class="${state.detailTab === tab ? 'active' : ''}" data-customers-detail-tab="${escapeAttribute(tab)}">
+    <button class="ctox-pane-tab" type="button" role="tab" aria-selected="${state.detailTab === tab ? 'true' : 'false'}" data-customers-detail-tab="${escapeAttribute(tab)}">
       ${escapeHtml(label)}
     </button>
   `;
@@ -2026,12 +2039,12 @@ function renderOverviewTab(context) {
     const opportunity = context.opportunity;
     return `
       <section class="customers-detail-block">
-        <div class="customers-metrics">
+        <dl class="ctox-fields">
           ${metric(state.t('stage', labels.de.stage), labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}
           ${metric(state.t('amount', labels.de.amount), formatMoney(opportunity.amount_cents, opportunity.currency))}
           ${metric(state.t('closeDate', labels.de.closeDate), formatDate(opportunity.close_date_ms, state.lang))}
           ${metric(state.t('probability', labels.de.probability), `${Number(opportunity.probability || 0)}%`)}
-        </div>
+        </dl>
       </section>
       <section class="customers-detail-block">
         <h3 class="customers-section-label">${escapeHtml(state.t('contacts', labels.de.contacts))}</h3>
@@ -2045,12 +2058,12 @@ function renderOverviewTab(context) {
     const contact = context.contact;
     return `
       <section class="customers-detail-block">
-        <div class="customers-metrics">
+        <dl class="ctox-fields">
           ${metric(state.t('accounts', labels.de.accounts), context.account?.name || contact.account_id || '—')}
           ${metric(state.t('jobTitle', labels.de.jobTitle), contact.job_title || '—')}
           ${metric(state.t('email', labels.de.email), contact.email || '—')}
           ${metric(state.t('phone', labels.de.phone), contact.phone || '—')}
-        </div>
+        </dl>
       </section>
       <section class="customers-detail-block">
         <h3 class="customers-section-label">${escapeHtml(state.t('opportunities', labels.de.opportunities))}</h3>
@@ -2062,17 +2075,17 @@ function renderOverviewTab(context) {
   }
   return `
     <section class="customers-detail-block">
-      <div class="customers-metrics">
+      <dl class="ctox-fields">
         ${metric(state.t('contacts', labels.de.contacts), related.contacts.length)}
         ${metric(state.t('opportunities', labels.de.opportunities), related.opportunities.length)}
         ${metric(state.t('openTasks', labels.de.openTasks), related.openTasks.length)}
         ${metric(state.t('arr', labels.de.arr), formatMoney(context.account.annual_recurring_revenue_cents, context.account.currency))}
-      </div>
+      </dl>
     </section>
       <section class="customers-detail-block">
         <div class="customers-section-head">
           <h3 class="customers-section-label">${escapeHtml(state.t('contacts', labels.de.contacts))}</h3>
-        <button class="customers-mini-button" type="button" data-customers-action="create-contact"${mutableDisabledAttr()}>${escapeHtml(state.t('newContact', labels.de.newContact))}</button>
+        <button class="ctox-button customers-mini" type="button" data-customers-action="create-contact"${mutableDisabledAttr()}>${escapeHtml(state.t('newContact', labels.de.newContact))}</button>
       </div>
       <div class="customers-mini-list">
         ${related.contacts.slice(0, 7).map(contactRow).join('') || emptyMiniRow(state.t('noContacts', labels.de.noContacts))}
@@ -2093,7 +2106,7 @@ function renderTasksTab(context) {
     <section class="customers-detail-block">
       <div class="customers-section-head">
         <h3 class="customers-section-label">${escapeHtml(state.t('tasks', labels.de.tasks))}</h3>
-        <button class="customers-mini-button" type="button" data-customers-action="create-task"${mutableDisabledAttr()}>${escapeHtml(state.t('newTask', labels.de.newTask))}</button>
+        <button class="ctox-button customers-mini" type="button" data-customers-action="create-task"${mutableDisabledAttr()}>${escapeHtml(state.t('newTask', labels.de.newTask))}</button>
       </div>
       <div class="customers-task-list">
         ${tasks.map(taskRow).join('') || emptyMiniRow(state.t('noTasks', labels.de.noTasks))}
@@ -2108,7 +2121,7 @@ function renderNotesTab(context) {
     <section class="customers-detail-block">
       <div class="customers-section-head">
         <h3 class="customers-section-label">${escapeHtml(state.t('notes', labels.de.notes))}</h3>
-        <button class="customers-mini-button" type="button" data-customers-action="create-note"${mutableDisabledAttr()}>${escapeHtml(state.t('newNote', labels.de.newNote))}</button>
+        <button class="ctox-button customers-mini" type="button" data-customers-action="create-note"${mutableDisabledAttr()}>${escapeHtml(state.t('newNote', labels.de.newNote))}</button>
       </div>
       <div class="customers-note-list">
         ${notes.map(noteRow).join('') || emptyMiniRow(state.t('noNotes', labels.de.noNotes))}
@@ -2148,7 +2161,7 @@ function renderAppsTab(context) {
       <h3 class="customers-section-label">${escapeHtml(state.t('linkedApps', labels.de.linkedApps))}</h3>
       <div class="customers-link-list">
         ${links.map(linkedAppRow).join('') || `
-          <div class="customers-empty compact">
+          <div class="ctox-empty">
             <strong>${escapeHtml(state.t('noAppLinks', labels.de.noAppLinks))}</strong>
             <span>${escapeHtml(state.t('noAppLinksBody', labels.de.noAppLinksBody))}</span>
           </div>
@@ -2191,24 +2204,26 @@ function renderAccountForm() {
     ? state.t('editCustomer', labels.de.editCustomer)
     : state.t('newCustomer', labels.de.newCustomer);
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
       <section class="customers-detail-block">
         <form class="customers-form" data-customers-form data-form-kind="${escapeAttribute(state.formMode)}">
-          <label>${escapeHtml(state.t('accountName', labels.de.accountName))}<input class="customers-input" name="name" autocomplete="organization" required value="${escapeAttribute(account?.name || '')}"></label>
-          <label>${escapeHtml(state.t('domain', labels.de.domain))}<input class="customers-input" name="domain" inputmode="url" placeholder="example.com" value="${escapeAttribute(account?.domain || account?.website_url || '')}"></label>
-          <label>${escapeHtml(state.t('industry', labels.de.industry))}<input class="customers-input" name="industry" value="${escapeAttribute(account?.industry || '')}"></label>
-          <label>${escapeHtml(state.t('owner', labels.de.owner))}<input class="customers-input" name="account_owner_id" value="${escapeAttribute(account?.account_owner_id || '')}"></label>
-          <label>${escapeHtml(state.t('arr', labels.de.arr))}<input class="customers-input" name="annual_recurring_revenue" inputmode="decimal" value="${escapeAttribute(account?.annual_recurring_revenue_cents ? String(Number(account.annual_recurring_revenue_cents) / 100) : '')}"></label>
-          <label>${escapeHtml(state.t('status', labels.de.status))}<select class="customers-select" name="account_status">${optionList(ACCOUNT_STATUS_LABELS, account?.account_status || 'active')}</select></label>
-          <label>${escapeHtml(state.t('stage', labels.de.stage))}<select class="customers-select" name="customer_stage">${optionList(STAGE_LABELS, account?.customer_stage || 'active', ['archived'])}</select></label>
-          <label>${escapeHtml(state.t('health', labels.de.health))}<select class="customers-select" name="health_status">${optionList(HEALTH_LABELS, account?.health_status || 'unknown')}</select></label>
-          <label>${escapeHtml(state.t('nextAction', labels.de.nextAction))}<input class="customers-input" name="next_action_at" type="date" value="${escapeAttribute(dateInputValue(account?.next_action_at_ms))}"></label>
+          <label>${escapeHtml(state.t('accountName', labels.de.accountName))}<input class="ctox-input" name="name" autocomplete="organization" required value="${escapeAttribute(account?.name || '')}"></label>
+          <label>${escapeHtml(state.t('domain', labels.de.domain))}<input class="ctox-input" name="domain" inputmode="url" placeholder="example.com" value="${escapeAttribute(account?.domain || account?.website_url || '')}"></label>
+          <label>${escapeHtml(state.t('industry', labels.de.industry))}<input class="ctox-input" name="industry" value="${escapeAttribute(account?.industry || '')}"></label>
+          <label>${escapeHtml(state.t('owner', labels.de.owner))}<input class="ctox-input" name="account_owner_id" value="${escapeAttribute(account?.account_owner_id || '')}"></label>
+          <label>${escapeHtml(state.t('arr', labels.de.arr))}<input class="ctox-input" name="annual_recurring_revenue" inputmode="decimal" value="${escapeAttribute(account?.annual_recurring_revenue_cents ? String(Number(account.annual_recurring_revenue_cents) / 100) : '')}"></label>
+          <label>${escapeHtml(state.t('status', labels.de.status))}<select class="ctox-select" name="account_status">${optionList(ACCOUNT_STATUS_LABELS, account?.account_status || 'active')}</select></label>
+          <label>${escapeHtml(state.t('stage', labels.de.stage))}<select class="ctox-select" name="customer_stage">${optionList(STAGE_LABELS, account?.customer_stage || 'active', ['archived'])}</select></label>
+          <label>${escapeHtml(state.t('health', labels.de.health))}<select class="ctox-select" name="health_status">${optionList(HEALTH_LABELS, account?.health_status || 'unknown')}</select></label>
+          <label>${escapeHtml(state.t('nextAction', labels.de.nextAction))}<input class="ctox-input" name="next_action_at" type="date" value="${escapeAttribute(dateInputValue(account?.next_action_at_ms))}"></label>
           ${formActions(state.formMode === 'account-edit' ? state.t('save', labels.de.save) : state.t('create', labels.de.create))}
         </form>
       </section>
@@ -2225,22 +2240,24 @@ function renderContactForm() {
     ? state.t('editContact', labels.de.editContact)
     : state.t('newContact', labels.de.newContact);
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
       <section class="customers-detail-block">
         <form class="customers-form" data-customers-form data-form-kind="${escapeAttribute(state.formMode)}">
           <input type="hidden" name="account_id" value="${escapeAttribute(accountId || '')}">
-          <label>${escapeHtml(state.t('firstName', labels.de.firstName))}<input class="customers-input" name="first_name" autocomplete="given-name" value="${escapeAttribute(contact?.first_name || '')}"></label>
-          <label>${escapeHtml(state.t('lastName', labels.de.lastName))}<input class="customers-input" name="last_name" autocomplete="family-name" value="${escapeAttribute(contact?.last_name || '')}"></label>
-          <label>${escapeHtml(state.t('email', labels.de.email))}<input class="customers-input" name="email" type="email" autocomplete="email" value="${escapeAttribute(contact?.email || '')}"></label>
-          <label>${escapeHtml(state.t('phone', labels.de.phone))}<input class="customers-input" name="phone" autocomplete="tel" value="${escapeAttribute(contact?.phone || '')}"></label>
-          <label>${escapeHtml(state.t('jobTitle', labels.de.jobTitle))}<input class="customers-input" name="job_title" autocomplete="organization-title" value="${escapeAttribute(contact?.job_title || '')}"></label>
-          <label>${escapeHtml(state.t('city', labels.de.city))}<input class="customers-input" name="city" autocomplete="address-level2" value="${escapeAttribute(contact?.city || '')}"></label>
+          <label>${escapeHtml(state.t('firstName', labels.de.firstName))}<input class="ctox-input" name="first_name" autocomplete="given-name" value="${escapeAttribute(contact?.first_name || '')}"></label>
+          <label>${escapeHtml(state.t('lastName', labels.de.lastName))}<input class="ctox-input" name="last_name" autocomplete="family-name" value="${escapeAttribute(contact?.last_name || '')}"></label>
+          <label>${escapeHtml(state.t('email', labels.de.email))}<input class="ctox-input" name="email" type="email" autocomplete="email" value="${escapeAttribute(contact?.email || '')}"></label>
+          <label>${escapeHtml(state.t('phone', labels.de.phone))}<input class="ctox-input" name="phone" autocomplete="tel" value="${escapeAttribute(contact?.phone || '')}"></label>
+          <label>${escapeHtml(state.t('jobTitle', labels.de.jobTitle))}<input class="ctox-input" name="job_title" autocomplete="organization-title" value="${escapeAttribute(contact?.job_title || '')}"></label>
+          <label>${escapeHtml(state.t('city', labels.de.city))}<input class="ctox-input" name="city" autocomplete="address-level2" value="${escapeAttribute(contact?.city || '')}"></label>
           <label class="customers-checkbox"><input type="checkbox" name="is_primary_contact" value="true" ${contact?.is_primary_contact ? 'checked' : ''}>${escapeHtml(state.t('primary', labels.de.primary))}</label>
           ${formActions(state.formMode === 'contact-edit' ? state.t('save', labels.de.save) : state.t('create', labels.de.create))}
         </form>
@@ -2259,25 +2276,27 @@ function renderOpportunityForm() {
     : state.t('newOpportunity', labels.de.newOpportunity);
   const contacts = (state.collections.customer_contacts || []).filter((contact) => contact.account_id === accountId);
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
       <section class="customers-detail-block">
         <form class="customers-form" data-customers-form data-form-kind="${escapeAttribute(state.formMode)}">
           <input type="hidden" name="account_id" value="${escapeAttribute(accountId || '')}">
-          <label>${escapeHtml(state.t('opportunityName', labels.de.opportunityName))}<input class="customers-input" name="name" required value="${escapeAttribute(opportunity?.name || '')}"></label>
-          <label>${escapeHtml(state.t('type', labels.de.type))}<select class="customers-select" name="opportunity_type">${optionList(OPPORTUNITY_TYPE_LABELS, opportunity?.opportunity_type || 'renewal')}</select></label>
-          <label>${escapeHtml(state.t('stage', labels.de.stage))}<select class="customers-select" name="stage">${optionList(OPPORTUNITY_STAGE_LABELS, opportunity?.stage || 'qualification')}</select></label>
-          <label>${escapeHtml(state.t('amount', labels.de.amount))}<input class="customers-input" name="amount" inputmode="decimal" value="${escapeAttribute(opportunity?.amount_cents ? String(Number(opportunity.amount_cents) / 100) : '')}"></label>
-          <label>${escapeHtml(state.t('probability', labels.de.probability))}<input class="customers-input" name="probability" inputmode="numeric" value="${escapeAttribute(opportunity?.probability ?? '')}"></label>
-          <label>${escapeHtml(state.t('closeDate', labels.de.closeDate))}<input class="customers-input" name="close_date" type="date" value="${escapeAttribute(dateInputValue(opportunity?.close_date_ms))}"></label>
-          <label>${escapeHtml(state.t('owner', labels.de.owner))}<input class="customers-input" name="owner_id" value="${escapeAttribute(opportunity?.owner_id || '')}"></label>
+          <label>${escapeHtml(state.t('opportunityName', labels.de.opportunityName))}<input class="ctox-input" name="name" required value="${escapeAttribute(opportunity?.name || '')}"></label>
+          <label>${escapeHtml(state.t('type', labels.de.type))}<select class="ctox-select" name="opportunity_type">${optionList(OPPORTUNITY_TYPE_LABELS, opportunity?.opportunity_type || 'renewal')}</select></label>
+          <label>${escapeHtml(state.t('stage', labels.de.stage))}<select class="ctox-select" name="stage">${optionList(OPPORTUNITY_STAGE_LABELS, opportunity?.stage || 'qualification')}</select></label>
+          <label>${escapeHtml(state.t('amount', labels.de.amount))}<input class="ctox-input" name="amount" inputmode="decimal" value="${escapeAttribute(opportunity?.amount_cents ? String(Number(opportunity.amount_cents) / 100) : '')}"></label>
+          <label>${escapeHtml(state.t('probability', labels.de.probability))}<input class="ctox-input" name="probability" inputmode="numeric" value="${escapeAttribute(opportunity?.probability ?? '')}"></label>
+          <label>${escapeHtml(state.t('closeDate', labels.de.closeDate))}<input class="ctox-input" name="close_date" type="date" value="${escapeAttribute(dateInputValue(opportunity?.close_date_ms))}"></label>
+          <label>${escapeHtml(state.t('owner', labels.de.owner))}<input class="ctox-input" name="owner_id" value="${escapeAttribute(opportunity?.owner_id || '')}"></label>
           <label>${escapeHtml(state.t('contacts', labels.de.contacts))}
-            <select class="customers-select" name="primary_contact_id">
+            <select class="ctox-select" name="primary_contact_id">
               <option value=""></option>
               ${contacts.map((contact) => `<option value="${escapeAttribute(contact.id)}"${contact.id === opportunity?.primary_contact_id ? ' selected' : ''}>${escapeHtml(contactDisplayName(contact))}</option>`).join('')}
             </select>
@@ -2298,21 +2317,23 @@ function renderTaskForm() {
     ? state.t('editTask', labels.de.editTask)
     : state.t('newTask', labels.de.newTask);
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
       <section class="customers-detail-block">
         <form class="customers-form" data-customers-form data-form-kind="${escapeAttribute(state.formMode)}">
           ${hiddenRecordInputs(context)}
-          <label>${escapeHtml(state.t('tasks', labels.de.tasks))}<input class="customers-input" name="title" required value="${escapeAttribute(task?.title || '')}"></label>
-          <label>${escapeHtml(state.t('body', labels.de.body))}<textarea class="customers-textarea" name="body">${escapeHtml(task?.body || '')}</textarea></label>
-          <label>${escapeHtml(state.t('status', labels.de.status))}<select class="customers-select" name="status">${optionList(TASK_STATUS_LABELS, task?.status || 'open')}</select></label>
-          <label>${escapeHtml(state.t('dueDate', labels.de.dueDate))}<input class="customers-input" name="due_at" type="date" value="${escapeAttribute(dateInputValue(task?.due_at_ms))}"></label>
-          <label>${escapeHtml(state.t('assignee', labels.de.assignee))}<input class="customers-input" name="assignee_id" value="${escapeAttribute(task?.assignee_id || '')}"></label>
+          <label>${escapeHtml(state.t('tasks', labels.de.tasks))}<input class="ctox-input" name="title" required value="${escapeAttribute(task?.title || '')}"></label>
+          <label>${escapeHtml(state.t('body', labels.de.body))}<textarea class="ctox-textarea" name="body">${escapeHtml(task?.body || '')}</textarea></label>
+          <label>${escapeHtml(state.t('status', labels.de.status))}<select class="ctox-select" name="status">${optionList(TASK_STATUS_LABELS, task?.status || 'open')}</select></label>
+          <label>${escapeHtml(state.t('dueDate', labels.de.dueDate))}<input class="ctox-input" name="due_at" type="date" value="${escapeAttribute(dateInputValue(task?.due_at_ms))}"></label>
+          <label>${escapeHtml(state.t('assignee', labels.de.assignee))}<input class="ctox-input" name="assignee_id" value="${escapeAttribute(task?.assignee_id || '')}"></label>
           ${formActions(state.formMode === 'task-edit' ? state.t('save', labels.de.save) : state.t('create', labels.de.create))}
         </form>
       </section>
@@ -2329,19 +2350,21 @@ function renderNoteForm() {
     ? state.t('editNote', labels.de.editNote)
     : state.t('newNote', labels.de.newNote);
   return `
-    <header class="customers-pane-header">
-      <div class="customers-title-group">
-        <span class="customers-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
-        <h2 class="customers-title">${escapeHtml(title)}</h2>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('actionKicker', labels.de.actionKicker))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
+        </div>
       </div>
     </header>
     <div class="customers-right-scroll">
       <section class="customers-detail-block">
         <form class="customers-form" data-customers-form data-form-kind="${escapeAttribute(state.formMode)}">
           ${hiddenRecordInputs(context)}
-          <label>${escapeHtml(state.t('notes', labels.de.notes))}<input class="customers-input" name="title" value="${escapeAttribute(note?.title || '')}"></label>
-          <label>${escapeHtml(state.t('body', labels.de.body))}<textarea class="customers-textarea" name="body">${escapeHtml(note?.body || '')}</textarea></label>
-          <label>${escapeHtml(state.t('format', labels.de.format))}<select class="customers-select" name="body_format">${optionList({ markdown: 'Markdown', plain: 'Plain text' }, note?.body_format || 'markdown')}</select></label>
+          <label>${escapeHtml(state.t('notes', labels.de.notes))}<input class="ctox-input" name="title" value="${escapeAttribute(note?.title || '')}"></label>
+          <label>${escapeHtml(state.t('body', labels.de.body))}<textarea class="ctox-textarea" name="body">${escapeHtml(note?.body || '')}</textarea></label>
+          <label>${escapeHtml(state.t('format', labels.de.format))}<select class="ctox-select" name="body_format">${optionList({ markdown: 'Markdown', plain: 'Plain text' }, note?.body_format || 'markdown')}</select></label>
           ${formActions(state.formMode === 'note-edit' ? state.t('save', labels.de.save) : state.t('create', labels.de.create))}
         </form>
       </section>
@@ -2371,8 +2394,8 @@ function filterOption(value, label, selected) {
 function formActions(primaryLabel) {
   return `
     <div class="customers-form-actions">
-      <button class="customers-button" type="button" data-customers-action="cancel-form">${escapeHtml(state.t('cancel', labels.de.cancel))}</button>
-      <button class="customers-button primary" type="submit"${mutableDisabledAttr()}>${escapeHtml(primaryLabel)}</button>
+      <button class="ctox-button" type="button" data-customers-action="cancel-form">${escapeHtml(state.t('cancel', labels.de.cancel))}</button>
+      <button class="ctox-button is-primary" type="submit"${mutableDisabledAttr()}>${escapeHtml(primaryLabel)}</button>
     </div>
     ${state.diagnostics.commandState ? `<div class="customers-command-state">${escapeHtml(state.diagnostics.commandState)}</div>` : ''}
   `;
@@ -3633,7 +3656,7 @@ function renderCommandAuditPanel(context) {
           ${commands.slice(0, 5).map(commandAuditRow).join('')}
         </div>
       ` : `
-        <div class="customers-empty compact">
+        <div class="ctox-empty">
           <strong>${escapeHtml(state.t('commandAuditEmpty', labels.de.commandAuditEmpty))}</strong>
           <span>${escapeHtml(state.t('commandAuditBody', labels.de.commandAuditBody))}</span>
         </div>
@@ -3732,10 +3755,8 @@ function commandStatusLabel(status) {
 
 function metric(label, value) {
   return `
-    <div class="customers-metric">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value ?? ''))}</strong>
-    </div>
+    <dt>${escapeHtml(label)}</dt>
+    <dd>${escapeHtml(String(value ?? ''))}</dd>
   `;
 }
 
@@ -3759,8 +3780,8 @@ function taskRow(task) {
         ${task.body ? `<p>${escapeHtml(task.body)}</p>` : ''}
       </div>
       <div class="customers-row-actions">
-        <button class="customers-icon-button small" type="button" data-customers-action="edit-task" data-task-id="${escapeAttribute(task.id)}" aria-label="${escapeAttribute(state.t('editTask', labels.de.editTask))}"${mutableDisabledAttr()}>${editIcon()}</button>
-        ${isDone ? '' : `<button class="customers-mini-button" type="button" data-customers-action="complete-task" data-task-id="${escapeAttribute(task.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('completeTask', labels.de.completeTask))}</button>`}
+        <button class="ctox-icon-button" type="button" data-customers-action="edit-task" data-task-id="${escapeAttribute(task.id)}" aria-label="${escapeAttribute(state.t('editTask', labels.de.editTask))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+        ${isDone ? '' : `<button class="ctox-button customers-mini" type="button" data-customers-action="complete-task" data-task-id="${escapeAttribute(task.id)}"${mutableDisabledAttr()}>${escapeHtml(state.t('completeTask', labels.de.completeTask))}</button>`}
       </div>
     </article>
   `;
@@ -3774,7 +3795,7 @@ function noteRow(note) {
         <span>${escapeHtml(formatDate(note.updated_at_ms || note.created_at_ms, state.lang))}</span>
         ${note.body ? `<p>${escapeHtml(note.body)}</p>` : ''}
       </div>
-      <button class="customers-icon-button small" type="button" data-customers-action="edit-note" data-note-id="${escapeAttribute(note.id)}" aria-label="${escapeAttribute(state.t('editNote', labels.de.editNote))}"${mutableDisabledAttr()}>${editIcon()}</button>
+      <button class="ctox-icon-button" type="button" data-customers-action="edit-note" data-note-id="${escapeAttribute(note.id)}" aria-label="${escapeAttribute(state.t('editNote', labels.de.editNote))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
     </article>
   `;
 }
@@ -3795,7 +3816,7 @@ function linkedAppRow(row) {
         <strong>${escapeHtml(row.label)}</strong>
         <span>${escapeHtml([row.countLabel, row.status, row.preview].filter(Boolean).join(' · '))}</span>
       </div>
-      <button class="customers-mini-button" type="button" data-customers-action="open-linked-app" data-link-module="${escapeAttribute(row.moduleId)}" data-link-href="${escapeAttribute(row.href)}">${escapeHtml(state.t('openApp', labels.de.openApp))}</button>
+      <button class="ctox-button customers-mini" type="button" data-customers-action="open-linked-app" data-link-module="${escapeAttribute(row.moduleId)}" data-link-href="${escapeAttribute(row.href)}">${escapeHtml(state.t('openApp', labels.de.openApp))}</button>
     </article>
   `;
 }
@@ -3987,28 +4008,25 @@ function escapeAttribute(value) {
   return escapeHtml(value);
 }
 
-function refreshIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Kit action icons: monochrome stroke glyphs delivered by the shell
+// (shared/icons.js actionIconPaths) via the module context.
+function actionIcon(name) {
+  return state.ctx?.getActionIcon?.(name) || '';
 }
 
-function importIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Status badge mapping onto the shared .ctox-badge variants. Parity with the
+// previous module-local palette: active/healthy -> success, at_risk/critical
+// -> danger, in-flight commercial stages -> module accent extra.
+function stageBadgeClass(stage) {
+  if (stage === 'active') return ' is-success';
+  if (['renewal', 'expansion', 'proposal', 'negotiation', 'committed'].includes(stage)) return ' customers-accent';
+  return '';
 }
 
-function exportIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21V10m0 0 4 4m-4-4-4 4M5 3h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-}
-
-function plusIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
-}
-
-function editIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-}
-
-function archiveIcon() {
-  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function healthBadgeClass(health) {
+  if (health === 'healthy') return ' is-success';
+  if (health === 'at_risk' || health === 'critical') return ' is-danger';
+  return '';
 }
 
 export const __customersTestHooks = {
