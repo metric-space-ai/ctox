@@ -2,7 +2,7 @@
   <!-- Left Spalte: Selector & Navigation (Strictly links and filters only) -->
   <section class="fibu-pane fibu-left" aria-label="Fibu Navigation">
     <div class="fibu-sidebar">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker">CTOX</span>
@@ -62,7 +62,7 @@
       <div class="fibu-sidebar-footer">
         <div class="fibu-skr-selector-wrap">
           <label for="skr-select">Kontenrahmen:</label>
-          <select id="skr-select" class="fibu-select">
+          <select id="skr-select" class="ctox-select">
             <option value="SKR03">SKR 03 (Prozessgliederung)</option>
             <option value="SKR04">SKR 04 (Abschlussgliederung)</option>
           </select>
@@ -75,13 +75,13 @@
   <!-- Center Spalte: Active Workbench (Main Workbench views) -->
   <section class="fibu-pane fibu-center" aria-label="Fibu Arbeitsbereich">
     <!-- Header dynamically changed by controller -->
-    <header class="ctox-pane-header fibu-center-head">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles fibu-head-meta">
+        <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-active-category>KONTENRAHMEN</span>
           <h2 class="ctox-pane-title" data-active-title>SKR03 Kontenrahmen-Explorer</h2>
         </div>
-        <div class="ctox-pane-actions fibu-head-actions" data-center-actions>
+        <div class="ctox-pane-actions" data-center-actions>
           <!-- Dynamic actions based on view -->
         </div>
       </div>
@@ -93,24 +93,24 @@
       <div class="fibu-view-panel" data-panel="skr">
         <div class="fibu-panel-toolbar">
           <div class="fibu-search-wrapper">
-            <input type="search" class="fibu-search-input" data-search-accounts placeholder="Konto oder Code suchen..." aria-describedby="accounts-count" />
+            <input type="search" class="ctox-pane-search" data-search-accounts placeholder="Konto oder Code suchen..." aria-describedby="accounts-count" />
             <span id="accounts-count" class="fibu-result-count" data-accounts-count>0 Konten</span>
           </div>
-          <button type="button" class="fibu-btn fibu-btn-primary" data-action="init-skr">
+          <button type="button" class="ctox-button is-primary" data-action="init-skr">
             <span class="fibu-action-icon" data-icon="R" aria-hidden="true"></span>
             <span>Kontenrahmen neu initialisieren</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
-                <th style="width: 100px;">Konto</th>
+                <th>Konto</th>
                 <th>Kontenbezeichnung</th>
-                <th style="width: 140px;">Typ</th>
-                <th style="width: 120px;">USt-Schlüssel</th>
-                <th style="width: 150px; text-align: right;">Soll-Saldo</th>
-                <th style="width: 150px; text-align: right;">Haben-Saldo</th>
+                <th>Typ</th>
+                <th>USt-Schlüssel</th>
+                <th class="is-num">Soll-Saldo</th>
+                <th class="is-num">Haben-Saldo</th>
               </tr>
             </thead>
             <tbody data-accounts-list>
@@ -124,25 +124,25 @@
       <div class="fibu-view-panel" data-panel="journal" hidden>
         <div class="fibu-panel-toolbar">
           <div class="fibu-search-wrapper">
-            <input type="search" class="fibu-search-input" data-search-journal placeholder="Journal durchsuchen..." aria-describedby="journal-count" />
+            <input type="search" class="ctox-pane-search" data-search-journal placeholder="Journal durchsuchen..." aria-describedby="journal-count" />
             <span id="journal-count" class="fibu-result-count" data-journal-count>0 Buchungen</span>
           </div>
-          <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-entry">
+          <button type="button" class="ctox-button is-primary" data-action="new-entry">
             <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
             <span>Neue manuelle Buchung</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
-                <th style="width: 100px;">Datum</th>
-                <th style="width: 120px;">Belegnummer</th>
+                <th>Datum</th>
+                <th>Belegnummer</th>
                 <th>Verwendungszweck / Buchungstext</th>
-                <th style="width: 140px;">Zugeordneter Beleg</th>
-                <th style="width: 150px; text-align: right;">Betrag</th>
-                <th style="width: 120px; text-align: center;">Status</th>
-                <th style="width: 80px; text-align: center;">Aktionen</th>
+                <th>Zugeordneter Beleg</th>
+                <th class="is-num">Betrag</th>
+                <th class="fibu-cell-center">Status</th>
+                <th class="fibu-cell-center">Aktionen</th>
               </tr>
             </thead>
             <tbody data-journal-list>
@@ -161,19 +161,19 @@
             <input type="file" id="fibu-file-input" style="display:none;" accept="application/pdf,image/*" multiple />
           </div>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
                 <th>Dateiname</th>
-                <th style="width: 140px;">Lieferant</th>
-                <th style="width: 100px;">Datum</th>
-                <th style="width: 100px; text-align: right;">Netto</th>
-                <th style="width: 80px; text-align: right;">USt %</th>
-                <th style="width: 100px; text-align: right;">Brutto</th>
-                <th style="width: 160px;">Vorgeschlagenes Konto</th>
-                <th style="width: 100px; text-align: center;">Status</th>
-                <th style="width: 100px; text-align: center;">Buchen</th>
+                <th>Lieferant</th>
+                <th>Datum</th>
+                <th class="is-num">Netto</th>
+                <th class="is-num">USt %</th>
+                <th class="is-num">Brutto</th>
+                <th>Vorgeschlagenes Konto</th>
+                <th class="fibu-cell-center">Status</th>
+                <th class="fibu-cell-center">Buchen</th>
               </tr>
             </thead>
             <tbody data-receipts-list>
@@ -192,23 +192,23 @@
             <input type="file" id="fibu-bank-input" style="display:none;" accept=".xml,.txt,.mt940" />
           </div>
           <div class="fibu-toolbar-actions">
-            <button type="button" class="fibu-btn fibu-btn-secondary" data-action="run-auto-reconciliation">
+            <button type="button" class="ctox-button" data-action="run-auto-reconciliation">
               <span class="fibu-action-icon" data-icon="AI" aria-hidden="true"></span>
               <span>Auto-Matching ausführen</span>
             </button>
           </div>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
-                <th style="width: 100px;">Wertstellung</th>
+                <th>Wertstellung</th>
                 <th>Zahlungsempfänger / IBAN</th>
                 <th>Verwendungszweck</th>
-                <th style="width: 120px; text-align: right;">Betrag</th>
-                <th style="width: 200px;">Vorgeschlagener Beleg</th>
-                <th style="width: 130px; text-align: center;">Status</th>
-                <th style="width: 100px; text-align: center;">Aktionen</th>
+                <th class="is-num">Betrag</th>
+                <th>Vorgeschlagener Beleg</th>
+                <th class="fibu-cell-center">Status</th>
+                <th class="fibu-cell-center">Aktionen</th>
               </tr>
             </thead>
             <tbody data-banking-list>
@@ -221,18 +221,12 @@
       <!-- 5. Reports Workspace (Bilanz, GuV, UStVA, DATEV) -->
       <div class="fibu-view-panel" data-panel="reports" hidden>
         <div class="fibu-report-tabs">
-          <button type="button" class="fibu-report-tab-btn active" data-report-tab="bilanz">
-            <span class="fibu-tab-icon" data-icon="BI" aria-hidden="true"></span>HGB-Bilanz
-          </button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="guv">
-            <span class="fibu-tab-icon" data-icon="GV" aria-hidden="true"></span>HGB-GuV
-          </button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="ustva">
-            <span class="fibu-tab-icon" data-icon="US" aria-hidden="true"></span>Umsatzsteuer-Voranmeldung
-          </button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="datev">
-            <span class="fibu-tab-icon" data-icon="DV" aria-hidden="true"></span>DATEV EXTF-Export
-          </button>
+          <div class="ctox-pane-tabs" role="tablist">
+            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="bilanz" aria-selected="true">HGB-Bilanz</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="guv" aria-selected="false">HGB-GuV</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="ustva" aria-selected="false">Umsatzsteuer-Voranmeldung</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="datev" aria-selected="false">DATEV EXTF-Export</button>
+          </div>
         </div>
 
         <div class="fibu-report-workspace-content">
@@ -240,7 +234,7 @@
           <div class="fibu-report-subpanel" data-report-subpanel="bilanz">
             <div class="fibu-report-header">
               <h3>Erstellung der Bilanz nach § 266 HGB</h3>
-              <span class="fibu-badge date-badge" data-report-date-badge>Aktiv</span>
+              <span class="ctox-badge" data-report-date-badge>Aktiv</span>
             </div>
             <div class="fibu-bilanz-tree-wrapper">
               <div class="fibu-bilanz-column">
@@ -316,14 +310,14 @@
               <div class="fibu-form-row inline" style="margin: 20px 0;">
                 <div class="fibu-form-group">
                   <label for="datev-start">Startdatum:</label>
-                  <input type="date" id="datev-start" class="fibu-input" value="2026-01-01" />
+                  <input type="date" id="datev-start" class="ctox-input" value="2026-01-01" />
                 </div>
                 <div class="fibu-form-group">
                   <label for="datev-end">Enddatum:</label>
-                  <input type="date" id="datev-end" class="fibu-input" value="2026-12-31" />
+                  <input type="date" id="datev-end" class="ctox-input" value="2026-12-31" />
                 </div>
               </div>
-              <button type="button" class="fibu-btn fibu-btn-primary fibu-btn-large" data-action="export-datev">
+              <button type="button" class="ctox-button is-primary" data-action="export-datev">
                 <span class="fibu-action-icon" data-icon="CSV" aria-hidden="true"></span>
                 <span>DATEV CSV-Stapel herunterladen (EXTF)</span>
               </button>
@@ -335,28 +329,28 @@
       <!-- 6. Assets & Depreciation (AfA) Panel -->
       <div class="fibu-view-panel" data-panel="assets" hidden>
         <div class="fibu-panel-toolbar">
-          <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-asset">
+          <button type="button" class="ctox-button is-primary" data-action="new-asset">
             <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
             <span>Neues Anlagegut erfassen</span>
           </button>
-          <button type="button" class="fibu-btn fibu-btn-secondary" data-action="trigger-depreciations">
+          <button type="button" class="ctox-button" data-action="trigger-depreciations">
             <span class="fibu-action-icon" data-icon="AFA" aria-hidden="true"></span>
             <span>AfA-Abschreibungslauf triggern</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
-                <th style="width: 80px;">Inventar-Nr</th>
+                <th>Inventar-Nr</th>
                 <th>Bezeichnung des Anlageguts</th>
-                <th style="width: 100px;">Anschaffungsdatum</th>
-                <th style="width: 120px; text-align: right;">Anschaffungswert</th>
-                <th style="width: 100px; text-align: center;">Nutzungsdauer (Jahre)</th>
-                <th style="width: 120px;">Abschreibungsart</th>
-                <th style="width: 120px; text-align: right;">Bisherige AfA</th>
-                <th style="width: 120px; text-align: right;">Buchwert</th>
-                <th style="width: 80px; text-align: center;">Details</th>
+                <th>Anschaffungsdatum</th>
+                <th class="is-num">Anschaffungswert</th>
+                <th class="fibu-cell-center">Nutzungsdauer (Jahre)</th>
+                <th>Abschreibungsart</th>
+                <th class="is-num">Bisherige AfA</th>
+                <th class="is-num">Buchwert</th>
+                <th class="fibu-cell-center">Details</th>
               </tr>
             </thead>
             <tbody data-assets-list>
@@ -369,20 +363,20 @@
       <!-- 6b. Travel Expenses Panel -->
       <div class="fibu-view-panel" data-panel="travel" hidden>
         <div class="fibu-panel-toolbar">
-          <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewTravelDrawer()">
+          <button type="button" class="ctox-button is-primary" onclick="openNewTravelDrawer()">
             <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
             <span>Neue Dienstreise erfassen</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
                 <th>Ziel / Zweck</th>
                 <th>Zeitraum</th>
-                <th style="text-align: right;">Verpflegungsmehraufwand (VMA)</th>
+                <th class="is-num">Verpflegungsmehraufwand (VMA)</th>
                 <th>Status</th>
-                <th style="width: 100px; text-align: center;">Aktion</th>
+                <th class="fibu-cell-center">Aktion</th>
               </tr>
             </thead>
             <tbody id="travel-expenses-list">
@@ -395,30 +389,30 @@
       <!-- 6c. Mileage Log Panel -->
       <div class="fibu-view-panel" data-panel="mileage" hidden>
         <div class="fibu-panel-toolbar" style="display:flex; justify-content:space-between; align-items:center;">
-          <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewMileageDrawer()">
+          <button type="button" class="ctox-button is-primary" onclick="openNewMileageDrawer()">
             <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
             <span>Neue Fahrt eintragen</span>
           </button>
           <div id="mileage-dashboard-summary" style="display:flex; gap:16px; font-size:12.5px; background:var(--surface-2); padding:6px 12px; border-radius:6px; border:1px solid var(--line);">
             <!-- Live km shares dashboard -->
           </div>
-          <button type="button" class="fibu-btn fibu-btn-secondary fibu-btn-dashed-warning" onclick="triggerAnnualPrivateCarShare()">
+          <button type="button" class="ctox-button fibu-btn-dashed-warning" onclick="triggerAnnualPrivateCarShare()">
             <span class="fibu-action-icon" data-icon="PKW" aria-hidden="true"></span>
             <span>Privatanteil buchen</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container">
-          <table class="fibu-table">
+        <div class="fibu-scrollable-container ctox-table-wrap">
+          <table class="ctox-table">
             <thead>
               <tr>
                 <th>Datum</th>
                 <th>Zweck / Route</th>
                 <th>Gesprächspartner</th>
-                <th style="text-align: right;">Kilometer</th>
-                <th style="text-align: right;">Erstattung (0,30 €/km)</th>
+                <th class="is-num">Kilometer</th>
+                <th class="is-num">Erstattung (0,30 €/km)</th>
                 <th>Typ</th>
                 <th>Status</th>
-                <th style="width: 100px; text-align: center;">Aktion</th>
+                <th class="fibu-cell-center">Aktion</th>
               </tr>
             </thead>
             <tbody id="mileage-log-list">
@@ -437,7 +431,7 @@
               Führen Sie Klick-Simulations-Tests direkt im echten DOM der Anwendung aus. Die Schritte werden visuell hervorgehoben.
             </p>
           </div>
-          <button type="button" class="fibu-btn fibu-btn-primary" data-action="run-all-ui-tests">
+          <button type="button" class="ctox-button is-primary" data-action="run-all-ui-tests">
             <span class="fibu-action-icon" data-icon="RUN" aria-hidden="true"></span>
             <span>Alle UI-Tests ausführen</span>
           </button>
@@ -449,14 +443,14 @@
             <div style="font-size:13px;" class="fibu-text-credit"><strong id="ui-test-failed">0</strong> Fehlgeschlagen</div>
             <div style="font-size:13px; display:none;" class="fibu-text-warning" id="ui-test-running-indicator">⏳ Test läuft... <span id="ui-test-active-step"></span></div>
           </div>
-          <table class="fibu-table">
+          <table class="ctox-table">
             <thead>
               <tr>
-                <th style="width: 120px;">Test-ID</th>
-                <th style="width: 250px;">Name / User Story</th>
+                <th>Test-ID</th>
+                <th>Name / User Story</th>
                 <th>Ablauf-Schritte</th>
-                <th style="width: 140px; text-align: center;">Status</th>
-                <th style="width: 120px; text-align: center;">Aktionen</th>
+                <th class="fibu-cell-center">Status</th>
+                <th class="fibu-cell-center">Aktionen</th>
               </tr>
             </thead>
             <tbody data-ui-tests-list>
@@ -480,7 +474,7 @@
       <div class="fibu-drawer-handle" data-drawer-toggle>
         <div class="fibu-drawer-handle-bar"></div>
         <span class="fibu-drawer-title" id="fibu-drawer-title" data-drawer-header-title>Buchungszeilen-Editor</span>
-        <button type="button" class="fibu-drawer-close-btn" data-action="close-drawer" aria-label="Buchungseditor schließen">✕</button>
+        <button type="button" class="ctox-pane-icon" data-action="close-drawer" aria-label="Buchungseditor schließen" title="Buchungseditor schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="fibu-drawer-content" data-drawer-content-body>
         <!-- Content will be injected dynamically -->
@@ -491,20 +485,16 @@
 
   <!-- Right Spalte: Companion & Auxiliary Functions (Complementary OCR viewer & AI chat, completely independent) -->
   <section class="fibu-pane fibu-right" aria-label="Belege & Agenten-Begleiter">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Companion</span>
           <h2 class="ctox-pane-title">Assistent</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs fibu-right-tabs">
-            <button type="button" class="ctox-pane-tab fibu-right-tab-btn active" data-right-tab="ocr">
-              <span class="fibu-tab-icon" data-icon="OCR" aria-hidden="true"></span>Beleg-Vorschau
-            </button>
-            <button type="button" class="ctox-pane-tab fibu-right-tab-btn" data-right-tab="agent">
-              <span class="fibu-tab-icon" data-icon="AI" aria-hidden="true"></span>CTOX AI Agent
-            </button>
+          <div class="ctox-pane-tabs fibu-right-tabs" role="tablist">
+            <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="ocr" aria-selected="true">Beleg-Vorschau</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="agent" aria-selected="false">CTOX AI Agent</button>
           </div>
         </div>
       </div>
@@ -514,7 +504,7 @@
       <!-- OCR Document Preview -->
       <div class="fibu-right-subpanel" data-right-subpanel="ocr">
         <div class="fibu-document-preview-container" data-ocr-preview-container>
-          <div class="fibu-empty-state">
+          <div class="ctox-empty">
             <span class="empty-icon">📄</span>
             <p>Wählen Sie eine Banktransaktion oder einen Beleg aus, um die PDF-Vorschau und OCR-Daten anzuzeigen.</p>
           </div>
@@ -539,8 +529,8 @@
             </div>
           </div>
           <div class="fibu-agent-chat-input-wrap">
-            <input type="text" class="fibu-agent-chat-input" data-chat-input placeholder="Fibu-Agent fragen..." />
-            <button type="button" class="fibu-agent-chat-send" data-action="send-chat-msg" aria-label="Nachricht senden" title="Nachricht senden">S</button>
+            <input type="text" class="ctox-input" data-chat-input placeholder="Fibu-Agent fragen..." />
+            <button type="button" class="ctox-pane-icon" data-action="send-chat-msg" aria-label="Nachricht senden" title="Nachricht senden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4"/></svg></button>
           </div>
         </div>
       </div>

@@ -19,13 +19,10 @@
      specials below carry literals; their dark values live in the single
      dark override block after this rule. */
   --fibu-primary: var(--accent);
-  --fibu-primary-hover: color-mix(in srgb, var(--accent) 85%, black);
   --fibu-accent: var(--accent);
   --fibu-success: var(--success);
   --fibu-warning: var(--warning);
   --fibu-danger: var(--danger);
-  --fibu-bg-glass: var(--glass-bg);
-  --fibu-border-glass: var(--line);
   --fibu-glow-color: var(--accent-soft);
   --fibu-font-mono: var(--font-mono);
   /* Module-local specials: blue mileage "commute" dot, E2E terminal look,
@@ -85,37 +82,7 @@
   flex-direction: column;
 }
 
-/* Pane Headers (Fully Theme-Adaptive) */
-.fibu-pane-head {
-  padding: 16px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--hairline);
-  flex-shrink: 0;
-}
-
-.fibu-pane-head span {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-  font-weight: 700;
-  display: block;
-  margin-bottom: 3px;
-}
-
-.fibu-pane-head h2 {
-  font-size: 14.5px;
-  font-weight: 720;
-  margin: 0;
-  color: var(--text-strong);
-  letter-spacing: -0.01em;
-}
-
-.fibu-center-head {
-  /* Inherits transparent background to blend with center pane */
-}
+/* Pane headers use the shared kit (.ctox-pane-header + .ctox-pane-band). */
 
 /* Left Sidebar Navigation */
 .fibu-sidebar {
@@ -189,8 +156,7 @@
 }
 
 .fibu-nav-icon::before,
-.fibu-action-icon::before,
-.fibu-tab-icon::before {
+.fibu-action-icon::before {
   content: attr(data-icon);
 }
 
@@ -200,8 +166,7 @@
   height: 20px;
 }
 
-.fibu-action-icon,
-.fibu-tab-icon {
+.fibu-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -213,21 +178,10 @@
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1;
-}
-
-.fibu-action-icon {
   min-width: 22px;
   height: 20px;
   padding: 0 5px;
   opacity: 0.86;
-}
-
-.fibu-tab-icon {
-  min-width: 24px;
-  height: 20px;
-  margin-right: 8px;
-  color: inherit;
-  opacity: 0.9;
 }
 
 .fibu-sidebar-footer {
@@ -250,23 +204,7 @@
   letter-spacing: 0.05em;
 }
 
-.fibu-select {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  color: var(--text);
-  padding: 8px 12px;
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.fibu-select:focus {
-  border-color: var(--fibu-primary);
-  box-shadow: 0 0 0 2px var(--fibu-glow-color);
-}
+/* Selects/inputs use the shared kit (.ctox-select / .ctox-input). */
 
 /* Center Workbench Body */
 .fibu-workbench-body {
@@ -307,24 +245,6 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-}
-
-.fibu-search-input {
-  width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  color: var(--text);
-  padding: 8px 14px;
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  transition: all 0.2s;
-}
-
-.fibu-search-input:focus {
-  border-color: var(--fibu-primary);
-  box-shadow: 0 0 0 2px var(--fibu-glow-color);
 }
 
 .fibu-result-count {
@@ -390,61 +310,12 @@
   color: var(--muted);
 }
 
-/* Buttons */
-.fibu-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-radius: var(--control-radius);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.2s;
-  outline: none;
-  font-family: inherit;
-  white-space: nowrap;
-}
-
-.fibu-btn-primary {
-  background: var(--fibu-primary);
-  color: #ffffff;
-  box-shadow: var(--shadow-sm);
-}
-
-.fibu-btn-primary:hover {
-  background: color-mix(in srgb, var(--fibu-primary) 90%, #fff 10%);
-  transform: translateY(-1px);
-}
-
-.fibu-btn-secondary {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text);
-}
-
-.fibu-btn-secondary:hover {
-  background: color-mix(in srgb, var(--surface-2) 130%, #fff 5%);
-  transform: translateY(-1px);
-}
-
-.fibu-btn-danger {
-  background: color-mix(in srgb, var(--fibu-danger) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--fibu-danger) 25%, transparent);
-  color: var(--fibu-danger);
-}
-
-.fibu-btn-danger:hover {
-  background: color-mix(in srgb, var(--fibu-danger) 22%, transparent);
-  transform: translateY(-1px);
-}
-
-.fibu-btn-large {
-  padding: 12px 28px;
-  font-size: 14.5px;
-  border-radius: 12px;
+/* Buttons use the shared kit (.ctox-button / .is-primary / .is-danger).
+   fibu-btn-xs is the module's compact variant for buttons inside table rows. */
+.fibu-module .ctox-button.fibu-btn-xs {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 /* Scrollable Tables Container */
@@ -455,66 +326,36 @@
   min-height: 0;
 }
 
-/* Fibu Tables (Fully Theme-Adaptive) */
-.fibu-table {
-  width: 100%;
+/* Data tables use the shared kit (.ctox-table-wrap + .ctox-table, .is-num,
+   .is-selected). Module-specific extensions only: minimum table width for
+   horizontal scrolling, clickable/middle-aligned rows, group rows, centered
+   cells, and table empty-state cells. */
+.fibu-module .ctox-table {
   min-width: 760px;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 13px;
-  text-align: left;
 }
 
-.fibu-table th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
-  font-weight: 700;
-  color: var(--text-strong);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.fibu-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--hairline);
+.fibu-module .ctox-table td {
   vertical-align: middle;
-  color: var(--text);
 }
 
-.fibu-table tr {
-  transition: all 0.2s;
+.fibu-module .ctox-table tbody tr {
   cursor: pointer;
 }
 
-.fibu-table tr:hover td {
-  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+.fibu-module .ctox-table .fibu-cell-center {
+  text-align: center;
 }
 
-.fibu-table tr.selected td {
-  background: var(--fibu-glow-color);
-  border-bottom-color: var(--fibu-primary);
-  box-shadow: inset 3px 0 0 var(--fibu-primary);
-}
-
-.fibu-table td.fibu-empty-state {
-  display: table-cell;
-  height: auto;
-  padding: 36px 20px;
-}
-
-.fibu-table tr[aria-selected="true"] td:first-child {
-  color: var(--text-strong);
-}
-
-.fibu-table tr.group-row td {
+.fibu-module .ctox-table tr.group-row td {
   font-weight: 700;
   color: var(--text-strong);
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);
+}
+
+.fibu-module .ctox-table td.fibu-empty-state {
+  padding: 36px 20px;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* Table Helpers */
@@ -524,59 +365,8 @@
   color: var(--fibu-primary);
 }
 
-.fibu-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-size: 10.5px;
-  font-weight: 600;
-  font-family: var(--fibu-font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.fibu-badge.status-posted {
-  background: color-mix(in srgb, var(--fibu-success) 12%, transparent);
-  color: var(--fibu-success);
-  border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
-}
-
-.fibu-badge.status-draft {
-  background: var(--surface-2);
-  color: var(--muted);
-  border: 1px solid var(--line);
-}
-
-.fibu-badge.status-storno {
-  background: color-mix(in srgb, var(--fibu-danger) 12%, transparent);
-  color: var(--fibu-danger);
-  border: 1px solid color-mix(in srgb, var(--fibu-danger) 20%, transparent);
-}
-
-.fibu-badge.status-matched {
-  background: color-mix(in srgb, var(--fibu-success) 12%, transparent);
-  color: var(--fibu-success);
-  border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
-}
-
-.fibu-badge.status-proposed {
-  background: color-mix(in srgb, var(--fibu-warning) 12%, transparent);
-  color: var(--fibu-warning);
-  border: 1px solid color-mix(in srgb, var(--fibu-warning) 25%, transparent);
-}
-
-.fibu-badge.status-unmatched {
-  background: var(--surface-2);
-  color: var(--muted);
-  border: 1px solid var(--line);
-}
-
-.fibu-badge.date-badge {
-  background: var(--accent-soft);
-  color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-}
+/* Status badges use the shared kit (.ctox-badge + .is-success/.is-warning/
+   .is-danger). */
 
 .fibu-storno-indicator {
   text-decoration: line-through;
@@ -587,39 +377,15 @@
   font-size: 11px;
 }
 
-/* Reports Styles (Tabs, Trees & Cards) */
+/* Reports Styles (Tabs, Trees & Cards) — the tab strip itself is the shared
+   kit segmented control (.ctox-pane-tabs / .ctox-pane-tab); this wrapper only
+   positions it inside the reports panel. */
 .fibu-report-tabs {
-  padding: 16px 24px 0 24px;
+  padding: 16px 24px 12px;
   display: flex;
   overflow-x: auto;
-  gap: 6px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
-}
-
-.fibu-report-tab-btn {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 16px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-  white-space: nowrap;
-}
-
-.fibu-report-tab-btn:hover {
-  color: var(--text-strong);
-}
-
-.fibu-report-tab-btn.active {
-  color: var(--fibu-primary);
-  border-bottom-color: var(--fibu-primary);
 }
 
 .fibu-report-workspace-content {
@@ -836,22 +602,6 @@
   color: var(--muted);
 }
 
-.fibu-input {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--text);
-  padding: 8px 12px;
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.fibu-input:focus {
-  border-color: var(--fibu-primary);
-}
-
 /* Bottom Slide-up Drawer Modal */
 .fibu-module .ctox-bottom-drawer,
 .fibu-bottom-drawer {
@@ -920,22 +670,6 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   letter-spacing: 0.05em;
 }
 
-.fibu-drawer-close-btn {
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 4px;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.fibu-drawer-close-btn:hover {
-  background: var(--surface-2);
-  color: var(--text-strong);
-}
-
 .fibu-drawer-content {
   flex: 1;
   overflow-y: auto;
@@ -970,69 +704,10 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   color: var(--fibu-success);
 }
 
-/* Edit split entry line item styles */
-.fibu-split-editor-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 10px;
-}
-
-.fibu-split-editor-table th {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-}
-
-.fibu-split-editor-table td {
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.fibu-split-action-btn {
-  background: transparent;
-  border: 0;
-  color: var(--fibu-danger);
-  cursor: pointer;
-  font-size: 14px;
-}
-
-/* Right Pane: OCR / Chat Companion */
+/* Right Pane: OCR / Chat Companion — the tabs are the shared kit segmented
+   control; the module only lets them wrap inside the narrow pane header. */
 .fibu-right-tabs {
-  padding: 0;
-  display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  border-bottom: 0;
-  flex-shrink: 0;
-  background: transparent;
-}
-
-.fibu-right-tab-btn {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 10px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-  white-space: nowrap;
-}
-
-.fibu-right-tab-btn:hover {
-  color: var(--text-strong);
-}
-
-.fibu-right-tab-btn.active {
-  color: var(--fibu-accent);
-  border-bottom-color: var(--fibu-accent);
 }
 
 .fibu-right-content-area {
@@ -1060,24 +735,15 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   flex-direction: column;
 }
 
-.fibu-empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  height: 100%;
-  color: var(--muted);
-  text-align: center;
-  padding: 40px 20px;
-}
-
+/* Empty states use the shared kit (.ctox-empty); table cells keep the
+   module-scoped td.fibu-empty-state variant next to the table rules above. */
 .empty-icon {
   font-size: 40px;
   opacity: 0.35;
 }
 
-.fibu-empty-state p {
+.fibu-module .ctox-empty p {
+  margin: 0;
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -1218,47 +884,8 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-2) 40%, transparent);
   display: flex;
-  gap: 8px;
-}
-
-.fibu-agent-chat-input {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--text);
-  padding: 8px 12px;
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-  transition: all 0.2s;
-}
-
-.fibu-agent-chat-input:focus {
-  border-color: var(--fibu-accent);
-}
-
-.fibu-agent-chat-send {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 8px;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
-  display: flex;
   align-items: center;
-  justify-content: center;
-  font-family: var(--fibu-font-mono);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0;
-  transition: all 0.2s;
-}
-
-.fibu-agent-chat-send:hover {
-  background: var(--accent-soft);
-  transform: scale(1.05);
+  gap: 8px;
 }
 
 /* Custom Scrollbars */
@@ -1355,6 +982,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-right .ctox-pane-actions {
   width: 100%;
   min-width: 0;
+  justify-content: flex-start;
 }
 
 /* Glowing Debit & Credit Typography — the shell success/danger tokens carry
@@ -1696,7 +1324,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
   .fibu-search-wrapper,
   .fibu-toolbar-actions,
-  .fibu-btn {
+  .fibu-panel-toolbar .ctox-button {
     width: 100%;
     max-width: none;
   }
@@ -1706,23 +1334,12 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
     padding: 12px;
   }
 
-  .fibu-table {
+  .fibu-module .ctox-table {
     min-width: 680px;
-    font-size: 12.5px;
-  }
-
-  .fibu-table th,
-  .fibu-table td {
-    padding: 10px 12px;
   }
 
   .fibu-report-tabs {
-    padding: 10px 12px 0;
-  }
-
-  .fibu-report-tab-btn {
-    padding: 8px 10px;
-    font-size: 12px;
+    padding: 10px 12px;
   }
 
   .fibu-ustva-grid {
@@ -1761,7 +1378,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
     margin-top: 8px;
   }
 
-  .fibu-right-tab-btn {
+  .fibu-right-tabs .ctox-pane-tab {
     justify-content: flex-start;
     width: 100%;
   }

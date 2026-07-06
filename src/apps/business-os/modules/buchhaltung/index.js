@@ -292,7 +292,7 @@ function bindElements(host) {
     journalCount: host.querySelector('[data-journal-count]'),
 
     // Reports sub-panels & tabs
-    reportTabBtns: host.querySelectorAll('.fibu-report-tab-btn'),
+    reportTabBtns: host.querySelectorAll('[data-report-tab]'),
     reportSubpanels: {
       bilanz: host.querySelector('[data-report-subpanel="bilanz"]'),
       guv: host.querySelector('[data-report-subpanel="guv"]'),
@@ -324,7 +324,7 @@ function bindElements(host) {
     drawerCloseBtn: host.querySelector('[data-action="close-drawer"]'),
 
     // Right Pane Tab Selectors
-    rightTabBtns: host.querySelectorAll('.fibu-right-tab-btn'),
+    rightTabBtns: host.querySelectorAll('[data-right-tab]'),
     rightSubpanels: {
       ocr: host.querySelector('[data-right-subpanel="ocr"]'),
       agent: host.querySelector('[data-right-subpanel="agent"]')
@@ -705,8 +705,7 @@ function wireEvents() {
   // Report Sub-Tabs switcher
   els.reportTabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-      els.reportTabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      els.reportTabBtns.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
       const target = btn.getAttribute('data-report-tab');
       switchReportSubpanel(target);
     });
@@ -715,8 +714,7 @@ function wireEvents() {
   // Right auxiliary tabs
   els.rightTabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-      els.rightTabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      els.rightTabBtns.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
       const target = btn.getAttribute('data-right-tab');
       switchRightSubpanel(target);
     });
@@ -880,14 +878,14 @@ function renderAccountsList(acctsArray) {
     const taxRate = acct.tax_rate_id ? (acct.tax_rate_id === 'DE_19' ? '19% Vor/USt' : '7% Vor/USt') : '—';
 
     html += `
-      <tr class="${isGroup ? 'group-row' : 'regular-row'} ${state.selectedAccountId === acct.id ? 'selected' : ''}" data-account-click-id="${acct.id}" aria-selected="${state.selectedAccountId === acct.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${isGroup ? 'group-row' : 'regular-row'} ${state.selectedAccountId === acct.id ? 'is-selected' : ''}" data-account-click-id="${acct.id}" aria-selected="${state.selectedAccountId === acct.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${acct.code}</span></td>
         <td>
           <span style="padding-left: ${acct.parent_id ? '16px' : '0px'};">
             ${isGroup ? '📂' : '📄'} ${acct.name}
           </span>
         </td>
-        <td><span class="fibu-badge status-draft">${{
+        <td><span class="ctox-badge">${{
           bank: 'Bank',
           cash: 'Kasse',
           receivable: 'Debitoren (Forderung)',
@@ -902,8 +900,8 @@ function renderAccountsList(acctsArray) {
           provisions: 'Rückstellungen'
         }[acct.account_type] || acct.account_type}</span></td>
         <td><span style="font-size:11px; opacity:0.85;">${taxRate}</span></td>
-        <td style="text-align: right; font-weight: ${isGroup ? '700' : 'normal'};">${formatSoll}</td>
-        <td style="text-align: right; font-weight: ${isGroup ? '700' : 'normal'};">${formatHaben}</td>
+        <td class="is-num" style="font-weight: ${isGroup ? '700' : 'normal'};">${formatSoll}</td>
+        <td class="is-num" style="font-weight: ${isGroup ? '700' : 'normal'};">${formatHaben}</td>
       </tr>
     `;
   });
@@ -1006,19 +1004,19 @@ function renderJournalRows(entries) {
     const receiptLabel = receipt ? `📄 ${receipt.filename}` : '—';
 
     html += `
-      <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'selected' : ''}" data-entry-click-id="${entry.id}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'is-selected' : ''}" data-entry-click-id="${entry.id}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${entry.posting_date}</span></td>
         <td><span class="fibu-mono">${entry.number || 'Entwurf'}</span></td>
         <td>${escapeHtml(entry.narration || 'Unbenannte Buchung')}</td>
         <td><span style="font-size:11px; opacity:0.8;">${receiptLabel}</span></td>
-        <td style="text-align: right; font-weight: 600;">${formattedTotal}</td>
-        <td style="text-align: center;">
-          <span class="fibu-badge ${isPosted ? 'status-posted' : 'status-draft'}">
+        <td class="is-num" style="font-weight: 600;">${formattedTotal}</td>
+        <td class="fibu-cell-center">
+          <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
             ${isPosted ? (isStorno ? 'Storniert' : 'Posted 🔒') : 'Entwurf'}
           </span>
         </td>
-        <td style="text-align: center;" onclick="event.stopPropagation();">
-          ${isPosted && !isStorno ? `<button class="fibu-btn fibu-btn-danger" style="padding:4px 8px; font-size:11px;" onclick="triggerStorno('${entry.id}')">Storno</button>` : '—'}
+        <td class="fibu-cell-center" onclick="event.stopPropagation();">
+          ${isPosted && !isStorno ? `<button class="ctox-button is-danger fibu-btn-xs" onclick="triggerStorno('${entry.id}')">Storno</button>` : '—'}
         </td>
       </tr>
     `;
@@ -1079,19 +1077,19 @@ function renderReceiptsList() {
     const suggestedLabel = suggestedAcct ? `${suggestedAcct.code} ${suggestedAcct.name}` : '—';
 
     html += `
-      <tr class="${state.selectedReceiptId === r.id ? 'selected' : ''}" data-receipt-click-id="${r.id}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedReceiptId === r.id ? 'is-selected' : ''}" data-receipt-click-id="${r.id}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
         <td style="font-weight: 500; color: var(--text-strong);">📄 ${escapeHtml(r.filename)}</td>
         <td>${escapeHtml(r.supplier_name || 'Unbekannt')}</td>
         <td><span class="fibu-mono">${r.invoice_date || '—'}</span></td>
-        <td style="text-align: right;">${formatCents(r.net_amount || 0)}</td>
-        <td style="text-align: right;">${r.tax_amount ? '19%' : '0%'}</td>
-        <td style="text-align: right; font-weight: 600;">${formatCents(r.gross_amount || 0)}</td>
+        <td class="is-num">${formatCents(r.net_amount || 0)}</td>
+        <td class="is-num">${r.tax_amount ? '19%' : '0%'}</td>
+        <td class="is-num" style="font-weight: 600;">${formatCents(r.gross_amount || 0)}</td>
         <td><span style="font-size:11.5px; opacity:0.85;">${suggestedLabel}</span></td>
-        <td style="text-align: center;">
-          <span class="fibu-badge ${status === 'posted' ? 'status-posted' : 'status-proposed'}">${status}</span>
+        <td class="fibu-cell-center">
+          <span class="ctox-badge ${status === 'posted' ? 'is-success' : 'is-warning'}">${status}</span>
         </td>
-        <td style="text-align: center;" onclick="event.stopPropagation();">
-          ${status !== 'posted' ? `<button class="fibu-btn fibu-btn-primary" style="padding:4px 8px; font-size:11px;" onclick="postReceiptDirectly('${r.id}')">Buchen</button>` : '🔒 Fibu'}
+        <td class="fibu-cell-center" onclick="event.stopPropagation();">
+          ${status !== 'posted' ? `<button class="ctox-button is-primary fibu-btn-xs" onclick="postReceiptDirectly('${r.id}')">Buchen</button>` : '🔒 Fibu'}
         </td>
       </tr>
     `;
@@ -1119,10 +1117,10 @@ function selectReceipt(id) {
 
   // Highlight row in Center
   state.els.receiptsList.querySelectorAll('tr').forEach(tr => {
-    tr.classList.remove('selected');
+    tr.classList.remove('is-selected');
     tr.setAttribute('aria-selected', 'false');
     if (tr.getAttribute('data-receipt-click-id') === id) {
-      tr.classList.add('selected');
+      tr.classList.add('is-selected');
       tr.setAttribute('aria-selected', 'true');
     }
   });
@@ -1223,7 +1221,7 @@ function renderBankingList() {
     const proposedLabel = matchedReceipt ? `📄 Vorschlag: ${matchedReceipt.filename}` : 'Keine Belegübereinstimmung';
 
     html += `
-      <tr class="${state.selectedBankLineId === line.id ? 'selected' : ''}" data-bankline-click-id="${line.id}" aria-selected="${state.selectedBankLineId === line.id ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedBankLineId === line.id ? 'is-selected' : ''}" data-bankline-click-id="${line.id}" aria-selected="${state.selectedBankLineId === line.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${line.value_date}</span></td>
         <td>
           <div style="font-weight:600; color:var(--text-strong);">${escapeHtml(line.counterparty_name || 'Unbekannter Empfänger')}</div>
@@ -1232,7 +1230,7 @@ function renderBankingList() {
         <td style="font-size:12px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
           ${escapeHtml(line.narration || '')}
         </td>
-        <td style="text-align: right;" class="${isCredit ? 'fibu-text-debit' : 'fibu-text-credit'}">
+        <td class="is-num ${isCredit ? 'fibu-text-debit' : 'fibu-text-credit'}">
           ${isCredit ? '+' : '-'}${formattedAmount}
         </td>
         <td>
@@ -1240,13 +1238,13 @@ function renderBankingList() {
             ${proposedLabel}
           </span>
         </td>
-        <td style="text-align: center;">
-          <span class="fibu-badge ${isMatched ? 'status-matched' : (isProposed ? 'status-proposed' : 'status-unmatched')}">
+        <td class="fibu-cell-center">
+          <span class="ctox-badge ${isMatched ? 'is-success' : (isProposed ? 'is-warning' : '')}">
             ${line.match_status}
           </span>
         </td>
-        <td style="text-align: center;" onclick="event.stopPropagation();">
-          ${!isMatched && matchedReceipt ? `<button class="fibu-btn fibu-btn-primary" style="padding:4px 8px; font-size:11px;" onclick="matchBankLineDirectly('${line.id}', '${matchedReceipt.id}')">Einbuchen</button>` : (isMatched ? '🔒 Reconciled' : '—')}
+        <td class="fibu-cell-center" onclick="event.stopPropagation();">
+          ${!isMatched && matchedReceipt ? `<button class="ctox-button is-primary fibu-btn-xs" onclick="matchBankLineDirectly('${line.id}', '${matchedReceipt.id}')">Einbuchen</button>` : (isMatched ? '🔒 Reconciled' : '—')}
         </td>
       </tr>
     `;
@@ -1640,17 +1638,17 @@ function renderAssetsList() {
   let html = '';
   ASSETS_MOCK.forEach(as => {
     html += `
-      <tr class="${state.selectedAssetId === as.nr ? 'selected' : ''}" data-asset-click-nr="${as.nr}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
+      <tr class="${state.selectedAssetId === as.nr ? 'is-selected' : ''}" data-asset-click-nr="${as.nr}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${as.nr}</span></td>
         <td style="font-weight: 500; color: var(--text-strong);">🏢 ${escapeHtml(as.name)}</td>
         <td><span class="fibu-mono">${as.date}</span></td>
-        <td style="text-align: right;">${formatCents(as.cost)}</td>
-        <td style="text-align: center;">${as.life}</td>
-        <td><span class="fibu-badge status-draft">${as.method}</span></td>
-        <td style="text-align: right;" class="fibu-text-credit">${formatCents(as.prev)}</td>
-        <td style="text-align: right;" class="fibu-text-debit">${formatCents(as.book)}</td>
-        <td style="text-align: center;">
-          <button type="button" class="fibu-btn fibu-btn-secondary" style="padding:4px 8px; font-size:11px;" data-asset-plan="${as.nr}">Plan</button>
+        <td class="is-num">${formatCents(as.cost)}</td>
+        <td class="fibu-cell-center">${as.life}</td>
+        <td><span class="ctox-badge">${as.method}</span></td>
+        <td class="fibu-text-credit is-num">${formatCents(as.prev)}</td>
+        <td class="fibu-text-debit is-num">${formatCents(as.book)}</td>
+        <td class="fibu-cell-center">
+          <button type="button" class="ctox-button fibu-btn-xs" data-asset-plan="${as.nr}">Plan</button>
         </td>
       </tr>
     `;
@@ -1712,17 +1710,17 @@ function openAccountLedgerDrawer(accountId) {
 
   let linesHtml = '';
   if (ledgerLines.length === 0) {
-    linesHtml = `<div class="fibu-empty-state">Keine Hauptbuchungen für dieses Sachkonto vorhanden.</div>`;
+    linesHtml = `<div class="ctox-empty">Keine Hauptbuchungen für dieses Sachkonto vorhanden.</div>`;
   } else {
     linesHtml = `
-      <table class="fibu-table">
+      <table class="ctox-table">
         <thead>
           <tr>
             <th>Datum</th>
             <th>Belegnr</th>
             <th>Buchungstext</th>
-            <th style="text-align:right;">Soll (Debit)</th>
-            <th style="text-align:right;">Haben (Credit)</th>
+            <th class="is-num">Soll (Debit)</th>
+            <th class="is-num">Haben (Credit)</th>
           </tr>
         </thead>
         <tbody>
@@ -1733,8 +1731,8 @@ function openAccountLedgerDrawer(accountId) {
           <td><span class="fibu-mono">${l.posting_date}</span></td>
           <td><span class="fibu-mono">${l.number}</span></td>
           <td>${escapeHtml(l.narration)}</td>
-          <td class="fibu-text-debit">${l.debit ? formatCents(l.debit) : '—'}</td>
-          <td class="fibu-text-credit">${l.credit ? formatCents(l.credit) : '—'}</td>
+          <td class="fibu-text-debit is-num">${l.debit ? formatCents(l.debit) : '—'}</td>
+          <td class="fibu-text-credit is-num">${l.credit ? formatCents(l.credit) : '—'}</td>
         </tr>
       `;
     });
@@ -1757,24 +1755,24 @@ function openJournalEntryDrawer(entryId) {
   let html = `
     <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
       <div>
-        <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Buchungstext</div>
+        <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase;">Buchungstext</div>
         <div style="font-size:14px; font-weight:600; color:var(--text-strong);">${escapeHtml(entry.narration || '')}</div>
       </div>
       <div>
-        <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Buchungsdatum</div>
+        <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase;">Buchungsdatum</div>
         <div style="font-size:14px; font-weight:600;" class="fibu-mono">${entry.posting_date}</div>
       </div>
     </div>
   `;
 
   html += `
-    <table class="fibu-table">
+    <table class="ctox-table">
       <thead>
         <tr>
           <th>Konto Code</th>
           <th>Kontenbezeichnung</th>
-          <th style="text-align:right;">Soll (Debit)</th>
-          <th style="text-align:right;">Haben (Credit)</th>
+          <th class="is-num">Soll (Debit)</th>
+          <th class="is-num">Haben (Credit)</th>
         </tr>
       </thead>
       <tbody>
@@ -1786,8 +1784,8 @@ function openJournalEntryDrawer(entryId) {
       <tr>
         <td><span class="fibu-mono">${acct?.code || '—'}</span></td>
         <td>${escapeHtml(acct?.name || 'Unbekanntes Konto')}</td>
-        <td class="fibu-text-debit">${l.debit ? formatCents(l.debit) : '—'}</td>
-        <td class="fibu-text-credit">${l.credit ? formatCents(l.credit) : '—'}</td>
+        <td class="fibu-text-debit is-num">${l.debit ? formatCents(l.debit) : '—'}</td>
+        <td class="fibu-text-credit is-num">${l.credit ? formatCents(l.credit) : '—'}</td>
       </tr>
     `;
   });
@@ -1797,7 +1795,7 @@ function openJournalEntryDrawer(entryId) {
   if (!isPosted) {
     html += `
       <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
-        <button class="fibu-btn fibu-btn-primary" onclick="postEntryDirectly('${entry.id}')">🔒 GoBD Festschreiben</button>
+        <button class="ctox-button is-primary" onclick="postEntryDirectly('${entry.id}')">🔒 GoBD Festschreiben</button>
       </div>
     `;
   } else {
@@ -1826,22 +1824,22 @@ function openReceiptDrawer(receipt) {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label>Lieferant</label>
-          <input type="text" class="fibu-input" value="${escapeHtml(receipt.supplier_name || '')}" readonly />
+          <input type="text" class="ctox-input" value="${escapeHtml(receipt.supplier_name || '')}" readonly />
         </div>
         <div class="fibu-form-group">
           <label>Rechnungsnummer</label>
-          <input type="text" class="fibu-input" value="${escapeHtml(receipt.invoice_number || '')}" readonly />
+          <input type="text" class="ctox-input" value="${escapeHtml(receipt.invoice_number || '')}" readonly />
         </div>
         <div class="fibu-form-group">
           <label>Belegdatum</label>
-          <input type="text" class="fibu-input" value="${receipt.invoice_date || ''}" readonly />
+          <input type="text" class="ctox-input" value="${receipt.invoice_date || ''}" readonly />
         </div>
       </div>
 
       <div class="fibu-form-row" style="margin-top:15px; background:var(--surface-2); padding:15px; border-radius:8px; border:1px solid var(--line);">
         <div class="fibu-form-group">
           <label class="fibu-text-warning" style="font-weight:700;">Zahlungsweg (Konto-Gegenbuchung)</label>
-          <select id="rcpt-payment-method" class="fibu-input" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''}>
+          <select id="rcpt-payment-method" class="ctox-select" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''}>
             <option value="kreditor">Geschäftskonto (Standard-Kreditor Verbindlichkeiten)</option>
             <option value="privat">Privat bezahlt (Privatauslage des Inhabers)</option>
             <option value="verrechnung">Gesellschafter-Verrechnungskonto</option>
@@ -1882,7 +1880,7 @@ function openReceiptDrawer(receipt) {
             </div>
           </div>
         ` : `
-          <button class="fibu-btn fibu-btn-primary" onclick="postReceiptWithAdvancedOptions('${receipt.id}')">✔️ Vorkontierung freigeben & Buchen</button>
+          <button class="ctox-button is-primary" onclick="postReceiptWithAdvancedOptions('${receipt.id}')">✔️ Vorkontierung freigeben & Buchen</button>
         `}
       </div>
     </div>
@@ -1907,11 +1905,11 @@ function openBankReconciliationDrawer(lineId) {
   let html = `
     <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
       <div>
-        <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Bankbuchung Verwendungszweck</div>
+        <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase;">Bankbuchung Verwendungszweck</div>
         <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);">${escapeHtml(line.narration)}</div>
       </div>
       <div>
-        <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Wertstellung</div>
+        <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase;">Wertstellung</div>
         <div style="font-size:13.5px; font-weight:600;" class="fibu-mono">${line.value_date}</div>
       </div>
     </div>
@@ -1938,13 +1936,13 @@ function openBankReconciliationDrawer(lineId) {
               <div style="font-weight:700; color:var(--text-strong);">📄 ${escapeHtml(matchedReceipt.filename)}</div>
               <div style="font-size:11px; opacity:0.8;">Lieferant: ${escapeHtml(matchedReceipt.supplier_name)} | Datum: ${matchedReceipt.invoice_date}</div>
             </div>
-            <button class="fibu-btn fibu-btn-primary" onclick="matchBankLineDirectly('${line.id}', '${matchedReceipt.id}')">Abgleich bestätigen</button>
+            <button class="ctox-button is-primary" onclick="matchBankLineDirectly('${line.id}', '${matchedReceipt.id}')">Abgleich bestätigen</button>
           </div>
         </div>
       `;
     } else {
       html += `
-        <div class="fibu-empty-state" style="margin-top:20px; padding:15px;">
+        <div class="ctox-empty" style="margin-top:20px; padding:15px; min-height:0;">
           Kein passender Beleg mit dem Betrag ${formatCents(Math.abs(amountVal))} im Vorrat gefunden.
         </div>
       `;
@@ -1952,7 +1950,7 @@ function openBankReconciliationDrawer(lineId) {
 
     html += `
       <div style="margin-top:20px; display:flex; justify-content:center;">
-        <button class="fibu-btn fibu-btn-secondary fibu-btn-dashed-warning" style="width:100%;" onclick="toggleBankSplitEditor('${line.id}')">
+        <button class="ctox-button fibu-btn-dashed-warning" style="width:100%;" onclick="toggleBankSplitEditor('${line.id}')">
           🥞 Transaktionsbetrag aufteilen (Split-Aufteilungsbuchung)
         </button>
       </div>
@@ -1974,20 +1972,20 @@ function openAssetDrawer(nr, name, cost, life) {
 
   let html = `
     <div style="margin-bottom:16px;">
-      <span style="font-size:11.5px; color:#64748b; font-weight:700; text-transform:uppercase;">Anschaffungskosten:</span>
+      <span style="font-size:11.5px; color:var(--muted); font-weight:700; text-transform:uppercase;">Anschaffungskosten:</span>
       <span style="font-size:14px; font-weight:700; color:var(--text-strong); margin-left:8px;">${formatCents(cost)}</span>
-      <span style="font-size:11.5px; color:#64748b; font-weight:700; text-transform:uppercase; margin-left:24px;">Nutzungsdauer:</span>
+      <span style="font-size:11.5px; color:var(--muted); font-weight:700; text-transform:uppercase; margin-left:24px;">Nutzungsdauer:</span>
       <span style="font-size:14px; font-weight:700; color:var(--text-strong); margin-left:8px;">${life} Jahre</span>
     </div>
 
-    <table class="fibu-table">
+    <table class="ctox-table">
       <thead>
         <tr>
           <th>Kalenderjahr</th>
-          <th style="text-align:right;">Buchwert (Anfang)</th>
-          <th style="text-align:right;">AfA-Rate (Jahr)</th>
-          <th style="text-align:right;">Kumulierte Abschreibung</th>
-          <th style="text-align:right;">Buchwert (Ende)</th>
+          <th class="is-num">Buchwert (Anfang)</th>
+          <th class="is-num">AfA-Rate (Jahr)</th>
+          <th class="is-num">Kumulierte Abschreibung</th>
+          <th class="is-num">Buchwert (Ende)</th>
         </tr>
       </thead>
       <tbody>
@@ -2006,10 +2004,10 @@ function openAssetDrawer(nr, name, cost, life) {
     html += `
       <tr>
         <td><span class="fibu-mono">${startYear + year}</span></td>
-        <td style="text-align:right;">${formatCents(currentBookVal)}</td>
-        <td class="fibu-text-credit" style="text-align:right;">${formatCents(yearRate)}</td>
-        <td style="text-align:right;">${formatCents(accumulated)}</td>
-        <td class="fibu-text-debit" style="text-align:right; font-weight:600;">${formatCents(endVal)}</td>
+        <td class="is-num">${formatCents(currentBookVal)}</td>
+        <td class="fibu-text-credit is-num">${formatCents(yearRate)}</td>
+        <td class="is-num">${formatCents(accumulated)}</td>
+        <td class="fibu-text-debit is-num" style="font-weight:600;">${formatCents(endVal)}</td>
       </tr>
     `;
     currentBookVal = endVal;
@@ -2029,37 +2027,37 @@ function openManualJournalDrawer() {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label for="new-entry-date">Belegdatum</label>
-          <input type="date" id="new-entry-date" class="fibu-input" value="2026-05-22" required aria-describedby="new-entry-validation" />
+          <input type="date" id="new-entry-date" class="ctox-input" value="2026-05-22" required aria-describedby="new-entry-validation" />
         </div>
         <div class="fibu-form-group" style="flex:2;">
           <label for="new-entry-narration">Buchungstext</label>
-          <input type="text" id="new-entry-narration" class="fibu-input" placeholder="z.B. Miete Büroräume Mai" required />
+          <input type="text" id="new-entry-narration" class="ctox-input" placeholder="z.B. Miete Büroräume Mai" required />
         </div>
       </div>
 
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label for="new-entry-soll">Soll-Konto (Debit)</label>
-          <select id="new-entry-soll" class="fibu-select" required>
+          <select id="new-entry-soll" class="ctox-select" required>
             ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.soll ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
         <div class="fibu-form-group">
           <label for="new-entry-haben">Haben-Konto (Credit)</label>
-          <select id="new-entry-haben" class="fibu-select" required>
+          <select id="new-entry-haben" class="ctox-select" required>
             ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.haben ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
         <div class="fibu-form-group">
           <label for="new-entry-amount">Betrag (Netto in EUR)</label>
-          <input type="number" step="0.01" min="0.01" id="new-entry-amount" class="fibu-input" placeholder="0.00" required />
+          <input type="number" step="0.01" min="0.01" id="new-entry-amount" class="ctox-input" placeholder="0.00" required />
         </div>
       </div>
 
       <div id="new-entry-validation" class="fibu-validation-summary" role="status" aria-live="polite"></div>
 
       <div class="fibu-drawer-actions">
-        <button type="submit" id="new-entry-submit" class="fibu-btn fibu-btn-primary" disabled aria-disabled="true">💾 Als Entwurf buchen</button>
+        <button type="submit" id="new-entry-submit" class="ctox-button is-primary" disabled aria-disabled="true">💾 Als Entwurf buchen</button>
       </div>
     </form>
   `;
@@ -2378,13 +2376,13 @@ window.updateReceiptDrawerOptions = (receiptId) => {
 
   // Render table
   let tableHtml = `
-    <table class="fibu-table" style="margin-top:10px;">
+    <table class="ctox-table" style="margin-top:10px;">
       <thead>
         <tr>
           <th>Konto</th>
           <th>Kontenbezeichnung</th>
-          <th style="text-align:right;">Soll (Debit)</th>
-          <th style="text-align:right;">Haben (Credit)</th>
+          <th class="is-num">Soll (Debit)</th>
+          <th class="is-num">Haben (Credit)</th>
         </tr>
       </thead>
       <tbody>
@@ -2395,8 +2393,8 @@ window.updateReceiptDrawerOptions = (receiptId) => {
       <tr>
         <td><span class="fibu-mono">${l.code}</span></td>
         <td>${escapeHtml(l.name)}</td>
-        <td class="fibu-text-debit" style="text-align:right;">${l.debit > 0 ? formatCents(l.debit) : '—'}</td>
-        <td class="fibu-text-credit" style="text-align:right;">${l.credit > 0 ? formatCents(l.credit) : '—'}</td>
+        <td class="fibu-text-debit is-num">${l.debit > 0 ? formatCents(l.debit) : '—'}</td>
+        <td class="fibu-text-credit is-num">${l.credit > 0 ? formatCents(l.credit) : '—'}</td>
       </tr>
     `;
   });
@@ -2500,12 +2498,12 @@ function renderBankSplitEditor(line) {
   state.activeBankSplits.forEach((split, idx) => {
     html += `
       <div style="display:flex; gap:8px; align-items:center;">
-        <select style="font-size:12px; flex:2;" class="fibu-input" onchange="updateBankSplit(${idx}, 'accountCode', this.value)">
+        <select style="font-size:12px; flex:2;" class="ctox-select" onchange="updateBankSplit(${idx}, 'accountCode', this.value)">
           ${state.accounts.map(a => `<option value="${a.code}" ${a.code === split.accountCode ? 'selected' : ''}>${a.code} - ${escapeHtml(a.name)}</option>`).join('')}
         </select>
-        <input type="number" style="font-size:12px; flex:1;" class="fibu-input" placeholder="Betrag €" value="${split.amount > 0 ? (split.amount / 100).toFixed(2) : ''}" oninput="updateBankSplit(${idx}, 'amount', parseFloat(this.value) * 100)" />
-        <input type="text" style="font-size:12px; flex:2;" class="fibu-input" placeholder="Zweck" value="${escapeHtml(split.narration || '')}" oninput="updateBankSplit(${idx}, 'narration', this.value)" />
-        <button class="fibu-btn fibu-btn-danger" style="padding:4px 8px;" onclick="deleteBankSplit(${idx})">🗑️</button>
+        <input type="number" style="font-size:12px; flex:1;" class="ctox-input" placeholder="Betrag €" value="${split.amount > 0 ? (split.amount / 100).toFixed(2) : ''}" oninput="updateBankSplit(${idx}, 'amount', parseFloat(this.value) * 100)" />
+        <input type="text" style="font-size:12px; flex:2;" class="ctox-input" placeholder="Zweck" value="${escapeHtml(split.narration || '')}" oninput="updateBankSplit(${idx}, 'narration', this.value)" />
+        <button class="ctox-button is-danger fibu-btn-xs" onclick="deleteBankSplit(${idx})">🗑️</button>
       </div>
     `;
   });
@@ -2515,13 +2513,13 @@ function renderBankSplitEditor(line) {
   html += `
       </div>
       <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
-        <button class="fibu-btn fibu-btn-secondary" style="font-size:11px;" onclick="addBankSplitRow()">➕ Zeile hinzufügen</button>
+        <button class="ctox-button fibu-btn-xs" onclick="addBankSplitRow()">➕ Zeile hinzufügen</button>
         <div class="${isBalanced ? 'fibu-text-debit' : 'fibu-text-credit'}" style="font-size:13px; font-weight:700;">
           ${isBalanced ? '✔️ Ausgeglichen (0,00 € Rest)' : `Restwert: ${(remaining / 100).toFixed(2)} €`}
         </div>
       </div>
       <div style="margin-top:16px; display:flex; justify-content:flex-end;">
-        <button class="fibu-btn fibu-btn-primary" ${!isBalanced ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''} onclick="postBankSplitReconciliation('${line.id}')">
+        <button class="ctox-button is-primary" ${!isBalanced ? 'disabled' : ''} onclick="postBankSplitReconciliation('${line.id}')">
           ✔️ Split-Abgleich verbuchen
         </button>
       </div>
@@ -3149,7 +3147,7 @@ function setSelectedRow(container, attrName, selectedId) {
   if (!container) return;
   container.querySelectorAll('tr').forEach(tr => {
     const isSelected = tr.getAttribute(attrName) === selectedId;
-    tr.classList.toggle('selected', isSelected);
+    tr.classList.toggle('is-selected', isSelected);
     tr.setAttribute('aria-selected', String(isSelected));
   });
 }
@@ -3181,17 +3179,17 @@ function renderUiTestsList() {
   let html = '';
   uiTestCases.forEach(tc => {
     const status = state.uiTestResults[tc.id] || 'pending';
-    let statusClass = 'status-draft';
+    let statusClass = '';
     let statusText = 'Bereit';
 
     if (status === 'running') {
-      statusClass = 'status-proposed';
+      statusClass = 'is-warning';
       statusText = '⏳ Läuft...';
     } else if (status === 'passed') {
-      statusClass = 'status-posted';
+      statusClass = 'is-success';
       statusText = '✔️ Bestanden';
     } else if (status === 'failed') {
-      statusClass = 'status-storno';
+      statusClass = 'is-danger';
       statusText = '❌ Fehlgeschlagen';
     }
 
@@ -3213,11 +3211,11 @@ function renderUiTestsList() {
             ${stepsHtml}
           </ol>
         </td>
-        <td style="text-align: center; vertical-align: middle;">
-          <span class="fibu-badge ${statusClass}">${statusText}</span>
+        <td class="fibu-cell-center">
+          <span class="ctox-badge ${statusClass}">${statusText}</span>
         </td>
-        <td style="text-align: center; vertical-align: middle;">
-          <button class="fibu-btn fibu-btn-secondary" style="padding:6px 10px; font-size:11px;" onclick="window.runSingleUiTest('${tc.id}')" ${status === 'running' ? 'disabled' : ''}>
+        <td class="fibu-cell-center">
+          <button class="ctox-button fibu-btn-xs" onclick="window.runSingleUiTest('${tc.id}')" ${status === 'running' ? 'disabled' : ''}>
             ⚡ Run
           </button>
         </td>
@@ -3250,7 +3248,7 @@ window.runSingleUiTest = async function(testId) {
   const log = (msg) => {
     if (logEl) {
       const time = new Date().toLocaleTimeString('de-DE');
-      logEl.innerHTML += `<div style="margin-bottom:4px;"><span style="color:#64748b;">[${time}]</span> <span style="color:#a855f7; font-weight:bold;">[${testId}]</span> ${escapeHtml(msg)}</div>`;
+      logEl.innerHTML += `<div style="margin-bottom:4px;"><span style="color:var(--muted);">[${time}]</span> <span style="color:#a855f7; font-weight:bold;">[${testId}]</span> ${escapeHtml(msg)}</div>`;
       logEl.scrollTop = logEl.scrollHeight;
     }
     if (stepSpan) stepSpan.textContent = msg;
@@ -3342,14 +3340,14 @@ window.renderTravelList = function() {
       <tr data-travel-click-id="${t.id}">
         <td><strong>✈️ ${escapeHtml(t.narration)}</strong></td>
         <td><span class="fibu-mono">${dateRange}</span></td>
-        <td class="fibu-text-warning" style="text-align: right; font-weight: 600;">${formatCents(totalAllowance)}</td>
+        <td class="fibu-text-warning is-num" style="font-weight: 600;">${formatCents(totalAllowance)}</td>
         <td>
-          <span class="fibu-badge ${isPosted ? 'status-posted' : 'status-draft'}">
+          <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
             ${isPosted ? 'Verbucht 🔒' : 'Entwurf'}
           </span>
         </td>
-        <td style="text-align: center;" onclick="event.stopPropagation();">
-          ${!isPosted ? `<button class="fibu-btn fibu-btn-primary" style="padding:4px 8px; font-size:11px;" onclick="postTravelEntryDirectly('${t.id}')">Buchen</button>` : '🔒'}
+        <td class="fibu-cell-center" onclick="event.stopPropagation();">
+          ${!isPosted ? `<button class="ctox-button is-primary fibu-btn-xs" onclick="postTravelEntryDirectly('${t.id}')">Buchen</button>` : '🔒'}
         </td>
       </tr>
     `;
@@ -3376,24 +3374,24 @@ window.openNewTravelDrawer = function() {
       <div class="fibu-form-row">
         <div class="fibu-form-group" style="flex:2;">
           <label>Reisezweck / Destination</label>
-          <input type="text" id="travel-purpose" class="fibu-input" placeholder="z.B. IT-Messe Berlin" required />
+          <input type="text" id="travel-purpose" class="ctox-input" placeholder="z.B. IT-Messe Berlin" required />
         </div>
       </div>
       <div class="fibu-form-row" style="margin-top:10px;">
         <div class="fibu-form-group">
           <label>Beginn (Datum & Uhrzeit)</label>
-          <input type="datetime-local" id="travel-start" class="fibu-input" value="${todayStr}T08:00" required onchange="updateTravelVmaCalculation()" />
+          <input type="datetime-local" id="travel-start" class="ctox-input" value="${todayStr}T08:00" required onchange="updateTravelVmaCalculation()" />
         </div>
         <div class="fibu-form-group">
           <label>Ende (Datum & Uhrzeit)</label>
-          <input type="datetime-local" id="travel-end" class="fibu-input" value="${todayStr}T18:00" required onchange="updateTravelVmaCalculation()" />
+          <input type="datetime-local" id="travel-end" class="ctox-input" value="${todayStr}T18:00" required onchange="updateTravelVmaCalculation()" />
         </div>
       </div>
 
       <div class="fibu-form-row" style="margin-top:15px; background:var(--surface-2); padding:15px; border-radius:8px; border:1px solid var(--line);">
         <div class="fibu-form-group">
           <label class="fibu-text-warning" style="font-weight:700;">Zahlungsweg (Ausgleichs-Gegenkonto)</label>
-          <select id="travel-payment-method" class="fibu-input">
+          <select id="travel-payment-method" class="ctox-select">
             <option value="privat">Privat getragen (Privatauslage des Inhabers - Gegenbuchung auf 1890)</option>
             <option value="verrechnung">Gesellschafter-Verrechnungskonto (Gegenbuchung auf 1370)</option>
           </select>
@@ -3411,7 +3409,7 @@ window.openNewTravelDrawer = function() {
         <div class="fibu-text-debit" style="font-size:14px; font-weight:700;">
           Erstattungsbetrag: <span id="travel-total-allowance-label">0,00 €</span>
         </div>
-        <button type="submit" class="fibu-btn fibu-btn-primary">💾 Als Entwurf buchen</button>
+        <button type="submit" class="ctox-button is-primary">💾 Als Entwurf buchen</button>
       </div>
     </form>
   `;
@@ -3625,16 +3623,16 @@ window.renderMileageList = function() {
         <td><span class="fibu-mono">${t.posting_date}</span></td>
         <td><strong>🚗 ${escapeHtml(metadata.destination || '')}</strong> <div style="font-size:11px; opacity:0.75;">Zweck: ${escapeHtml(t.narration || '')}</div></td>
         <td>${escapeHtml(metadata.contactPerson || '—')}</td>
-        <td style="text-align: right;" class="fibu-mono">${km} km</td>
-        <td class="fibu-text-warning" style="text-align: right; font-weight: 600;">${formatCents(reimbursement)}</td>
-        <td><span class="fibu-badge ${metadata.purpose === 'business' ? 'status-posted' : 'status-draft'}">${typeLabel}</span></td>
+        <td class="fibu-mono is-num">${km} km</td>
+        <td class="fibu-text-warning is-num" style="font-weight: 600;">${formatCents(reimbursement)}</td>
+        <td><span class="ctox-badge ${metadata.purpose === 'business' ? 'is-success' : ''}">${typeLabel}</span></td>
         <td>
-          <span class="fibu-badge ${isPosted ? 'status-posted' : 'status-draft'}">
+          <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
             ${isPosted ? 'Verbucht 🔒' : 'Entwurf'}
           </span>
         </td>
-        <td style="text-align: center;" onclick="event.stopPropagation();">
-          ${!isPosted && metadata.purpose === 'business' ? `<button class="fibu-btn fibu-btn-primary" style="padding:4px 8px; font-size:11px;" onclick="postMileageEntryDirectly('${t.id}')">Buchen</button>` : (isPosted ? '🔒' : '—')}
+        <td class="fibu-cell-center" onclick="event.stopPropagation();">
+          ${!isPosted && metadata.purpose === 'business' ? `<button class="ctox-button is-primary fibu-btn-xs" onclick="postMileageEntryDirectly('${t.id}')">Buchen</button>` : (isPosted ? '🔒' : '—')}
         </td>
       </tr>
     `;
@@ -3707,11 +3705,11 @@ window.openNewMileageDrawer = function() {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label>Datum</label>
-          <input type="date" id="mileage-date" class="fibu-input" value="${todayStr}" required />
+          <input type="date" id="mileage-date" class="ctox-input" value="${todayStr}" required />
         </div>
         <div class="fibu-form-group">
           <label>Fahrttyp</label>
-          <select id="mileage-purpose-type" class="fibu-input" onchange="updateMileageReimbursementLive()">
+          <select id="mileage-purpose-type" class="ctox-select" onchange="updateMileageReimbursementLive()">
             <option value="business">Geschäftlich (Kilometerpauschale 0,30 €)</option>
             <option value="private">Privatfahrt (Keine Erstattung)</option>
             <option value="commute">Arbeitsweg (Wohnung/Arbeitsstätte)</option>
@@ -3721,34 +3719,34 @@ window.openNewMileageDrawer = function() {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label>Anfangs-Kilometerstand</label>
-          <input type="number" id="mileage-start-km" class="fibu-input" placeholder="z.B. 12400" required oninput="updateMileageReimbursementLive()" />
+          <input type="number" id="mileage-start-km" class="ctox-input" placeholder="z.B. 12400" required oninput="updateMileageReimbursementLive()" />
         </div>
         <div class="fibu-form-group">
           <label>End-Kilometerstand</label>
-          <input type="number" id="mileage-end-km" class="fibu-input" placeholder="z.B. 12550" required oninput="updateMileageReimbursementLive()" />
+          <input type="number" id="mileage-end-km" class="ctox-input" placeholder="z.B. 12550" required oninput="updateMileageReimbursementLive()" />
         </div>
       </div>
       <div class="fibu-form-row">
         <div class="fibu-form-group" style="flex:2;">
           <label>Route / Reiseziel (Start -> Ziel)</label>
-          <input type="text" id="mileage-route" class="fibu-input" placeholder="Büro -> Kundengespräch Berlin -> Büro" required />
+          <input type="text" id="mileage-route" class="ctox-input" placeholder="Büro -> Kundengespräch Berlin -> Büro" required />
         </div>
         <div class="fibu-form-group">
           <label>Besuchter Partner / Kontakt</label>
-          <input type="text" id="mileage-contact" class="fibu-input" placeholder="Firma Müller GmbH" />
+          <input type="text" id="mileage-contact" class="ctox-input" placeholder="Firma Müller GmbH" />
         </div>
       </div>
       <div class="fibu-form-row">
         <div class="fibu-form-group" style="flex:2;">
           <label>Fahrtzweck / Notiz</label>
-          <input type="text" id="mileage-purpose-detail" class="fibu-input" placeholder="Kundenpräsentation & Vertragsverhandlung" required />
+          <input type="text" id="mileage-purpose-detail" class="ctox-input" placeholder="Kundenpräsentation & Vertragsverhandlung" required />
         </div>
       </div>
 
       <div class="fibu-form-row" id="mileage-reimbursement-payment-wrap" style="margin-top:15px; background:var(--surface-2); padding:15px; border-radius:8px; border:1px solid var(--line);">
         <div class="fibu-form-group">
           <label class="fibu-text-warning" style="font-weight:700;">Zahlungsweg (Gegenbuchung)</label>
-          <select id="mileage-payment-method" class="fibu-input">
+          <select id="mileage-payment-method" class="ctox-select">
             <option value="privat">Privatauslage des Inhabers (Einlage - Gegenbuchung auf 1890)</option>
             <option value="verrechnung">Gesellschafter-Verrechnungskonto (Gegenbuchung auf 1370)</option>
           </select>
@@ -3759,7 +3757,7 @@ window.openNewMileageDrawer = function() {
         <div class="fibu-text-debit" style="font-size:14px; font-weight:700;">
           Erstattungssumme: <span id="mileage-reimbursement-label">0,00 €</span>
         </div>
-        <button type="submit" class="fibu-btn fibu-btn-primary">💾 Als Fahrt buchen</button>
+        <button type="submit" class="ctox-button is-primary">💾 Als Fahrt buchen</button>
       </div>
     </form>
   `;
@@ -3924,7 +3922,7 @@ window.triggerAnnualPrivateCarShare = function() {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label>Berechnungsmethode</label>
-          <select id="car-share-method" class="fibu-input" onchange="updateCarShareLiveCalculations()">
+          <select id="car-share-method" class="ctox-select" onchange="updateCarShareLiveCalculations()">
             <option value="logbook">Fahrtenbuch-Methode (Ist-Kosten-Anteil: Privat-km * 0,30 €)</option>
             <option value="one_percent">1%-Pauschalmethode (30.000 € Listenpreis * 1% = 300,00 €)</option>
           </select>
@@ -3934,7 +3932,7 @@ window.triggerAnnualPrivateCarShare = function() {
       <div class="fibu-form-row">
         <div class="fibu-form-group">
           <label>Zu versteuernder Betrag (€)</label>
-          <input type="number" step="0.01" id="car-share-amount" value="${defaultVal.toFixed(2)}" class="fibu-input" oninput="updateCarShareLiveCalculations()" />
+          <input type="number" step="0.01" id="car-share-amount" value="${defaultVal.toFixed(2)}" class="ctox-input" oninput="updateCarShareLiveCalculations()" />
         </div>
       </div>
 
@@ -3948,7 +3946,7 @@ window.triggerAnnualPrivateCarShare = function() {
       </div>
 
       <div style="margin-top:20px; display:flex; justify-content:flex-end;">
-        <button class="fibu-btn fibu-btn-primary" onclick="postAnnualCarShare()">✔️ Steuererklärung abschließen & buchen</button>
+        <button class="ctox-button is-primary" onclick="postAnnualCarShare()">✔️ Steuererklärung abschließen & buchen</button>
       </div>
     </div>
   `;

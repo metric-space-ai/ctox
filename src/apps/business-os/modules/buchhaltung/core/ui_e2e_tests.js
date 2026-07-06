@@ -342,7 +342,7 @@ export const uiTestCases = [
       let postBtn = null;
       rows.forEach(r => {
         if (r.textContent.includes('hetzner_cloud_invoice.pdf')) {
-          postBtn = r.querySelector('.fibu-btn-primary');
+          postBtn = r.querySelector('.ctox-button.is-primary');
         }
       });
 
@@ -475,7 +475,7 @@ export const uiTestCases = [
 
       // Step 5: Click confirm match
       log('Bestätige den Abgleich und buche Ausgleich (Soll 1600 / Haben 1200)...');
-      const matchBtn = targetRow.querySelector('.fibu-btn-primary');
+      const matchBtn = targetRow.querySelector('.ctox-button.is-primary');
       if (matchBtn) {
         await highlight(matchBtn, 600);
         await window.matchBankLineDirectly('e2e-hetzner-bank-line', 'e2e-hetzner-rcpt');
@@ -604,7 +604,7 @@ export const uiTestCases = [
 
       await highlight(targetRow, 1000);
 
-      const planBtn = targetRow.querySelector('.fibu-btn-secondary');
+      const planBtn = targetRow.querySelector('[data-asset-plan]');
       if (planBtn) {
         log('Öffne Abschreibungsplan-Grafik...');
         await highlight(planBtn, 600);
@@ -647,7 +647,7 @@ export const uiTestCases = [
 
       // Step 2: Open UStVA Subpanel
       log('Öffne Umsatzsteuer-Voranmeldung (ELSTER)...');
-      const ustvaTabBtn = Array.from(document.querySelectorAll('.fibu-report-tab-btn')).find(b => b.textContent.includes('UStVA'));
+      const ustvaTabBtn = document.querySelector('[data-report-tab="ustva"]');
       if (ustvaTabBtn) {
         await highlight(ustvaTabBtn, 800);
         ustvaTabBtn.click();
