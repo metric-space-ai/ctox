@@ -36,23 +36,41 @@ forms, but the working views should remain direct, inspectable ESM.
 The shell imports `index.js` and calls `mount(ctx)`; the context carries
 everything a module is allowed to touch: `host`, `db`, `sync`, `commandBus`,
 `eventBus`, `contextMenu`, `notifications`, `windowManager`, drawer openers,
-`locale`, and `preferences`. `mount` returns an unmount/cleanup function.
+`locale`, and `permissions` (full pinned contract:
+`docs/business-os-module-context.md`). `mount` returns an unmount/cleanup
+function.
 
 Styling comes from two shell-owned layers that are loaded once for every app:
 
 - `app.css` defines the primitive design tokens (`--bg`, `--surface`,
   `--surface-2`, `--line`, `--text`, `--muted`, `--accent`, `--danger`,
   `--panel-radius`, `--control-radius`, `--font-sans`, `--font-mono`, ...).
-- `shared/base.css` is the module base kit: `.ctox-workspace` (the standard
-  3-pane grid wired to the shell column resizers), `.ctox-pane`,
-  `.ctox-pane-body`, `.ctox-pane-band`, `.ctox-toolbar`, `.ctox-button`,
-  `.ctox-input`, `.ctox-chip`, `.ctox-card`, `.ctox-list`, `.ctox-empty`,
-  `.ctox-badge`, plus derived semantic tokens (`--line-strong`, `--success`,
-  `--warning`). Modules use these classes directly — no import needed — and
-  keep `index.css` for what is genuinely module-specific. Module-local color
-  names should alias shell tokens (see `modules/customers/index.css`), which
-  makes light/dark theming automatic. `modules/conversations/` is the layout
-  reference.
+- `shared/base.css` is the module base kit — the construction set every app
+  builds its frame and controls from: `.ctox-workspace` (the standard 3-pane
+  grid wired to the shell column resizers), `.ctox-pane`, `.ctox-pane-body`,
+  `.ctox-pane-band`, the pane header blocks (`.ctox-pane-actions`,
+  `.ctox-pane-icon`, `.ctox-pane-search`, `.ctox-pane-filter`,
+  `.ctox-pane-tabs`/`.ctox-pane-tab`), `.ctox-toolbar`, `.ctox-button`,
+  `.ctox-input`, `.ctox-chip`, `.ctox-card`, `.ctox-list`,
+  `.ctox-table`/`.ctox-table-wrap`, `.ctox-fields`, `.ctox-modal`,
+  `.ctox-avatar`, `.ctox-choice`, `.ctox-empty`, `.ctox-badge`, plus derived
+  semantic tokens (`--line-strong`, `--success`, `--warning`). Modules use
+  these classes directly — no import needed — and keep `index.css` for what
+  is genuinely module-specific. Module-local color names should alias shell
+  tokens (see `modules/customers/index.css`), which makes light/dark theming
+  automatic. `modules/conversations/` is the layout reference.
+
+Two hard UI conventions on top of the kit:
+
+- Pane-header primary actions are compact `.ctox-pane-icon` buttons with an
+  `aria-label` and `title` — never wide text buttons. Text buttons
+  (`.ctox-button`, `.is-primary`, `.is-danger`) belong in toolbars, forms,
+  and modal footers.
+- Action glyphs come from the shared set: `ctx.getActionIcon(name)` in
+  JS-generated markup (names via `listActionIcons()` in `shared/icons.js`);
+  static SVGs in `index.html` follow the same style (24 viewBox,
+  `stroke="currentColor"`, stroke-width 1.8, no fills). Do not invent
+  per-module icon styles.
 
 Known pitfalls the conformance guard
 (`scripts/assert-module-conformance.mjs`, run in CI) catches early:
@@ -96,6 +114,21 @@ Every module should preserve the same operating pattern:
 - right drawer: focused topic details from the right pane
 
 This keeps user workflows and CTOX prompt context stable across modules.
+
+### Deliberately Free-Form Apps
+
+The kit is the default, not a cage. When a workflow explicitly needs it, an
+app may ship a fully custom web UI (`layout.shell: "full-workspace"` or a
+windowed desktop app) and skip the pane grid entirely. Two things still hold:
+
+- Tokens and conformance rules apply unchanged — a free-form app still theams
+  with the workspace.
+- Data still flows through the shell context (`ctx.db`, `ctx.commandBus`).
+  An app-external persistence layer cuts the app off from every other app —
+  no shared records, no right-click record context, no CTOX automation — and
+  is the explicit exception, not a convenience. Integrating an external data
+  source belongs on the CTOX side (backend sync into replicated collections),
+  not in the browser app.
 
 ## First Blueprint
 

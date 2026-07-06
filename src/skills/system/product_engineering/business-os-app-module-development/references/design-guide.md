@@ -54,6 +54,48 @@ must keep working when those tokens change.
   Business OS tokens.
 - Test the app in light, dark, and one custom-brand fixture before delivery.
 
+## Component Kit (shared/base.css)
+
+The shell preloads `src/apps/business-os/shared/base.css` into every app
+document. It is the construction set: build the app frame and all recurring
+controls from these classes, and keep app CSS for what is genuinely unique.
+Do not rebuild any of these locally.
+
+- Frame: `.ctox-workspace` (+ `--two-pane`, `--single`) with `.ctox-pane`
+  columns and shell-owned `.ctox-column-resizer` (`data-resizer`,
+  `data-resizer-var`, `data-resizer-min/max`); `.ctox-pane-body`,
+  `.ctox-pane-scroll`, `.ctox-pane-band`.
+- Pane header: `.ctox-pane-header` + `.ctox-pane-title-row` +
+  `.ctox-pane-titles` (`.ctox-pane-kicker`, `.ctox-pane-title`) +
+  `.ctox-pane-actions` on the right, then a `.ctox-pane-tools` row with
+  `.ctox-pane-search` and `.ctox-pane-filter`.
+- Actions: `.ctox-pane-icon` (30px icon button) in pane headers;
+  `.ctox-button` / `.ctox-button.is-primary` / `.is-danger` and
+  `.ctox-icon-button` in toolbars, forms, and modal footers.
+- Data: `.ctox-table-wrap` + `.ctox-table` (sticky column headers, `.is-num`
+  for numeric columns, `.is-selected` rows); `.ctox-list`/`.ctox-list-item`
+  for row lists; `.ctox-fields` (dl) for key/value details; `.ctox-card` for
+  inspector sections; `.ctox-badge` (`.is-success/.is-warning/.is-danger`)
+  for status; `.ctox-chip` (+`.ctox-chip-count`) for filter pills;
+  `.ctox-avatar` (+`--sm`/`--lg`) for people.
+- Forms: `.ctox-input`, `.ctox-select`, `.ctox-textarea`,
+  `.ctox-field-label`, `.ctox-choice-group`/`.ctox-choice`.
+- Overlays: `.ctox-modal` + `.ctox-modal-card` (`-header/-title/-body/
+  -footer`, `--wide`), toggled with `[hidden]`; `.ctox-empty` for empty
+  states. App-level toasts use `ctx.notifications`, never app-owned toasts.
+
+## Icon Rules
+
+- Primary actions are elegant, compact icon buttons — never large text
+  buttons in headers or on top of lists.
+- Every icon button carries `aria-label` and `title`.
+- Action glyphs come from the shared set: `ctx.getActionIcon(name)` (names
+  via `listActionIcons()` in `shared/icons.js`). Static SVGs follow the same
+  style: `viewBox="0 0 24 24"`, `fill="none"`, `stroke="currentColor"`,
+  stroke-width 1.8, round caps. Do not mix icon styles or invent new ones.
+- The app tile icon (`icon.svg`) may use the gradient module-icon style; UI
+  action icons stay monochrome so they inherit control states.
+
 ## UX Patterns
 
 - Runtime-installed business apps use `layout.shell: "full-workspace"`.
