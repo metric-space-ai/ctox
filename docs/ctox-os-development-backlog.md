@@ -69,11 +69,6 @@ customers ist Referenz-Consumer (`3fed531d`).
 Für KI-gebaute Apps ist `mount(ctx)` die API des Betriebssystems — heute
 reich, aber undokumentiert und ungetestet (app.js ~4100).
 
-- **OS-D1 (M): ctx-Contract spezifizieren + pinnen.** Dokument
-  (`docs/business-os-module-context.md` o. ä.) mit allen ctx-Feldern,
-  Semantik und Stabilitätszusagen; Vertragstest, der die Shell-Facade gegen
-  die Spezifikation prüft (Feld-Liste + Typen), damit Shell-Änderungen den
-  Contract nicht still brechen. Version im ctx (`ctx.contractVersion`).
 - **OS-D2 (M): Demand-Loading deklarativ.** Die vier Demand-Only-Collections
   sind nativ hardcoded (`DEMAND_FILE_CHUNK_COLLECTIONS`, rxdb_peer.rs
   ~9149). Pro Modul deklarierbar machen (module.json/collections.schema.json:
@@ -186,3 +181,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-G1 Fehlerklassifikations-Korpus (14 Fälle inkl. Order-Pins,
   classifyReplicationErrorKind, Rust-Alignment auf Contract-Codes):
   `654cc570`
+- OS-D1 mount(ctx)-Contract v1: docs/business-os-module-context.md (41
+  Felder) + assert-module-context-contract.mjs (CTX-CONTRACT-Marker in
+  app.js) + CI-Wiring: `a447fcae`
