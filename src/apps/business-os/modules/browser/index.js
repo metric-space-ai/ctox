@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const STYLE_BUILD = '20260605-rxdb-cancel1';
+const STYLE_BUILD = '20260706-kit-tokens1';
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
@@ -996,16 +996,16 @@ function renderAuthAssist(refs, session) {
       ${extractStatus ? `<small>${escapeHtml(authAssistStatusLabel(extractStatus, 'Seitenauswertung laeuft'))}</small>` : ''}
     </div>
     <div class="browser-auth-actions">
-      <button type="button" data-browser-credential-fill ${canFill ? '' : 'disabled'}>
+      <button type="button" class="ctox-button" data-browser-credential-fill ${canFill ? '' : 'disabled'}>
         Zugangsdaten einsetzen
       </button>
-      <button type="button" data-browser-auth-complete ${completed ? 'disabled' : ''}>
+      <button type="button" class="ctox-button" data-browser-auth-complete ${completed ? 'disabled' : ''}>
         ${completed ? 'Angemeldet' : 'Ich bin angemeldet'}
       </button>
-      <button type="button" data-browser-web-stack-capture ${canCapture ? '' : 'disabled'}>
+      <button type="button" class="ctox-button" data-browser-web-stack-capture ${canCapture ? '' : 'disabled'}>
         An CTOX uebergeben
       </button>
-      <button type="button" data-browser-web-stack-extract ${canExtract ? '' : 'disabled'}>
+      <button type="button" class="ctox-button" data-browser-web-stack-extract ${canExtract ? '' : 'disabled'}>
         Seite auslesen
       </button>
     </div>

@@ -4,7 +4,7 @@ import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260626-desktop-sync-idle-v4';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
 
-const STYLE_BUILD = '20260626-desktop-sync-idle-v4';
+const STYLE_BUILD = '20260706-kit-tokens1';
 const LAYOUT_DOC_ID = 'layout';
 const DESKTOP_SYNC_COLLECTIONS = Object.freeze([
   'desktop_icons',

@@ -395,16 +395,16 @@
 
 .widget-sync[data-state="syncing"] .widget-sync-bar > i,
 .widget-sync[data-state="starting"] .widget-sync-bar > i {
-  background: color-mix(in srgb, var(--accent) 72%, #60a5fa);
+  background: color-mix(in srgb, var(--accent) 72%, var(--accent-soft));
 }
 
 .widget-sync[data-state="issue"] .widget-sync-title,
 .widget-sync[data-state="issue"] .widget-sync-count {
-  color: #fca5a5;
+  color: var(--danger);
 }
 
 .widget-sync[data-state="issue"] .widget-sync-bar > i {
-  background: #f87171;
+  background: var(--danger);
 }
 
 .widget-time:empty,

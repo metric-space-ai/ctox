@@ -27,8 +27,8 @@
   --ctox-drawer-bg: radial-gradient(760px 540px at 0% 0%, color-mix(in srgb, var(--ctox-accent) 8%, transparent), transparent 58%), var(--ctox-surface);
   --ctox-radius-panel: var(--panel-radius);
   --ctox-radius-control: var(--control-radius);
-  --ctox-ok: #4f7f35;
-  --ctox-blocked: #b74333;
+  --ctox-ok: var(--success);
+  --ctox-blocked: var(--danger);
   --ctox-left-width: 340px;
   box-sizing: border-box;
   display: grid;

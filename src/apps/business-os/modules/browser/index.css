@@ -3,7 +3,7 @@
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 100%;
   height: 100%;
-  background: oklch(8% 0.006 225);
+  background: var(--bg);
   color: var(--text);
   overflow: hidden;
 }
@@ -18,7 +18,7 @@
   display: grid;
   grid-template-rows: auto auto auto;
   border-bottom: 1px solid var(--line);
-  background: oklch(13% 0.01 225);
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -33,12 +33,9 @@
   min-height: 42px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   padding: 6px 10px 0;
-  background: oklch(11.5% 0.01 225);
+  background: var(--surface-2);
 }
 
-.browser-icon-button,
-.browser-toolbar button,
-.browser-actions button,
 .browser-session-item {
   border: 1px solid var(--line);
   background: var(--surface-2);
@@ -51,24 +48,12 @@
   cursor: pointer;
 }
 
-.browser-icon-button {
-  width: 34px;
-  padding: 0;
-}
-
-.browser-toolbar button:disabled,
-.browser-actions button:disabled {
-  color: var(--muted);
-  cursor: default;
-  opacity: 0.65;
-}
-
 .browser-auth-assist {
   display: grid;
   gap: 9px;
-  border: 1px solid color-mix(in srgb, var(--accent, #0ea5e9) 42%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #0ea5e9) 9%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
   padding: 10px;
 }
 
@@ -103,24 +88,6 @@
   flex-wrap: wrap;
 }
 
-.browser-auth-actions button {
-  min-height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.browser-auth-actions button:disabled {
-  color: var(--muted);
-  cursor: default;
-  opacity: 0.72;
-}
-
 .browser-kicker {
   display: block;
   color: var(--muted);
@@ -136,7 +103,7 @@
 }
 
 .browser-error {
-  color: oklch(73% 0.17 28);
+  color: var(--danger);
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
@@ -184,9 +151,9 @@
 }
 
 .browser-session-item[aria-current="true"] {
-  border-color: color-mix(in srgb, var(--accent, #0ea5e9) 45%, var(--line));
-  border-bottom-color: color-mix(in srgb, var(--accent, #0ea5e9) 20%, var(--surface));
-  background: color-mix(in srgb, var(--accent, #0ea5e9) 16%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-bottom-color: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
 }
 
 .browser-pill {
@@ -205,15 +172,15 @@
 }
 
 .browser-actions button[data-browser-start] {
-  border-color: color-mix(in srgb, var(--accent, #0ea5e9) 48%, var(--line));
-  background: color-mix(in srgb, var(--accent, #0ea5e9) 24%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface-2));
   font-weight: 800;
 }
 
 .browser-notice {
-  border: 1px solid color-mix(in srgb, var(--accent, #0ea5e9) 35%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #0ea5e9) 8%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
@@ -223,14 +190,14 @@
 .browser-workbench {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  background: oklch(8% 0.006 225);
+  background: var(--bg);
 }
 
 .browser-toolbar {
   min-height: 54px;
   border-bottom: 1px solid var(--line);
   padding: 10px 12px;
-  background: oklch(13.5% 0.01 225);
+  background: var(--surface);
 }
 
 .browser-nav-actions {
@@ -248,14 +215,7 @@
 
 .browser-address-form input {
   min-width: 0;
-  height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  padding: 0 12px;
-  font: inherit;
-  font-size: 13px;
+  min-height: 36px;
 }
 
 .browser-status-strip {
@@ -265,7 +225,7 @@
   align-items: center;
   min-height: 32px;
   border-bottom: 1px solid var(--line);
-  background: oklch(11% 0.008 225);
+  background: var(--surface-2);
   padding: 0 12px;
   color: var(--muted);
   font-size: 12px;
@@ -293,21 +253,21 @@
 .browser-status-chip[data-state="capturing"],
 .browser-status-chip[data-state="ready"],
 .browser-status-chip[data-state="synthetic"] {
-  border-color: color-mix(in srgb, oklch(70% 0.15 160) 45%, var(--line));
-  color: oklch(78% 0.14 160);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  color: var(--success);
 }
 
 .browser-status-chip[data-state="starting"],
 .browser-status-chip[data-state="loading"],
 .browser-status-chip[data-state="waiting"] {
-  border-color: color-mix(in srgb, oklch(76% 0.14 82) 45%, var(--line));
-  color: oklch(82% 0.13 82);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  color: var(--warning);
 }
 
 .browser-status-chip[data-state="failed"],
 .browser-status-chip[data-state="error"] {
-  border-color: color-mix(in srgb, oklch(64% 0.2 28) 45%, var(--line));
-  color: oklch(73% 0.17 28);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
 }
 
 .browser-frame-shell {
@@ -317,7 +277,7 @@
   display: grid;
   place-items: center;
   padding: 0;
-  background: #050607;
+  background: var(--bg);
 }
 
 .browser-frame-shell canvas {
@@ -332,7 +292,7 @@
 }
 
 .browser-frame-shell canvas:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent, #0ea5e9) 65%, white);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 

@@ -4,27 +4,27 @@
     <div class="browser-auth-assist" data-browser-auth-assist hidden></div>
       <div class="browser-session-list" data-browser-session-list aria-label="Browser Fenster"></div>
     <div class="browser-actions">
-      <button type="button" data-browser-start data-t="newWindow">Neues Fenster</button>
-      <button type="button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
-      <button type="button" data-browser-stop data-t="close">Schliessen</button>
+      <button type="button" class="ctox-button" data-browser-start data-t="newWindow">Neues Fenster</button>
+      <button type="button" class="ctox-button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
+      <button type="button" class="ctox-button" data-browser-stop data-t="close">Schliessen</button>
     </div>
-      <button type="button" class="browser-icon-button" data-browser-refresh aria-label="Aktualisieren" data-t-aria="refresh">↻</button>
+      <button type="button" class="ctox-icon-button" data-browser-refresh aria-label="Aktualisieren" data-t-aria="refresh">↻</button>
     </div>
     <div class="browser-dev-actions" hidden>
-      <button type="button" data-browser-reset data-t="reset">Reset</button>
-      <button type="button" data-browser-seed data-t="seed">Testbild</button>
-      <button type="button" data-browser-clear data-t="clearImages">Bilder loeschen</button>
+      <button type="button" class="ctox-button" data-browser-reset data-t="reset">Reset</button>
+      <button type="button" class="ctox-button" data-browser-seed data-t="seed">Testbild</button>
+      <button type="button" class="ctox-button" data-browser-clear data-t="clearImages">Bilder loeschen</button>
     </div>
     <div class="browser-notice" data-browser-notice hidden></div>
     <header class="browser-toolbar">
       <div class="browser-nav-actions" aria-label="Navigation">
-        <button type="button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
-        <button type="button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
-        <button type="button" data-browser-reload aria-label="Neu laden" data-t-aria="navReload">↻</button>
+        <button type="button" class="ctox-icon-button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
+        <button type="button" class="ctox-icon-button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
+        <button type="button" class="ctox-icon-button" data-browser-reload aria-label="Neu laden" data-t-aria="navReload">↻</button>
       </div>
       <form class="browser-address-form" data-browser-address-form>
-        <input data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
-        <button type="submit" data-t="go">Los</button>
+        <input class="ctox-input" data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
+        <button type="submit" class="ctox-button" data-t="go">Los</button>
       </form>
     </header>
     <div class="browser-status-strip" aria-label="Browser Status">
