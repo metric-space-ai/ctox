@@ -327,6 +327,12 @@
   font-weight: 700;
 }
 
+/* Modules clear the count text when it is zero — collapse the empty span so
+   no flex-gap hole remains. */
+.ctox-chip-count:empty {
+  display: none;
+}
+
 /* ----------------------------------------------------------------------------
    7. Cards (right-pane inspector sections)
    -------------------------------------------------------------------------- */
