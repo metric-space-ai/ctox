@@ -53,11 +53,6 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-X3b (M): workspace-artifacts-Soak-Familie reparieren.** Rest aus
-  OS-X3: die Multi-Datei-Modes (`waitForWorkspaceArtifacts`) erwarten
-  weiterhin background-gepullte Chunk-Docs und sind unter dem App-DB-Pfad
-  aus demselben Grund rot. Braucht ein Demand-Fetch-Pendant für
-  Datei-LISTEN (pro erwarteter Datei fetchFile + Metadaten-Abgleich).
 - **OS-X4 (M, Produkt-Beobachtung): Externe CLI-Store-Writes wecken den
   Daemon nicht.** `ctox business-os files sync <path>` schreibt aus einem
   separaten Prozess in die RxDB-SQLite; In-Prozess-Hooks feuern nicht, und
@@ -210,3 +205,7 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
   Peers (`ace2d2bc`) und TTL-Sweep-Liveness (Generation-Supersession →
   Sweep feuerte nie bei periodischen Refreshes; jetzt Armed+Dirty-Flags,
   `cd25b8e1`).
+- OS-X3b artifacts-Familie auf Produkt-Semantik
+  (waitForWorkspaceArtifactsProduct, size_bytes-Metadaten-Gate,
+  expliziter Pull nach CLI-Mutation im Churn); artifacts + churn lokal
+  verifiziert grün: `b60929cb`.
