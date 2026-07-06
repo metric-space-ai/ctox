@@ -39,9 +39,13 @@ const noteRecordSchema = {
   additionalProperties: true
 };
 
+// `notes` opts into the field-merge conflict strategy (docs/ctox-rxdb.md
+// §8.2): concurrent edits to different fields (title/notebook/tags vs.
+// content) both survive. The wrapper is a sibling of `schema` and is
+// hash-neutral (all consumers read `definition.schema || definition`).
 export const collections = {
   business_commands: commandSchema,
-  notes: noteRecordSchema
+  notes: { schema: noteRecordSchema, conflictStrategy: 'field-merge' }
 };
 
 export const migrationStrategies = {

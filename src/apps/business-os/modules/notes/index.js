@@ -352,14 +352,28 @@ export async function mount(ctx) {
   state.contextMenuCleanup = initNotesContextMenu(state);
   
   // Pre-select first note if available
+  // Presence (advisory UX): show who else has the same note open, and
+  // publish which note this user is editing. Cleared on unmount.
+  state.presenceRemote = [];
+  state.presenceCleanup = null;
+  if (ctx.presence?.subscribe) {
+    state.presenceCleanup = ctx.presence.subscribe((entries) => {
+      state.presenceRemote = Array.isArray(entries) ? entries : [];
+      scheduleRender();
+    });
+  }
+
   const initialNotes = getFilteredNotes();
   if (initialNotes.length > 0) {
     selectNote(initialNotes[0].id);
   } else {
     renderEditor();
   }
-  
+
   return () => {
+    state.presenceCleanup?.();
+    state.presenceCleanup = null;
+    try { state.ctx?.presence?.clear?.(); } catch {}
     if (state.saveTimer) clearTimeout(state.saveTimer);
     if (state.renderTimer) clearTimeout(state.renderTimer);
     if (state.toastTimer) clearTimeout(state.toastTimer);
@@ -1044,7 +1058,14 @@ function renderNotesList() {
 
 function renderEditor() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
-  
+
+  // Publish presence for the open note (the editor is live, so "editing").
+  // Only collection + record id go on the wire — never titles or content, so
+  // locked notes stay non-revealing. The registry dedups unchanged sets.
+  try {
+    state.ctx?.presence?.set(note ? [{ collection: 'notes', recordId: note.id, mode: 'editing' }] : []);
+  } catch {}
+
   // Clean up any dynamic restore banner
   els.editorWorkspace?.querySelector('.nn-restore-banner')?.remove();
   els.editorWorkspace?.querySelector('.nn-draft-banner')?.remove();
@@ -1082,6 +1103,17 @@ function renderEditor() {
     (note.tags || '').split(',').map(x => x.trim()).filter(Boolean).forEach(tg => {
       badgesHtml += `<span class="nn-card-badge tag-badge">#${escapeHtml(tg)}</span>`;
     });
+  }
+  // Presence hint: other users with this note open right now.
+  const ownActorId = state.ctx?.actor?.id || '';
+  const presencePeers = (state.presenceRemote || []).filter((entry) => entry
+    && entry.collection === 'notes'
+    && entry.recordId === note.id
+    && entry.actorId
+    && entry.actorId !== ownActorId);
+  if (presencePeers.length) {
+    const names = [...new Set(presencePeers.map((entry) => entry.actorName || entry.actorId))].join(', ');
+    badgesHtml += `<span class="nn-card-badge presence-badge">✎ ${escapeHtml(names)} ${escapeHtml(state.t('presenceEditing', 'bearbeitet gerade'))}</span>`;
   }
   if (els.noteBadgesContainer) {
     els.noteBadgesContainer.innerHTML = badgesHtml;

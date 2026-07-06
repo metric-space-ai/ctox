@@ -51,5 +51,6 @@
   "saturday": "Samstag",
   "sunday": "Sonntag",
   "bookingHolds": "Reservierungen",
-  "bookings": "Buchungen"
+  "bookings": "Buchungen",
+  "presenceEditing": "bearbeitet gerade"
 }

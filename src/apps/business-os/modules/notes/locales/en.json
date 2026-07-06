@@ -32,5 +32,6 @@
   "localSync": "Local Synchronization",
   "syncDescription": "Notes are automatically synchronized in the background as Markdown files:",
   "syncHint": "Manually created .md files in this folder are automatically imported.",
-  "noNotes": "No notes"
+  "noNotes": "No notes",
+  "presenceEditing": "is editing right now"
 }

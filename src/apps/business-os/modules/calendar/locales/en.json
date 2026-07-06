@@ -51,5 +51,6 @@
   "saturday": "Saturday",
   "sunday": "Sunday",
   "bookingHolds": "Booking Holds",
-  "bookings": "Bookings"
+  "bookings": "Bookings",
+  "presenceEditing": "is editing right now"
 }

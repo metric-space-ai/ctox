@@ -145,7 +145,21 @@ export async function mount(ctx) {
   await loadDataFromDb();
   wireRealtimeSync();
 
+  // Presence (advisory UX): publish which event this user has open in the
+  // edit drawer, and surface a hint when someone else edits the same event.
+  state.presenceRemote = [];
+  state.presenceCleanup = null;
+  if (ctx.presence?.subscribe) {
+    state.presenceCleanup = ctx.presence.subscribe((entries) => {
+      state.presenceRemote = Array.isArray(entries) ? entries : [];
+      updateEventFormPresenceHint();
+    });
+  }
+
   return () => {
+    state.presenceCleanup?.();
+    state.presenceCleanup = null;
+    try { state.ctx?.presence?.clear?.(); } catch {}
     if (state.renderTimer) clearTimeout(state.renderTimer);
     state.rxSubscriptions.forEach(sub => sub.unsubscribe());
     state.rxSubscriptions = [];
@@ -882,10 +896,41 @@ function closeDrawer() {
   els.drawer?.setAttribute('aria-hidden', 'true');
   state.editingType = null;
   state.editingItem = null;
+  try { state.ctx?.presence?.set([]); } catch {}
   if (state.activeFormSubscription) {
     state.activeFormSubscription.unsubscribe();
     state.activeFormSubscription = null;
   }
+}
+
+// Presence hint inside the event drawer: visible while someone ELSE has the
+// same persisted event open in their edit drawer. New (unsaved) events have
+// no record id and publish nothing.
+function updateEventFormPresenceHint() {
+  const drawerOpenForEvent = state.editingType === 'event' && state.editingItem?.id;
+  let hint = els.drawer?.querySelector('[data-calendar-presence-hint]') || null;
+  if (!drawerOpenForEvent) {
+    hint?.remove();
+    return;
+  }
+  const ownActorId = state.ctx?.actor?.id || '';
+  const peers = (state.presenceRemote || []).filter((entry) => entry
+    && entry.collection === 'calendar_events'
+    && entry.recordId === state.editingItem.id
+    && entry.actorId
+    && entry.actorId !== ownActorId);
+  if (!peers.length) {
+    hint?.remove();
+    return;
+  }
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.className = 'calendar-presence-hint';
+    hint.setAttribute('data-calendar-presence-hint', '');
+    els.drawerTitle?.insertAdjacentElement('afterend', hint);
+  }
+  const names = [...new Set(peers.map((entry) => entry.actorName || entry.actorId))].join(', ');
+  hint.textContent = `✎ ${names} ${state.t('presenceEditing', 'bearbeitet gerade')}`;
 }
 
 // 1. EVENT FORM
@@ -894,6 +939,13 @@ function openEventForm(eventId = null, defaults = null) {
   state.editingType = 'event';
   const dbEvent = eventId ? state.events.find(e => e.id === eventId) : null;
   state.editingItem = dbEvent;
+  // Publish presence for a persisted event being edited (new events have no
+  // record id yet and publish nothing).
+  try {
+    state.ctx?.presence?.set(dbEvent
+      ? [{ collection: 'calendar_events', recordId: dbEvent.id, mode: 'editing' }]
+      : []);
+  } catch {}
   const defaultCalendarId = dbEvent?.calendar_id
     || [...state.selectedCalendarIds].find(id => state.calendars.some(c => c.id === id))
     || state.calendars[0]?.id
@@ -977,6 +1029,7 @@ function openEventForm(eventId = null, defaults = null) {
   `;
 
   openDrawer('Termin', dbEvent ? 'Termin bearbeiten' : 'Neuer Termin', html);
+  updateEventFormPresenceHint();
 
   // Form Events
   const form = els.drawer.querySelector('#drawerEventForm');

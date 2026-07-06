@@ -186,11 +186,14 @@ const calendarBookingSchema = {
   additionalProperties: true
 };
 
+// `calendar_events` opts into the field-merge conflict strategy
+// (docs/ctox-rxdb.md §8.2): concurrent edits to different fields (time vs.
+// title vs. description) both survive. Hash-neutral sibling wrapper.
 export const collections = {
   business_commands: commandSchema,
   calendar_sources: calendarSourceSchema,
   calendar_calendars: calendarCalendarSchema,
-  calendar_events: calendarEventSchema,
+  calendar_events: { schema: calendarEventSchema, conflictStrategy: 'field-merge' },
   calendar_event_instances: calendarEventInstanceSchema,
   calendar_availability_rules: calendarAvailabilityRuleSchema,
   calendar_booking_pages: calendarBookingPageSchema,

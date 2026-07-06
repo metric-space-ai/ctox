@@ -612,6 +612,13 @@
   border: 1px solid rgba(0, 136, 55, 0.1);
 }
 
+/* Presence hint (advisory): another user has this note open. */
+.nn-card-badge.presence-badge {
+  background: rgba(196, 90, 26, 0.10);
+  color: #c45a1a;
+  border: 1px solid rgba(196, 90, 26, 0.25);
+}
+
 /* Card Icons */
 .nn-card-icons {
   display: flex;
