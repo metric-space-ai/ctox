@@ -12297,6 +12297,66 @@ mod tests {
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    /// Idle-discipline ratchet (strategy rule: "idle must stay idle", see
+    /// docs/ctox-os-framework-strategy.md). Every background loop in this
+    /// file must engage one of the sanctioned idle strategies — interval
+    /// backoff through a `*_sleep_secs`/`*_sleep_interval` helper, an
+    /// event-driven watch, a table-change notification, or an explicit idle
+    /// interval constant. A new `async fn *_loop` that polls at a fixed
+    /// active-rate interval with none of these fails here. Fix the loop;
+    /// extending the marker list is an architecture decision, not a
+    /// convenience.
+    #[test]
+    fn background_loops_use_a_sanctioned_idle_strategy() {
+        let source = include_str!("rxdb_peer.rs");
+        const IDLE_MARKERS: &[&str] = &[
+            "projection_sleep_secs(",
+            "sleep_interval(",
+            "wait_for_event(",
+            "wait_for_table_change",
+            "wait_for_business_command_wake(",
+            "_IDLE_",
+        ];
+        let mut checked = Vec::new();
+        let mut offset = 0usize;
+        while let Some(found) = source[offset..].find("\nasync fn ") {
+            let fn_start = offset + found + 1;
+            let name_start = fn_start + "async fn ".len();
+            let name_end = match source[name_start..].find('(') {
+                Some(index) => name_start + index,
+                None => break,
+            };
+            let name = &source[name_start..name_end];
+            let next_async = source[name_end..].find("\nasync fn ");
+            let next_plain = source[name_end..].find("\nfn ");
+            let body_end = match (next_async, next_plain) {
+                (Some(a), Some(b)) => name_end + a.min(b),
+                (Some(a), None) => name_end + a,
+                (None, Some(b)) => name_end + b,
+                (None, None) => source.len(),
+            };
+            let body = &source[name_end..body_end];
+            if name.ends_with("_loop") && body.contains("loop {") {
+                let sanctioned = IDLE_MARKERS.iter().any(|marker| body.contains(marker));
+                assert!(
+                    sanctioned,
+                    "background loop `{name}` has no sanctioned idle strategy \
+                     (expected one of {IDLE_MARKERS:?}); a fixed-interval poll \
+                     violates the idle-CPU budget"
+                );
+                checked.push(name.to_string());
+            }
+            offset = name_end;
+        }
+        assert!(
+            checked.len() >= 10,
+            "idle-strategy scan found only {} background loops ({checked:?}) — \
+             the source scan drifted from the file layout; fix the scan, do not \
+             delete it",
+            checked.len()
+        );
+    }
+
     #[test]
     fn business_record_projection_skips_transient_payload_collections() {
         let collections = business_record_projection_collections();
