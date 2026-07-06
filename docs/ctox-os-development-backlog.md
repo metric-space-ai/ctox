@@ -31,10 +31,6 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
   SQLite-Pfade (compiled query, candidate plan, fallback scan) im
   `ctox-rxdb`-Crate, damit Datenpfad-Änderungen eine Zahl haben.
   Achtung: Cargo-Target nach `/tmp` bzw. `runtime/build/cargo-target`.
-- **OS-A3 (S): Sync-Diagnose vervollständigen.** Per-Collection-Lag und
-  Checkpoint-Alter in die Diagnose aufnehmen (browser: `createDiagnostics`
-  in sync.js hat `remoteCheckpoint`, aber kein Alter/Lag; nativ:
-  Status-Snapshot). Sichtbar im ctox-Modul / `business-os-advanced-status`.
 
 ## Cluster B — Konnektivität (Kernversprechen: Zugriff ohne VPN-Planung)
 
@@ -90,9 +86,6 @@ ein Creator-Formular mit vorausgefüllten Werten.
   Vanilla-Erkennung gegen Upstream-Hash statt MIN-seq; Update ohne
   Neuinstallation, Rollback als geprüfter Pfad. Referenz:
   App-Deployment-Review 2026-06-25.
-- **OS-E2 (S): Update-Badges systematisch.** Start-Menü/Shell-Badge aus dem
-  Lifecycle-Feld (renderStartMenuLifecycleBadge-Pfad), nicht nur App-Store-
-  Ansicht.
 
 ## Cluster F — Harness↔Business-OS-Schleife schließen
 
@@ -184,3 +177,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-D1 mount(ctx)-Contract v1: docs/business-os-module-context.md (41
   Felder) + assert-module-context-contract.mjs (CTX-CONTRACT-Marker in
   app.js) + CI-Wiring: `a447fcae`
+- OS-E2 verifiziert bereits erledigt (Vorwelle Juni): das Start-Menü
+  rendert das Lifecycle-Badge (`renderStartMenuLifecycleBadge`,
+  app.js ~8475/8508) — kein offener Rest.
