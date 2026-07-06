@@ -1,15 +1,19 @@
 <main class="tickets-module" data-tickets-root data-resize-frame>
   <aside class="tickets-pane tickets-left" aria-label="Tickets">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-ticket-kicker>CTOX</span>
           <h2 class="ctox-pane-title" data-ticket-title>Tickets</h2>
         </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-ticket-create-local aria-label="Ticket anlegen" title="Ticket anlegen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
       </div>
       <div class="ctox-pane-tools">
-        <button class="tickets-command-button" type="button" data-ticket-create-local>Neu</button>
-        <input class="ctox-pane-search" data-ticket-search placeholder="Suchen..." />
+        <input class="ctox-pane-search" type="search" data-ticket-search placeholder="Suchen..." />
         <select class="ctox-pane-filter" data-ticket-state>
           <option value="all">Alle Status</option>
           <option value="open">Offen</option>

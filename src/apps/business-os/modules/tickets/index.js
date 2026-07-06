@@ -11,7 +11,7 @@ const TICKET_HYDRATION_POLL_MS = 350;
 
 const labels = {
   de: {
-    createLocal: 'Neu',
+    createTicket: 'Ticket anlegen',
     search: 'Suchen...',
     allStatus: 'Alle Status',
     open: 'Offen',
@@ -66,7 +66,7 @@ const labels = {
     promptCancel: 'Abbrechen',
   },
   en: {
-    createLocal: 'New',
+    createTicket: 'Create ticket',
     search: 'Search...',
     allStatus: 'All status',
     open: 'Open',
@@ -188,7 +188,10 @@ async function ensureStyles() {
 
 function applyStaticLabels() {
   const root = state.ctx.host.querySelector('[data-tickets-root]');
-  root.querySelector('[data-ticket-create-local]').textContent = state.t('createLocal', 'Neu');
+  const createButton = root.querySelector('[data-ticket-create-local]');
+  const createLabel = state.t('createTicket', 'Ticket anlegen');
+  createButton.setAttribute('aria-label', createLabel);
+  createButton.setAttribute('title', createLabel);
   root.querySelector('[data-ticket-search]').placeholder = state.t('search', 'Suchen...');
   root.querySelector('[data-ticket-state]').innerHTML = `
     <option value="all">${escapeHtml(state.t('allStatus', 'Alle Status'))}</option>
@@ -474,22 +477,26 @@ function renderDetail() {
   applyTicketContext(detail, ticket, 'detail');
   const events = eventsForTicket(ticket.ticket_key);
   detail.innerHTML = `
-    <header class="tickets-detail-head">
-      <div>
-        <span>${escapeHtml(ticket.ticket_key || ticket.id)}</span>
-        <h1>${escapeHtml(ticket.title || ticket.ticket_key || 'Ticket')}</h1>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(ticket.ticket_key || ticket.id)}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(ticket.title || ticket.ticket_key || 'Ticket')}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <span class="ctox-badge ${statusBadgeClass(ticket.remote_status)}">${escapeHtml(displayStatus(ticket.remote_status || 'open'))}</span>
+        </div>
       </div>
-      <span class="tickets-status">${escapeHtml(displayStatus(ticket.remote_status || 'open'))}</span>
     </header>
     <div class="tickets-detail-scroll os-scrollbar">
       <section class="tickets-section">
         <h3>Ticket</h3>
-        <div class="tickets-facts">
+        <dl class="ctox-fields">
           ${fact(state.t('source', 'Quelle'), ticket.source_system)}
           ${fact(state.t('requester', 'Requester'), ticket.requester)}
           ${fact(state.t('priority', 'Priorität'), ticket.priority)}
           ${fact(state.t('updated', 'Aktualisiert'), formatDate(ticket.updated_at || ticket.last_synced_at))}
-        </div>
+        </dl>
         <p class="tickets-body">${escapeHtml(ticket.body_text || '')}</p>
       </section>
       <section class="tickets-section">
@@ -522,7 +529,7 @@ function renderContext() {
   const clarifications = clarificationsForTicket(ticket.ticket_key);
   const bundles = state.data.ctox_ticket_control_bundles;
   context.innerHTML = `
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(state.t('controls', 'Kontrollen'))}</span>
@@ -583,7 +590,7 @@ function renderCase(item) {
       <span>${escapeHtml(item.state || 'case')} · ${escapeHtml(item.risk_level || '')}</span>
       <strong>${escapeHtml(item.label || item.case_id)}</strong>
       <small>${escapeHtml(item.approval_mode || '')} · A${escapeHtml(String(item.autonomy_level || '').replace(/^A/i, ''))}</small>
-      <dl>
+      <dl class="ctox-fields">
         ${fact(state.t('approvals', 'Approvals'), String(approvals.length))}
         ${fact(state.t('verification', 'Verification'), verifications[0]?.status || '')}
         ${fact(state.t('writebacks', 'Writebacks'), String(writebacks.length))}
@@ -600,7 +607,7 @@ function renderCaseActions(item) {
   return `
     <div class="tickets-action-row">
       ${actions.map((action) => `
-        <button type="button" class="tickets-command-button" data-ticket-action="${escapeAttr(action.id)}" data-case-id="${escapeAttr(item.case_id)}">
+        <button type="button" class="ctox-button" data-ticket-action="${escapeAttr(action.id)}" data-case-id="${escapeAttr(item.case_id)}">
           ${escapeHtml(action.label)}
         </button>
       `).join('')}
@@ -843,14 +850,14 @@ function renderClarification(item) {
       ${canPublish || canResolve ? `
         <div class="tickets-action-row">
           ${canPublish ? `
-            <button type="button" class="tickets-command-button"
+            <button type="button" class="ctox-button"
               data-clarification-action="publish"
               data-clarification-id="${escapeAttr(item.clarification_id)}">
               ${escapeHtml(state.t('publishClarification', 'Geprüft senden'))}
             </button>
           ` : ''}
           ${canResolve ? `
-          <button type="button" class="tickets-command-button"
+          <button type="button" class="ctox-button"
             data-clarification-action="resolve"
             data-clarification-id="${escapeAttr(item.clarification_id)}">
             ${escapeHtml(state.t('resolveClarification', 'Antwort erfassen'))}
@@ -942,7 +949,7 @@ function labelForTicket(ticketKey) {
 
 function fact(label, value) {
   if (value === undefined || value === null || value === '') return '';
-  return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`;
 }
 
 function renderEmptyState(title, body = '', modifier = '') {
@@ -1032,6 +1039,14 @@ function ticketRecordId(ticket) {
 
 function ticketRecordLabel(ticket) {
   return ticket?.title || ticket?.ticket_key || ticket?.id || 'Ticket';
+}
+
+function statusBadgeClass(value) {
+  const status = String(value || '').toLowerCase();
+  if (/closed|done|completed|resolved|verified/.test(status)) return 'is-success';
+  if (/blocked|failed|rejected|error/.test(status)) return 'is-danger';
+  if (/pending|waiting|clarification/.test(status)) return 'is-warning';
+  return '';
 }
 
 function displayStatus(value) {
