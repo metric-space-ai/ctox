@@ -1,5 +1,5 @@
 /**
- * Shared CTOX DB helpers for Business OS modules.
+ * Shared CTOX Sync Engine helpers for Business OS modules.
  *
  * Modules should describe what data they need and render domain state. The
  * shell/runtime owns database handles, schema registration, foreground
@@ -29,10 +29,10 @@ const DEFAULT_DEBOUNCE_MS = 50;
  */
 
 /**
- * Subscribe to one live CTOX DB query.
+ * Subscribe to one live CTOX Sync Engine query.
  *
  * @param {object} ctx Business OS module context.
- * @param {string} collectionName CTOX DB collection name.
+ * @param {string} collectionName CTOX Sync Engine collection name.
  * @param {object|string} query Mango query, primary key, or selector shorthand.
  * @param {(data: object[]|object|null) => void} onData Called on initial load and deltas.
  * @param {{ single?: boolean, optional?: boolean, includeDeleted?: boolean, onError?: (error: Error) => void }} options
@@ -42,13 +42,13 @@ export function liveQuery(ctx, collectionName, query = {}, onData = () => {}, op
   const collection = collectionFor(ctx, collectionName);
   if (!collection) {
     if (options.optional) return noopCleanup();
-    throw new Error(`CTOX DB collection is not available: ${collectionName}`);
+    throw new Error(`CTOX Sync Engine collection is not available: ${collectionName}`);
   }
   const rxQuery = options.single ? collection.findOne(query) : collection.find(query);
   const observable = rxQuery?.$;
   if (!observable?.subscribe) {
     if (options.optional) return noopCleanup();
-    throw new Error(`CTOX DB collection is not observable: ${collectionName}`);
+    throw new Error(`CTOX Sync Engine collection is not observable: ${collectionName}`);
   }
   const subscription = observable.subscribe((value) => {
     try {
@@ -64,7 +64,7 @@ export function liveQuery(ctx, collectionName, query = {}, onData = () => {}, op
  * Subscribe to a live list and render it.
  *
  * @param {object} ctx Business OS module context.
- * @param {string} collectionName CTOX DB collection name.
+ * @param {string} collectionName CTOX Sync Engine collection name.
  * @param {object} query Mango query.
  * @param {(items: object[]) => void} render Render callback.
  * @param {{ optional?: boolean, includeDeleted?: boolean, onError?: (error: Error) => void }} options
@@ -84,7 +84,7 @@ export function liveList(ctx, collectionName, query = {}, render = () => {}, opt
  * once every collection has emitted its initial snapshot.
  *
  * @param {object} ctx Business OS module context.
- * @param {string[]} collectionNames CTOX DB collection names.
+ * @param {string[]} collectionNames CTOX Sync Engine collection names.
  * @param {(input: { ctx: object, snapshots: Record<string, object[]>, changedCollection: string }) => any|Promise<any>} loader
  * @param {(data: any) => void} onData
  * @param {{ query?: object|((collectionName: string) => object), debounceMs?: number, requireInitial?: boolean, includeDeleted?: boolean, onError?: (error: Error) => void }} options

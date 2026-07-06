@@ -11,7 +11,7 @@ Current runtime files:
 - `superdoc.mjs`: bundled SuperDoc runtime for DOCX editing.
 - `superdoc.css`: SuperDoc stylesheet loaded by the documents module.
 
-CTOX DB is not vendored here anymore. The active package-manager-free browser
+CTOX Sync Engine is not vendored here anymore. The active package-manager-free browser
 runtime lives at `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs`, with source
 and tests next to that artifact.
 

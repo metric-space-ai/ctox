@@ -1,16 +1,16 @@
-# Business OS CTOX DB / RxDB Sync Contract
+# Business OS CTOX Sync Engine / RxDB Sync Contract
 
 This is the only supported Business OS data path.
 
 ## Naming and Compatibility
 
-Business OS uses **CTOX DB** for its browser storage and sync runtime. The
+Business OS uses **CTOX Sync Engine** for its browser storage and sync runtime. The
 runtime id is `ctox-rxdb-js` and the native peer is `rxdb-rs`, but this is not
 upstream RxDB and it is not a drop-in replacement for the npm `rxdb` package.
 
 The supported app-facing contract is:
 
-- public runtime: `CTOX DB`
+- public runtime: `CTOX Sync Engine`
 - runtime id: `ctox-rxdb-js`
 - API contract: `ctox-db-business-os-v1`
 - compatibility marker: `not-upstream-rxdb`
@@ -22,12 +22,12 @@ manager behavior.
 
 ## Browser Peer
 
-- Runtime: CTOX DB (`ctox-rxdb-js`)
+- Runtime: CTOX Sync Engine (`ctox-rxdb-js`)
 - Upstream provenance: historical RxDB `16.20.0` fork baseline, not a
   compatibility promise
 - Storage: CTOX native IndexedDB storage via `getCtoxIndexedDbStorage()`
 - Local database: IndexedDB
-- Transport: CTOX DB WebRTC replication over native browser WebRTC APIs
+- Transport: CTOX Sync Engine WebRTC replication over native browser WebRTC APIs
 - Topic per collection: `{sync_room}:{collection}`
 - Room derivation: `ctox-business-os:{instance_id}:{sha256(room_password).base64url[0..22]}`
 - Protocol marker: `ctox-rxdb-protocol-v1`

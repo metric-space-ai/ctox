@@ -6,7 +6,7 @@ Ziel: `Business OS MCP Channel v1` wird ein offizieller CTOX
 Kommunikationskanal fuer ChatGPT und andere MCP Clients. Der Kanal erlaubt
 Business-OS-Interaktion ueber typisierte Tools fuer Module, Records, Commands,
 Runs, Artefakte, Freigaben und Handoffs, ohne Business OS als Browser-Shell zu
-duplizieren und ohne den CTOX DB / RxDB / WebRTC Datenvertrag zu umgehen.
+duplizieren und ohne den CTOX Sync Engine / RxDB / WebRTC Datenvertrag zu umgehen.
 
 ## Readiness Statement
 
@@ -27,7 +27,7 @@ Der Kanal ist nicht:
 - ein Remote Desktop fuer Business OS
 - ein allgemeiner CLI- oder Shell-Zugang
 - ein HTTP-Datenproxy fuer Business-OS-Collections
-- ein Ersatz fuer CTOX DB / RxDB / WebRTC
+- ein Ersatz fuer CTOX Sync Engine / RxDB / WebRTC
 - ein Weg, Authoritative Commands ohne CTOX Validierung auszufuehren
 
 Parallel zum MCP Server entsteht ein extern installierbarer Agent Skill. Dieser
@@ -42,7 +42,7 @@ und was zu tun ist, wenn kein MCP Server verbunden ist.
 Business OS bleibt local-first und P2P:
 
 ```text
-Business OS Browser <-> CTOX DB / RxDB / WebRTC <-> CTOX Instance
+Business OS Browser <-> CTOX Sync Engine / RxDB / WebRTC <-> CTOX Instance
 ```
 
 Der MCP Channel ist ein separater Kommunikationskanal:

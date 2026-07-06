@@ -146,7 +146,7 @@ export function createCalendarView({
 }
 
 /**
- * Maps CTOX DB events to EventCalendar standard structure and expands recurring series using rrule.js.
+ * Maps CTOX Sync Engine events to EventCalendar standard structure and expands recurring series using rrule.js.
  */
 function prepareEventsForCalendar(events, calendars, rangeStart, rangeEnd) {
   const result = [];

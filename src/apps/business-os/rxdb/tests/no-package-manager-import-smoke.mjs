@@ -135,7 +135,7 @@ for (const [mutator, expectedCode] of [
 }
 
 if (typeof createRxDatabase !== 'function' || getCtoxIndexedDbStorage().name !== 'ctox-indexeddb-native') {
-  throw new Error('CTOX DB database exports are missing');
+  throw new Error('CTOX Sync Engine database exports are missing');
 }
 
 if (addRxPlugin({ name: 'ignored-transition-plugin' }) !== undefined) {

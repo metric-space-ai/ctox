@@ -20,10 +20,10 @@ for (const legacy of [
 for (const file of walk(appLocalRoot)) {
   const basename = path.basename(file);
   if (['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'].includes(basename)) {
-    offenders.push(`${relative(file)}: package-manager file is not allowed in app-local CTOX DB`);
+    offenders.push(`${relative(file)}: package-manager file is not allowed in app-local CTOX Sync Engine`);
   }
   if (file.split(path.sep).includes('node_modules')) {
-    offenders.push(`${relative(file)}: dependency tree is not allowed in app-local CTOX DB`);
+    offenders.push(`${relative(file)}: dependency tree is not allowed in app-local CTOX Sync Engine`);
   }
 }
 

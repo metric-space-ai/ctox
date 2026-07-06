@@ -19,7 +19,7 @@
   `ctx.db.collection('<declared-collection-name>')`.
 - Scope every runtime app collection name to the module id, for example
   `inventory_v0_1_items`, so independent generated apps and future versions do
-  not collide in CTOX DB.
+  not collide in CTOX Sync Engine.
 - Send workflow automation through `ctx.commandBus.dispatch(...)`.
 - Use `business_os.chat.task` for normal AI/chat follow-up with `payload.record_snapshot`.
 - Show returned `task_id`/`command_id` as a real tracking control that opens the

@@ -1,4 +1,4 @@
-// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs.
+// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs.
 
 // src/apps/business-os/rxdb/src/protocol-contract.generated.mjs
 var CTOX_RXDB_PROTOCOL = "ctox-rxdb-protocol-v1";
@@ -3907,7 +3907,7 @@ async function deflateInflate(bytes) {
     const buf = await new Response(stream).arrayBuffer();
     return new TextDecoder().decode(buf);
   }
-  throw new Error('DecompressionStream("deflate-raw") is required for compressed CTOX DB chunks');
+  throw new Error('DecompressionStream("deflate-raw") is required for compressed CTOX Sync Engine chunks');
 }
 
 // src/apps/business-os/rxdb/src/demand-loading-transport.mjs
@@ -8532,7 +8532,7 @@ function buildBusinessOsAdvancedStatus({
     ok,
     rxdbRuntime: {
       name: "ctox-rxdb-js",
-      publicName: "CTOX DB",
+      publicName: "CTOX Sync Engine",
       source: "app-local",
       packageManager: "none",
       compatibility: "ctox-db-api",

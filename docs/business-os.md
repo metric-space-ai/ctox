@@ -21,7 +21,7 @@ CTOX App (Rust Daemon Host)
 
 CTOX Business OS Web App (Browser Client)
   -> Statically served HTML/JS/CSS (vanilla runtime)
-  -> Local CTOX DB data store (browser IndexedDB)
+  -> Local CTOX Sync Engine data store (browser IndexedDB)
   -> WebRTC P2P sync peer (ctox-rxdb-js)
 ```
 
@@ -29,13 +29,13 @@ To support setups behind NAT, residential firewalls, or private networks, the Bu
 
 ---
 
-## 2. Sync Architecture (CTOX DB / RxDB WebRTC)
+## 2. Sync Architecture (CTOX Sync Engine / RxDB WebRTC)
 
-Replication between the client browser (IndexedDB) and the daemon (SQLite) is handled by the **CTOX DB WebRTC replication contract**. CTOX DB is the Business OS runtime id for the CTOX-owned RxDB-derived implementation; it is not a drop-in replacement for upstream npm `rxdb`.
+Replication between the client browser (IndexedDB) and the daemon (SQLite) is handled by the **CTOX Sync Engine WebRTC replication contract**. CTOX Sync Engine is the Business OS runtime id for the CTOX-owned RxDB-derived implementation; it is not a drop-in replacement for upstream npm `rxdb`.
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/business-os.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "CTOX Sync Engine WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/business-os.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```

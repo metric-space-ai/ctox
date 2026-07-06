@@ -464,7 +464,7 @@
         "uses_collections_proxy": false,
         "uses_cached_db_handle": false
       },
-      "notes": "Phase 13C migrated Matching to the guarded facade batch: the module now receives the Shell Business OS context through setBusinessOsDatabaseContext(ctx), resolves matching_requirements/matching_objects/matching_results only through ctx.db.collection(name), removed its standalone CTOX DB/open-bundle fallback and ctx.db.raw injection, and gates writes through ctx.permissions.canWriteCollection. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on matching_requirements before data.read, read success after an exact collection data.read grant and write denial without data.write."
+      "notes": "Phase 13C migrated Matching to the guarded facade batch: the module now receives the Shell Business OS context through setBusinessOsDatabaseContext(ctx), resolves matching_requirements/matching_objects/matching_results only through ctx.db.collection(name), removed its standalone CTOX Sync Engine/open-bundle fallback and ctx.db.raw injection, and gates writes through ctx.permissions.canWriteCollection. Browser/Rust dynamic-app smoke registers its module schema and requires collection/property/raw/context denial on matching_requirements before data.read, read success after an exact collection data.read grant and write denial without data.write."
     },
     "nachweise": {
       "title": "Nachweise",

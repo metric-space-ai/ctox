@@ -1,7 +1,7 @@
 // =============================================================================
 // AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
 // =============================================================================
-// This file orchestrates CTOX DB, the WebRTC-ONLY data plane between Business OS
+// This file orchestrates CTOX Sync Engine, the WebRTC-ONLY data plane between Business OS
 // and the CTOX daemon. Hard rules (each one has caused real regressions):
 //   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only.
 //   2. NO npm/bare/node: imports — this runtime is package-manager-free.
@@ -14,7 +14,7 @@
 //      green. Never delete or weaken a failing test to make it pass.
 // =============================================================================
 
-// Per-collection sync runtime on top of CTOX DB. Repair philosophy: the
+// Per-collection sync runtime on top of CTOX Sync Engine. Repair philosophy: the
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
@@ -663,7 +663,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260706-fieldmerge-v2');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260706-syncengine-v1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }

@@ -1,7 +1,7 @@
 # src/core/business_os — agent guardrails
 
 This directory wires the CTOX daemon to Business OS. The data plane between
-the browser and this daemon is **WebRTC-only** (CTOX DB / ctox-rxdb): Business
+the browser and this daemon is **WebRTC-only** (CTOX Sync Engine / ctox-rxdb): Business
 OS collections, `business_commands`, `ctox_queue_tasks`, desktop files/chunks,
 module manifests and runtime status replicate ONLY over RxDB/WebRTC and
 persist in the RxDB store opened by `rxdb_peer.rs`. See `docs/ctox-rxdb.md`

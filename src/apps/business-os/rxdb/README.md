@@ -1,19 +1,19 @@
-# CTOX DB (`ctox-rxdb-js`)
+# CTOX Sync Engine (`ctox-rxdb-js`)
 
-`ctox-rxdb-js` is the package-manager-free Browser-side CTOX DB runtime for
+`ctox-rxdb-js` is the package-manager-free Browser-side CTOX Sync Engine runtime for
 CTOX Business OS. It is derived from RxDB concepts and historical fork work,
 but it is not upstream RxDB and is not a drop-in replacement for the npm
 `rxdb` package.
 
-Business OS app code must treat this as **CTOX DB**:
+Business OS app code must treat this as **CTOX Sync Engine**:
 
-- public runtime name: `CTOX DB`;
+- public runtime name: `CTOX Sync Engine`;
 - package/runtime id: `ctox-rxdb-js`;
 - API contract: `ctox-db-business-os-v1`;
 - upstream compatibility: `not-upstream-rxdb`.
 
 Apps must not import `rxdb` or `rxdb/plugins/...`. They receive database and
-collection handles from the Business OS runtime and use the CTOX DB contract.
+collection handles from the Business OS runtime and use the CTOX Sync Engine contract.
 
 Design constraints:
 

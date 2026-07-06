@@ -61,7 +61,7 @@ muss im Abschnitt "Plan-Aenderungslog" dokumentiert werden.
 1. `Kunden` ist eine native Business-OS-App, kein eingebettetes Twenty.
 2. Das Modul bleibt no-build: `module.json`, `schema.js`, `index.html`,
    `index.css`, `index.js`, direkte ESM.
-3. Durable Daten laufen ueber CTOX DB / RxDB-Collections aus `schema.js`.
+3. Durable Daten laufen ueber CTOX Sync Engine / RxDB-Collections aus `schema.js`.
 4. Authoritative Domain-Uebergaenge laufen ueber `business_commands` und
    Backend-Validierung.
 5. Die Browser-UI ist keine Vertrauensgrenze fuer Stage-Moves, Dedupe, Import

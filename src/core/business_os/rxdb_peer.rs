@@ -11757,7 +11757,7 @@ fn rx_schema_from_runtime_module_schema(
     );
     normalize_schema_indexes(&mut schema);
     serde_json::from_value(schema)
-        .with_context(|| format!("collection `{name}` schema must match CTOX DB schema type"))
+        .with_context(|| format!("collection `{name}` schema must match CTOX Sync Engine schema type"))
 }
 
 fn is_runtime_module_collection_name(name: &str) -> bool {

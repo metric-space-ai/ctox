@@ -1,7 +1,7 @@
 //! ============================================================================
 //! AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
 //! ============================================================================
-//! This module is the CTOX side of CTOX DB, the WebRTC-ONLY data plane to
+//! This module is the CTOX side of CTOX Sync Engine, the WebRTC-ONLY data plane to
 //! Business OS. Hard rules (each one has caused real regressions):
 //!   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only
 //!      (root README.md "Data Boundary").

@@ -15,7 +15,7 @@
 //   npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
 //     --bundle --format=esm \
 //     --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
-//     "--banner:js=// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
+//     "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 //
 // and bump the cache-buster (`ctox-rxdb-js.mjs?v=...`) in shared/db.js,
 // shared/sync.js and modules/matching/ui/businessOsDataSource.js.
@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ESBUILD_PIN = 'esbuild@0.28.0';
-const BANNER = '// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs.';
+const BANNER = '// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs.';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(testDir, '..');

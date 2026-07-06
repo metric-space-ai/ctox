@@ -1,4 +1,4 @@
-# ctox-rxdb-js (CTOX DB browser runtime) — agent guardrails
+# ctox-rxdb-js (CTOX Sync Engine browser runtime) — agent guardrails
 
 Read `docs/ctox-rxdb.md` before changing anything here. This runtime is the
 WebRTC-ONLY data plane between Business OS and the CTOX daemon. Every rule
@@ -16,7 +16,7 @@ below exists because an agent broke it in good faith and shipped a regression.
    npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
      --bundle --format=esm \
      --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
-     "--banner:js=// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
+     "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
    ```
    and bump the `?v=` cache-buster in `shared/db.js` and `shared/sync.js`
    (both identical — a mismatch loads a second bundle copy and duplicates

@@ -1,6 +1,6 @@
 {
   "name": "ctox-rxdb-js",
-  "public_name": "CTOX DB",
+  "public_name": "CTOX Sync Engine",
   "format": "browser-esm",
   "package_manager": "none",
   "api_contract": "ctox-db-business-os-v1",

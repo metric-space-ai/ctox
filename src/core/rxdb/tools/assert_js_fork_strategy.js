@@ -8,7 +8,7 @@ const appLocalRoot = path.join(repoRoot, 'src/apps/business-os/rxdb');
 const offenders = [];
 
 assertText(path.join(appLocalRoot, 'README.md'), [
-  ['CTOX DB public name', /CTOX DB/],
+  ['CTOX Sync Engine public name', /CTOX Sync Engine/],
   ['not upstream RxDB', /not upstream RxDB|not upstream npm `rxdb`/],
   ['not drop-in replacement', /not a drop-in replacement/],
   ['API contract', /ctox-db-business-os-v1/],
@@ -18,7 +18,7 @@ assertText(path.join(appLocalRoot, 'README.md'), [
 ]);
 assertManifest(path.join(appLocalRoot, 'manifest.json'));
 assertText(path.join(appLocalRoot, 'src/advanced-status-bridge.mjs'), [
-  ['public runtime status', /publicName:\s*'CTOX DB'/],
+  ['public runtime status', /publicName:\s*'CTOX Sync Engine'/],
   ['API contract status', /apiContract:\s*'ctox-db-business-os-v1'/],
   ['upstream marker status', /upstreamCompatibility:\s*'not-upstream-rxdb'/],
   ['not upstream compatible status', /upstreamCompatible:\s*false/],
@@ -46,7 +46,7 @@ assertText(path.join(appLocalRoot, 'dist/ctox-rxdb-js.mjs'), [
   ['stable createRxDatabase export', /\bcreateRxDatabase\b/],
   ['stable replicateWebRTC export', /\breplicateWebRTC\b/],
   ['stable Advanced Status export', /\bbuildBusinessOsAdvancedStatus\b/],
-  ['CTOX DB branding', /publicName:\s*"CTOX DB"/],
+  ['CTOX Sync Engine branding', /publicName:\s*"CTOX Sync Engine"/],
   ['API contract branding', /apiContract:\s*"ctox-db-business-os-v1"/],
 ]);
 
@@ -72,7 +72,7 @@ function assertManifest(file) {
   if (!parsed) return;
   const required = {
     name: 'ctox-rxdb-js',
-    public_name: 'CTOX DB',
+    public_name: 'CTOX Sync Engine',
     package_manager: 'none',
     api_contract: 'ctox-db-business-os-v1',
     compatibility: 'ctox-db-api',

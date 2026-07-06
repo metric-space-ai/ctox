@@ -515,7 +515,7 @@ pub fn business_os_status_text(root: &Path) -> String {
          Runtime contract:\n\
            - Business OS apps are runtime-installed vanilla HTML/CSS/JS modules.\n\
            - Dynamic apps live under runtime/business-os/installed-modules/<module-id>.\n\
-           - CTOX core runs as the outbound CTOX DB/WebRTC peer.\n\
+           - CTOX core runs as the outbound CTOX Sync Engine/WebRTC peer.\n\
            - SQLite state, commands, module manifests, and files sync over RxDB.\n\
            - Only system Business OS apps are installed by default.\n\
            - Non-system apps are installed through the app store only.\n",
@@ -693,7 +693,7 @@ fn render_rxdb_peer_status_text(status: &serde_json::Value) -> String {
         .map(|age| format!("{:.1}s ago", age as f64 / 1000.0))
         .unwrap_or_else(|| "none".to_string());
     let mut out = format!(
-        "CTOX DB native peer\n  running:        {running}\n  replicationUp:  {replication_up}\n  heartbeat:      {heartbeat}\n"
+        "CTOX Sync Engine native peer\n  running:        {running}\n  replicationUp:  {replication_up}\n  heartbeat:      {heartbeat}\n"
     );
     if let Some(errors) = status.get("healthErrors").and_then(|v| v.as_array()) {
         for error in errors {

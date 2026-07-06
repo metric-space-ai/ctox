@@ -141,7 +141,7 @@ new `index.js`.
   `contracts_v0_1_contracts`, not shared names such as `contracts` or
   `contract_records`.
 - If you add collections, list them in `module.json`, declare them in `collections.schema.json`, and export matching schemas from `schema.js`.
-- Runtime-installed module collections are registered into the native CTOX DB
+- Runtime-installed module collections are registered into the native CTOX Sync Engine
   peer from `collections.schema.json`. If a collection is missing from either
   `module.json`, `collections.schema.json`, or `schema.js`, browser and native
   persistence will disagree.

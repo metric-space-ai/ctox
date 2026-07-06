@@ -19,7 +19,7 @@ Google Chat. Es ergaenzt den Umsetzungsplan in
 - Die neuen Bot-Chat-Adapter sind in v1 text-only. Attachment-Uploads bleiben
   blockiert, bis provider-spezifische Upload-, Groessen-, MIME-, Persistenz-
   und Security-Review-Pfade implementiert sind.
-- Business-OS-Daten laufen weiter ueber CTOX DB / RxDB / WebRTC. Es gibt keinen
+- Business-OS-Daten laufen weiter ueber CTOX Sync Engine / RxDB / WebRTC. Es gibt keinen
   Browser-HTTP-Datenproxy fuer Chat-Nachrichten.
 
 ## Gemeinsamer Smoke-Test

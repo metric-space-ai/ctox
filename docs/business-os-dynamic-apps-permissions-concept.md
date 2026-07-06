@@ -718,7 +718,7 @@ Production blockers:
   now receives the Shell Business OS context via `setBusinessOsDatabaseContext(ctx)`,
   resolves Matching collections through `ctx.db.collection(name)`, gates writes
   through `ctx.permissions.canWriteCollection`, and no longer injects `ctx.db.raw`
-  or opens a standalone CTOX DB fallback.
+  or opens a standalone CTOX Sync Engine fallback.
 - Browser, CTOX, Knowledge, Reports and Tickets no longer use direct
   `ctx.db.raw` access. Their system collections now resolve through
   `ctx.db.collection(name)`. Creator runtime and generated app templates no
@@ -1250,7 +1250,7 @@ Additional Phase 13C Matching guarded-module evidence passed locally on
   Apps smoke registers `/modules/matching/schema.js` and checks the
   module-owned `matching_requirements` collection.
 - Matching no longer passes `ctx.db.raw` into `businessOsDataSource`, no longer
-  imports/opens the CTOX DB bundle as a standalone fallback, and no longer
+  imports/opens the CTOX Sync Engine bundle as a standalone fallback, and no longer
   creates missing collections from inside the module.
 - `businessOsDataSource` now receives the Shell context through
   `setBusinessOsDatabaseContext(ctx)`, builds its UI-facing aliases on top of

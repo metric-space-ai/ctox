@@ -55,16 +55,16 @@ daemon that keeps technical work organized over time.
 
 Business OS is the browser surface for CTOX. The browser shell can be delivered
 by CTOX itself, by ctox.dev, or by the desktop app. Business data still uses one
-path: CTOX DB over WebRTC between browser IndexedDB and the CTOX SQLite store.
+path: CTOX Sync Engine over WebRTC between browser IndexedDB and the CTOX SQLite store.
 HTTP may deliver static assets or launch context, but it is not the data bridge
 between Business OS and CTOX.
 
-CTOX DB is the Business OS runtime contract implemented by `ctox-rxdb-js` in
+CTOX Sync Engine is the Business OS runtime contract implemented by `ctox-rxdb-js` in
 the browser and `rxdb-rs` in the daemon. It is derived from RxDB concepts, but
 it is not upstream npm `rxdb` and not a drop-in replacement for arbitrary RxDB
 plugins. Business OS apps use the database handles supplied by the shell.
 
-The full reference for CTOX DB — architecture on both sides, the wire
+The full reference for CTOX Sync Engine — architecture on both sides, the wire
 protocol, the contracts pipeline, failure/recovery semantics with their
 hard invariants, the test map, and the agent guardrails — is
 [`docs/ctox-rxdb.md`](docs/ctox-rxdb.md). Read it before changing anything
@@ -72,7 +72,7 @@ in the data plane.
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "CTOX Sync Engine WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```

@@ -117,7 +117,7 @@ Known pitfalls the conformance guard
 
 ## Data Runtime Contract
 
-Business OS modules use **CTOX DB**, the CTOX-owned browser data runtime backed
+Business OS modules use **CTOX Sync Engine**, the CTOX-owned browser data runtime backed
 by `ctox-rxdb-js` and the native `rxdb-rs` peer. It is RxDB-derived, but it is
 not upstream npm `rxdb` and not a drop-in replacement for arbitrary RxDB
 plugins.

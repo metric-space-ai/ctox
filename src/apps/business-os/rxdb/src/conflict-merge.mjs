@@ -1,6 +1,6 @@
 // Field-merge conflict strategy (opt-in per collection).
 //
-// Default CTOX DB semantics are whole-document LWW with the origin-aware gate
+// Default CTOX Sync Engine semantics are whole-document LWW with the origin-aware gate
 // in storage-indexeddb.mjs (§8.1 invariants): an unsynced LOCAL write wins
 // whole-doc against an incoming master row, or is replaced whole-doc once the
 // master row is accepted — either way one side's FIELD changes are lost when

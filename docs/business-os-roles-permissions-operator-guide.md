@@ -2,7 +2,7 @@
 
 This guide is business-facing operator guidance for CTOX Business OS. It does
 not introduce a data path. Business data, app records, commands, files,
-catalog state and runtime status stay on CTOX DB over RxDB/WebRTC.
+catalog state and runtime status stay on CTOX Sync Engine over RxDB/WebRTC.
 
 ## Roles
 

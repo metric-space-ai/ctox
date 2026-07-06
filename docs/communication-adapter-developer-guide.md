@@ -35,7 +35,7 @@ Every native adapter must provide these typed operations:
 Adapters must normalize inbound data into the existing communication tables via
 `communication_accounts`, `communication_threads`, `communication_messages`,
 sync-run evidence and routing rows. Browser-facing state is projected through
-the CTOX DB / RxDB / WebRTC data plane.
+the CTOX Sync Engine / RxDB / WebRTC data plane.
 
 ## Data Boundary
 

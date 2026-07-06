@@ -13,7 +13,7 @@ Business OS ATS end-to-end (UIs, gates, billing, DSGVO, audit) at volume.
 
 ## 1. Hard rules (read first)
 
-1. **Never invent an alternate data path.** Business OS data lives in CTOX DB.
+1. **Never invent an alternate data path.** Business OS data lives in CTOX Sync Engine.
    The two supported ways to create records on a test instance you have host
    access to:
    - **Command dispatch** (preferred for anything with a server command — it

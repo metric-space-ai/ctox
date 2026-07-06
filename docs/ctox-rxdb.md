@@ -1,6 +1,6 @@
-# CTOX DB (ctox-rxdb) — The Business OS Data Plane
+# CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
-This is the reference document for CTOX DB: the WebRTC-only replication layer
+This is the reference document for CTOX Sync Engine: the WebRTC-only replication layer
 between the browser-side Business OS shell and the CTOX daemon. It is written
 for engineers and coding agents, and every technical claim in it has been
 verified against the cited source file. When this document and the code
@@ -10,14 +10,14 @@ Two implementations, one contract:
 
 | Side | Name | Location |
 |---|---|---|
-| Browser | `ctox-rxdb-js` (public name **CTOX DB**) | `src/apps/business-os/rxdb/` |
+| Browser | `ctox-rxdb-js` (public name **CTOX Sync Engine**) | `src/apps/business-os/rxdb/` |
 | Daemon | `rxdb-rs` (crate `ctox-rxdb`, lib name `rxdb`) | `src/core/rxdb/` + `src/core/business_os/rxdb_peer.rs` |
 
 ---
 
-## 1. What CTOX DB is
+## 1. What CTOX Sync Engine is
 
-CTOX DB is a CTOX-owned data-plane runtime *derived from* RxDB concepts. It is
+CTOX Sync Engine is a CTOX-owned data-plane runtime *derived from* RxDB concepts. It is
 **not upstream RxDB** and not a drop-in replacement for the npm `rxdb`
 package (`src/apps/business-os/rxdb/README.md`).
 
@@ -26,7 +26,7 @@ The identity contract is pinned in `src/apps/business-os/rxdb/manifest.json`:
 | Field | Value |
 |---|---|
 | `name` (runtime id) | `ctox-rxdb-js` |
-| `public_name` | `CTOX DB` |
+| `public_name` | `CTOX Sync Engine` |
 | `format` | `browser-esm` |
 | `package_manager` | `none` |
 | `api_contract` | `ctox-db-business-os-v1` |
@@ -51,7 +51,7 @@ The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 reduced to the CTOX-as-WebRTC-peer scope. Root `README.md` ("Business OS
 Connectivity", from line 54) defines the relationship: the browser shell may
 be delivered by CTOX itself, ctox.dev, or the desktop app, but business data
-always uses one path — CTOX DB over WebRTC between browser IndexedDB and the
+always uses one path — CTOX Sync Engine over WebRTC between browser IndexedDB and the
 CTOX SQLite store.
 
 ---
@@ -78,7 +78,7 @@ simplification, not a path spec.)
 
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
-path, replicate through CTOX DB/WebRTC, never through HTTP.
+path, replicate through CTOX Sync Engine/WebRTC, never through HTTP.
 
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed
@@ -108,7 +108,7 @@ All descriptions verified against the file headers.
 | Module | One line |
 |---|---|
 | `index.mjs` | Public browser-ESM entry; everything the bundle exports. |
-| `rx-database.mjs` | `createRxDatabase` / collection surface of CTOX DB. |
+| `rx-database.mjs` | `createRxDatabase` / collection surface of CTOX Sync Engine. |
 | `schema.mjs` | Canonical JSON + WebCrypto SHA-256 schema hashes; schema-hash registry; protocol payload helpers. |
 | `storage-indexeddb.mjs` | Minimal document storage over native IndexedDB (default db `ctox_business_os_js_v1`). |
 | `replication-webrtc.mjs` | `replicateWebRTC`: shared room peer plus per-collection replication states (pull/push, checkpoints, master handler). |
@@ -174,7 +174,7 @@ through `collectionStartQueue` (500 ms spacing). Key mechanics, all in
 (chunk-ish collections get small batches), and the `nativeRxdbPeerReady` gate.
 
 Runtime-installed Business OS app collections are dynamic but still part of
-the CTOX DB data plane. The browser registers them from each module's
+the CTOX Sync Engine data plane. The browser registers them from each module's
 `schema.js`; the native peer registers matching schemas from
 `runtime/business-os/installed-modules/<module-id>/collections.schema.json`
 when it starts. App creation finalization refreshes a running in-process native
@@ -260,7 +260,7 @@ write core daemon state into the RxDB store for replication.
 Workspace corporate design lives in the singleton
 `business_workspace_branding/workspace-branding` document. Admin updates go
 through `ctox.business_os.branding.update`; the native store validates allowed
-semantic tokens and projects the result over CTOX DB/WebRTC.
+semantic tokens and projects the result over CTOX Sync Engine/WebRTC.
 
 ### 4.3 Persistence map
 
@@ -627,7 +627,7 @@ committed dist):
 npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
   --bundle --format=esm \
   --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
-  "--banner:js=// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
+  "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 ```
 
 **Cache-buster discipline.** The bundle is imported with a `?v=` query in

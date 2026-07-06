@@ -1916,7 +1916,7 @@ function assertHealthyAdvancedStatusContract(status) {
     problems.push(`checks.rxdbRuntimeAppLocal is ${JSON.stringify(status.checks?.rxdbRuntimeAppLocal)}`);
   }
   if (status.rxdbRuntime?.name !== 'ctox-rxdb-js'
-    || status.rxdbRuntime?.publicName !== 'CTOX DB'
+    || status.rxdbRuntime?.publicName !== 'CTOX Sync Engine'
     || status.rxdbRuntime?.source !== 'app-local'
     || status.rxdbRuntime?.packageManager !== 'none'
     || status.rxdbRuntime?.apiContract !== 'ctox-db-business-os-v1'

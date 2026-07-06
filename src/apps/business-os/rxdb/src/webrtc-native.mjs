@@ -1,7 +1,7 @@
 // =============================================================================
 // AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
 // =============================================================================
-// This file is part of CTOX DB, the WebRTC-ONLY data plane between Business OS
+// This file is part of CTOX Sync Engine, the WebRTC-ONLY data plane between Business OS
 // and the CTOX daemon. Hard rules (each one has caused real regressions):
 //   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only.
 //   2. NO npm/bare/node: imports — this runtime is package-manager-free.
@@ -2231,7 +2231,7 @@ function splitFrameChunks(text, transferId) {
 
 // Test-only surface (mirrors replicationWebRtcTestInternals): lets the smoke
 // suite assert the frame-chunking invariants without reaching into private
-// scope. Not part of the public CTOX DB API.
+// scope. Not part of the public CTOX Sync Engine API.
 export const webrtcNativeTestInternals = Object.freeze({
   splitFrameChunks,
   jsonEscapedCharLen,

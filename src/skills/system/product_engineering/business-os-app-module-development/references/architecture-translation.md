@@ -16,7 +16,7 @@ Business OS app
   starts automation through ctx.commandBus.dispatch(...)
 
 CTOX data plane
-  browser CTOX DB/RxDB
+  browser CTOX Sync Engine/RxDB
   WebRTC replication
   native CTOX peer
   runtime module schemas from collections.schema.json
@@ -35,7 +35,7 @@ HTTP can serve static shell and module files. HTTP is not the app data bridge.
 | Server action / background job | `ctx.commandBus.dispatch(...)` |
 | AI assistant action | `business_os.chat.task` through `ctx.commandBus.dispatch(...)` with `payload.record_snapshot` |
 | Create a real local ticket | `ctox.ticket.local.create` through `ctx.commandBus.dispatch(...)` |
-| Postgres table | module-owned CTOX DB collection declared in module files |
+| Postgres table | module-owned CTOX Sync Engine collection declared in module files |
 | IndexedDB/localStorage | do not use; use `ctx.db.collection('<collection>')` for durable app records |
 | npm package | only use local browser ESM already shipped with the app |
 | build step | none; files must run directly in the browser |
@@ -98,7 +98,7 @@ shell/developer control surface.
 
 For runtime-created apps, every module-owned collection must exist in all three
 places: `module.json` `collections`, `collections.schema.json`, and `schema.js`.
-The browser registers `schema.js`; the native CTOX DB peer registers
+The browser registers `schema.js`; the native CTOX Sync Engine peer registers
 `collections.schema.json`. If those disagree, the app may appear in the shell
 but fail when reading, writing, or syncing records.
 

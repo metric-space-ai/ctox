@@ -323,20 +323,20 @@ function assertCtoxDbBrandingContract() {
 
   const sharedDb = readFileSync(sharedDbPath, 'utf8');
   for (const marker of [
-    "publicName: 'CTOX DB'",
+    "publicName: 'CTOX Sync Engine'",
     "compatibility: 'ctox-db-api'",
     'upstreamCompatible: false',
     "upstreamCompatibility: 'not-upstream-rxdb'",
     "apiContract: 'ctox-db-business-os-v1'",
   ]) {
     if (!sharedDb.includes(marker)) {
-      offenders.push(`src/apps/business-os/shared/db.js: CTOX DB runtime branding missing ${marker}`);
+      offenders.push(`src/apps/business-os/shared/db.js: CTOX Sync Engine runtime branding missing ${marker}`);
     }
   }
 
   const runtimeManifest = JSON.parse(readFileSync(runtimeManifestPath, 'utf8'));
-  if (runtimeManifest.public_name !== 'CTOX DB') {
-    offenders.push('src/apps/business-os/rxdb/manifest.json: public_name must be CTOX DB');
+  if (runtimeManifest.public_name !== 'CTOX Sync Engine') {
+    offenders.push('src/apps/business-os/rxdb/manifest.json: public_name must be CTOX Sync Engine');
   }
   if (runtimeManifest.api_contract !== 'ctox-db-business-os-v1') {
     offenders.push('src/apps/business-os/rxdb/manifest.json: api_contract must be ctox-db-business-os-v1');
@@ -347,27 +347,27 @@ function assertCtoxDbBrandingContract() {
 
   const advancedStatusBridge = readFileSync(advancedStatusBridgePath, 'utf8');
   for (const marker of [
-    "publicName: 'CTOX DB'",
+    "publicName: 'CTOX Sync Engine'",
     "apiContract: 'ctox-db-business-os-v1'",
     "upstreamCompatibility: 'not-upstream-rxdb'",
     'upstreamCompatible: false',
   ]) {
     if (!advancedStatusBridge.includes(marker)) {
-      offenders.push(`src/apps/business-os/rxdb/src/advanced-status-bridge.mjs: CTOX DB status branding missing ${marker}`);
+      offenders.push(`src/apps/business-os/rxdb/src/advanced-status-bridge.mjs: CTOX Sync Engine status branding missing ${marker}`);
     }
   }
 
   for (const [path, required] of [
-    [contractPath, ['CTOX DB', 'upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1', "must not import `rxdb`"]],
-    [appReadmePath, ['CTOX DB', 'not upstream npm `rxdb`', 'ctox-db-business-os-v1', "Do not import `rxdb`"]],
-    [runtimeReadmePath, ['CTOX DB', 'not upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1']],
-    [rootReadmePath, ['CTOX DB', 'not upstream npm `rxdb`', 'not a drop-in replacement']],
-    [businessOsDocPath, ['CTOX DB', 'not a drop-in replacement for upstream npm `rxdb`']],
+    [contractPath, ['CTOX Sync Engine', 'upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1', "must not import `rxdb`"]],
+    [appReadmePath, ['CTOX Sync Engine', 'not upstream npm `rxdb`', 'ctox-db-business-os-v1', "Do not import `rxdb`"]],
+    [runtimeReadmePath, ['CTOX Sync Engine', 'not upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1']],
+    [rootReadmePath, ['CTOX Sync Engine', 'not upstream npm `rxdb`', 'not a drop-in replacement']],
+    [businessOsDocPath, ['CTOX Sync Engine', 'not a drop-in replacement for upstream npm `rxdb`']],
   ]) {
     const content = readFileSync(path, 'utf8');
     for (const marker of required) {
       if (!content.includes(marker)) {
-        offenders.push(`${relative(repoRoot, path)}: CTOX DB compatibility docs missing ${marker}`);
+        offenders.push(`${relative(repoRoot, path)}: CTOX Sync Engine compatibility docs missing ${marker}`);
       }
     }
   }
@@ -383,7 +383,7 @@ function assertNoUpstreamRxdbImports(file, content) {
   ];
   for (const pattern of importPatterns) {
     if (pattern.test(content)) {
-      offenders.push(`${rel}: Business OS apps must use CTOX DB shell handles, not upstream rxdb imports`);
+      offenders.push(`${rel}: Business OS apps must use CTOX Sync Engine shell handles, not upstream rxdb imports`);
       return;
     }
   }

@@ -36,7 +36,7 @@ explizit in diese Registry integriert sind.
 ## Nicht Verhandelbare Regeln
 
 1. Neue Adapter duerfen Business-OS-Daten nicht ueber HTTP zwischen Browser und
-   CTOX proxien. Business-OS-Daten laufen weiter ueber CTOX DB / RxDB / WebRTC.
+   CTOX proxien. Business-OS-Daten laufen weiter ueber CTOX Sync Engine / RxDB / WebRTC.
 2. Browser-Code darf keine Anbieter-Tokens halten, persistieren oder direkt fuer
    Provider-API-Zugriffe verwenden.
 3. Runtime-Konfiguration, Tokens, Bot-IDs, Workspace-IDs und Secret-Material

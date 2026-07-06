@@ -137,7 +137,7 @@ INSTALL / UPGRADE
   ctox update status             dump install layout + manifest + update state
   ctox business-os status        show bundled and native Business OS state
   ctox business-os rxdb status [--json]
-                                 CTOX DB peer health: heartbeat, replicationUp,
+                                 CTOX Sync Engine peer health: heartbeat, replicationUp,
                                  loop ticks, external-poll wakeups
   ctox business-os peer rotate   rotate the persisted Business OS WebRTC room
   ctox business-os serve [--addr 127.0.0.1:8765]

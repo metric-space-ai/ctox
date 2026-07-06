@@ -11,7 +11,7 @@ REST, Redis, ActionCable, or Vue architecture.
 
 The app must fit the current CTOX Business OS architecture:
 
-- Business data stays on CTOX DB / RxDB / WebRTC.
+- Business data stays on CTOX Sync Engine / RxDB / WebRTC.
 - Browser actions go through `ctx.commandBus.dispatch`.
 - Native Rust validates commands, mutates canonical state, and projects records
   back to Business OS collections.

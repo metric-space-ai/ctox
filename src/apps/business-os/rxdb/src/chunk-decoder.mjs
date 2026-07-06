@@ -39,5 +39,5 @@ async function deflateInflate(bytes) {
     const buf = await new Response(stream).arrayBuffer();
     return new TextDecoder().decode(buf);
   }
-  throw new Error('DecompressionStream("deflate-raw") is required for compressed CTOX DB chunks');
+  throw new Error('DecompressionStream("deflate-raw") is required for compressed CTOX Sync Engine chunks');
 }

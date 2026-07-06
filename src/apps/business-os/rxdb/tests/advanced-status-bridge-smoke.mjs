@@ -41,7 +41,7 @@ assert(Array.isArray(env.sync.peerSessions), 'peerSessions is array');
 assert(env.checks.rxdbRuntimeAppLocal === true, 'app-local check on');
 assert(env.checks.queryDemandLoadingActive === true, 'V1.5 active');
 assert(env.rxdbRuntime.name === 'ctox-rxdb-js', 'runtime name');
-assert(env.rxdbRuntime.publicName === 'CTOX DB', 'public runtime name');
+assert(env.rxdbRuntime.publicName === 'CTOX Sync Engine', 'public runtime name');
 assert(env.rxdbRuntime.source === 'app-local', 'app-local source');
 assert(env.rxdbRuntime.packageManager === 'none', 'no package manager');
 assert(env.rxdbRuntime.apiContract === 'ctox-db-business-os-v1', 'api contract');

@@ -19,7 +19,7 @@ Rust remains required only for native capabilities:
 - specialized demand loaders, stream sources, or performance-critical indexes
 
 The WebRTC-only data boundary does not change. Module data, commands, files,
-manifests, and runtime status continue to replicate only through CTOX DB.
+manifests, and runtime status continue to replicate only through CTOX Sync Engine.
 
 ## Problem Statement
 
@@ -229,7 +229,7 @@ Work:
 - Update `registerModuleSchemas()` to load `collections.schema.json` first.
 - Require `collections.schema.json` for runtime schema registration.
 - Keep browser migrations declarative in `collections.schema.json` metadata.
-- Keep module sync lazy and collection-priority behavior inside CTOX DB.
+- Keep module sync lazy and collection-priority behavior inside CTOX Sync Engine.
 
 Exit criteria:
 

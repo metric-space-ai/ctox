@@ -55,7 +55,7 @@ if (ci) {
   assertContains(ciPath, ci, 'release evidence guard syntax check', 'node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js');
   assertContains(ciPath, ci, 'release evidence guard execution', 'node src/core/rxdb/tools/assert_js_fork_release_evidence.js');
   for (const item of requiredEvidence) {
-    assertContains(ciPath, ci, `uploaded CTOX DB evidence ${item}`, item);
+    assertContains(ciPath, ci, `uploaded CTOX Sync Engine evidence ${item}`, item);
   }
   for (const item of forbiddenLegacyEvidence) {
     assertNotContains(ciPath, ci, `legacy RxDB fork evidence ${item}`, item);

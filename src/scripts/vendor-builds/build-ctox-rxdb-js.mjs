@@ -20,11 +20,11 @@ const writeProvenance = process.argv.includes('--write-provenance');
 const writeBundle = process.argv.includes('--write-bundle');
 
 const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-if (manifest.name !== 'ctox-rxdb-js' || manifest.public_name !== 'CTOX DB') {
-  throw new Error('app-local CTOX DB manifest identity is invalid');
+if (manifest.name !== 'ctox-rxdb-js' || manifest.public_name !== 'CTOX Sync Engine') {
+  throw new Error('app-local CTOX Sync Engine manifest identity is invalid');
 }
 if (manifest.package_manager !== 'none') {
-  throw new Error('app-local CTOX DB must remain package-manager-free');
+  throw new Error('app-local CTOX Sync Engine must remain package-manager-free');
 }
 
 await fs.mkdir(outDir, { recursive: true });

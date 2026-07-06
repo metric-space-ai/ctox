@@ -28,7 +28,7 @@ export function buildBusinessOsAdvancedStatus({
     ok,
     rxdbRuntime: {
       name: 'ctox-rxdb-js',
-      publicName: 'CTOX DB',
+      publicName: 'CTOX Sync Engine',
       source: 'app-local',
       packageManager: 'none',
       compatibility: 'ctox-db-api',

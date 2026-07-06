@@ -1,4 +1,4 @@
-# rxdb-rs (CTOX DB native crate) — agent guardrails
+# rxdb-rs (CTOX Sync Engine native crate) — agent guardrails
 
 Read `docs/ctox-rxdb.md` before changing anything here. This crate is the
 CTOX side of the WebRTC-ONLY data plane to Business OS. Every rule below

@@ -11,7 +11,7 @@ const offenders = [];
 const manifest = readJson(manifestPath);
 if (manifest) {
   if (manifest.name !== 'ctox-rxdb-js') offenders.push(`${relative(manifestPath)}: name must be ctox-rxdb-js`);
-  if (manifest.public_name !== 'CTOX DB') offenders.push(`${relative(manifestPath)}: public_name must be CTOX DB`);
+  if (manifest.public_name !== 'CTOX Sync Engine') offenders.push(`${relative(manifestPath)}: public_name must be CTOX Sync Engine`);
   if (manifest.package_manager !== 'none') offenders.push(`${relative(manifestPath)}: package_manager must be none`);
   if (manifest.api_contract !== 'ctox-db-business-os-v1') offenders.push(`${relative(manifestPath)}: api_contract must be ctox-db-business-os-v1`);
   if (manifest.upstream_compatible !== false || manifest.upstream_compatibility !== 'not-upstream-rxdb') {
@@ -30,7 +30,7 @@ if (dist) {
     'buildBusinessOsAdvancedStatus',
   ]) {
     if (!new RegExp(`\\b${name}\\b`).test(dist)) {
-      offenders.push(`${relative(distPath)}: missing expected CTOX DB export ${name}`);
+      offenders.push(`${relative(distPath)}: missing expected CTOX Sync Engine export ${name}`);
     }
   }
   for (const forbidden of ['simple-peer', 'Dexie', 'npm', 'premium access', 'rxdb-premium']) {
