@@ -72,7 +72,6 @@ const state = {
   canManage: false,
   catalog: [],
   extra: [],
-  toastTimer: null,
 };
 
 const els = {};
@@ -107,7 +106,6 @@ export async function mount(ctx) {
   await refresh();
 
   return () => {
-    if (state.toastTimer) clearTimeout(state.toastTimer);
     styleLink.remove();
   };
 }
@@ -119,11 +117,12 @@ async function loadModuleMarkup() {
   } catch (_error) {
     /* fall through to minimal markup */
   }
-  return '<main class="credentials-module" data-credentials-root>'
+  return '<main class="ctox-workspace ctox-workspace--single credentials-module" data-credentials-root>'
+    + '<section class="ctox-pane"><div class="ctox-pane-scroll cred-body">'
     + '<div class="cred-notice" data-cred-notice></div>'
     + '<div class="cred-list" data-cred-list></div>'
     + '<div class="cred-list" data-cred-extra-list></div>'
-    + '<div class="cred-toast" data-cred-toast hidden></div></main>';
+    + '</div></section></main>';
 }
 
 function bindElements(host) {
@@ -136,7 +135,6 @@ function bindElements(host) {
   els.addForm = host.querySelector('[data-cred-add]');
   els.addKey = host.querySelector('[data-add-key]');
   els.addValue = host.querySelector('[data-add-value]');
-  els.toast = host.querySelector('[data-cred-toast]');
 }
 
 function applyStaticLabels() {
@@ -146,7 +144,13 @@ function applyStaticLabels() {
   };
   set('[data-cred-title]', 'title');
   set('[data-cred-subtitle]', 'subtitle');
-  set('[data-cred-refresh-label]', 'refresh');
+  // The refresh action is a compact icon button — label it for a11y/tooltip
+  // instead of replacing its SVG content.
+  const refreshButton = els.host.querySelector('[data-cred-refresh-label]');
+  if (refreshButton) {
+    refreshButton.setAttribute('aria-label', state.t('refresh'));
+    refreshButton.setAttribute('title', state.t('refresh'));
+  }
   set('[data-cred-known-title]', 'known_title');
   set('[data-cred-extra-title]', 'extra_title');
   set('[data-cred-add-title]', 'add_title');
@@ -202,12 +206,12 @@ async function refresh() {
 function render() {
   if (!els.list) return;
   if (!state.canManage) {
-    els.list.innerHTML = `<div class="cred-empty">${esc(state.t('no_permission'))}</div>`;
+    els.list.innerHTML = `<div class="ctox-empty">${esc(state.t('no_permission'))}</div>`;
     if (els.extraSection) els.extraSection.hidden = true;
     return;
   }
   if (!state.catalog.length) {
-    els.list.innerHTML = `<div class="cred-empty">${esc(state.t('empty_known'))}</div>`;
+    els.list.innerHTML = `<div class="ctox-empty">${esc(state.t('empty_known'))}</div>`;
   } else {
     els.list.innerHTML = state.catalog.map((entry) => rowHtml(entry, false)).join('');
   }
@@ -232,17 +236,17 @@ function rowHtml(entry, isExtra) {
   const placeholder = isSet ? state.t('ph_rotate') : state.t('ph_set');
   const saveLabel = isSet ? state.t('btn_rotate') : state.t('btn_save');
   const deleteButton = isSet
-    ? `<button type="button" class="danger" data-action="delete" data-key="${esc(name)}">${esc(state.t('btn_delete'))}</button>`
+    ? `<button type="button" class="ctox-button is-danger" data-action="delete" data-key="${esc(name)}">${esc(state.t('btn_delete'))}</button>`
     : '';
   return `<div class="cred-row" data-key="${esc(name)}" data-context-record-id="${esc(name)}" data-context-record-type="credential" data-context-label="${esc(name)}">
     <div class="cred-meta">
       <span class="cred-name">${esc(name)}</span>
       ${description ? `<span class="cred-desc">${esc(description)}</span>` : ''}
-      <span class="cred-status ${isSet ? 'is-set' : 'is-unset'}">${esc(statusText)}</span>
+      <span class="ctox-badge${isSet ? ' is-success' : ''}" data-cred-status>${esc(statusText)}</span>
     </div>
     <div class="cred-actions">
-      <input type="password" data-value-for="${esc(name)}" placeholder="${esc(placeholder)}" autocomplete="new-password" />
-      <button type="button" data-action="save" data-key="${esc(name)}">${esc(saveLabel)}</button>
+      <input type="password" class="ctox-input" data-value-for="${esc(name)}" placeholder="${esc(placeholder)}" autocomplete="new-password" />
+      <button type="button" class="ctox-button" data-action="save" data-key="${esc(name)}">${esc(saveLabel)}</button>
       ${deleteButton}
     </div>
   </div>`;
@@ -374,14 +378,11 @@ function hideNotice() {
 }
 
 function toast(message, isError = false) {
-  if (!els.toast) return;
-  els.toast.textContent = message;
-  els.toast.classList.toggle('is-error', Boolean(isError));
-  els.toast.hidden = false;
-  if (state.toastTimer) clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => {
-    if (els.toast) els.toast.hidden = true;
-  }, 3200);
+  state.ctx?.notifications?.show?.({
+    type: isError ? 'error' : 'success',
+    title: state.t('title'),
+    message: String(message ?? ''),
+  });
 }
 
 function formatUpdated(value) {

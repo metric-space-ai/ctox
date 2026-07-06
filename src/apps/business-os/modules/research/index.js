@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const BUILD = '20260626-skf-dialog-knowledge-v2';
+const BUILD = '20260706-kit-migration-v1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -955,11 +955,16 @@ function renderLeft() {
   if (!root) return;
   const task = selectedTask();
   root.innerHTML = `
-    <header class="research-pane-header">
-      <div><span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span><h2>${escapeHtml(state.t('knowledgeDashboards', 'Knowledge Dashboards'))}</h2></div>
-      <div class="research-header-actions">
-        <button type="button" class="research-icon-button" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
-        <button type="button" class="research-icon-button" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('webResearch', 'Web Research'))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('knowledgeDashboards', 'Knowledge Dashboards'))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
+          <button type="button" class="ctox-pane-icon" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+        </div>
       </div>
     </header>
     <div class="research-left-scroll">
@@ -994,7 +999,7 @@ function renderRankingRow(source) {
     <button type="button" class="research-rank-row${selected ? ' is-selected' : ''}" data-action="select-source" data-source-id="${escapeHtml(source.id)}" data-context-record-id="${escapeHtml(source.id)}" data-context-record-type="source" data-context-label="${escapeHtml(source.title)}">
       <span class="research-rank">#${source.rank}</span>
       <span class="research-rank-main"><strong>${escapeHtml(source.title)}</strong><small>${escapeHtml(source.subtitle)}</small></span>
-      <span class="research-grade research-grade-${source.grade.toLowerCase()}">${source.grade}</span>
+      <span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade}</span>
       <span class="research-score">${(source.score / 10).toFixed(1)}</span>
     </button>
   `;
@@ -1056,19 +1061,23 @@ function renderCenter() {
   const yAxis = axisPair.y;
   const isGraphMode = state.mapMode === 'discovery';
   root.innerHTML = `
-    <header class="research-pane-header research-center-header">
-      <div><span>${escapeHtml(task.knowledge_domain)}</span><h2>${escapeHtml(task.title)}</h2></div>
-      <div class="research-center-actions">
-        ${state.showDiagram ? `<span class="research-map-hint">Scroll zoom · drag pan</span>` : ''}
-        <button type="button"
-                class="research-button"
-                data-action="toggle-diagram"
-                style="margin:0; background:color-mix(in srgb, var(--research-accent) 12%, var(--research-surface-2)); border-color:color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); color:var(--research-accent); font-weight:800; font-size:11px; padding:0 12px; height:30px; border-radius:6px;"
-                title="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
-                aria-label="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
-                aria-pressed="${!state.showDiagram}">
-          ${state.showDiagram ? 'Karte ausblenden ✖' : 'Karte einblenden 🗺️'}
-        </button>
+    <header class="ctox-pane-header ctox-pane-band research-center-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(task.knowledge_domain)}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(task.title)}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          ${state.showDiagram ? `<span class="research-map-hint">Scroll zoom · drag pan</span>` : ''}
+          <button type="button"
+                  class="ctox-pane-icon${state.showDiagram ? ' is-active' : ''}"
+                  data-action="toggle-diagram"
+                  title="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
+                  aria-label="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
+                  aria-pressed="${!state.showDiagram}">
+            ${iconSvg('eye')}
+          </button>
+        </div>
       </div>
     </header>
     <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
@@ -1076,8 +1085,8 @@ function renderCenter() {
         <div class="research-map-head">
           <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
           ${mapModeToggle()}
-          <button type="button" class="research-map-reset" data-action="reset-map" aria-label="${escapeHtml(state.t('resetMapView', 'Kartenansicht zurücksetzen'))}">${escapeHtml(state.t('reset', 'Reset'))}</button>
-          <button type="button" class="research-map-reset" data-action="toggle-diagram" title="${state.showDiagram ? 'Einklappen' : 'Ausklappen'}" style="margin-left: 6px;">${state.showDiagram ? 'Einklappen' : 'Ausklappen'}</button>
+          <button type="button" class="ctox-button" data-action="reset-map" aria-label="${escapeHtml(state.t('resetMapView', 'Kartenansicht zurücksetzen'))}">${escapeHtml(state.t('reset', 'Reset'))}</button>
+          <button type="button" class="ctox-button" data-action="toggle-diagram" title="${state.showDiagram ? 'Einklappen' : 'Ausklappen'}">${state.showDiagram ? 'Einklappen' : 'Ausklappen'}</button>
         </div>
         <div class="research-portfolio-map${isGraphMode ? ' is-discovery-graph' : ''}">
           <div class="research-map-grid" aria-hidden="true"></div>
@@ -1090,16 +1099,16 @@ function renderCenter() {
       </section>
       <section class="research-workbench">
         <div class="research-tabs-container">
-          <div class="research-tabs" role="tablist" aria-label="Research views">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
             ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
             ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
             ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
             ${tabButton('reports', `Fachberichte (12)`)}
           </div>
           ${state.activeTab === 'sources' ? `
-            <div class="research-view-toggle">
+            <div class="ctox-pane-tabs research-view-toggle">
               <button type="button"
-                      class="research-view-btn${state.sourcesViewMode === 'table' ? ' is-active' : ''}"
+                      class="ctox-pane-tab${state.sourcesViewMode === 'table' ? ' is-active' : ''}"
                       data-action="sources-view"
                       data-view-mode="table"
                       aria-label="${escapeHtml(state.t('tableView', 'Tabelle'))}"
@@ -1107,7 +1116,7 @@ function renderCenter() {
                 ${iconSvg('table')}
               </button>
               <button type="button"
-                      class="research-view-btn${state.sourcesViewMode === 'shards' ? ' is-active' : ''}"
+                      class="ctox-pane-tab${state.sourcesViewMode === 'shards' ? ' is-active' : ''}"
                       data-action="sources-view"
                       data-view-mode="shards"
                       aria-label="${escapeHtml(state.t('shardsView', 'Karten'))}"
@@ -1128,21 +1137,26 @@ function renderCenter() {
 function renderNoTaskCenter() {
   const empty = emptyStateForNoTask();
   return `
-    <header class="research-pane-header research-center-header">
-      <div><span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span><h2>${escapeHtml(state.t('evidenceWorkbench', 'Portfolio Map & Evidence Workbench'))}</h2></div>
-      <div class="research-header-actions">
-        <button type="button" class="research-icon-button" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
-        <button type="button" class="research-icon-button" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+    <header class="ctox-pane-header ctox-pane-band research-center-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('webResearch', 'Web Research'))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('evidenceWorkbench', 'Portfolio Map & Evidence Workbench'))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
+          <button type="button" class="ctox-pane-icon" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+        </div>
       </div>
     </header>
     <div class="research-center-empty-body">
-      <section class="research-empty-state research-empty-state-panel">
+      <section class="ctox-empty research-empty-state-panel">
         <strong>${escapeHtml(empty.title)}</strong>
         <span>${escapeHtml(empty.body)}</span>
       </section>
       <section class="research-workbench research-empty-workbench" aria-label="${escapeHtml(state.t('sources', 'Sources'))}">
         <div class="research-tabs-container">
-          <div class="research-tabs" role="tablist" aria-label="Research views">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
             ${disabledTabButton('sources', state.t('sources', 'Sources'))}
             ${disabledTabButton('measurements', state.t('measurements', 'Measurements'))}
             ${disabledTabButton('knowledge', state.t('knowledge', 'Knowledge'))}
@@ -1151,7 +1165,7 @@ function renderNoTaskCenter() {
         <div class="research-empty-workbench-body">
           <label class="research-empty-search-row">
             <span>${escapeHtml(state.t('sourceSearch', 'Quellensuche'))}</span>
-            <input type="text" disabled placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}" />
+            <input type="text" class="ctox-input" disabled placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}" />
           </label>
           <p>${escapeHtml(state.t('noTaskControlsHint', 'Suche, Filter, Portfolio Map und Tabellen werden aktiv, sobald mindestens eine lokale Knowledge Domain mit Quellen geladen ist.'))}</p>
         </div>
@@ -1162,9 +1176,9 @@ function renderNoTaskCenter() {
 
 function mapModeToggle() {
   return `
-    <div class="research-map-mode" role="group" aria-label="Research map view">
-      <button type="button" data-action="map-mode" data-map-mode="portfolio" aria-pressed="${state.mapMode !== 'discovery'}">${escapeHtml(state.t('map', 'Map'))}</button>
-      <button type="button" data-action="map-mode" data-map-mode="discovery" aria-pressed="${state.mapMode === 'discovery'}">${escapeHtml(state.t('graph', 'Graph'))}</button>
+    <div class="ctox-pane-tabs" role="group" aria-label="Research map view">
+      <button type="button" class="ctox-pane-tab${state.mapMode !== 'discovery' ? ' is-active' : ''}" data-action="map-mode" data-map-mode="portfolio" aria-pressed="${state.mapMode !== 'discovery'}">${escapeHtml(state.t('map', 'Map'))}</button>
+      <button type="button" class="ctox-pane-tab${state.mapMode === 'discovery' ? ' is-active' : ''}" data-action="map-mode" data-map-mode="discovery" aria-pressed="${state.mapMode === 'discovery'}">${escapeHtml(state.t('graph', 'Graph'))}</button>
     </div>
   `;
 }
@@ -1449,7 +1463,7 @@ function renderSourcesTable(filteredList = state.sourceModels) {
   const xAxis = axisPair.x;
   const yAxis = axisPair.y;
   return `
-    <table class="research-data-table" style="table-layout: fixed; width: 100%;">
+    <table class="ctox-table" style="table-layout: fixed; width: 100%;">
       <colgroup>
         <col style="width: 48%;" />
         <col style="width: 14%;" />
@@ -1462,10 +1476,10 @@ function renderSourcesTable(filteredList = state.sourceModels) {
         <tr>
           <th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th>
           <th>${escapeHtml(state.t('classLabel', 'Class'))}</th>
-          <th style="text-align: right;">${escapeHtml(state.t('scoreLabel', 'Score'))}</th>
-          <th style="text-align: right;">${escapeHtml(axisLabel(yAxis, task))}</th>
-          <th style="text-align: right;">${escapeHtml(axisLabel(xAxis, task))}</th>
-          <th style="text-align: right;"></th>
+          <th class="is-num">${escapeHtml(state.t('scoreLabel', 'Score'))}</th>
+          <th class="is-num">${escapeHtml(axisLabel(yAxis, task))}</th>
+          <th class="is-num">${escapeHtml(axisLabel(xAxis, task))}</th>
+          <th class="is-num"></th>
         </tr>
       </thead>
       <tbody>
@@ -1473,10 +1487,10 @@ function renderSourcesTable(filteredList = state.sourceModels) {
           <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}">
             <td><button type="button" data-action="select-source" data-source-id="${escapeHtml(source.id)}"><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.id)}</span></button></td>
             <td>${escapeHtml(source.sourceClass)}</td>
-            <td style="text-align: right;"><span class="research-score-pill research-grade-${source.grade.toLowerCase()}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
-            <td style="text-align: right;">${Math.round(source.dimensions[yAxis] ?? 0)}</td>
-            <td style="text-align: right;">${Math.round(source.dimensions[xAxis] ?? 0)}</td>
-            <td style="text-align: right;">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
+            <td class="is-num"><span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
+            <td class="is-num">${Math.round(source.dimensions[yAxis] ?? 0)}</td>
+            <td class="is-num">${Math.round(source.dimensions[xAxis] ?? 0)}</td>
+            <td class="is-num">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
       </tbody>
@@ -1501,7 +1515,7 @@ function renderSourcesWorkbench() {
     <div class="research-sources-shards-wrapper">
       <div class="research-sources-shards-toolbar">
         <input type="text"
-               class="research-sources-shards-search"
+               class="ctox-input research-sources-shards-search"
                id="research-source-search-input"
                data-action="source-search"
                placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
@@ -1510,7 +1524,7 @@ function renderSourcesWorkbench() {
         <div class="research-sources-shards-filters">
           ${subthemes.map((theme) => `
             <button type="button"
-                    class="research-tag-pill${activeTag === theme.id ? ' is-active' : ''}"
+                    class="ctox-chip${activeTag === theme.id ? ' is-active' : ''}"
                     data-action="source-tag-filter"
                     data-tag-id="${theme.id}">
               ${escapeHtml(theme.label)}
@@ -1635,7 +1649,7 @@ function gradeFullText(grade) {
 
 function renderMeasurementsTable() {
   return `
-    <table class="research-data-table" style="table-layout: fixed; width: 100%;">
+    <table class="ctox-table" style="table-layout: fixed; width: 100%;">
       <colgroup>
         <col style="width: 25%;" />
         <col style="width: 15%;" />
@@ -1648,9 +1662,9 @@ function renderMeasurementsTable() {
         <tr>
           <th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th>
           <th>Prop</th>
-          <th style="text-align: right;">RPM</th>
-          <th style="text-align: right;">Axial N</th>
-          <th style="text-align: right;">Radial N</th>
+          <th class="is-num">RPM</th>
+          <th class="is-num">Axial N</th>
+          <th class="is-num">Radial N</th>
           <th>Method</th>
         </tr>
       </thead>
@@ -1659,9 +1673,9 @@ function renderMeasurementsTable() {
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
             <td>${escapeHtml([row.prop_diameter_in, row.prop_pitch_in].filter(isPresent).join(' x '))}</td>
-            <td style="text-align: right;">${formatNumber(row.rpm)}</td>
-            <td style="text-align: right;">${formatNumber(row.axial_load_N ?? row.thrust_N)}</td>
-            <td style="text-align: right;">${formatNumber(row.radial_load_N)}</td>
+            <td class="is-num">${formatNumber(row.rpm)}</td>
+            <td class="is-num">${formatNumber(row.axial_load_N ?? row.thrust_N)}</td>
+            <td class="is-num">${formatNumber(row.radial_load_N)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
@@ -1695,17 +1709,24 @@ function renderRight() {
   const axisPair = normalizedAxisPair(task);
   const canRun = canRunResearchTask(task);
   root.innerHTML = `
-    <header class="research-pane-header">
-      <div><span>${escapeHtml(state.t('context', 'Context'))}</span><h2>${escapeHtml(task?.title || 'Research')}</h2></div>
-      <button type="button" class="research-button primary" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} title="${escapeHtml(runResearchHint(task, runInfo))}">${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}</button>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('context', 'Context'))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(task?.title || 'Research')}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}" title="${escapeHtml(runResearchHint(task, runInfo))}">${iconSvg('play')}</button>
+        </div>
+      </div>
     </header>
     <div class="research-right-scroll">
       <section class="research-context-block">
-        <span class="research-kicker">Knowledge Base</span>
+        <span class="ctox-pane-kicker">Knowledge Base</span>
         <strong>${escapeHtml(task?.knowledge_domain || state.t('noDomain', 'Keine Domain'))}</strong>
         <p>${escapeHtml(task?.prompt || state.t('defaultTaskDesc', 'Research-Dashboard auf Basis einer vorhandenen Knowledge Base.'))}</p>
         ${task?.criteria ? `<small>${escapeHtml(task.criteria)}</small>` : ''}
-        ${task ? `<button type="button" class="research-button" data-action="edit-task">${escapeHtml(state.t('editScoring', 'Scoring bearbeiten'))}</button>` : ''}
+        ${task ? `<button type="button" class="ctox-button" data-action="edit-task">${escapeHtml(state.t('editScoring', 'Scoring bearbeiten'))}</button>` : ''}
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
@@ -1716,7 +1737,7 @@ function renderRight() {
       </section>
       ${renderRunPanel(runInfo)}
       <section class="research-context-block">
-        <span class="research-kicker">${escapeHtml(state.t('selectedSource', 'Selected Source'))}</span>
+        <span class="ctox-pane-kicker">${escapeHtml(state.t('selectedSource', 'Selected Source'))}</span>
         ${source ? `
           <strong style="font-size: 13px; display: block; margin-bottom: 8px; color: var(--research-text);">${escapeHtml(source.title)}</strong>
           <p style="font-size: 11.5px; line-height: 1.4; color: var(--research-muted); margin-bottom: 12px;">${escapeHtml(source.note || state.t('noSummaryAvailable', 'Keine Zusammenfassung vorhanden.'))}</p>
@@ -1778,7 +1799,7 @@ function renderRight() {
             </div>
           </div>
           
-          <button type="button" class="research-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}" style="width: 100%; text-align: center;">${escapeHtml(state.t('details', 'Details'))}</button>
+          <button type="button" class="ctox-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}" style="width: 100%; text-align: center;">${escapeHtml(state.t('details', 'Details'))}</button>
         ` : `<p>${escapeHtml(state.t('selectSourcePrompt', 'Wähle eine Quelle aus.'))}</p>`}
       </section>
       <section class="research-context-block">
@@ -1806,13 +1827,13 @@ function renderRunPanel(runInfo) {
             <small>${escapeHtml(runInfo.title || runInfo.commandType || 'Systematic Research')}</small>
           </div>
         </div>
-        <dl class="research-run-facts">
-          <div><dt>${escapeHtml(state.t('command', 'Command'))}</dt><dd>${escapeHtml(shortId(runInfo.commandId))}</dd></div>
-          <div><dt>${escapeHtml(state.t('queue', 'Queue'))}</dt><dd>${escapeHtml(shortId(runInfo.taskQueueId))}</dd></div>
-          <div><dt>${escapeHtml(state.t('thread', 'Thread'))}</dt><dd>${escapeHtml(runInfo.threadKey || '-')}</dd></div>
+        <dl class="ctox-fields">
+          <dt>${escapeHtml(state.t('command', 'Command'))}</dt><dd>${escapeHtml(shortId(runInfo.commandId))}</dd>
+          <dt>${escapeHtml(state.t('queue', 'Queue'))}</dt><dd>${escapeHtml(shortId(runInfo.taskQueueId))}</dd>
+          <dt>${escapeHtml(state.t('thread', 'Thread'))}</dt><dd>${escapeHtml(runInfo.threadKey || '-')}</dd>
         </dl>
         <div class="research-run-actions">
-          <button type="button" class="research-button" data-action="focus-ctox-run" data-command-id="${escapeHtml(runInfo.commandId)}" data-task-queue-id="${escapeHtml(runInfo.taskQueueId)}" ${runInfo.taskQueueId || runInfo.commandId ? '' : 'disabled'}>${escapeHtml(state.t('viewInCtox', 'In CTOX ansehen'))}</button>
+          <button type="button" class="ctox-button" data-action="focus-ctox-run" data-command-id="${escapeHtml(runInfo.commandId)}" data-task-queue-id="${escapeHtml(runInfo.taskQueueId)}" ${runInfo.taskQueueId || runInfo.commandId ? '' : 'disabled'}>${escapeHtml(state.t('viewInCtox', 'In CTOX ansehen'))}</button>
         </div>
       ` : `
         <p>${escapeHtml(state.t('noRunStarted', 'Kein Research-Lauf für dieses Dashboard gestartet.'))}</p>
@@ -1923,35 +1944,35 @@ function openTaskDialog(editTask = null) {
   const dimensionsText = formatDimensionLines(scoringDimensionsForTask(editTask));
   const domainOptions = knowledgeDomainOptionsMarkup(selectedDomain);
   const overlay = document.createElement('div');
-  overlay.className = 'research-modal-backdrop';
+  overlay.className = 'ctox-modal research-task-dialog';
   overlay.innerHTML = `
-    <section class="research-modal" role="dialog" aria-modal="true" aria-labelledby="research-create-title">
-      <header>
-        <div>
-          <span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span>
-          <strong id="research-create-title">${isEdit ? escapeHtml(state.t('editScoring', 'Scoring bearbeiten')) : escapeHtml(state.t('dashboardAnlegen', 'Dashboard anlegen'))}</strong>
+    <section class="ctox-modal-card" role="dialog" aria-modal="true" aria-labelledby="research-create-title">
+      <header class="ctox-modal-header">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('webResearch', 'Web Research'))}</span>
+          <h3 class="ctox-modal-title" id="research-create-title">${isEdit ? escapeHtml(state.t('editScoring', 'Scoring bearbeiten')) : escapeHtml(state.t('dashboardAnlegen', 'Dashboard anlegen'))}</h3>
         </div>
-        <button type="button" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
+        <button type="button" class="ctox-pane-icon" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">${iconSvg('close')}</button>
       </header>
-      <form data-research-task-form>
+      <form class="ctox-modal-body" data-research-task-form>
         <input type="hidden" name="task_id" value="${escapeHtml(editTask?.id || '')}">
         ${isEdit ? `<input type="hidden" name="domain" value="${escapeHtml(selectedDomain)}">` : ''}
-        <label><span>${escapeHtml(state.t('titel', 'Titel'))}</span><input name="title" placeholder="${escapeHtml(state.t('neueResearch', 'Neue Research'))}" value="${escapeHtml(editTask?.title || '')}" required></label>
+        <label><span class="ctox-field-label">${escapeHtml(state.t('titel', 'Titel'))}</span><input class="ctox-input" name="title" placeholder="${escapeHtml(state.t('neueResearch', 'Neue Research'))}" value="${escapeHtml(editTask?.title || '')}" required></label>
         <label>
-          <span>Knowledge Domain</span>
-          <select name="${isEdit ? 'domain_display' : 'domain'}" ${isEdit || !state.knowledgeBases.length ? 'disabled' : ''} required>
+          <span class="ctox-field-label">Knowledge Domain</span>
+          <select class="ctox-select" name="${isEdit ? 'domain_display' : 'domain'}" ${isEdit || !state.knowledgeBases.length ? 'disabled' : ''} required>
             <option value="" ${selectedDomain ? '' : 'selected'} disabled>${escapeHtml(state.t('selectKnowledgeDomain', 'Knowledge Domain auswählen'))}</option>
             ${domainOptions}
           </select>
           <small class="research-field-note">${escapeHtml(domainSelectionNote(isEdit))}</small>
         </label>
-        <label><span>${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}" required>${escapeHtml(editTask?.prompt || '')}</textarea></label>
-        <label><span>${escapeHtml(state.t('kriterien', 'Kriterien'))}</span><textarea name="criteria" placeholder="${escapeHtml(state.t('criteriaPlaceholder', 'Scope, Ausschlüsse, Scoring-Hinweise'))}">${escapeHtml(editTask?.criteria || '')}</textarea></label>
-        <label><span>${escapeHtml(state.t('scoringDimensions', 'Scoring Dimensionen'))}</span><textarea name="scoring_dimensions" placeholder="${escapeHtml(state.t('scoringPlaceholder', 'overlap: Overlap\nbuyer_clarity: Buyer clarity'))}">${escapeHtml(dimensionsText)}</textarea></label>
+        <label><span class="ctox-field-label">${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea class="ctox-textarea" name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}" required>${escapeHtml(editTask?.prompt || '')}</textarea></label>
+        <label><span class="ctox-field-label">${escapeHtml(state.t('kriterien', 'Kriterien'))}</span><textarea class="ctox-textarea" name="criteria" placeholder="${escapeHtml(state.t('criteriaPlaceholder', 'Scope, Ausschlüsse, Scoring-Hinweise'))}">${escapeHtml(editTask?.criteria || '')}</textarea></label>
+        <label><span class="ctox-field-label">${escapeHtml(state.t('scoringDimensions', 'Scoring Dimensionen'))}</span><textarea class="ctox-textarea" name="scoring_dimensions" placeholder="${escapeHtml(state.t('scoringPlaceholder', 'overlap: Overlap\nbuyer_clarity: Buyer clarity'))}">${escapeHtml(dimensionsText)}</textarea></label>
         <p class="research-validation" data-validation-status aria-live="polite"></p>
-        <footer>
-          <button type="button" class="research-button" data-close>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-          <button type="submit" class="research-button primary" disabled>${isEdit ? escapeHtml(state.t('save', 'Speichern')) : escapeHtml(state.t('create', 'Anlegen'))}</button>
+        <footer class="ctox-modal-footer">
+          <button type="button" class="ctox-button" data-close>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+          <button type="submit" class="ctox-button is-primary" disabled>${isEdit ? escapeHtml(state.t('save', 'Speichern')) : escapeHtml(state.t('create', 'Anlegen'))}</button>
         </footer>
       </form>
     </section>
@@ -2002,7 +2023,7 @@ function openTaskDialog(editTask = null) {
 }
 
 function closeTaskDialog() {
-  state.ctx.host.querySelector('.research-modal-backdrop')?.remove();
+  state.ctx.host.querySelector('.research-task-dialog')?.remove();
 }
 
 function knowledgeDomainOptionsMarkup(selectedDomain = '') {
@@ -2014,7 +2035,7 @@ function knowledgeDomainOptionsMarkup(selectedDomain = '') {
 }
 
 function refreshOpenTaskDialogDomainOptions() {
-  const overlay = state.ctx.host.querySelector('.research-modal-backdrop');
+  const overlay = state.ctx.host.querySelector('.research-task-dialog');
   const form = overlay?.querySelector('[data-research-task-form]');
   const select = form?.querySelector('select[name="domain"]');
   if (!overlay || !form || !select) return;
@@ -2038,7 +2059,7 @@ function refreshOpenTaskDialogDomainOptions() {
 }
 
 async function refreshTaskDialogKnowledgeOptions() {
-  const overlay = state.ctx.host.querySelector('.research-modal-backdrop');
+  const overlay = state.ctx.host.querySelector('.research-task-dialog');
   if (!overlay || overlay.dataset.knowledgeRefresh === 'running') return;
   overlay.dataset.knowledgeRefresh = 'running';
   const note = overlay.querySelector('.research-field-note');
@@ -2278,9 +2299,9 @@ function openSourceDrawer(sourceId) {
   const body = document.createElement('div');
   body.className = 'research-drawer';
   body.innerHTML = `
-    <header><strong>${escapeHtml(source.title)}</strong><button type="button" data-close>×</button></header>
+    <header><strong>${escapeHtml(source.title)}</strong><button type="button" class="ctox-pane-icon" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">${iconSvg('close')}</button></header>
     <div class="research-drawer-body">
-      <span class="research-grade research-grade-${source.grade.toLowerCase()}">${source.grade} · ${(source.score / 10).toFixed(1)}</span>
+      <span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade} · ${(source.score / 10).toFixed(1)}</span>
       <p>${escapeHtml(source.note || '')}</p>
       <pre>${escapeHtml(JSON.stringify(source.row, null, 2))}</pre>
     </div>
@@ -2368,16 +2389,16 @@ function renderContextMenu(context, x, y) {
           <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
           <span>${escapeHtml(researchContextSummary(context))}</span>
         </div>
-        <button type="button" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
+        <button type="button" class="ctox-pane-icon" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">${iconSvg('close')}</button>
       </header>
       ${canModifyApp ? `
-        <div class="research-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="mode" value="data" checked> ${escapeHtml(state.t('workWithResearch', 'Mit Research arbeiten'))}</label>
-          <label><input type="radio" name="mode" value="app"> ${escapeHtml(state.t('modifyDashboard', 'Dashboard modifizieren'))}</label>
+        <div class="ctox-choice-group research-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label class="ctox-choice"><input type="radio" name="mode" value="data" checked> <span>${escapeHtml(state.t('workWithResearch', 'Mit Research arbeiten'))}</span></label>
+          <label class="ctox-choice"><input type="radio" name="mode" value="app"> <span>${escapeHtml(state.t('modifyDashboard', 'Dashboard modifizieren'))}</span></label>
         </div>
       ` : ''}
-      <textarea name="message" placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
-      <footer><span data-status></span><button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button></footer>
+      <textarea class="ctox-textarea" name="message" placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
+      <footer><span data-status></span><button type="submit" class="ctox-button is-primary">${escapeHtml(state.t('send', 'Senden'))}</button></footer>
     </form>
   `;
   state.contextMenu.hidden = false;
@@ -2694,11 +2715,11 @@ function axisSelect(axis, selected, variant = 'toolbar') {
 }
 
 function tabButton(id, label) {
-  return `<button type="button" data-action="tab" data-tab="${id}" aria-pressed="${state.activeTab === id}">${escapeHtml(label)}</button>`;
+  return `<button type="button" class="ctox-pane-tab${state.activeTab === id ? ' is-active' : ''}" role="tab" data-action="tab" data-tab="${id}" aria-selected="${state.activeTab === id}">${escapeHtml(label)}</button>`;
 }
 
 function disabledTabButton(id, label) {
-  return `<button type="button" data-tab="${escapeHtml(id)}" aria-disabled="true" disabled>${escapeHtml(label)}</button>`;
+  return `<button type="button" class="ctox-pane-tab" data-tab="${escapeHtml(id)}" aria-disabled="true" disabled>${escapeHtml(label)}</button>`;
 }
 
 function axisLabel(id, task = selectedTask()) {
@@ -2733,16 +2754,22 @@ function relativeTime(ms) {
   return new Date(value).toLocaleDateString(localeStr, { day: '2-digit', month: '2-digit' });
 }
 
+// Standard action icons come from the shell icon set (shared/icons.js via
+// ctx.getActionIcon): monochrome stroke glyphs that inherit currentColor.
+// Legacy local names are mapped onto the shared glyph names.
 function iconSvg(name) {
-  const paths = {
-    refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16m0 0v5h5M3 12a9 9 0 0 1 15-6.7L21 8m0 0V3h-5"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>',
-    table: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="10" y1="3" x2="10" y2="21"/>',
-    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
-    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
-    eyeOff: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
-  };
-  return `<svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">${paths[name] || ''}</svg>`;
+  const kitNames = { plus: 'add', table: 'columns' };
+  return state.ctx?.getActionIcon?.(kitNames[name] || name, 16, 1.8) || '';
+}
+
+// Grade → kit badge state (A=success, B=info, C=warning, D=danger).
+function gradeBadgeClass(grade) {
+  const g = String(grade || '').toUpperCase();
+  if (g === 'A') return 'is-success';
+  if (g === 'B') return 'is-info';
+  if (g === 'C') return 'is-warning';
+  if (g === 'D') return 'is-danger';
+  return '';
 }
 
 function safeAxis(value, task = selectedTask(), fallback = DEFAULT_AXIS_X) {
@@ -3190,18 +3217,21 @@ function showPromptViewer(filename) {
   const promptText = getPromptForFilename(filename);
   
   const backdrop = document.createElement("div");
-  backdrop.className = "research-modal-backdrop";
-  backdrop.style.zIndex = "10000";
+  backdrop.className = "ctox-modal";
+  // Above module modals (240), below shell notifications (260).
+  backdrop.style.zIndex = "250";
   backdrop.innerHTML = `
-    <div class="research-modal" style="position: relative;">
-      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--research-line); padding-bottom: 10px;">
-        <div>
-          <span style="font-size: 10px; color: var(--research-accent); text-transform: uppercase; font-weight: 800; letter-spacing: 0.5px; display: block; margin-bottom: 2px;">KI-Generierung</span>
-          <h3 style="font-size: 14px; font-weight: 700; margin: 0; color: var(--research-text);">System-Prompt des Fachberichts</h3>
+    <div class="ctox-modal-card">
+      <header class="ctox-modal-header">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">KI-Generierung</span>
+          <h3 class="ctox-modal-title">System-Prompt des Fachberichts</h3>
         </div>
-        <button type="button" class="research-map-reset" style="padding: 4px 8px; margin: 0;" onclick="this.closest('.research-modal-backdrop').remove()">Schließen</button>
+        <button type="button" class="ctox-button" onclick="this.closest('.ctox-modal').remove()">Schließen</button>
+      </header>
+      <div class="ctox-modal-body">
+        <div style="font-family: var(--font-mono, monospace); font-size: 11px; line-height: 1.6; color: var(--research-text); max-height: 380px; overflow-y: auto; white-space: pre-wrap; background: var(--research-surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--research-line); text-align: left;">\${escapeHtml(promptText)}</div>
       </div>
-      <div style="font-family: monospace; font-size: 11px; line-height: 1.6; color: var(--research-text); max-height: 380px; overflow-y: auto; white-space: pre-wrap; background: var(--research-surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--research-line); box-shadow: inset 0 2px 6px rgba(0,0,0,0.15); text-align: left;">\${escapeHtml(promptText)}</div>
     </div>
   `;
   document.body.appendChild(backdrop);
@@ -3253,7 +3283,7 @@ function parseMarkdown(md) {
     } else {
       if (inTable) {
         inTable = false;
-        lines[i - 1] = `<table class="research-data-table">${tableRows.join('')}</table>`;
+        lines[i - 1] = `<table>${tableRows.join('')}</table>`;
       }
     }
   }
@@ -3278,7 +3308,7 @@ function parseMarkdown(md) {
     .replace(/&lt;em&gt;/gi, '<em>').replace(/&lt;\/em&gt;/gi, '</em>')
     .replace(/&lt;code&gt;/gi, '<code>').replace(/&lt;\/code&gt;/gi, '</code>')
     .replace(/&lt;pre&gt;/gi, '<pre>').replace(/&lt;\/pre&gt;/gi, '</pre>')
-    .replace(/&lt;table class="research-data-table"&gt;/gi, '<table class="research-data-table">').replace(/&lt;\/table&gt;/gi, '</table>')
+    .replace(/&lt;table&gt;/gi, '<table>').replace(/&lt;\/table&gt;/gi, '</table>')
     .replace(/&lt;tr&gt;/gi, '<tr>').replace(/&lt;\/tr&gt;/gi, '</tr>')
     .replace(/&lt;th&gt;/gi, '<th>').replace(/&lt;\/th&gt;/gi, '</th>')
     .replace(/&lt;td&gt;/gi, '<td>').replace(/&lt;\/td&gt;/gi, '</td>');
@@ -3366,7 +3396,7 @@ function renderReportsWorkbench(task) {
     : content.startsWith('Fehler')
       ? `<div style="padding: 40px; text-align: center; color: var(--research-warn);">${escapeHtml(content)}</div>`
       : `
-        <div class="ai-warning-banner" style="background: color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)); border: 1px solid color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        <div class="ai-warning-banner" style="background: color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)); border: 1px solid color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; box-shadow: 0 4px 12px color-mix(in srgb, var(--research-text) 10%, transparent);">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
             <div style="display: flex; align-items: center; gap: 12px;">
               <span style="font-size: 1.4rem; line-height: 1;">🤖</span>
@@ -3375,8 +3405,8 @@ function renderReportsWorkbench(task) {
                 <div style="font-size: 11px; color: var(--research-muted); margin-top: 2px;">Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</div>
               </div>
             </div>
-            <button type="button" class="research-button primary" onclick="window.showPromptViewer('${selectedReport.filename}')" style="margin: 0; background: color-mix(in srgb, var(--research-accent) 12%, var(--research-surface-2)); border-color: color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); color: var(--research-accent); font-weight: 800; font-size: 11px; padding: 0 12px; height: 28px; border-radius: 6px;">
-              Prompt im Modal ⚡
+            <button type="button" class="ctox-button" onclick="window.showPromptViewer('${selectedReport.filename}')">
+              Prompt im Modal
             </button>
           </div>
           <div style="border-top: 1px dashed var(--research-line); padding-top: 10px; margin-top: 10px; text-align: left;">
@@ -3384,7 +3414,7 @@ function renderReportsWorkbench(task) {
               <summary style="font-size: 11px; color: var(--research-accent); font-weight: 700; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px;">
                 <span>▶ System-Prompt der KI-Generierung einblenden</span>
               </summary>
-              <div style="margin-top: 8px; background: var(--research-surface-2); border: 1px solid var(--research-line); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; line-height: 1.5; color: var(--research-text); max-height: 180px; overflow-y: auto; white-space: pre-wrap; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
+              <div style="margin-top: 8px; background: var(--research-surface-2); border: 1px solid var(--research-line); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; line-height: 1.5; color: var(--research-text); max-height: 180px; overflow-y: auto; white-space: pre-wrap; box-shadow: inset 0 2px 4px color-mix(in srgb, var(--research-text) 10%, transparent);">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
             </details>
           </div>
         </div>

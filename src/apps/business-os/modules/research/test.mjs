@@ -111,7 +111,7 @@ test('empty knowledge read retries only when knowledge_tables sync is live', () 
 test('empty dashboard keeps standard header and disabled workbench controls', () => {
   const markup = hooks.renderNoTaskCenter();
 
-  assert.match(markup, /research-pane-header research-center-header/);
+  assert.match(markup, /ctox-pane-header ctox-pane-band research-center-header/);
   assert.match(markup, /data-action="refresh"/);
   assert.match(markup, /data-action="new-task"/);
   assert.match(markup, /research-empty-workbench/);

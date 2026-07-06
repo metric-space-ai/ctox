@@ -1,89 +1,24 @@
+/* Research module — module-specific styling on top of shared/base.css.
+   Frame (workspace/panes/headers), buttons, tabs, chips, tables, badges,
+   modals, inputs and field lists come from the shell kit; this file keeps
+   only the genuinely module-specific pieces (portfolio map, discovery graph,
+   source cards, run panel, reports explorer). */
+
 .research-module {
-  --research-bg: var(--bo-background, var(--bg, oklch(0.965 0.006 235)));
-  --research-surface: var(--bo-surface, var(--surface, oklch(0.99 0.004 235)));
-  --research-surface-2: var(--bo-surface-muted, var(--surface-2, oklch(0.945 0.008 235)));
-  --research-line: var(--bo-border, var(--line, oklch(0.84 0.012 235)));
-  --research-text: var(--bo-text, var(--text, oklch(0.2 0.015 235)));
-  --research-muted: var(--bo-muted, var(--muted, oklch(0.48 0.015 235)));
-  --research-accent: var(--bo-accent, var(--accent, oklch(0.48 0.115 205)));
-  --research-good: oklch(0.56 0.11 153);
-  --research-warn: oklch(0.68 0.12 78);
-  --research-risk: oklch(0.56 0.14 28);
+  --research-bg: var(--bg);
+  --research-surface: var(--surface);
+  --research-surface-2: var(--surface-2);
+  --research-line: var(--line);
+  --research-text: var(--text);
+  --research-muted: var(--muted);
+  --research-accent: var(--accent);
+  --research-good: var(--success);
+  --research-warn: var(--warning);
+  --research-risk: var(--danger);
   --research-left-width: 320px;
   --research-right-width: 300px;
-  display: grid;
   grid-template-columns: var(--research-left-width) 12px minmax(0, 1fr) 12px var(--research-right-width);
-  gap: 0;
-  height: 100%;
-  min-height: 0;
-  padding: 12px;
-  overflow: hidden;
   position: relative;
-  background: var(--research-bg);
-  color: var(--research-text);
-  font: 14px/1.45 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
-}
-
-.research-pane {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--research-line);
-  border-radius: var(--radius-panel, 12px);
-  background: var(--research-surface);
-  box-shadow: var(--sh-subtle, 0 8px 22px color-mix(in srgb, var(--research-text) 8%, transparent));
-}
-
-.research-left,
-.research-center,
-.research-right {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.research-pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 52px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--research-line);
-}
-
-.research-pane-header span,
-.research-kicker {
-  display: block;
-  color: var(--research-muted);
-  font-size: 11px;
-  font-weight: 780;
-  line-height: 1.1;
-  text-transform: uppercase;
-}
-
-.research-pane-header h2 {
-  margin: 3px 0 0;
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 820;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-header-actions,
-.research-axis-tools,
-.research-tabs,
-.research-center-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.research-center-actions {
-  gap: 10px;
-  justify-content: flex-end;
 }
 
 .research-map-hint {
@@ -92,83 +27,6 @@
   font-size: 11px;
   font-weight: 760;
   white-space: nowrap;
-}
-
-.research-icon-button,
-.research-button,
-.research-tabs button,
-.research-axis-select select {
-  min-height: 30px;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  color: var(--research-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.research-icon-button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  min-width: 30px;
-  padding: 0;
-  color: var(--research-accent);
-  cursor: pointer;
-  line-height: 1;
-}
-
-.research-icon-button svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.research-icon-button:hover {
-  border-color: color-mix(in srgb, var(--research-accent) 42%, var(--research-line));
-  background: color-mix(in srgb, var(--research-accent) 10%, var(--research-surface));
-}
-
-.research-button {
-  padding: 0 10px;
-}
-
-.research-button.primary,
-.research-tabs button[aria-pressed="true"] {
-  border-color: var(--research-accent);
-  background: color-mix(in srgb, var(--research-accent) 14%, var(--research-surface));
-  color: var(--research-accent);
-}
-
-.research-button:disabled,
-.research-icon-button:disabled,
-.research-tabs button:disabled,
-.research-axis-select select:disabled,
-.research-context-chat button:disabled {
-  border-color: color-mix(in srgb, var(--research-line) 82%, transparent);
-  background: var(--research-surface-2);
-  color: color-mix(in srgb, var(--research-muted) 72%, transparent);
-  cursor: not-allowed;
-  opacity: 0.58;
-  box-shadow: none;
-  filter: grayscale(0.35);
-}
-
-.research-button.primary:disabled {
-  border-color: color-mix(in srgb, var(--research-line) 82%, transparent);
-  background: color-mix(in srgb, var(--research-surface-2) 85%, var(--research-surface));
-  color: color-mix(in srgb, var(--research-muted) 78%, transparent);
-}
-
-.research-button:disabled:hover,
-.research-icon-button:disabled:hover {
-  border-color: color-mix(in srgb, var(--research-line) 82%, transparent);
-  background: var(--research-surface-2);
 }
 
 .research-left-scroll,
@@ -303,50 +161,6 @@
   text-align: right;
 }
 
-.research-grade {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 38px;
-  min-height: 24px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 850;
-}
-
-.research-score-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 58px;
-  min-height: 24px;
-  box-sizing: border-box;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  color: var(--research-muted);
-  font-size: 11px;
-  font-weight: 850;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.research-grade-a {
-  color: var(--research-good);
-}
-
-.research-grade-b {
-  color: var(--research-accent);
-}
-
-.research-grade-c {
-  color: var(--research-warn);
-}
-
-.research-grade-d {
-  color: var(--research-risk);
-}
-
 .research-center-body {
   display: grid;
   grid-template-rows: minmax(300px, 1fr) minmax(230px, 0.85fr);
@@ -372,61 +186,18 @@
 .research-map-head {
   min-height: 32px;
   padding: 0 4px 7px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
 }
 
-.research-map-head div {
+.research-map-head > div:first-child {
   display: flex;
   align-items: baseline;
   gap: 4px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .research-map-head strong {
   margin-right: 0;
-}
-
-.research-map-mode {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--research-line);
-  border-radius: 7px;
-  overflow: hidden;
-  background: var(--research-surface-2);
-}
-
-.research-map-mode button,
-.research-map-reset {
-  min-height: 28px;
-  border: 1px solid var(--research-line);
-  background: var(--research-surface-2);
-  color: var(--research-muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 820;
-  padding: 0 9px;
-  cursor: pointer;
-}
-
-.research-map-mode button {
-  border: 0;
-  border-radius: 0;
-}
-
-.research-map-mode button + button {
-  border-left: 1px solid var(--research-line);
-}
-
-.research-map-mode button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--research-accent) 14%, var(--research-surface));
-  color: var(--research-accent);
-}
-
-.research-map-reset {
-  border-radius: 6px;
 }
 
 .research-portfolio-map {
@@ -666,40 +437,8 @@
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.research-tabs {
-  padding: 8px;
-  border-bottom: 1px solid var(--research-line);
-}
-
-.research-tabs button {
-  padding: 0 10px;
-}
-
-.research-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.research-data-table th,
-.research-data-table td {
-  border-bottom: 1px solid color-mix(in srgb, var(--research-line) 72%, transparent);
-  padding: 8px;
-  vertical-align: top;
-}
-
-.research-data-table th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--research-surface);
-  color: var(--research-muted);
-  font-size: 11px;
-  text-align: left;
-  text-transform: uppercase;
-}
-
-.research-data-table td button {
+/* Table cell content inside the kit table (source title button, sub id). */
+.research-table-host .ctox-table td button {
   display: grid;
   gap: 2px;
   max-width: 360px;
@@ -708,18 +447,12 @@
   color: inherit;
   font: inherit;
   text-align: left;
+  padding: 0;
+  cursor: pointer;
 }
 
-.research-data-table td span {
+.research-table-host .ctox-table td span {
   color: var(--research-muted);
-}
-
-.research-data-table .research-score-pill {
-  color: inherit;
-}
-
-.research-data-table tr.is-selected {
-  background: color-mix(in srgb, var(--research-accent) 8%, transparent);
 }
 
 .research-knowledge-list {
@@ -838,33 +571,6 @@
   background: var(--research-risk);
 }
 
-.research-run-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin: 0;
-}
-
-.research-run-facts div {
-  min-width: 0;
-}
-
-.research-run-facts dt {
-  color: var(--research-muted);
-  font-size: 10px;
-  font-weight: 780;
-  text-transform: uppercase;
-}
-
-.research-run-facts dd {
-  margin: 1px 0 0;
-  overflow: hidden;
-  font-size: 11px;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .research-run-actions {
   display: flex;
   justify-content: flex-start;
@@ -873,28 +579,6 @@
 @keyframes research-pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--research-warn) 42%, transparent); }
   100% { box-shadow: 0 0 0 8px transparent; }
-}
-
-.research-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin: 0;
-}
-
-.research-facts div {
-  min-width: 0;
-}
-
-.research-facts dt {
-  color: var(--research-muted);
-  font-size: 11px;
-  font-weight: 780;
-}
-
-.research-facts dd {
-  margin: 2px 0 0;
-  font-weight: 820;
 }
 
 .research-note {
@@ -965,10 +649,16 @@
 .research-axis-select select {
   max-width: 168px;
   padding: 0 8px;
+  min-height: 30px;
+  border: 1px solid var(--research-line);
+  border-radius: 6px;
+  background: var(--research-surface-2);
+  color: var(--research-muted);
+  font: inherit;
+  font-size: 12px;
 }
 
-.research-empty,
-.research-empty-state {
+.research-empty {
   color: var(--research-muted);
   font-size: 13px;
 }
@@ -996,14 +686,6 @@
 .research-empty-card span {
   color: var(--research-muted);
   font-size: 12px;
-}
-
-.research-empty-state {
-  display: grid;
-  place-items: center;
-  gap: 5px;
-  height: 100%;
-  text-align: center;
 }
 
 .research-center-empty-body {
@@ -1056,19 +738,6 @@
   text-transform: uppercase;
 }
 
-.research-empty-search-row input {
-  width: 100%;
-  min-height: 32px;
-  box-sizing: border-box;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  color: color-mix(in srgb, var(--research-muted) 78%, transparent);
-  font: inherit;
-  font-size: 12px;
-  padding: 0 10px;
-}
-
 .research-drawer {
   display: grid;
   gap: 12px;
@@ -1083,14 +752,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-.research-drawer header button,
-.research-context-chat header button {
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  color: var(--research-muted);
 }
 
 .research-drawer form,
@@ -1109,25 +770,6 @@
   font-weight: 780;
 }
 
-.research-drawer input,
-.research-drawer textarea,
-.research-drawer select,
-.research-context-chat textarea {
-  width: 100%;
-  border: 1px solid var(--research-line);
-  border-radius: 7px;
-  background: var(--research-surface);
-  color: var(--research-text);
-  font: inherit;
-  padding: 8px;
-}
-
-.research-drawer textarea,
-.research-context-chat textarea {
-  min-height: 90px;
-  resize: vertical;
-}
-
 .research-drawer pre {
   max-height: 44vh;
   overflow: auto;
@@ -1138,114 +780,21 @@
   font-size: 11px;
 }
 
-.research-modal-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 80;
-  display: grid;
-  place-items: start center;
-  overflow: auto;
-  background: color-mix(in srgb, var(--research-bg) 66%, transparent);
-  padding: 72px 18px 18px;
-}
-
-.research-modal {
-  width: min(560px, calc(100vw - 48px));
-  overflow: hidden;
-  border: 1px solid var(--research-line);
-  border-radius: 8px;
-  background: var(--research-surface);
-  color: var(--research-text);
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--research-text) 20%, transparent);
-}
-
-.research-modal header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 52px;
-  border-bottom: 1px solid var(--research-line);
-  padding: 10px 12px;
-}
-
-.research-modal header div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.research-modal header span,
-.research-modal label span {
-  color: var(--research-muted);
-  font-size: 11px;
-  font-weight: 780;
-  line-height: 1.1;
-  text-transform: uppercase;
-}
-
-.research-modal header strong {
-  overflow: hidden;
-  color: var(--research-text);
-  font-size: 15px;
-  font-weight: 830;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-modal header button,
-.research-context-chat [data-close] {
-  width: 30px;
-  min-width: 30px;
-  min-height: 30px;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  color: var(--research-muted);
-  font: inherit;
-  font-size: 18px;
-  font-weight: 760;
-  cursor: pointer;
-  padding: 0;
-}
-
-.research-modal form {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-}
-
-.research-modal label {
+/* Task dialog (ctox-modal) — module-specific form layout. */
+.research-task-dialog label {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.research-modal input,
-.research-modal textarea,
-.research-modal select {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface);
-  color: var(--research-text);
-  font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 9px;
+.research-task-dialog form {
+  display: grid;
+  gap: 12px;
 }
 
-.research-modal textarea {
+.research-task-dialog .ctox-textarea {
   min-height: 86px;
   max-height: 180px;
-  resize: vertical;
-}
-
-.research-modal select:disabled {
-  color: color-mix(in srgb, var(--research-muted) 78%, transparent);
-  cursor: not-allowed;
-  opacity: 0.72;
 }
 
 .research-field-note,
@@ -1262,22 +811,6 @@
   background: color-mix(in srgb, var(--research-warn) 8%, transparent);
   color: color-mix(in srgb, var(--research-text) 82%, var(--research-warn));
   padding: 7px 9px;
-}
-
-.research-modal input:focus,
-.research-modal textarea:focus,
-.research-modal select:focus {
-  border-color: var(--research-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--research-accent) 15%, transparent);
-  outline: none;
-}
-
-.research-modal footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--research-line) 78%, transparent);
-  padding-top: 12px;
 }
 
 .research-context-menu {
@@ -1337,76 +870,12 @@
 }
 
 .research-context-mode {
-  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  min-width: 0;
 }
 
-.research-context-mode label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 30px;
-  overflow: hidden;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  color: var(--research-muted);
-  font-size: 11.5px;
-  font-weight: 760;
-  padding: 0 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-context-mode input {
-  margin: 0;
-  accent-color: var(--research-accent);
-}
-
-.research-context-chat textarea {
-  width: 100%;
-  min-width: 0;
+.research-context-chat .ctox-textarea {
   min-height: 92px;
   max-height: 180px;
-  box-sizing: border-box;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface);
-  color: var(--research-text);
-  font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 9px;
-  resize: vertical;
-}
-
-.research-context-chat textarea:focus {
-  border-color: var(--research-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--research-accent) 15%, transparent);
-  outline: none;
-}
-
-.research-context-chat button {
-  flex: 0 0 auto;
-  min-height: 30px;
-  overflow: hidden;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  color: var(--research-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 760;
-  cursor: pointer;
-  padding: 0 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-context-chat button[type="submit"] {
-  border-color: var(--research-accent);
-  background: color-mix(in srgb, var(--research-accent) 14%, var(--research-surface));
-  color: var(--research-accent);
 }
 
 .research-context-chat footer > span {
@@ -1461,62 +930,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid var(--research-line);
-  padding-right: 8px;
+  padding: 8px;
   background: var(--research-surface);
 }
 
-.research-tabs-container .research-tabs {
-  border-bottom: none;
+/* Icon-only view-switch tabs can be narrower than text tabs. */
+.research-view-toggle .ctox-pane-tab {
+  min-width: 32px;
 }
-
-.research-view-toggle {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  background: var(--research-surface-2);
-  overflow: hidden;
-  padding: 2px;
-}
-
-.research-view-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--research-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 120ms ease;
-}
-
-.research-view-btn svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.research-view-btn:hover {
-  color: var(--research-text);
-  background: color-mix(in srgb, var(--research-accent) 6%, transparent);
-}
-
-.research-view-btn.is-active {
-  background: var(--research-surface);
-  color: var(--research-accent);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--research-text) 10%, transparent);
-}
-
-/* Shards View Layout & Toolbar */
 
 .research-sources-shards-wrapper {
   display: flex;
@@ -1535,57 +958,16 @@
   background: color-mix(in srgb, var(--research-surface-2) 30%, var(--research-surface));
 }
 
-.research-sources-shards-search {
-  flex: 1;
+.research-sources-shards-toolbar .ctox-input {
+  flex: 1 1 220px;
+  width: auto;
   min-width: 220px;
-  height: 32px;
-  border: 1px solid var(--research-line);
-  border-radius: 8px;
-  background: var(--research-surface);
-  color: var(--research-text);
-  font: inherit;
-  font-size: 13px;
-  padding: 0 12px;
-  outline: none;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.research-sources-shards-search:focus {
-  border-color: var(--research-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--research-accent) 15%, transparent);
 }
 
 .research-sources-shards-filters {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.research-tag-pill {
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--research-line);
-  border-radius: 999px;
-  background: var(--research-surface);
-  color: var(--research-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-  transition: all 120ms ease;
-}
-
-.research-tag-pill:hover {
-  border-color: color-mix(in srgb, var(--research-accent) 50%, var(--research-line));
-  color: var(--research-text);
-  transform: translateY(-0.5px);
-}
-
-.research-tag-pill.is-active {
-  background: color-mix(in srgb, var(--research-accent) 12%, var(--research-surface));
-  border-color: var(--research-accent);
-  color: var(--research-accent);
-  font-weight: 800;
 }
 
 .research-sources-shards-scroll {
@@ -1860,7 +1242,7 @@
 }
 
 .markdown-body code {
-  font-family: monospace;
+  font-family: var(--font-mono, ui-monospace, monospace);
   background: var(--research-surface-2);
   padding: 2px 4px;
   border-radius: 4px;
@@ -1888,31 +1270,6 @@
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 20px;
-}
-
-.research-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-  padding: 24px;
-}
-
-.research-modal {
-  background: var(--research-surface);
-  border: 1px solid var(--research-line);
-  border-radius: 12px;
-  width: 100%;
-  max-width: 640px;
-  padding: 20px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.3);
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
 
 /* METRIC PROFILING PROGRESS BARS */
@@ -1958,4 +1315,3 @@
 .research-metric-progress-bar-fill.warn {
   background: var(--research-warn);
 }
-
