@@ -402,11 +402,14 @@ pub struct WebRTCRsConnectionHandler {
     /// live entries are pushed as `presence$` response frames on change,
     /// on peer close, and once after the TTL sweep.
     presence: Arc<Mutex<HashMap<WebRTCRsPeer, PeerPresenceReport>>>,
-    /// Generation guard for the one-shot TTL sweep task: each presence update
-    /// bumps it, and a sleeping sweep task that wakes on a stale generation
-    /// exits without broadcasting (a newer task has the duty). No presence =>
-    /// no live sweep task.
-    presence_sweep_generation: Arc<AtomicU64>,
+    /// TTL-sweep arming flag: at most one pending sweep task (no presence =>
+    /// no task). See `schedule_presence_sweep` for why this is NOT a
+    /// per-update generation counter.
+    presence_sweep_armed: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when a peer with visible presence was removed outside the normal
+    /// broadcast paths (abrupt disconnect -> `remove_peer`); the next sweep
+    /// broadcasts the corrected aggregate even when nothing expired.
+    presence_dirty: Arc<std::sync::atomic::AtomicBool>,
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
@@ -465,7 +468,8 @@ impl WebRTCRsConnectionHandler {
             send_queues: Arc::new(Mutex::new(HashMap::new())),
             active_collections: Arc::new(Mutex::new(HashMap::new())),
             presence: Arc::new(Mutex::new(HashMap::new())),
-            presence_sweep_generation: Arc::new(AtomicU64::new(0)),
+            presence_sweep_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            presence_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
@@ -1233,25 +1237,29 @@ impl WebRTCRsConnectionHandler {
         }
     }
 
-    /// Arm the one-shot TTL sweep. Idle discipline: the task exists only
-    /// while presence entries exist; each update supersedes the previous
-    /// task via the generation counter, and a sweep that finds nothing to
-    /// prune re-arms without broadcasting. An empty map arms nothing.
+    /// Arm the TTL sweep. Idle discipline: at most ONE sweep task exists,
+    /// and only while presence entries exist. The first design superseded
+    /// the pending task on every update via a generation counter — with
+    /// peers refreshing every 20s that postponed the sweep FOREVER, so a
+    /// killed tab's entries never expired (found by the two-browser E2E
+    /// mode). Now the armed task always fires after TTL+1s: it prunes
+    /// expired reports, broadcasts when it pruned something or a peer
+    /// removal marked the aggregate dirty, and re-arms only while entries
+    /// remain. An empty map arms nothing and clears nothing.
     fn schedule_presence_sweep(self: &Arc<Self>) {
         if self.presence.lock().is_empty() {
             return;
         }
-        let generation = self
-            .presence_sweep_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1;
+        if self.presence_sweep_armed.swap(true, Ordering::SeqCst) {
+            return; // a sweep task is already pending
+        }
         let handler = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(CTOX_PRESENCE_TTL_MS + 1_000)).await;
-            if handler.presence_sweep_generation.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            if handler.prune_expired_presence(now_ms()) {
+            handler.presence_sweep_armed.store(false, Ordering::SeqCst);
+            let pruned = handler.prune_expired_presence(now_ms());
+            let dirty = handler.presence_dirty.swap(false, Ordering::SeqCst);
+            if pruned || dirty {
                 handler.broadcast_presence().await;
             }
             handler.schedule_presence_sweep();
@@ -2317,10 +2325,19 @@ fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
         // Phase 2: drop the per-peer active-collection set so it cannot leak
         // across reconnects (a new connection re-reports its active set).
         handler.active_collections.lock().remove(peer);
-        // Drop any presence report the same way. The broadcast to survivors
-        // happens on the OnClose path; here it is pure cleanup so a
-        // reconnecting peer starts presence-blank.
-        handler.presence.lock().remove(peer);
+        // Drop any presence report. Graceful closes broadcast on the OnClose
+        // path; an ABRUPT disconnect (killed tab -> ICE/DTLS timeout) can
+        // land here without OnClose ever firing, so mark the aggregate dirty
+        // — the armed TTL sweep then pushes the corrected aggregate to the
+        // survivors even when nothing expired.
+        if handler
+            .presence
+            .lock()
+            .remove(peer)
+            .is_some_and(|report| !report.entries.is_empty())
+        {
+            handler.presence_dirty.store(true, Ordering::SeqCst);
+        }
         // #12c: drop the captured capability token so a reconnect re-presents
         // (and re-verifies) its identity rather than inheriting a stale one.
         handler.peer_capability_tokens.lock().remove(peer);
