@@ -6350,6 +6350,96 @@ function ensureCtoxSmokeBinary() {
           : waitForFile(id, ms, expectedPayload);
       }
 
+      // OS-X3b: product-semantics variant of the multi-file artifacts wait.
+      // Under the app DB chunk collections never background-pull (§8.1), so
+      // the chunk-doc based wait below can never see bytes — read them the
+      // way the product does, via rxdb.file.fetch per expected file. A file
+      // only counts once its payload matches AND the replicated metadata doc
+      // caught up (size_bytes match) — the demand fetch can serve NEW bytes
+      // before the desktop_files pull delivers the updated doc, which would
+      // otherwise leak a stale generation id to churn assertions.
+      async function waitForWorkspaceArtifactsProduct(expectedFiles, ms = 60000) {
+        const expected = Array.isArray(expectedFiles) ? expectedFiles : [];
+        const deadline = Date.now() + ms;
+        let lastSeen = null;
+        while (Date.now() < deadline) {
+          const loader = appFileReplicationState?.demandFileLoader || null;
+          const receivedFiles = [];
+          const missing = [];
+          const mismatched = [];
+          for (const file of expected) {
+            const fileDoc = await db.desktop_files.findOne(file.id).exec();
+            const receivedFileDoc = fileDoc?.toJSON?.() || fileDoc;
+            if (!receivedFileDoc || !loader?.fetchFile) {
+              missing.push({ id: file.id, relativePath: file.relativePath || '', hasFile: Boolean(receivedFileDoc), hasLoader: Boolean(loader?.fetchFile) });
+              continue;
+            }
+            const expectedContent = String(file.content || '');
+            const metadataFresh = Number(receivedFileDoc.size_bytes || 0) === expectedContent.length;
+            let payload = null;
+            try {
+              const demandChunks = (await loader.fetchFile(file.id))
+                .filter((chunk) => chunk && chunk.cancelled !== true)
+                .filter((chunk) => typeof (chunk.bytesBase64 ?? chunk.bytes_base64) === 'string')
+                .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+              const contiguous = demandChunks.length > 0
+                && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
+              if (contiguous) {
+                payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+              }
+              if (payload === null || payload !== expectedContent || !metadataFresh) {
+                mismatched.push({
+                  id: file.id,
+                  relativePath: file.relativePath || '',
+                  expectedLength: expectedContent.length,
+                  actualLength: payload === null ? null : payload.length,
+                  metadataFresh,
+                });
+                continue;
+              }
+              const actualPath = receivedFileDoc.virtual_path || receivedFileDoc.path || '';
+              if (file.expectedVirtualPath && actualPath !== file.expectedVirtualPath) {
+                throw new Error(`workspace artifact virtual path mismatch: ${JSON.stringify({
+                  id: file.id,
+                  expected: file.expectedVirtualPath,
+                  actual: actualPath,
+                })}`);
+              }
+              receivedFiles.push({
+                file: receivedFileDoc,
+                chunks: demandChunks,
+                payload,
+                generationId: receivedFileDoc.content_generation_id || '',
+                allChunkCount: demandChunks.length,
+                expectedVirtualPath: file.expectedVirtualPath,
+                relativePath: file.relativePath || '',
+              });
+            } catch (error) {
+              if (String(error?.message || '').includes('virtual path mismatch')) throw error;
+              mismatched.push({ id: file.id, relativePath: file.relativePath || '', error: error?.message || String(error) });
+            }
+          }
+          lastSeen = {
+            expectedCount: expected.length,
+            receivedCount: receivedFiles.length,
+            missing: missing.slice(0, 8),
+            mismatched: mismatched.slice(0, 8),
+            demandFetch: true,
+          };
+          if (receivedFiles.length === expected.length) return receivedFiles;
+          await delay(500);
+        }
+        throw new Error(`browser did not receive expected workspace artifacts through demand fetch: ${JSON.stringify(lastSeen)}`);
+      }
+
+      // Product semantics under the app DB, raw chunk replication otherwise
+      // (mirrors waitForFileProduct).
+      function waitForWorkspaceArtifactsAuto(expectedFiles, ms = 60000) {
+        return useAppDb
+          ? waitForWorkspaceArtifactsProduct(expectedFiles, ms)
+          : waitForWorkspaceArtifacts(expectedFiles, ms);
+      }
+
       async function waitForWorkspaceArtifacts(expectedFiles, ms = 60000) {
         const expected = Array.isArray(expectedFiles) ? expectedFiles : [];
         const deadline = Date.now() + ms;
@@ -12552,7 +12642,7 @@ function ensureCtoxSmokeBinary() {
               || smokeMode === 'workspace-agent-artifacts-churn-rust-to-browser'
               || smokeMode === 'workspace-agent-artifacts-background-rust-to-browser') {
               const waitStartedAt = Date.now();
-              const artifacts = await waitForWorkspaceArtifacts(
+              const artifacts = await waitForWorkspaceArtifactsAuto(
                 rustSeed.files || [],
                 smokeMode === 'workspace-agent-artifacts-background-rust-to-browser' ? 90000 : 60000,
               );
@@ -12592,7 +12682,13 @@ function ensureCtoxSmokeBinary() {
         const mutation = await mark('mutateAndSyncMs', () => globalThis.__ctoxMutateRustWorkspaceArtifacts?.());
         const updatedRelativePaths = Array.isArray(mutation?.updatedRelativePaths) ? mutation.updatedRelativePaths : [];
         const addedRelativePaths = Array.isArray(mutation?.addedRelativePaths) ? mutation.addedRelativePaths : [];
-        const changed = await mark('waitChangedArtifactsMs', () => waitForWorkspaceArtifacts(mutation?.files || rustSeed.files || [], 90000));
+        // The mutation lands via the CLI — an EXTERNAL SQLite write with no
+        // in-process hook and a possibly-standby external poll (same reason
+        // as the workspace-update mode): pull explicitly before waiting.
+        await appFileReplicationState?.pullFromRemotePeers?.();
+        await appChunkReplicationState?.pullFromRemotePeers?.();
+        await bounded(appFileReplicationState?.awaitInSync?.(), 30000);
+        const changed = await mark('waitChangedArtifactsMs', () => waitForWorkspaceArtifactsAuto(mutation?.files || rustSeed.files || [], 90000));
         const changedByRelativePath = new Map(changed.map((file) => [file.relativePath, file]));
         const staleGenerations = [];
         for (const relativePath of updatedRelativePaths) {
