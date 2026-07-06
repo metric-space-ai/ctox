@@ -145,10 +145,21 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 
 ## Querschnitt / Hygiene
 
-- **OS-X1 (S): Capability-Token-Strict ohne Env-Toggle.**
-  `CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN` in den SQLite-Runtime-Store
-  überführen (Guardrail: keine Env-Toggles für Produktionsverhalten);
-  Strict-Mode mittelfristig Default, Legacy-Fallback nur für Migration.
+- **OS-X1 (M, RE-SCOPED 2026-07-06): Auth-Env-Fläche migrieren.**
+  Ursprüngliche Annahme war falsch: `CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN`
+  läuft BEREITS über den Runtime-Store (`runtime_env::env_or_config` liest nur
+  persistierte Konfiguration, keine Prozess-Env; Tests setzen es via
+  `save_runtime_env_map`). Der echte Befund: die HTTP-Session-Auth-Fläche in
+  `store.rs::session_for_request` (`CTOX_BUSINESS_OS_REQUIRE_LOGIN`,
+  `CTOX_BUSINESS_OS_SESSION_TOKEN`, `CTOX_BUSINESS_PASSWORD`,
+  `CTOX_BUSINESS_USER`, `CTOX_BUSINESS_OS_LOGIN_URL`) ist echte Prozess-Env —
+  aber eine DOKUMENTIERTE Operator-Schnittstelle (systemd-Units der
+  ctox.dev-Fleet, `docs/ats-golive/tenant-config.md`). Migration in den
+  Runtime-Store braucht Fleet-/Provisioning-Koordination (env als
+  Legacy-Fallback während der Übergangsphase) — nicht autonom umstellen.
+  Zweiter offener Teil: Strict-Default für Capability-Tokens (heute Opt-in,
+  ohne Token wird auf unprivilegiert degradiert) — Produktentscheidung mit
+  Migrationspfad.
 - **OS-X2 (S): Wire-Daemon in CI/lokal bauen.** Die zwei dauerhaft
   geskippten Cross-Process-Smokes (`wire daemon not built`) laufen lassen —
   Skips zählen als fehlende Abdeckung.
