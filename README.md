@@ -2,7 +2,7 @@
 
 <img src="docs/site/assets/ctox-full-logo.png" alt="CTOX" width="440">
 
-<p><strong>The agentic daemon for long-running technical work.</strong></p>
+<p><strong>Self-hosted agent runtime and app platform in a single Rust daemon.</strong></p>
 
 [![Release](https://img.shields.io/github/v/release/metric-space-ai/ctox?sort=semver&display_name=tag&label=release&color=ec4899)](https://github.com/metric-space-ai/ctox/releases)
 [![License](https://img.shields.io/github/license/metric-space-ai/ctox?color=3b82f6)](LICENSE)
@@ -18,413 +18,72 @@
 
 </div>
 
-It is built for people who already use coding agents and notice where a single
-agent session stops being enough: real work spreads across tickets, servers,
-communication, approvals, waiting states, failed checks, follow-ups, and context
-that must still be correct tomorrow.
+CTOX is a self-hosted agent runtime and app platform. A single Rust daemon
+holds durable work state in SQLite, executes long-running agent work, and
+serves Business OS: web app modules delivered to the browser and synced
+peer-to-peer over WebRTC. Agents create and modify apps at runtime; every
+change is versioned and reversible.
 
-CTOX does not try to be "another better coding agent". It owns the layer around
-agent execution: durable work state, context assembly, queue and ticket
-management, verification, process evidence, communication, and continuation.
+## Features
 
-## Quick Introduction
+- **Single binary** — persistent daemon with durable state in
+  `runtime/ctox.sqlite3`: work queues, tickets, schedules, verification,
+  process mining, and an agent harness. No external services required.
+- **Apps as modules** — Business OS apps are HTML/JS/CSS modules served to the
+  browser. At startup the runtime provides data access, commands, permissions,
+  the signed-in user, windows, files, chat, and notifications.
+- **Peer-to-peer sync** — CTOX Sync Engine (`ctox-rxdb-js` in the browser,
+  `rxdb-rs` in the daemon) replicates collections over WebRTC between browser
+  IndexedDB and daemon SQLite. Signaling carries pairing only (SDP/ICE);
+  business data is never proxied over HTTP.
+- **Runtime changes** — agents modify module code and SQLite schema in place
+  through the daemon, without a build step or redeploy. Every patch is
+  SHA-256-hashed and versioned, with one-click rollback.
+- **Model backends** — API providers (`openai`, `anthropic`, `openrouter`,
+  `minimax`, `azure_foundry`) or local inference (currently
+  `Qwen/Qwen3.6-27B` on CUDA). Configured in the TUI; credentials live in the
+  CTOX secret store.
+- **Cross-platform** — macOS, Linux, Windows. An optional Desktop app (beta)
+  installs and manages local and remote instances.
 
-Coding agents are good at bounded sessions. CTOX is for the work around those
-sessions.
+## Installation
 
-A CTOX instance runs on a workstation, server, or remote host. You give it work
-through the TUI, `ctox chat`, mail, tickets, schedules, or other configured
-channels. The daemon records that work in durable state, builds the next worker
-context from the runtime database, lets an agent perform a bounded run, records
-the result, and decides whether the work is done, blocked, waiting, scheduled,
-or needs another continuation.
+```sh
+curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
+```
 
-The important unit is not a chat transcript. The important unit is the runtime
-state:
+Installer flags, model setup examples, and update commands
+(`ctox upgrade --stable`) are documented in the
+[installation docs](https://metric-space-ai.github.io/ctox/docs.html#install).
 
-- current work, queue items, plans, schedules, and follow-ups
-- tickets, cases, approvals, writebacks, and audit history
-- Focus, Anchors, Narrative, knowledge, claims, and recent communication
-- verification records and process-mining events
-- a core state model with transition checks and process evidence
+## Quick start
 
-That is the practical difference: CTOX uses agents, but CTOX itself is the
-daemon that keeps technical work organized over time.
+```sh
+ctox doctor   # check installation and runtime environment
+ctox          # open the TUI: model backend, credentials, communication, autonomy
+ctox start    # start the daemon
+ctox status   # check service state
+ctox chat "Check this CTOX installation and summarize what is configured."
+```
 
-## Business OS Connectivity
+`ctox start` also brings up the local Business OS web surface
+(`http://127.0.0.1:8765`) and the local MCP endpoint
+(`http://127.0.0.1:8788/mcp`); opt out with `--no-business-os-autostart`.
 
-Business OS is the browser surface for CTOX. The browser shell can be delivered
-by CTOX itself, by ctox.dev, or by the desktop app. Business data still uses one
-path: CTOX Sync Engine over WebRTC between browser IndexedDB and the CTOX SQLite store.
-HTTP may deliver static assets or launch context, but it is not the data bridge
-between Business OS and CTOX.
-
-CTOX Sync Engine is the Business OS runtime contract implemented by `ctox-rxdb-js` in
-the browser and `rxdb-rs` in the daemon. It is derived from RxDB concepts, but
-it is not upstream npm `rxdb` and not a drop-in replacement for arbitrary RxDB
-plugins. Business OS apps use the database handles supplied by the shell.
-
-The full reference for CTOX Sync Engine — architecture on both sides, the wire
-protocol, the contracts pipeline, failure/recovery semantics with their
-hard invariants, the test map, and the agent guardrails — is
-[`docs/ctox-rxdb.md`](docs/ctox-rxdb.md). Read it before changing anything
-in the data plane.
+## Architecture
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "CTOX Sync Engine WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```
 
-| Setup | How the app reaches the browser | Pairing and data path |
-| --- | --- | --- |
-| Public CTOX host | CTOX serves Business OS and injects session plus pairing config from the public host or customer domain. | Browser and CTOX join `signaling.ctox.dev`, negotiate WebRTC, and replicate collections directly. |
-| Managed `*.ctox.dev` subdomain | ctox.dev serves the shell, account flow, and launch URL; `/.well-known/ctox-business-os.json` exposes non-secret status. | The subdomain is not an HTTP data proxy. It hands the browser a room config, then RxDB/WebRTC talks to CTOX. |
-| ctox.dev Web Deploy | ctox.dev serves the static Business OS shell when CTOX is not the web host. | The launch URL carries packed `ctox_config` bootstrap only; WebRTC carries collections, commands, files, manifests, and status. |
-| Desktop/private CTOX | The Desktop app opens the static shell for a local or private instance with no inbound IP. | The room password pairs the outbound browser and native peer. Private/NAT closure requires credentialed TURN, not STUN-only ICE. |
-
-The supported modes are intentionally delivery choices, not data-channel
-choices. A reachable host, managed ctox.dev entrypoint, or desktop launcher may
-serve the same Business OS shell, but browser business data still goes through
-the RxDB/WebRTC contract. There is no HTTP bridge for Business OS collections,
-commands, module manifests, files, or runtime state.
-
-`ctox start` starts the native Business OS peer plus the local Business OS web
-surface and local MCP endpoint by default:
-
-```text
-Business OS web: http://127.0.0.1:8765
-Business OS MCP: http://127.0.0.1:8788/mcp
-```
-
-The installer can opt out with `--no-business-os-autostart`. That flag disables
-both local surfaces for daemon startup; operators can still run them explicitly
-with `ctox business-os serve` and `ctox business-os mcp serve`.
-
-### Business OS MCP Channel
-
-External agents use a separate typed communication channel: Business OS MCP.
-This channel is for agent workflows such as status checks, module discovery,
-bounded record queries, delegated Business OS actions, command status, artifacts,
-and approvals. It is not the Browser Business OS data path and does not replace
-RxDB/WebRTC replication.
-
-Managed MCP flow:
-
-```text
-Codex / ChatGPT / Agent
-  -> https://mcp.ctox.dev/mcp/<instance-id>
-  -> connected CTOX daemon
-  -> local Business OS store and policy gate
-```
-
-The external agent skill lives at `skills/ctox-business-os-mcp/`. Install it in
-an agent runtime together with an MCP server entry. For the Example instance,
-Codex is configured as:
-
-```text
-name: cto1-example-business-os
-url:  https://mcp.ctox.dev/mcp/cto1.example.com
-auth: bearer token from CTOX_BUSINESS_OS_MCP_TOKEN
-```
-
-The managed gateway does not store Business OS collections. A CTOX instance must
-connect outbound before the agent can read or delegate work:
-
-```sh
-export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
-ctox business-os mcp connect \
-  --url wss://mcp.ctox.dev/connect/cto1.example.com
-```
-
-Local MCP and managed MCP are separate. Local agents on the same host can use
-`http://127.0.0.1:8788/mcp` after `ctox start`. Remote agents should use the
-managed gateway only after the CTOX instance has been explicitly connected.
-
-For private desktop setups, keep the remote-control/TUI room separate from the
-Business OS sync room. The Business OS values come from:
-
-```sh
-ctox business-os peer status
-```
-
-Use the `ctox-business-os:...` room and its room password for Business OS.
-The older remote TUI room is only for terminal/control sessions.
-
-`ctox_config` and explicit room-password URL parameters are bootstrap-only.
-Business OS normalizes them into the local pairing config and removes the
-sensitive query parameters from the address bar before continuing with
-RxDB/WebRTC sync.
-
-### Business OS Readiness Checks
-
-Use these checks when bringing up a CTOX instance or debugging a browser that
-loads the shell but shows no app data:
-
-```sh
-ctox status
-ctox business-os peer status
-```
-
-For a public or managed host, `/api/business-os/status` must report the native
-RxDB peer and required SQLite collections as healthy before the Browser shell is
-considered ready. A reachable HTTP page alone is not readiness. In ctox.dev
-managed mode, `/.well-known/ctox-business-os.json` must keep
-`httpDataProxy:false` and `businessDataPath:"rxdb-webrtc"`.
-
-Private/NAT installs must include credentialed TURN in the launch config or in
-the ctox.dev-generated ICE servers. A naked `turn:` URL or STUN-only config is a
-diagnostic state, not production closure. Business OS Advanced Status should
-show `sync.iceServersHaveCredentialedTurn:true` for private/NAT evidence.
-
-### Data Boundary
-
-The following records must never be proxied through HTTP between the browser and
-CTOX:
-
-- Business OS collections and module runtime data
-- `business_commands` and `ctox_queue_tasks`
-- `desktop_files` and `desktop_file_chunks`
-- module manifests and native runtime status
-
-Those records replicate only through RxDB/WebRTC and persist on the CTOX side in
-`runtime/ctox.sqlite3`.
-
-## Install
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
-```
-
-If you want a coding agent to run the install for you, copy this prompt into
-your coding agent:
-
-```text
-Install CTOX on this machine by running the official installer:
-
-curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
-
-After installation, run `ctox doctor` and report whether CTOX is available on
-PATH and whether the installation looks healthy. Do not pass installer flags
-unless this machine needs an explicit backend override.
-```
-
-### Agent Skill For Install And Business OS MCP
-
-If you want a coding agent to install, connect, or operate CTOX for you, install
-the CTOX Business OS deploy skill in that agent runtime first. The skill is
-published separately so Codex, Claude Code, ChatGPT, or another MCP-capable
-agent can learn the supported CTOX setup paths without guessing:
-
-```text
-https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox
-```
-
-Copy this prompt into the coding agent:
-
-```text
-Install the CTOX agent skill from GitHub so this agent can set up, connect,
-and verify CTOX Business OS remote-control deployments.
-
-https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox
-
-Use your runtime's native skill-installation mechanism. If your runtime does
-not have one, clone or download the repository and install only the
-`ctox/` folder as a skill named `ctox`.
-
-After installation, verify that the skill's `SKILL.md` and `references/`
-folder are available to you. Restart or reload your agent runtime if required.
-Do not configure CTOX, tokens, ctox.dev coupling, or MCP endpoints yet unless I
-explicitly ask for deployment setup.
-```
-
-With the skill installed, an agent can follow CTOX's supported paths instead of
-inventing an unsafe shortcut:
-
-- install CTOX locally or on an SSH-accessible host with the official installer,
-  then run `ctox doctor`, `ctox status`, and Business OS readiness checks;
-- connect a local agent to `http://127.0.0.1:8788/mcp` using the admin-only
-  Business OS MCP connect-info route;
-- bootstrap a managed `*.ctox.dev` instance by using a human web login only to
-  enable Managed MCP and mint a one-time agent bearer token;
-- configure `https://mcp.ctox.dev/mcp/<instance-id>` for remote agents after the
-  CTOX instance connects outbound to the managed gateway;
-- inspect Business OS status, modules, entities, records, runs, artifacts,
-  approvals, and audit activity through typed MCP tools;
-- let a coding agent create or modify runtime-installed Business OS apps with
-  app-scoped source tools, including relative browser ESM dependencies under
-  `lib/` or `vendor/`, then validate, smoke-test, and E2E-test the app;
-- hand back Business OS deep links and command IDs instead of pretending an
-  HTTP page load or a browser automation session proves connectivity.
-
-The skill does not grant access by itself. It tells the agent how to obtain or
-use the right CTOX credential path. Business OS data still stays on the
-RxDB/WebRTC data plane; the MCP channel is a typed control channel and must not
-be replaced with raw SQL, browser remote control, or HTTP data proxying.
-
-The installer creates a managed layout by default:
-
-- install root: `~/.local/lib/ctox`
-- state root: `~/.local/state/ctox`
-- cache root: `~/.cache/ctox`
-- binary symlink directory: `~/.local/bin`
-
-Most first-time users should not pass installer flags. Install CTOX first, then
-open the TUI with `ctox` and configure model source, API keys, local inference,
-context window, autonomy, and communication there.
-
-Only use installer flags during the first install when you already know you need
-to override hardware detection or seed a specific local model:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh \
-  | bash -s -- --backend=metal
-```
-
-First-install overrides:
-
-| Flag | When to use it |
-| --- | --- |
-| `--backend=<cuda\|metal\|cpu>` | Forces the local inference backend. Leave it unset unless auto-detection is wrong or you intentionally want CPU fallback. `cuda` is for NVIDIA Linux hosts, `metal` is for Apple Silicon macOS, and `cpu` is the slow fallback. |
-| `--model=<model>` | Seeds the default local model profile. Do not use this during a first install unless you know the exact model id is supported by the current build; model selection can be changed later in the TUI. |
-| `--api-provider=<provider>` | Seeds a remote provider for first boot. Most users should configure this in the TUI; currently useful for scripted Azure Foundry installs. |
-| `--azure-foundry-endpoint=<url>` | Seeds the Azure Foundry resource endpoint. CTOX appends `/openai/v1` when needed. |
-| `--azure-foundry-deployment-id=<id>` | Seeds the Azure Foundry deployment ID and uses it as the chat model. |
-| `--features=<features>` | Overrides detected local engine features for controlled builds. Normal installs should let CTOX detect hardware. |
-
-### Example: API model with key
-
-Use this when CTOX should call an API-backed model instead of local inference:
-
-```sh
-printf '%s\n' "sk-..." | ctox secret put --scope credentials --name OPENAI_API_KEY --value-stdin
-ctox
-```
-
-In the TUI settings, select:
-
-```text
-Chat Source: api
-API Provider: openai
-Chat Model: gpt-5.4-mini
-```
-
-Supported API provider choices are `openai`, `anthropic`, `openrouter`,
-`minimax`, and `azure_foundry`. Provider tokens should be stored through the
-TUI or `ctox secret`; normal shell exports are not the recommended
-configuration path.
-
-### Example: OpenAI model with Codex subscription auth
-
-Use this when CTOX should use the Codex/ChatGPT OAuth credentials already
-stored by Codex instead of an `OPENAI_API_KEY`:
-
-```text
-API Provider: openai
-OpenAI Auth: chatgpt_subscription
-Chat Model: gpt-5.4-mini
-```
-
-In this mode CTOX ignores `OPENAI_API_KEY` for OpenAI direct sessions and does
-not record those turns as OpenAI API spend. Other API providers still require
-their provider tokens in the CTOX secret store.
-
-For Azure Foundry, choose `azure_foundry` and enter:
-
-```text
-Foundry Endpoint: https://<resource>.openai.azure.com
-Deployment ID: <deployment-id>
-Foundry Token: <token>
-```
-
-CTOX normalizes the endpoint to `/openai/v1` when needed. The Deployment ID is
-used as the request model name, which matches the Azure Foundry deployment
-model flow.
-
-Then start the daemon:
-
-```sh
-ctox start
-ctox chat "Check this CTOX installation and confirm that the API model is reachable."
-```
-
-You can also enter the API key directly in the TUI. Do not use global shell
-exports for normal CTOX configuration.
-
-### Example: supported 27B model on CUDA
-
-Use this on a Linux host with an NVIDIA GPU/CUDA setup and the required local
-model artifacts for `Qwen/Qwen3.6-27B`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh \
-  | bash -s -- --backend=cuda --model=Qwen/Qwen3.6-27B
-ctox
-```
-
-In the TUI settings, select:
-
-```text
-Chat Source: local
-Chat Model: Qwen/Qwen3.6-27B
-```
-
-Then verify and switch:
-
-```sh
-ctox doctor
-ctox runtime switch Qwen/Qwen3.6-27B quality --context 256k
-```
-
-If the CUDA backend, model weights, or runtime artifacts are missing,
-`ctox doctor` or the TUI should show that before you assign real work.
-
-Advanced installer options:
-
-| Flag | What it changes |
-| --- | --- |
-| `--install-root=<path>` | Where the managed CTOX installation is stored. Use this for nonstandard filesystem layouts or multiple installs on one host. |
-| `--state-root=<path>` | Where runtime state is stored, including the SQLite database. Use this when state must live on a specific volume or service account path. |
-| `--cache-root=<path>` | Where downloaded models and cache files are stored. Use this when the default home cache does not have enough disk space. |
-| `--bin-dir=<path>` | Where the `ctox` command symlink is placed. Use this if `~/.local/bin` is not on `PATH` or your system uses a different user-local binary directory. |
-| `--tools-root=<path>` | Where CTOX-managed helper tools are installed. Defaults to `<state-root>/tools`. |
-| `--dependencies-root=<path>` | Where downloaded dependencies and assets are installed. Defaults to `<state-root>/dependencies`. |
-| `--no-business-os-autostart` | Do not start the local Business OS web surface or local MCP endpoint automatically with `ctox start`. |
-| `--repo=<url>` | Installs from a fork or custom repository. Normal users should keep the default repository. |
-| `--branch=<branch>` | Installs from a non-default branch. This is mainly for development, testing, or controlled rollout of a fork. |
-
-## First Run
-
-```sh
-ctox doctor
-ctox
-ctox start
-ctox status
-ctox chat "Check this CTOX installation, summarize what is configured, and list the next setup steps before taking on real work."
-```
-
-What these commands do:
-
-- `ctox doctor` checks the installation and runtime environment.
-- `ctox` opens the TUI for configuration and operation.
-- `ctox start` starts the persistent daemon, including Business OS web and
-  local Business OS MCP by default.
-- `ctox status` shows the current service state.
-- `ctox work-hours set 08:00 18:00` lets the daemon accept and start work only
-  inside that local-time window; `ctox work-hours off` disables the guard.
-- `ctox chat <instruction>` submits a small first check to the daemon.
-
-Most users should start in the TUI, configure the model backend and credentials
-there, then submit work through the TUI or `ctox chat`.
-
-## How CTOX Runs Work
-
-The daemon loop is roughly:
+The daemon loop:
 
 ```text
 intake
-  -> durable queue item, ticket case, schedule, or plan step
+  -> durable queue item, ticket, schedule, or plan step
   -> leased worker run
   -> context build from runtime state
   -> bounded agent execution
@@ -432,86 +91,27 @@ intake
   -> complete, blocked, waiting, scheduled, requeued, or continued
 ```
 
-CTOX workers can call CTOX commands themselves. This is intentional: internal
-tools such as `ctox ticket`, `ctox queue`, `ctox verification`, and
-`ctox process-mining` make the daemon inspect and update its own runtime state
-through an auditable command surface instead of relying only on prompt memory.
+The unit of work is runtime state, not a chat transcript. Workers can call
+CTOX commands themselves (`ctox ticket`, `ctox queue`, `ctox verification`,
+`ctox process-mining`), so the daemon inspects and updates its own state
+through an auditable command surface.
 
-The command surface is documented in the
-[CLI reference](https://metric-space-ai.github.io/ctox/cli.html). Many commands
-are daemon tools first and human commands second; normal operation should happen
-through the TUI, `ctox chat`, configured channels, tickets, and schedules.
+External agents connect through Business OS MCP, a typed control channel —
+locally at `http://127.0.0.1:8788/mcp`. MCP is a control channel; it does not
+replace the WebRTC data plane. An agent skill for install, connect, and
+operation is available at
+[ctox-business-os-deploy-skill](https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox).
 
-## Model Backends
+## Documentation
 
-CTOX can run with API-backed models or with the integrated local inference path,
-depending on the configured runtime.
-
-The supported local chat surface is intentionally narrow: CTOX promotes one
-local Qwen chat model at a time. The current promoted local chat model is
-`Qwen/Qwen3.6-27B` on CUDA/NVIDIA hosts. Metal Qwen crates in
-`src/core/inference/models/` are active bring-up work and must not be documented
-as production-supported local chat until the root runtime is wired to that exact
-backend and verified.
-
-Typical configuration is done in the TUI. Important runtime settings include:
-
-- chat source: `api` or `local`
-- API provider: `local`, `openai`, `anthropic`, `openrouter`, `minimax`, or `azure_foundry`
-- OpenAI auth mode: `api_key` or `chatgpt_subscription`
-- provider credentials, stored through the TUI or CTOX secret store
-- local runtime, currently `candle`
-- active chat model
-- context window
-- autonomy level
-
-See the technical documentation for the current model/runtime details:
-<https://metric-space-ai.github.io/ctox/docs.html#configuration>
-
-The harness review, task-spawn, subagent, and liveness-proof model is documented
-in [HARNESS.md](HARNESS.md).
-
-## Desktop App
-
-The CTOX Desktop app is an optional management surface. It is useful when you
-want to install CTOX locally, connect to remote CTOX instances, or manage
-multiple instances from one place.
-
-The core runtime is still the daemon. The Desktop app manages instances; the
-daemon owns the work.
-
-## Update
-
-```sh
-ctox update status
-ctox update check
-ctox upgrade --stable
-ctox upgrade --dev
-ctox update apply --version <tag>
-ctox update rollback
-```
-
-`ctox upgrade --dev` follows the current `main` branch as a source upgrade.
-`ctox upgrade --stable` follows the latest published release.
-Managed upgrades keep the active release and the previous rollback release, but
-prune Cargo `target/` build trees from retained releases after activation so old
-source builds do not keep filling the disk.
-
-## Repository Layout
-
-- `install.sh` - public installer entry point used by the raw GitHub install command.
-- `src/core/` - CTOX daemon, runtime, mission systems, TUI, model control, harness, and local inference source.
-- `src/apps/` - application surfaces, currently Desktop, Business OS, and the web app area.
-- `src/tools/` - supporting source packages used by CTOX, such as web, PDF, document, and speech tooling.
-- `src/scripts/` - source-side build helpers only; old benchmark, qualification, remote, and model-recovery scripts are archived.
-- `docs/` - technical documentation, RFCs, legal notices, and the GitHub Pages site under `docs/site/`.
-- `tests/` - integration, harness, fixture, and behavior tests.
-- `runtime/` - ignored local runtime state, database, model/cache/build output, and generated state.
-- `archive/` - ignored review area for obsolete or uncertain project material before deletion or reintegration.
-- `.github/workflows/` - CI, release, and Pages workflows.
-
-`src/` is source code only. Runtime state, caches, generated data, test outputs,
-and archived material stay out of `src/`.
+- [Documentation](https://metric-space-ai.github.io/ctox/docs.html) — install,
+  configuration, runtime, operations
+- [CLI reference](https://metric-space-ai.github.io/ctox/cli.html) — the full
+  command surface
+- [HARNESS.md](HARNESS.md) — review, task-spawn, subagent, and liveness-proof
+  model
+- [docs/ctox-rxdb.md](docs/ctox-rxdb.md) — sync engine architecture, wire
+  protocol, failure/recovery semantics, invariants
 
 ## Development
 
@@ -522,10 +122,16 @@ cargo test
 cargo run -- process-mining spawn-liveness
 ```
 
-The repository contains platform-specific code paths for macOS, Linux, Windows,
-and optional local inference backends. Use the release workflow for production
-binaries. Release builds also gate on `ctox process-mining spawn-liveness`, which
-checks both runtime task-spawn contracts and harness subagent liveness.
+Repository layout:
+
+- `src/core/` — daemon, runtime, mission systems, TUI, harness, local inference
+- `src/apps/` — Desktop, Business OS, and web app surfaces
+- `src/tools/` — supporting packages (web, PDF, document, speech)
+- `docs/` — technical documentation, RFCs, and the Pages site (`docs/site/`)
+- `tests/` — integration, harness, fixture, and behavior tests
+
+Use the release workflow for production binaries; release builds gate on
+`ctox process-mining spawn-liveness`.
 
 ## License
 

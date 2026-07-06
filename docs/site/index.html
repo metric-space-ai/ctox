@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="CTOX is an agentic daemon for technical work, Business OS automation, durable work state, channels, tickets, and verified execution."
+      content="CTOX is a self-hosted app platform and agent runtime: a Rust daemon with SQLite state, peer-to-peer WebRTC sync to the browser, and Business OS app modules that agents build and modify at runtime. Open source, AGPL-3.0."
     />
-    <title>CTOX</title>
+    <title>CTOX — self-hosted app platform and agent runtime</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
     <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
     <style>
@@ -1609,16 +1609,17 @@
         <div class="hero-inner">
           <div class="hero-copy">
             <img class="brand-mark" src="assets/ctox-full-logo.png" alt="" />
-            <h1 id="hero-title">Your Workspace. Redefined on the Fly by AI.</h1>
+            <h1 id="hero-title">A Rust daemon that runs your team's apps.</h1>
             <p class="lead">
-              Stop fitting your business operations into rigid SaaS templates.
-              CTOX Business OS is a persistent background Rust daemon and a fluid browser shell 
-              that dynamically rewrite their database schemas, application views, and logic in real-time 
-              to match your exact operational needs.
+              CTOX is an agent runtime and app platform in one self-hosted binary.
+              The daemon keeps durable state in SQLite, executes long-running agent work,
+              and serves the Business OS: web app modules your team uses in the browser,
+              replicated peer-to-peer over WebRTC. Agents build and modify the apps at
+              runtime — every change versioned and reversible.
             </p>
             <div class="hero-actions">
               <a class="hero-link" href="#install" data-scroll-to="install">Install CTOX</a>
-              <span class="hero-note">Install on one host, or manage local and remote instances with the Desktop Beta.</span>
+              <span class="hero-note">Open source, AGPL-3.0. Install on one host, or manage local and remote instances with the Desktop Beta.</span>
             </div>
           </div>
         </div>
@@ -1627,33 +1628,34 @@
       <section class="what" aria-labelledby="what-title">
         <div class="section-inner what-layout">
           <div class="what-copy">
-            <p class="section-kicker">Software on demand</p>
-            <h2 id="what-title">Static software is a relic of the past. Your workspace should flow.</h2>
+            <p class="section-kicker">What CTOX is</p>
+            <h2 id="what-title">App platform and agent runtime in one binary.</h2>
             <p>
-              Traditional SaaS forces you to work the way its designers decided. 
-              CTOX Business OS is different. It is a living software canvas where 
-              you can right-click any element or data row and ask the integrated AI 
-              to rewrite the interface, restructure the databases, or extend the app logic 
-              instantly while you work.
+              An internal tool normally drags a stack behind it: hosted database,
+              auth service, deployment, monitoring — per app. CTOX collapses that
+              into one daemon on a machine you control. Apps are HTML/JS modules
+              served to the browser, data lives in SQLite and replicates to browser
+              IndexedDB over WebRTC, and agents change schema and code at runtime
+              instead of through a redeploy.
             </p>
           </div>
 
           <div class="capability-lines" aria-label="CTOX capabilities">
             <div>
-              <b>Rigid SaaS</b>
-              <span>Forces you into pre-packaged database columns, static pipelines, and unchangeable button logic.</span>
+              <b>One binary</b>
+              <span>A persistent Rust daemon: SQLite state, WebRTC sync, work queues, and an agent harness. No external services required to run it.</span>
             </div>
             <div>
-              <b>Fluid AI Software</b>
-              <span>Adapts dynamically to your active operational requirements on the fly, with zero compile time.</span>
+              <b>Apps as modules</b>
+              <span>Business OS apps are HTML/JS/CSS modules. On start, the runtime hands them data access, commands, permissions, the signed-in user, windows, files, chat, and notifications.</span>
             </div>
             <div>
-              <b>Authoritative Daemon</b>
-              <span>The persistent Rust background loop coordinates local SQLite, secure WebRTC sync, and queue processing.</span>
+              <b>Changes at runtime</b>
+              <span>Agents alter module code and SQLite schema in place through the daemon. No build step, no redeploy.</span>
             </div>
             <div>
-              <b>Full Accountability</b>
-              <span>Every single AI hot-patch is automatically logged, versioned, and instantly reversible with one click.</span>
+              <b>Versioned and reversible</b>
+              <span>Every module change is SHA-256-hashed, versioned in the daemon's database, and can be rolled back to any previous state.</span>
             </div>
           </div>
         </div>
@@ -1680,7 +1682,7 @@
               </div>
               <div class="platform-row">
                 <b>Knowledge</b>
-                <p>Findings, decisions, known issues, and useful context are persisted so the next run does not rely on chat memory.</p>
+                <p>Findings, decisions, known issues, and useful context are persisted so the next run starts from recorded state instead of chat memory.</p>
               </div>
             </div>
 
@@ -1715,20 +1717,23 @@ records
             <div class="business-os-title-stack">
               <p class="section-kicker">Fluid workspace shell</p>
               <span class="beta-chip">Desktop app beta</span>
-              <h2 id="business-os-title">Software that builds itself as you work.</h2>
+              <h2 id="business-os-title">Apps your team uses — and changes — while they run.</h2>
             </div>
             <p>
-              CTOX Business OS is the ultimate fluid workspace shell built on top of a persistent Rust daemon. 
-              Instead of a rigid enterprise portal, your operational boards, sales funnels, and databases are living canvases. 
-              Simply right-click any UI block or record to let the integrated AI instantly adapt the application to your needs.
+              The Business OS is the browser shell the daemon serves. Your team signs
+              in and works with modules: records, pipelines, files, tasks. Any module
+              can be changed in place — right-click a grid or a view, describe the
+              change, and an agent patches the module's schema or code.
             </p>
           </div>
 
           <div class="automation-claim">
-            <b>The Right-Click Revolution: Software on Demand</b>
+            <b>From right-click to patched module</b>
             <p>
-              Why fit your operations into rigid SaaS templates? In CTOX Business OS, the entire workspace is a self-tuning canvas. 
-              Right-click anywhere to execute semantic database mutations or live-patch the actual application code on the fly:
+              The animation below is the actual flow: a context-menu request becomes
+              an agent job in the daemon. The agent edits the module's HTML/JS in
+              place, hashes the bundle, stores the new version, and the interface
+              updates live — with rollback one click away:
             </p>
           </div>
 
@@ -1853,20 +1858,20 @@ records
 
           <div class="os-proof-strip" aria-label="Business OS work surfaces">
             <div>
-              <b>Right-Click to Adapt Data</b>
-              <span>Need custom fields, qualification scoring, or custom columns? Right-click the data grid and tell the AI. The background daemon dynamically shifts the local database schema and populates the records.</span>
+              <b>Schema changes at runtime</b>
+              <span>A new field or a scoring column is a schema change in local SQLite. The daemon applies it, populates the records, and the sync engine replicates it to browser IndexedDB.</span>
             </div>
             <div>
-              <b>Right-Click to Adapt the App</b>
-              <span>Want a custom button, a tailored form, or a different view? Right-click the UI element, type your prompt, and the AI hot-patches the actual module's HTML and Javascript code in real-time.</span>
+              <b>Code changes at runtime</b>
+              <span>A new button, form, or view is an in-place edit of the module's HTML and JavaScript. The daemon serves the new version immediately — no build, no redeploy.</span>
             </div>
             <div>
-              <b>100% Private Sync Mesh</b>
-              <span>Replication is fully peer-to-peer (WebRTC) between browser IndexedDB and the daemon's local SQLite store. All operational data stays local, firewalled, and protected behind your residential firewall.</span>
+              <b>Peer-to-peer data plane</b>
+              <span>Replication runs over WebRTC between browser IndexedDB and the daemon's SQLite. Signaling carries SDP/ICE only; there is no HTTP data proxy in the path.</span>
             </div>
             <div>
-              <b>One-Click Rollback Safety</b>
-              <span>Every single AI hot-patch is automatically sealed, SHA-256 hashed, and logged inside the daemon's database. If you don't like an update, revert to any previous version instantly in one click.</span>
+              <b>Versioned and reversible</b>
+              <span>Each patch is SHA-256-hashed, sealed, and logged in the daemon's database. Any module rolls back to any previous version in one click.</span>
             </div>
           </div>
 
@@ -1874,29 +1879,29 @@ records
             <figure class="business-shot">
               <img src="assets/business-os-competitive-analysis.png" alt="CTOX Business OS competitive analysis dashboard with ranking and portfolio map" loading="lazy" />
               <figcaption>
-                <b>AI-Synthesized Surfaces</b>
-                <span>Marketing research adapted on the fly: scoring criteria and custom watchlists were right-clicked and hot-patched by the AI during active qualifying.</span>
+                <b>Research workspace</b>
+                <span>Scoring criteria and watchlists were added at runtime through right-click requests during active work.</span>
               </figcaption>
             </figure>
             <figure class="business-shot">
               <img src="assets/business-os-pipeline.png" alt="CTOX Business OS sales pipeline with candidate automation and research database request" loading="lazy" />
               <figcaption>
-                <b>Fluid Qualification Gates</b>
-                <span>AI-qualified outreach pipelines: the qualifying rules and lead status criteria were modified dynamically via simple right-click context instructions.</span>
+                <b>Pipeline module</b>
+                <span>Qualification rules and lead status criteria were changed through context-menu requests instead of a redeploy.</span>
               </figcaption>
             </figure>
             <figure class="business-shot">
               <img src="assets/business-os-leads.png" alt="CTOX Business OS leads workspace with lead accounts and actions" loading="lazy" />
               <figcaption>
-                <b>Self-Adapting Schemas</b>
-                <span>Interactive sales workspace: custom contact properties, offers, and task relations were live-extended into SQLite and IndexedDB instantly.</span>
+                <b>Records workspace</b>
+                <span>Custom contact properties, offers, and task relations were extended into SQLite and IndexedDB at runtime.</span>
               </figcaption>
             </figure>
             <figure class="business-shot">
               <img src="assets/business-os-knowledge.png" alt="CTOX Business OS knowledge store with skillbooks and runbooks" loading="lazy" />
               <figcaption>
-                <b>Self-Tuning Runbooks</b>
-                <span>Live runbooks and skill files are directly editable, letting the daemon immediately absorb, optimize, and execute team operations.</span>
+                <b>Knowledge store</b>
+                <span>Runbooks and skill files are editable data the daemon reads on its next run.</span>
               </figcaption>
             </figure>
           </div>
@@ -1957,20 +1962,20 @@ records
 
           <div class="compare-list">
             <div class="compare-row">
-              <b>The Fluid AI Paradigm</b>
-              <p>Traditional static SaaS forces manual developer cycles for database schema updates and application modifications. In Business OS, the integrated AI edits the raw HTML/JS/CSS modules and structures local SQLite tables in-place instantly upon a simple right-click request.</p>
+              <b>Changes without redeploys</b>
+              <p>Module code and schema changes are daemon operations, not deployment cycles. On request, an agent edits the raw HTML/JS/CSS modules and restructures local SQLite tables in place — and every one of those edits goes through the versioning path below.</p>
             </div>
             <div class="compare-row">
-              <b>Authoritative State Validation</b>
-              <p>The browser UI is a fluid canvas, but the underlying Rust daemon enforces absolute guard gates. Every transaction, queue task, and command execution is continuously validated against 12 formal transition gates and 5 core state invariants.</p>
+              <b>The daemon is the authority</b>
+              <p>The browser is a client, not the source of truth. Every transaction, queue task, and command execution is validated in the Rust daemon against 12 formal transition gates and 5 core state invariants.</p>
             </div>
             <div class="compare-row">
-              <b>Forensic Process Mining</b>
-              <p>CTOX does not rely on trust. Every database mutation is monitored by SQLite triggers and recorded in an audit trail, enabling Petri and DFG process discovery, deadlock checks, conformance audits, and safety violation scans.</p>
+              <b>Audited mutations</b>
+              <p>Every database mutation is recorded through SQLite triggers into an audit trail. That trail supports Petri-net and DFG process discovery, deadlock checks, conformance audits, and safety-violation scans.</p>
             </div>
             <div class="compare-row">
-              <b>Built-in Rollback Safety</b>
-              <p>Every AI UI hot-patch is automatically versioned, hashed, and sealed inside the daemon. A single click from the App Store drawer rolls back any module's files and directory state to its precise baseline instantly.</p>
+              <b>Rollback built in</b>
+              <p>Every module patch is versioned, hashed, and sealed inside the daemon. A single click from the App Store drawer rolls a module's files and directory state back to its precise baseline.</p>
             </div>
           </div>
         </div>
@@ -2075,7 +2080,7 @@ ctox status</code>
 
     <footer>
       <div class="section-inner">
-        <span>CTOX downloads</span>
+        <span>CTOX — open source under AGPL-3.0</span>
         <span>metric-space-ai/ctox</span>
       </div>
     </footer>
