@@ -53,29 +53,27 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C3 (M, blockiert durch OS-X3): E2E-/Soak-Mode für Presence +
+- **OS-C3 (M): E2E-/Soak-Mode für Presence +
   Merge.** browser_rust_smoke-Mode mit zwei Browser-Peers: konkurrierende
   Feld-Edits konvergieren ohne Verlust; Presence-Badge erscheint/
   verschwindet (Peer-Close, TTL). Vorarbeit erledigt: Playwright unter
-  /tmp/ctox-pw-smoke (Harness-Kandidatenpfad), System-Chrome erkannt.
-  Blockiert bis OS-X3 die Basis-Modes des Harness repariert.
-- **OS-X3 (M): Soak-Harness-Basis-Modes reparieren.** KORRIGIERTER Befund
-  (ersetzt die frühere "Chunk-Pfad vorbestehend rot"-Deutung; native Seite
-  ist verifiziert gesund — Datei `available`, Chunk-Row im Store). Der Mode
-  `rust-to-browser` ist im aktuellen Tree in BEIDEN Aufrufvarianten
-  konstruktionsbedingt rot: (a) mit `SMOKE_PAGE_PATH=/index.html` bootet
-  die App und repliziert, aber `waitForFile` erwartet Chunk-Docs per
-  Background-Pull, der für Chunk-Collections seit der Demand-Only-Härtung
-  BEWUSST aus ist (`isDemandOnlyPullCollection` ⇒ `pull:null`, auch für
-  Leases; §8.1 in docs/ctox-rxdb.md) — kann nie grün werden; (b) ohne
-  Page-Path 404t die Default-Seite `/__rxdb_smoke__.html` (einzige Referenz
-  im Tree, kein Creator, keine Server-Route) ⇒ nichts bootet
-  (`syncConfig:null`). Der Soak-Workflow ist manuell; letzter Grün-Stand
-  2026-06-10 liegt VOR der Demand-Only-Härtung. Reparaturoptionen:
-  (1) plain-Modes auf App-DB + `waitForFileViaDemandFetch` umstellen
-  (folgt der Produkt-Semantik), oder (2) synthetische Smoke-Seite
-  wiederherstellen/ausliefern. Zusätzlich: ungültige Mode/Page-Kombis früh
-  mit klarer Meldung ablehnen (Gegenstück zum bestehenden UI-Mode-Guard).
+  /tmp/ctox-pw-smoke (Harness-Kandidatenpfad), System-Chrome erkannt;
+  Basis-Modes seit OS-X3 (dcda96bc) wieder grün — ENTBLOCKT.
+- **OS-X3b (M): workspace-artifacts-Soak-Familie reparieren.** Rest aus
+  OS-X3: die Multi-Datei-Modes (`waitForWorkspaceArtifacts`) erwarten
+  weiterhin background-gepullte Chunk-Docs und sind unter dem App-DB-Pfad
+  aus demselben Grund rot. Braucht ein Demand-Fetch-Pendant für
+  Datei-LISTEN (pro erwarteter Datei fetchFile + Metadaten-Abgleich).
+- **OS-X4 (M, Produkt-Beobachtung): Externe CLI-Store-Writes wecken den
+  Daemon nicht.** `ctox business-os files sync <path>` schreibt aus einem
+  separaten Prozess in die RxDB-SQLite; In-Prozess-Hooks feuern nicht, und
+  der External-Write-Poll steht nach der Idle-Härtung bis zu 30 min im
+  Standby — laufende Browser sehen das Update erst bei der nächsten
+  eigenen Pull-Ursache. Idee: CLI löst nach dem Write einen expliziten
+  Daemon-Wake aus (Table-Change-Notify über den bestehenden
+  `wait_for_table_change_for_path`-Mechanismus per Generation-Bump, KEIN
+  neuer HTTP-Datenpfad). Bis dahin gilt: Harness/Automationen pullen
+  explizit (Präzedenz: stale-generation- und update-Mode).
 - **OS-C4b (S, optional): Feld-Merge unterhalb Top-Level.** Rest aus OS-C4:
   für deklarierte Objektfelder rekursiv mergen statt Top-Level-atomar.
   Braucht eine Deklarationsform (welche Felder) — erst angehen, wenn ein
@@ -207,3 +205,8 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-C4 Base-Refresh im Push-Retry (explizite Base via baseById) +
   Merge-Zähler in der Sync-Diagnose: `ff60bbf6`; Sub-Top-Level-Merge als
   OS-C4b optional offen.
+- OS-X3 Soak-Basis-Modes repariert (Option 1 Produkt-Semantik:
+  Default-Page /index.html wie Matrix, waitForFileProduct via
+  rxdb.file.fetch, notGenerationId-Gate, expliziter Pull nach externem
+  CLI-Write); rust-to-browser + workspace-update lokal verifiziert grün:
+  `dcda96bc`. Rest: OS-X3b (artifacts-Familie), OS-X4 (CLI-Wake).
