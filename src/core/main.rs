@@ -5,6 +5,8 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
 
 const APPSEC_PIPELINE_STAGE_MAX_ATTEMPTS: u64 = 3;
 const APPSEC_PIPELINE_STAGE_RETRY_DELAY_SECONDS: i64 = 30;
@@ -1231,11 +1233,12 @@ fn appsec_state_dir_for_args(root: &Path, args: &[String]) -> PathBuf {
 }
 
 pub(crate) fn run_projected_appsec_command(root: &Path, args: &[String]) -> anyhow::Result<Value> {
-    let forwarded = build_appsec_forwarded_args(root, args);
+    let args = append_appsec_credential_proof_arg(root, args)?;
+    let forwarded = build_appsec_forwarded_args(root, &args);
     let mut output = ctox_appsec_pentest::run_cli_json(forwarded.clone(), Some(root.to_path_buf()))
         .context("ctox appsec command failed")?;
     let ok = output.get("ok").and_then(serde_json::Value::as_bool) != Some(false);
-    if ok && is_appsec_pipeline_enqueue(args) {
+    if ok && is_appsec_pipeline_enqueue(&args) {
         let enqueue = enqueue_appsec_pipeline_queue_tasks(root, &output)
             .context("failed to enqueue AppSec pipeline stages")?;
         if let Some(object) = output.as_object_mut() {
@@ -1248,6 +1251,194 @@ pub(crate) fn run_projected_appsec_command(root: &Path, args: &[String]) -> anyh
         object.insert("ctox_durable_projection".to_string(), projection);
     }
     Ok(output)
+}
+
+fn append_appsec_credential_proof_arg(root: &Path, args: &[String]) -> anyhow::Result<Vec<String>> {
+    let should_prove = matches!(
+        (
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str)
+        ),
+        (Some("authz"), Some("run"))
+    ) || (matches!(
+        (
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str)
+        ),
+        (Some("authz"), Some("preflight"))
+    ) && arg_flag(args, "--require-credentials"));
+    if !should_prove
+        || arg_value(args, "--credential-proof").is_some()
+        || arg_value(args, "--subjects").is_none()
+    {
+        return Ok(args.to_vec());
+    }
+
+    let subjects_path = resolve_appsec_cli_path(root, &arg_value(args, "--subjects").unwrap());
+    let subjects_value: Value =
+        serde_json::from_slice(&fs::read(&subjects_path).with_context(|| {
+            format!(
+                "failed to read AppSec authz subjects for credential proof: {}",
+                subjects_path.display()
+            )
+        })?)?;
+    let proof = build_appsec_credential_proof(root, &subjects_value)?;
+    let state_dir = resolve_appsec_cli_path(root, &appsec_state_dir_for_args(root, args));
+    let authz_dir = state_dir.join("authz");
+    fs::create_dir_all(&authz_dir).with_context(|| {
+        format!(
+            "failed to create AppSec authz proof directory {}",
+            authz_dir.display()
+        )
+    })?;
+    let proof_path = authz_dir.join(format!("authz-credential-proof-{}.json", current_millis()));
+    fs::write(&proof_path, serde_json::to_vec_pretty(&proof)?).with_context(|| {
+        format!(
+            "failed to write AppSec authz credential proof {}",
+            proof_path.display()
+        )
+    })?;
+
+    let mut augmented = args.to_vec();
+    augmented.extend([
+        "--credential-proof".to_string(),
+        proof_path.to_string_lossy().to_string(),
+    ]);
+    Ok(augmented)
+}
+
+fn resolve_appsec_cli_path(root: &Path, value: impl AsRef<Path>) -> PathBuf {
+    let path = value.as_ref();
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn current_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn build_appsec_credential_proof(root: &Path, subjects_value: &Value) -> anyhow::Result<Value> {
+    let subjects = if let Some(items) = subjects_value.get("subjects").and_then(Value::as_array) {
+        items.as_slice()
+    } else if let Some(items) = subjects_value.as_array() {
+        items.as_slice()
+    } else {
+        anyhow::bail!("authz subjects file must be an array or object with subjects[]");
+    };
+    let mut rows = Vec::new();
+    let mut available = 0usize;
+    let mut missing = 0usize;
+    let mut empty = 0usize;
+    let mut invalid = 0usize;
+    let mut credential_subjects = 0usize;
+
+    for subject in subjects {
+        let subject_id = subject
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let role = subject
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .trim();
+        let anonymous = role == "anonymous" || subject_id == "unauthenticated";
+        let credential_ref = subject
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let (status, detail) = if anonymous {
+            ("anonymous", "credential-not-required")
+        } else if let Some(credential_ref) = credential_ref {
+            credential_subjects += 1;
+            match parse_appsec_ctox_secret_ref(credential_ref) {
+                Some((scope, name)) => match crate::secrets::read_secret_value(root, &scope, &name)
+                {
+                    Ok(value) if !value.trim().is_empty() => {
+                        available += 1;
+                        ("available", "secret-present")
+                    }
+                    Ok(_) => {
+                        empty += 1;
+                        ("empty", "secret-empty")
+                    }
+                    Err(_) => {
+                        if crate::secrets::secret_exists(root, &scope, &name).unwrap_or(false) {
+                            missing += 1;
+                            ("unreadable", "secret-present-but-unreadable")
+                        } else {
+                            missing += 1;
+                            ("missing", "secret-missing")
+                        }
+                    }
+                },
+                None => {
+                    invalid += 1;
+                    ("invalid-ref", "credential-ref-invalid")
+                }
+            }
+        } else {
+            missing += 1;
+            ("missing-ref", "credential-ref-missing")
+        };
+        rows.push(json!({
+            "subject_id": subject_id,
+            "role": role,
+            "credential_ref": credential_ref,
+            "status": status,
+            "detail": detail,
+        }));
+    }
+
+    Ok(json!({
+        "version": "ctox.appsec_pentest.authz_credential_proof.v1",
+        "generated_by": "ctox-core-secret-store",
+        "generated_at": current_millis().to_string(),
+        "subjects": rows,
+        "summary": {
+            "subjects": subjects.len(),
+            "credential_subjects": credential_subjects,
+            "available": available,
+            "missing": missing,
+            "empty": empty,
+            "invalid": invalid,
+        },
+        "secret_policy": "This proof stores only redacted credential availability status from the CTOX Secret Store. It never stores passwords, cookies, bearer tokens, private keys, screenshots, raw browser streams, or decrypted secret values."
+    }))
+}
+
+fn parse_appsec_ctox_secret_ref(value: &str) -> Option<(String, String)> {
+    if value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let Ok(parsed) = Url::parse(value) else {
+        return None;
+    };
+    if parsed.scheme() != "ctox-secret"
+        || parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return None;
+    }
+    let scope = parsed.host_str()?.trim();
+    if scope.is_empty() || scope.contains('/') {
+        return None;
+    }
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    if segments.len() != 1 || segments[0].trim().is_empty() || segments[0].contains('/') {
+        return None;
+    }
+    Some((scope.to_string(), segments[0].trim().to_string()))
 }
 
 fn is_appsec_pipeline_enqueue(args: &[String]) -> bool {
@@ -4277,14 +4468,15 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::{
-        appsec_command_argv_strings, appsec_command_unresolved_placeholders,
-        browser_automation_source_from_stage_command, chat_status_has_completed_since,
-        execute_appsec_stage_commands, find_ctox_root_from_ancestors, handle_appsec_pipeline_work,
-        looks_like_ctox_root, openrouter_tool_smoke_summary,
-        persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
-        record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
-        resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
-        validated_workspace_root_override, AppsecStageExecutionContext,
+        append_appsec_credential_proof_arg, appsec_command_argv_strings,
+        appsec_command_unresolved_placeholders, browser_automation_source_from_stage_command,
+        chat_status_has_completed_since, execute_appsec_stage_commands,
+        find_ctox_root_from_ancestors, handle_appsec_pipeline_work, looks_like_ctox_root,
+        openrouter_tool_smoke_summary, persist_appsec_command_expected_artifact,
+        persist_runtime_turn_timeout, record_appsec_stage_artifact_bindings,
+        resolve_appsec_stage_command_placeholders, resolve_chat_attachment_paths,
+        resolve_runtime_ctox_root, run_projected_appsec_command, validated_workspace_root_override,
+        AppsecStageExecutionContext,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -4413,6 +4605,85 @@ mod tests {
         assert!(err
             .to_string()
             .contains("`--timeout` must be a positive integer number of seconds"));
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_authz_preflight_injects_redacted_credential_proof() {
+        let root = make_fake_ctox_root("appsec-credential-proof");
+        let state = root.join("runtime/appsec/proof-test");
+        let authz_dir = state.join("authz");
+        fs::create_dir_all(&authz_dir).unwrap();
+        let subjects = authz_dir.join("authz-subjects.json");
+        fs::write(
+            &subjects,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.authz_subjects.v1",
+                "subjects": [
+                    {"id": "user-a", "role": "owner", "login_hint": "a@example.test", "credential_ref": "ctox-secret://appsec/a", "verify_selector": "[data-testid='account-shell']"},
+                    {"id": "user-b", "role": "member", "login_hint": "b@example.test", "credential_ref": "ctox-secret://appsec/b", "verify_selector": "[data-testid='account-shell']"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        crate::secrets::write_secret_record(
+            &root,
+            "appsec",
+            "a",
+            "super-sensitive-password",
+            Some("test authz credential".to_string()),
+            serde_json::json!({"source": "test"}),
+        )
+        .unwrap();
+
+        let args = vec![
+            "--state-dir".to_string(),
+            state.to_string_lossy().to_string(),
+            "authz".to_string(),
+            "preflight".to_string(),
+            "--target".to_string(),
+            "https://example.test/app".to_string(),
+            "--subjects".to_string(),
+            subjects.to_string_lossy().to_string(),
+            "--require-credentials".to_string(),
+        ];
+        let augmented = append_appsec_credential_proof_arg(&root, &args).unwrap();
+        let proof_arg = augmented
+            .windows(2)
+            .find(|window| window.first().map(String::as_str) == Some("--credential-proof"))
+            .and_then(|window| window.get(1))
+            .map(PathBuf::from)
+            .expect("credential proof arg");
+        let proof_text = fs::read_to_string(&proof_arg).unwrap();
+        assert!(!proof_text.contains("super-sensitive-password"));
+        let proof: serde_json::Value = serde_json::from_str(&proof_text).unwrap();
+        assert_eq!(
+            proof.get("version").and_then(serde_json::Value::as_str),
+            Some("ctox.appsec_pentest.authz_credential_proof.v1")
+        );
+        assert_eq!(
+            proof
+                .pointer("/summary/available")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            proof
+                .pointer("/summary/missing")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert!(proof
+            .get("subjects")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|row| {
+                row.get("subject_id").and_then(serde_json::Value::as_str) == Some("user-b")
+                    && row.get("status").and_then(serde_json::Value::as_str) == Some("missing")
+            }));
 
         cleanup_test_dir(&root);
     }
