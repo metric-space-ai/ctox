@@ -34,13 +34,14 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 
 ## Cluster B — Konnektivität (Kernversprechen: Zugriff ohne VPN-Planung)
 
-- **OS-B1 (L): Natives TURN-Provisioning.** Heute wird TURN nur erkannt
-  (`iceServersContainTurn`, sync.js), nicht bereitgestellt. Ephemere
-  Credentials existieren als Ansatz (`store::ephemeral_turn_server`,
-  rxdb_peer.rs ~2082). Entscheidung: eingebetteter TURN-Dienst im CTOX-Prozess
-  vs. verwalteter externer TURN; Credentials pro Peer-Session, Konfiguration
-  über Runtime-Store (kein Env-Toggle). Ohne das scheitert Fern-Zugriff an
-  symmetrischem NAT.
+- **OS-B1b (M): TURN-Fleet-Provisioning (ctox.dev-Repo).** Die
+  Architekturentscheidung ist gefallen und dokumentiert
+  (`docs/ctox-turn.md`, Commit 545ddf91): externes coturn neben der
+  Signaling-Ebene, KEIN Relay im Daemon; CTOX mintet ephemere Credentials
+  (war bereits implementiert) und hat jetzt den Operator-Pfad
+  `ctox business-os turn set/status`. Offen ist der verwaltete Teil im
+  ctox.dev-Repo: coturn pro Fleet-Host deployen, Shared Secret pro Instanz
+  in der Control-DB, beim Provisioning URL+Secret in die Instanz setzen.
 - **OS-B2 (M): Reconnect-Testmatrix.** Tab-Reload ist nicht explizit
   getestet (nur Multi-Tab-Leadership). Smokes/Soak-Modes für: Tab-Reload,
   Netzwerkwechsel, Laptop-Sleep/Wake, Signaling-Neustart mit Passwort-
@@ -180,3 +181,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-E2 verifiziert bereits erledigt (Vorwelle Juni): das Start-Menü
   rendert das Lifecycle-Badge (`renderStartMenuLifecycleBadge`,
   app.js ~8475/8508) — kein offener Rest.
+- OS-B1 (Repo-Teil) TURN-Architekturentscheidung + Operator-CLI
+  (`docs/ctox-turn.md`, `ctox business-os turn set/status`): `545ddf91`;
+  Fleet-Teil als OS-B1b offen.
