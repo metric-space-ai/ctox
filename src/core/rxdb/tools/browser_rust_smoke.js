@@ -165,7 +165,11 @@ const signalingUrl = `ws://127.0.0.1:${signalingPort}`;
 const signalingDebug = process.env.SIGNALING_DEBUG === '1';
 const sqlitePath = process.env.CTOX_SQLITE || path.join(runtimeRoot, 'runtime/business-os-rxdb.sqlite3');
 const nativeBusinessOsSqlitePath = path.join(runtimeRoot, 'runtime/business-os.sqlite3');
-const pagePath = process.env.SMOKE_PAGE_PATH || '/__rxdb_smoke__.html';
+// OS-X3: the default is the Business OS app shell — the same default the
+// soak matrix uses (browser_rust_smoke_matrix.js). The legacy synthetic page
+// `/__rxdb_smoke__.html` no longer exists anywhere in the tree; defaulting to
+// it produced a silent 404 boot and a misleading timeout 30s later.
+const pagePath = process.env.SMOKE_PAGE_PATH || '/index.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
 const dynamicOpenModuleFixture = {
   module: {
@@ -6083,12 +6087,21 @@ function ensureCtoxSmokeBinary() {
         })}`);
       }
 
-      async function waitForFileViaDemandFetch(id, ms = 30000, expectedPayload = null) {
+      async function waitForFileViaDemandFetch(id, ms = 30000, expectedPayload = null, { notGenerationId = '' } = {}) {
         const deadline = Date.now() + ms;
         let lastSeen = null;
         while (Date.now() < deadline) {
           const fileDoc = await db.desktop_files.findOne(id).exec();
           const file = fileDoc?.toJSON?.() || fileDoc;
+          // OS-X3: an update wait must not return while the replicated
+          // metadata doc still carries the pre-update generation — the
+          // demand fetch can serve the NEW bytes before the desktop_files
+          // pull delivers the updated doc.
+          if (notGenerationId && file && (file.content_generation_id || '') === notGenerationId) {
+            lastSeen = { file, demandFetch: true, reason: 'stale-generation-metadata' };
+            await delay(500);
+            continue;
+          }
           const loader = appFileReplicationState?.demandFileLoader || null;
           if (file && loader?.fetchFile) {
             try {
@@ -6143,6 +6156,20 @@ function ensureCtoxSmokeBinary() {
           syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
           syncConfig: globalThis.ctoxBusinessOsSmoke?.state?.sync?.config || null,
         })}`);
+      }
+
+      // OS-X3: product-semantics file wait. Under the app DB, chunk
+      // collections are demand-only by design (§8.1 docs/ctox-rxdb.md:
+      // isDemandOnlyPullCollection => pull disabled, leases included), so
+      // waiting for background-pulled chunk DOCS can never succeed there —
+      // file bytes must be read the way the product reads them, via
+      // rxdb.file.fetch (waitForFileViaDemandFetch). The raw replication
+      // wait (waitForFile) remains for explicit non-app pages, which run a
+      // direct replicateWebRTC with pull enabled.
+      function waitForFileProduct(id, ms, expectedPayload = null, options = {}) {
+        return useAppDb
+          ? waitForFileViaDemandFetch(id, ms, expectedPayload, options)
+          : waitForFile(id, ms, expectedPayload);
       }
 
       async function waitForWorkspaceArtifacts(expectedFiles, ms = 60000) {
@@ -12371,7 +12398,7 @@ function ensureCtoxSmokeBinary() {
             if (smokeMode === 'business-os-restore-resync-ui') {
               return waitForFileViaDemandFetch(rustSeed.id, 60000, rustSeed.content);
             }
-            return waitForFile(rustSeed.id);
+            return waitForFileProduct(rustSeed.id, 60000, rustSeed.content);
           })();
       if (smokeMode === 'workspace-agent-artifacts-churn-rust-to-browser') {
         const phaseTimings = {};
@@ -12752,7 +12779,7 @@ function ensureCtoxSmokeBinary() {
         await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
         await bounded(appFileReplicationState?.awaitInSync?.(), 25000);
         await bounded(appChunkReplicationState?.awaitInSync?.(), 25000);
-        const materialized = await waitForFile(rustSeed.id, 90000, rustSeed.content);
+        const materialized = await waitForFileProduct(rustSeed.id, 90000, rustSeed.content);
         if (materialized.file?.content_state !== 'available') {
           throw new Error(`large workspace file did not become available after materialize: ${JSON.stringify(materialized.file)}`);
         }
@@ -12847,7 +12874,7 @@ function ensureCtoxSmokeBinary() {
           })}`);
         }
         const waitForFileStartedAt = mark();
-        const materialized = await waitForFile(rustSeed.id, 30000, rustSeed.content);
+        const materialized = await waitForFileProduct(rustSeed.id, 30000, rustSeed.content);
         phaseTimings.waitForFileMs = Math.round(mark() - waitForFileStartedAt);
         const desktopViewerStartedAt = mark();
         const desktopViewer = await openDesktopFileViewerAndWait({
@@ -12930,7 +12957,19 @@ function ensureCtoxSmokeBinary() {
       if (smokeMode === 'workspace-update-rust-to-browser') {
         const updatedContent = `${rustSeed.content}\nupdated via workspace smoke ${Date.now()}`;
         const update = await globalThis.__ctoxUpdateRustSeedFile?.(updatedContent);
-        const updated = await waitForFile(rustSeed.id, 60000, updatedContent);
+        // The update lands in the native store via the CLI — an EXTERNAL
+        // SQLite write. In-process change hooks do not fire for it, and the
+        // external write poll may be in idle standby, so the event-driven
+        // relay is best-effort here. Pull explicitly (masterChangesSince
+        // reads the native store at request time) so the browser observes
+        // the update deterministically — same precedent as the
+        // stale-generation mode below.
+        await appFileReplicationState?.pullFromRemotePeers?.();
+        await appChunkReplicationState?.pullFromRemotePeers?.();
+        await bounded(appFileReplicationState?.awaitInSync?.(), 30000);
+        const updated = await waitForFileProduct(rustSeed.id, 60000, updatedContent, {
+          notGenerationId: received.generationId || '',
+        });
         const updatedPath = updated.file?.virtual_path || updated.file?.path || '';
         if (rustSeed.expectedVirtualPath && updatedPath !== rustSeed.expectedVirtualPath) {
           throw new Error(`workspace updated file virtual path mismatch: ${JSON.stringify({
