@@ -16563,6 +16563,10 @@ fn repair_stalled_founder_communications(
             .unwrap_or(0);
             continue;
         }
+        if founder_communication_review_budget_exhausted(root, &message)? {
+            repaired += escalate_exhausted_founder_communication(root, state, &message)?;
+            continue;
+        }
         let rework_changed = ensure_founder_communication_rework_runnable(
             root,
             &message,
@@ -16587,6 +16591,9 @@ fn repair_stalled_founder_communications(
     let candidates = channels::list_stalled_inbound_messages(root, 64)?;
     for message in candidates {
         if !is_founder_or_owner_inbound_message(settings, &message) {
+            if channels::is_reviewed_external_chat_channel(&message.channel) {
+                repaired += repair_stalled_external_chat_message(root, state, &message)?;
+            }
             continue;
         }
         // Bug #1: auto-submitted founder mails (out-of-office, server
@@ -16694,6 +16701,10 @@ fn repair_stalled_founder_communications(
             )?;
             continue;
         }
+        if founder_communication_review_budget_exhausted(root, &message)? {
+            repaired += escalate_exhausted_founder_communication(root, state, &message)?;
+            continue;
+        }
         let previous_route_status = communication_route_status(root, &message.message_key)?;
         let rework_changed = ensure_founder_communication_rework_runnable(
             root,
@@ -16717,6 +16728,255 @@ fn repair_stalled_founder_communications(
         }
     }
     Ok(repaired)
+}
+
+fn communication_review_budget_exhausted_for_message_key(
+    root: &Path,
+    message_key: &str,
+) -> Result<bool> {
+    let threshold = review_checkpoint_requeue_block_threshold(root);
+    let attempts = queue_review_checkpoint_attempt_count(root, message_key)?
+        .max(queue_review_unavailable_attempt_count(root, message_key)?);
+    Ok(attempts >= threshold)
+}
+
+/// Whether the finite rework budget for this founder/owner inbound is
+/// exhausted on any of its durable tracks: direct review checkpoints on the
+/// inbound message itself, a founder-rework work item parked `blocked` by the
+/// thread circuit-breaker, or a founder-rework work item terminally `failed`
+/// by the review-loop threshold. A crash-`failed` rework without the loop
+/// note keeps the existing restore path instead of escalating.
+fn founder_communication_review_budget_exhausted(
+    root: &Path,
+    message: &channels::RoutedInboundMessage,
+) -> Result<bool> {
+    if communication_review_budget_exhausted_for_message_key(root, &message.message_key)? {
+        return Ok(true);
+    }
+    if let Some(item) = find_founder_communication_rework_self_work(root, &message.message_key)? {
+        if item.state == "blocked" {
+            return Ok(true);
+        }
+        if item.state == "failed"
+            && founder_rework_loop_terminal_already_active(root, &item.work_id)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn founder_communication_escalation_body(message: &channels::RoutedInboundMessage) -> String {
+    let subject = message.subject.trim();
+    let intro = if subject.is_empty() {
+        "Kurzer Zwischenstand zu deiner Nachricht:".to_string()
+    } else {
+        format!("Kurzer Zwischenstand zu deiner Nachricht \"{subject}\":")
+    };
+    format!(
+        "{intro}\n\n\
+Ich habe mehrfach versucht, dir hier eine belastbare Antwort zu liefern. Das Ergebnis hat meine interne Qualitätsprüfung wiederholt nicht bestanden, deshalb stoppe ich die automatischen Anläufe für diesen Vorgang, statt weiter im Kreis zu arbeiten.\n\n\
+Der Vorgang ist nicht verloren, er wartet auf deine Rückmeldung: Wenn du das Thema weiter brauchst, antworte kurz in diesem Thread, gern mit Priorität oder zusätzlichem Kontext. Ich setze die Arbeit dann neu und sauber auf."
+    )
+}
+
+fn external_chat_escalation_body() -> String {
+    "Kurzer Hinweis: Ich habe mehrfach versucht, hier eine saubere Antwort zu erstellen, aber sie hat meine interne Qualitätsprüfung wiederholt nicht bestanden. Ich stoppe die automatischen Anläufe für diese Nachricht. Wenn du das Thema weiter brauchst, schreib mir kurz Priorität oder zusätzlichen Kontext, dann setze ich es neu auf.".to_string()
+}
+
+/// Terminal path for a founder/owner communication whose finite rework budget
+/// is exhausted: send a deterministic, policy-authored escalation notice into
+/// the founder thread through the reviewed send machinery, then close the
+/// inbound and its rework backing. A send failure leaves all state untouched
+/// so the next sweep retries; the consumed approval row makes a successful
+/// escalation idempotent across sweeps.
+fn escalate_exhausted_founder_communication(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    message: &channels::RoutedInboundMessage,
+) -> Result<usize> {
+    let close_reason =
+        "Founder communication was escalated in-thread after the finite rework budget was exhausted.";
+    if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
+        let mut repaired = channels::ack_leased_messages(
+            root,
+            std::slice::from_ref(&message.message_key),
+            "handled",
+        )
+        .unwrap_or(0);
+        repaired += close_open_founder_communication_self_work_for_inbound(
+            root,
+            &message.message_key,
+            close_reason,
+        )?;
+        repaired += cancel_open_founder_communication_rework_queue_for_inbound(
+            root,
+            &message.message_key,
+            close_reason,
+        )?;
+        return Ok(repaired.max(1));
+    }
+    let body = founder_communication_escalation_body(message);
+    let summary = format!(
+        "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped and the founder was notified in-thread.",
+        message.message_key
+    );
+    match channels::record_and_send_founder_escalation_reply(
+        root,
+        &message.message_key,
+        &body,
+        &summary,
+    ) {
+        Ok(_) => {
+            push_event(
+                state,
+                format!(
+                    "Escalated exhausted founder communication {} to the founder in-thread",
+                    message.message_key
+                ),
+            );
+            let mut repaired = channels::ack_leased_messages(
+                root,
+                std::slice::from_ref(&message.message_key),
+                "handled",
+            )
+            .unwrap_or(0);
+            repaired += close_open_founder_communication_self_work_for_inbound(
+                root,
+                &message.message_key,
+                close_reason,
+            )?;
+            repaired += cancel_open_founder_communication_rework_queue_for_inbound(
+                root,
+                &message.message_key,
+                close_reason,
+            )?;
+            Ok(repaired.max(1))
+        }
+        Err(err) => {
+            push_event(
+                state,
+                format!(
+                    "Failed to escalate exhausted founder communication {}: {}",
+                    message.message_key,
+                    clip_text(&err.to_string(), 180)
+                ),
+            );
+            Ok(0)
+        }
+    }
+}
+
+/// Safety net for stalled inbound chat messages (failed / review_rework
+/// without a reviewed sent reply), mirroring the founder e-mail sweep:
+/// terminal verdicts stay terminal, superseded messages are cancelled,
+/// budget-exhausted threads get a deterministic in-thread escalation notice,
+/// and everything else is restored into the normal routing loop.
+fn repair_stalled_external_chat_message(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    message: &channels::RoutedInboundMessage,
+) -> Result<usize> {
+    let keys = std::slice::from_ref(&message.message_key);
+    if channels::inbound_message_has_terminal_no_send(root, &message.message_key).unwrap_or(false) {
+        return Ok(channels::ack_leased_messages(root, keys, "handled").unwrap_or(0));
+    }
+    if channels::metadata_marks_auto_submitted(&message.metadata) {
+        let _ = channels::record_terminal_no_send_verdict(
+            root,
+            &message.message_key,
+            "service-loop",
+            "auto-submitted chat notification: no action expected",
+        );
+        return Ok(channels::ack_leased_messages(root, keys, "handled").unwrap_or(0));
+    }
+    if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
+        return Ok(channels::ack_leased_messages(root, keys, "handled").unwrap_or(0));
+    }
+    if chat_thread_has_newer_inbound(root, message)? {
+        return Ok(channels::ack_leased_messages(root, keys, "cancelled").unwrap_or(0));
+    }
+    if communication_review_budget_exhausted_for_message_key(root, &message.message_key)? {
+        let summary = format!(
+            "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped and the sender was notified in-thread.",
+            message.message_key
+        );
+        return match channels::record_and_send_external_chat_escalation_reply(
+            root,
+            &message.message_key,
+            &external_chat_escalation_body(),
+            &summary,
+        ) {
+            Ok(_) => {
+                push_event(
+                    state,
+                    format!(
+                        "Escalated exhausted {} communication {} to the sender in-thread",
+                        message.channel, message.message_key
+                    ),
+                );
+                let _ = channels::ack_leased_messages(root, keys, "handled");
+                Ok(1)
+            }
+            Err(err) => {
+                push_event(
+                    state,
+                    format!(
+                        "Failed to escalate exhausted {} communication {}: {}",
+                        message.channel,
+                        message.message_key,
+                        clip_text(&err.to_string(), 180)
+                    ),
+                );
+                Ok(0)
+            }
+        };
+    }
+    let previous_route_status = communication_route_status(root, &message.message_key)?;
+    let repaired = channels::ack_leased_messages(root, keys, "pending").unwrap_or(0);
+    if repaired > 0 && previous_route_status.as_deref() != Some("pending") {
+        push_event(
+            state,
+            format!(
+                "Restored stalled {} communication {} into the routing loop",
+                message.channel, message.message_key
+            ),
+        );
+    }
+    Ok(repaired)
+}
+
+fn chat_thread_has_newer_inbound(
+    root: &Path,
+    message: &channels::RoutedInboundMessage,
+) -> Result<bool> {
+    if message.thread_key.trim().is_empty() || message.external_created_at.trim().is_empty() {
+        return Ok(false);
+    }
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM communication_messages
+            WHERE channel = ?1
+              AND direction = 'inbound'
+              AND thread_key = ?2
+              AND external_created_at > ?3
+              AND message_key != ?4
+            LIMIT 1
+        )
+        "#,
+        params![
+            message.channel,
+            message.thread_key,
+            message.external_created_at,
+            message.message_key
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
 }
 
 fn founder_thread_has_later_reviewed_send(
@@ -35193,6 +35453,108 @@ Was jetzt zu tun ist:\n\
         assert!(events
             .iter()
             .any(|event| event.mechanism_id == "runtime_blocker_backoff"));
+    }
+
+    #[test]
+    fn escalation_bodies_pass_founder_outbound_body_guard() {
+        let message = channels::RoutedInboundMessage {
+            message_key: "mail-escalation-1".to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "email/thread-escalation".to_string(),
+            sender_display: "Founder".to_string(),
+            sender_address: "founder@example.com".to_string(),
+            subject: "QR-Code als PDF".to_string(),
+            preview: "Bitte QR-Code senden.".to_string(),
+            body_text: "Bitte QR-Code senden.".to_string(),
+            external_created_at: "2026-07-06T08:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+        channels::ensure_founder_outbound_body_text_clean(&founder_communication_escalation_body(
+            &message,
+        ))
+        .expect("founder escalation body must pass the outbound body guard");
+        channels::ensure_founder_outbound_body_text_clean(&external_chat_escalation_body())
+            .expect("chat escalation body must pass the outbound body guard");
+    }
+
+    #[test]
+    fn review_budget_exhaustion_is_detected_from_checkpoint_proofs() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-review-budget-exhaustion-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let message_key = "chat-budget-1";
+        // The review checkpoint only accepts leased/running/blocked/failed
+        // queue items as feedback sources, exactly like the live dispatcher.
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'leased', 'ctox-service', '2026-07-06T08:00:00Z', NULL, NULL, '2026-07-06T08:00:00Z')
+            "#,
+            rusqlite::params![message_key],
+        )
+        .expect("failed to seed leased routing state");
+        drop(conn);
+        let outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Fail,
+            mission_state: "UNHEALTHY".to_string(),
+            summary: "review rejected the draft".to_string(),
+            report: String::new(),
+            score: 10,
+            reasons: vec!["rework".to_string()],
+            failed_gates: vec!["rework".to_string()],
+            semantic_findings: Vec::new(),
+            categorized_findings: Vec::new(),
+            open_items: Vec::new(),
+            evidence: Vec::new(),
+            handoff: None,
+            disposition: review::ReviewDisposition::default(),
+            pipeline_resolution: None,
+        };
+        let threshold = review_checkpoint_requeue_block_threshold(&root);
+        for attempt in 1..threshold {
+            enforce_queue_review_checkpoint_feedback_transition(
+                &root,
+                message_key,
+                &outcome,
+                attempt,
+            )
+            .expect("checkpoint transition must be accepted");
+            assert!(
+                !communication_review_budget_exhausted_for_message_key(&root, message_key)
+                    .expect("budget check"),
+                "budget must not be exhausted below the threshold"
+            );
+        }
+        enforce_queue_review_checkpoint_feedback_transition(
+            &root,
+            message_key,
+            &outcome,
+            threshold,
+        )
+        .expect("checkpoint transition must be accepted");
+        assert!(
+            communication_review_budget_exhausted_for_message_key(&root, message_key)
+                .expect("budget check"),
+            "budget must be exhausted at the threshold"
+        );
+        assert!(
+            !communication_review_budget_exhausted_for_message_key(&root, "other-key")
+                .expect("budget check"),
+            "an unrelated message key must not be exhausted"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

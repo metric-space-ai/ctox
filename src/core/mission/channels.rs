@@ -2866,7 +2866,11 @@ pub fn list_stalled_inbound_messages(
         FROM communication_messages m
         JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE m.direction = 'inbound'
-          AND m.channel IN ('email', 'jami')
+          AND m.channel IN (
+                'email', 'jami', 'teams', 'whatsapp', 'meeting', 'slack',
+                'discord', 'telegram', 'matrix', 'mattermost', 'zulip',
+                'google_chat'
+          )
           AND r.route_status IN ('failed', 'review_rework')
           AND (
                 r.acked_at IS NULL
@@ -5192,9 +5196,12 @@ fn protected_recipient_policies(
 }
 
 fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -> Result<()> {
-    let lowered = request.body.to_ascii_lowercase();
-    let first_lines = request
-        .body
+    ensure_founder_outbound_body_text_clean(&request.body)
+}
+
+pub(crate) fn ensure_founder_outbound_body_text_clean(body: &str) -> Result<()> {
+    let lowered = body.to_ascii_lowercase();
+    let first_lines = body
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -5901,7 +5908,7 @@ fn external_chat_review_digest(
     (action_digest, action_json, body_sha256)
 }
 
-fn is_reviewed_external_chat_channel(channel: &str) -> bool {
+pub(crate) fn is_reviewed_external_chat_channel(channel: &str) -> bool {
     matches!(
         channel,
         "teams"
@@ -6669,6 +6676,201 @@ pub(crate) fn send_reviewed_external_chat_action(
             reviewed_founder_send: true,
         },
     )
+}
+
+/// Deterministic policy escalation for a founder/owner inbound email whose
+/// finite completion-review budget is exhausted: record a policy-authored
+/// approval for the exact escalation body and send it through the same gated
+/// reviewed-send sequence as `send_reviewed_founder_reply` (send lock,
+/// protected-recipient check, exact-digest approval match, body-clean gate,
+/// core transition, durable send artifact). The deliverables-presence gate is
+/// intentionally not applied: the escalation exists precisely because the
+/// requested deliverable could not be produced, and it must still reach the
+/// founder instead of the thread ending silently.
+pub(crate) fn record_and_send_founder_escalation_reply(
+    root: &Path,
+    inbound_message_key: &str,
+    body: &str,
+    review_summary: &str,
+) -> Result<Value> {
+    let _send_guard = acquire_reviewed_founder_send_lock()?;
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let inbound = load_message_from_conn(&conn, inbound_message_key)?
+        .with_context(|| format!("missing inbound communication message {inbound_message_key}"))?;
+    anyhow::ensure!(
+        inbound.channel == "email" && inbound.direction == "inbound",
+        "founder escalation reply requires an inbound email message"
+    );
+    let addressing = load_message_addressing_from_conn(&conn, inbound_message_key)?
+        .with_context(|| format!("missing communication addressing for {inbound_message_key}"))?;
+    let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
+    let request = resolve_outbound_subject(
+        &conn,
+        ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: inbound.account_key.clone(),
+            thread_key: inbound.thread_key.clone(),
+            body: body.trim().to_string(),
+            subject: format!("Re: {}", inbound.subject.trim()),
+            to,
+            cc,
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        },
+    )?;
+    let settings = runtime_settings_with_owner_profiles(
+        root,
+        communication_gateway::CommunicationAdapterKind::Email,
+    );
+    let protected = protected_recipient_policies(&settings, &request);
+    anyhow::ensure!(
+        !protected.is_empty(),
+        "founder escalation reply requires founder/owner/admin recipient"
+    );
+    let action = FounderReplyAction {
+        account_key: request.account_key.clone(),
+        thread_key: request.thread_key.clone(),
+        subject: request.subject.clone(),
+        to: request.to.clone(),
+        cc: request.cc.clone(),
+        attachments: Vec::new(),
+    };
+    let (action_digest, action_json, body_sha256) =
+        founder_reply_review_digest(&action, &request.body);
+    let approval_key = format!("founder-escalation:{inbound_message_key}:{action_digest}");
+    // A consumed escalation approval (sent_at set) must stay consumed: the
+    // conflict arm deliberately does not reset sent_at, so a retry after a
+    // successful send fails the unconsumed-approval lookup below instead of
+    // double-sending the notice.
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'policy-escalation', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            review_summary=excluded.review_summary
+        "#,
+        params![
+            approval_key,
+            inbound_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record founder escalation approval")?;
+    let approval_key = require_unconsumed_founder_reply_review(
+        &conn,
+        inbound_message_key,
+        &action,
+        &request.body,
+    )?;
+    ensure_founder_outbound_body_clean(&request)?;
+    let entity_id = format!("founder-reply:{inbound_message_key}");
+    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
+    let send_result = send_email_message(
+        root,
+        &conn,
+        &db_path,
+        &request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key: &approval_key,
+        }),
+    )?;
+    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "communication.escalated",
+            title: "Founder communication escalated after exhausted rework budget",
+            body_text: review_summary,
+            message_key: Some(inbound_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "body_sha256": body_sha256,
+                "action_digest": action_digest,
+                "escalation": true,
+            }),
+        },
+    );
+    Ok(send_result)
+}
+
+/// Chat-channel counterpart of `record_and_send_founder_escalation_reply`:
+/// record a policy-authored approval for the exact escalation body against
+/// the stalled inbound chat message and deliver it through the reviewed
+/// external-chat send path (exact-digest approval match plus core send
+/// transition inside `send_message`).
+pub(crate) fn record_and_send_external_chat_escalation_reply(
+    root: &Path,
+    inbound_message_key: &str,
+    body: &str,
+    review_summary: &str,
+) -> Result<Value> {
+    let action =
+        prepare_reviewed_external_chat_reply(root, inbound_message_key)?.with_context(|| {
+            format!("inbound {inbound_message_key} is not a reviewed external chat message")
+        })?;
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let trimmed_body = body.trim();
+    let (action_digest, action_json, body_sha256) =
+        external_chat_review_digest(&action, trimmed_body);
+    let approval_key = format!("external-chat-escalation:{inbound_message_key}:{action_digest}");
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'policy-escalation', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            review_summary=excluded.review_summary
+        "#,
+        params![
+            approval_key,
+            inbound_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record external chat escalation approval")?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "communication.escalated",
+            title: "External chat communication escalated after exhausted rework budget",
+            body_text: review_summary,
+            message_key: Some(inbound_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "body_sha256": body_sha256,
+                "action_digest": action_digest,
+                "channel": &action.channel,
+                "escalation": true,
+            }),
+        },
+    );
+    drop(conn);
+    send_reviewed_external_chat_action(root, &action, trimmed_body)
 }
 
 fn send_reviewed_email_communication_request(
@@ -13715,6 +13917,86 @@ mod tests {
             list_stalled_inbound_messages(&root, 10).expect("failed to list stalled messages");
         assert_eq!(stalled.len(), 1);
         assert_eq!(stalled[0].message_key, "acked-failed-founder-1");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stalled_inbound_includes_failed_chat_channel_messages() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-channel-chat-stalled-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = crate::paths::core_db(&root);
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        for (message_key, channel, account_key, thread_key) in [
+            (
+                "stalled-whatsapp-1",
+                "whatsapp",
+                "whatsapp:test-account",
+                "whatsapp/thread-1",
+            ),
+            (
+                "stalled-telegram-1",
+                "telegram",
+                "telegram:test-account",
+                "telegram/thread-1",
+            ),
+        ] {
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key,
+                    channel,
+                    account_key,
+                    thread_key,
+                    remote_id: message_key,
+                    direction: "inbound",
+                    folder_hint: "INBOX",
+                    sender_display: "Owner",
+                    sender_address: "chat:owner",
+                    recipient_addresses_json: "[]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Chat question",
+                    preview: "Bitte kurz beantworten.",
+                    body_text: "Bitte kurz beantworten.",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "trusted",
+                    status: "received",
+                    seen: false,
+                    has_attachments: false,
+                    external_created_at: "2026-04-27T09:01:02Z",
+                    observed_at: "2026-04-27T09:01:02Z",
+                    metadata_json: "{}",
+                },
+            )
+            .expect("message upsert");
+            conn.execute(
+                r#"
+                INSERT INTO communication_routing_state (
+                    message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+                ) VALUES (?1, 'failed', NULL, NULL, '2026-04-27T11:55:27Z', NULL, '2026-04-27T11:55:27Z')
+                "#,
+                params![message_key],
+            )
+            .expect("failed to seed failed chat route");
+        }
+
+        let stalled =
+            list_stalled_inbound_messages(&root, 10).expect("failed to list stalled messages");
+        let mut keys = stalled
+            .iter()
+            .map(|message| message.message_key.as_str())
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["stalled-telegram-1", "stalled-whatsapp-1"]);
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
