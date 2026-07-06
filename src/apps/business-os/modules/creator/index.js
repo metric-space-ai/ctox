@@ -840,7 +840,6 @@ function creatorCommandContextFromElement(state, target) {
 }
 
 function renderCreatorContextMenu(state, context, x, y) {
-  ensureCtoxContextMenuStyles();
   const canModifyApp = canModifyCreatorApp(state);
   state.contextMenu.innerHTML = `
     <form class="creator-context-chat" data-creator-context-chat-form>
@@ -934,123 +933,6 @@ async function dispatchCreatorContextChat(state, context, message, mode = 'data'
     },
   }));
   hideCreatorContextMenu(state);
-}
-
-function ensureCtoxContextMenuStyles() {
-  if (document.getElementById('ctox-unified-context-menu-style')) return;
-  const style = document.createElement('style');
-  style.id = 'ctox-unified-context-menu-style';
-  style.textContent = `
-    .ctox-context-menu {
-      position: absolute;
-      z-index: 2400;
-      width: min(560px, calc(100vw - 24px));
-      max-width: calc(100% - 16px);
-      overflow: hidden;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: var(--radius-panel, 12px);
-      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
-      padding: 6px;
-      font-family: system-ui, -apple-system, sans-serif;
-      animation: ctox-menu-fade-in 0.15s ease-out;
-    }
-    @keyframes ctox-menu-fade-in {
-      from { opacity: 0; transform: scale(0.97); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    .ctox-context-menu form {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 10px;
-      min-width: 0;
-      padding: 12px;
-    }
-    .ctox-context-menu header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      border-bottom: 1px solid var(--bo-border, var(--border, #e5e5ea));
-      padding-bottom: 10px;
-    }
-    .ctox-context-menu header strong {
-      font-size: 14px;
-      color: var(--bo-text, var(--text, #1c1c1e));
-    }
-    .ctox-context-menu header span {
-      display: block;
-      font-size: 11px;
-      color: var(--bo-text-muted, var(--text-muted, #8e8e93));
-      margin-top: 2px;
-    }
-    .ctox-context-menu button[type="button"] {
-      border: none;
-      background: transparent;
-      color: var(--bo-text-muted, var(--text-muted, #8e8e93));
-      cursor: pointer;
-      font-size: 20px;
-      line-height: 1;
-      padding: 4px 8px;
-    }
-    .ctox-context-menu .ctox-context-mode {
-      display: flex;
-      gap: 16px;
-      background: var(--bo-surface-2, var(--surface-2, #f2f2f7));
-      border-radius: 8px;
-      padding: 8px 12px;
-    }
-    .ctox-context-menu .ctox-context-mode label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--bo-text, var(--text, #1c1c1e));
-      cursor: pointer;
-    }
-    .ctox-context-menu textarea {
-      width: 100%;
-      height: 90px;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: 8px;
-      background: var(--bo-surface-3, var(--surface-3, #fff));
-      color: var(--bo-text, var(--text, #000));
-      padding: 8px 12px;
-      font-size: 13px;
-      font-family: inherit;
-      resize: vertical;
-    }
-    .ctox-context-menu textarea:focus {
-      outline: none;
-      border-color: var(--bo-accent, var(--accent, #e5a93c));
-    }
-    .ctox-context-menu footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      border-top: 1px solid var(--bo-border, var(--border, #e5e5ea));
-      padding-top: 10px;
-    }
-    .ctox-context-menu footer span {
-      font-size: 12px;
-      color: var(--bo-accent, var(--accent, #e5a93c));
-    }
-    .ctox-context-menu footer button[type="submit"] {
-      border: none;
-      border-radius: 6px;
-      background: var(--bo-accent-gradient, var(--accent-gradient, #e5a93c));
-      color: #fff;
-      font-size: 13px;
-      font-weight: 600;
-      padding: 6px 16px;
-      cursor: pointer;
-    }
-  `;
-  document.head.append(style);
 }
 
 function escapeHtml(value) {
