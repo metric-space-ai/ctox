@@ -11620,6 +11620,21 @@ fn runtime_installed_module_collection_creators(
 }
 
 fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String, RxJsonSchema)> {
+    module_dir_collection_schemas(module_dir, true)
+}
+
+/// Local modules (`runtime/business-os/local-modules/`, operator-placed and
+/// git-ignored) load their collection schemas exactly like installed modules
+/// but carry no runtime-installed marker — dropping the directory IS the
+/// install. Completes the local-modules discovery from commit 8741c150.
+fn local_module_collection_schemas(module_dir: &Path) -> Vec<(String, RxJsonSchema)> {
+    module_dir_collection_schemas(module_dir, false)
+}
+
+fn module_dir_collection_schemas(
+    module_dir: &Path,
+    require_installed_marker: bool,
+) -> Vec<(String, RxJsonSchema)> {
     let manifest_path = module_dir.join("module.json");
     let schema_path = module_dir.join("collections.schema.json");
     if !manifest_path.is_file() || !schema_path.is_file() {
@@ -11635,7 +11650,7 @@ fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String
             return Vec::new();
         }
     };
-    if !manifest_value_is_runtime_installed_for_native_peer(&manifest) {
+    if require_installed_marker && !manifest_value_is_runtime_installed_for_native_peer(&manifest) {
         return Vec::new();
     }
     let declared = manifest
