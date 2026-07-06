@@ -2006,6 +2006,69 @@ pub fn ephemeral_turn_server(root: &Path, session_id: &str) -> Option<Value> {
     }))
 }
 
+/// Backlog OS-B1 (architecture decision, see docs/ctox-turn.md): the relay is
+/// NOT embedded in the daemon — TURN exists precisely for the case where the
+/// CTOX box is not publicly reachable, so a relay on that box could not be
+/// reached either. CTOX only mints ephemeral credentials for an external
+/// coturn (co-located with the signaling plane). These two functions are the
+/// operator surface behind `ctox business-os turn set/status`.
+pub fn set_turn_config(
+    root: &Path,
+    url: Option<&str>,
+    secret: Option<&str>,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        url.is_some() || secret.is_some(),
+        "nothing to set: pass --url and/or --secret"
+    );
+    if let Some(url) = url {
+        let trimmed = url.trim();
+        anyhow::ensure!(
+            trimmed.starts_with("turn:") || trimmed.starts_with("turns:"),
+            "TURN url must start with turn: or turns: (got `{trimmed}`)"
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            root,
+            BUSINESS_OS_TURN_URL_KEY,
+            trimmed,
+        )?;
+    }
+    if let Some(secret) = secret {
+        let trimmed = secret.trim();
+        anyhow::ensure!(!trimmed.is_empty(), "TURN secret must not be empty");
+        crate::secrets::write_secret_record(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_TURN_SECRET_NAME,
+            trimmed,
+            Some("coturn use-auth-secret shared secret (ephemeral TURN credentials)".to_owned()),
+            serde_json::json!({"source": "business-os-turn-cli"}),
+        )?;
+    }
+    turn_config_status(root)
+}
+
+/// Redacted TURN configuration state: never returns the secret or a minted
+/// credential — only whether the pieces are in place and what the browser
+/// would receive structurally.
+pub fn turn_config_status(root: &Path) -> anyhow::Result<Value> {
+    let url = business_os_turn_url(root);
+    let secret_configured = business_os_turn_secret(root).is_some();
+    let active = url.is_some() && secret_configured;
+    Ok(serde_json::json!({
+        "url": url,
+        "secret_configured": secret_configured,
+        "active": active,
+        "credential_scheme": "coturn use-auth-secret (ephemeral, HMAC-SHA1 REST)",
+        "credential_ttl_secs": BUSINESS_OS_TURN_TTL_SECS,
+        "note": if active {
+            "TURN is served to peers via sync config ice_servers."
+        } else {
+            "TURN inactive: peers fall back to STUN only. Set both --url and --secret."
+        },
+    }))
+}
+
 fn business_os_room_password(root: &Path) -> anyhow::Result<String> {
     if let Ok(value) = env::var("CTOX_BUSINESS_OS_ROOM_PASSWORD") {
         let trimmed = value.trim();
