@@ -866,6 +866,56 @@
 }
 
 /* ----------------------------------------------------------------------------
+   15b. Callout — inline result/status panel (gate checks, hints, warnings).
+     <div class="ctox-callout is-success">…</div>
+   Neutral by default; state variants tint border and background.
+   -------------------------------------------------------------------------- */
+.ctox-callout {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ctox-callout.is-success {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+}
+
+.ctox-callout.is-warning {
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--line));
+}
+
+.ctox-callout.is-danger {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
+/* Data/code dump block (exports, logs, JSON previews). */
+.ctox-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: auto;
+  min-width: 0;
+  max-height: 320px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------------------------------
    16. Avatar — person/entity marker with image or initials fallback.
    <span class="ctox-avatar">AB</span> or with an <img> child.
    -------------------------------------------------------------------------- */
