@@ -106,6 +106,7 @@ function validateAppsecAuthzE2e(evidence) {
   if (Number(matrix.caseCount || 0) < Number(matrix.ownerBaselineCaseCount || 0) + Number(matrix.crossSubjectReplayCaseCount || 0)) {
     errors.push("AppSec authz matrix caseCount must cover owner baseline and cross-subject replay cases");
   }
+  validateAuthzMatrixCases(matrix, errors);
   if (authz.crossAccountSuccessesReviewed !== true) {
     errors.push("AppSec authz e2e crossAccountSuccessesReviewed must be true");
   }
@@ -119,6 +120,85 @@ function validateAppsecAuthzE2e(evidence) {
     errors.push("AppSec authz e2e matrixArtifact must be present");
   }
   return errors;
+}
+
+function validateAuthzMatrixCases(matrix, errors) {
+  if (!Array.isArray(matrix.cases) || matrix.cases.length === 0) {
+    errors.push("AppSec authz matrix cases must include concrete owner-baseline and cross-subject replay cases");
+    return;
+  }
+  const ownerBaselineCases = matrix.cases.filter((item) => authzCaseKind(item) === "owner-baseline");
+  const crossSubjectCases = matrix.cases.filter((item) => authzCaseKind(item) === "cross-subject-replay");
+  if (ownerBaselineCases.length < 1) {
+    errors.push("AppSec authz matrix cases must include at least one owner-baseline case");
+  }
+  if (crossSubjectCases.length < 1) {
+    errors.push("AppSec authz matrix cases must include at least one cross-subject-replay case");
+  }
+  for (const [index, item] of matrix.cases.entries()) {
+    validateAuthzMatrixCase(item, index, errors);
+  }
+}
+
+function validateAuthzMatrixCase(item, index, errors) {
+  if (!item || typeof item !== "object") {
+    errors.push(`AppSec authz matrix case ${index} must be an object`);
+    return;
+  }
+  const prefix = `AppSec authz matrix case ${index}`;
+  if (!isNonEmptyString(firstPresent(item, ["actor", "actorSubject", "actor_subject", "actorSubjectId", "actor_subject_id"]))) {
+    errors.push(`${prefix} actor must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["owner", "ownerSubject", "owner_subject", "ownerSubjectId", "owner_subject_id"]))) {
+    errors.push(`${prefix} owner must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["object", "objectRef", "object_ref", "objectId", "object_id"]))) {
+    errors.push(`${prefix} object must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["endpoint", "url", "path"]))) {
+    errors.push(`${prefix} endpoint must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["method", "httpMethod", "http_method"]))) {
+    errors.push(`${prefix} method must be present`);
+  }
+  if (firstPresent(item, ["expected", "expectedAccess", "expected_access", "expectedDecision", "expected_decision"]) === undefined) {
+    errors.push(`${prefix} expected decision must be present`);
+  }
+  if (firstPresent(item, ["actual", "actualAccess", "actual_access", "actualDecision", "actual_decision"]) === undefined) {
+    errors.push(`${prefix} actual decision must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["bodyClass", "body_class", "responseBodyClass", "response_body_class"]))) {
+    errors.push(`${prefix} body class must be present`);
+  }
+  if (firstPresent(item, [
+    "leakDecision",
+    "leak_decision",
+    "mutationDecision",
+    "mutation_decision",
+    "accessDecision",
+    "access_decision",
+  ]) === undefined) {
+    errors.push(`${prefix} leak, mutation, or access decision must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, ["evidenceArtifact", "evidence_artifact", "artifact", "artifactPath", "artifact_path"]))) {
+    errors.push(`${prefix} evidence artifact must be present`);
+  }
+}
+
+function authzCaseKind(item) {
+  const raw = String(firstPresent(item || {}, ["kind", "type", "caseType", "case_type", "phase"]) || "").toLowerCase();
+  if (raw.includes("owner") && raw.includes("baseline")) return "owner-baseline";
+  if (raw.includes("cross") && (raw.includes("subject") || raw.includes("account")) && raw.includes("replay")) {
+    return "cross-subject-replay";
+  }
+  return raw;
+}
+
+function firstPresent(object, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(object, key)) return object[key];
+  }
+  return undefined;
 }
 
 function selectAppsecAuthzE2eEvidence(evidence) {

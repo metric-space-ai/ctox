@@ -46,6 +46,47 @@ function validEvidence(overrides = {}) {
         ownerBaselineCaseCount: 1,
         crossSubjectReplayCaseCount: 2,
         caseCount: 3,
+        cases: [
+          {
+            type: "owner-baseline",
+            actor: "user-a",
+            owner: "user-a",
+            object: "account:user-a",
+            endpoint: "/api/accounts/user-a",
+            method: "GET",
+            expected: "allow",
+            actual: "allow",
+            bodyClass: "owner-data",
+            accessDecision: "baseline-allow",
+            evidenceArtifact: "runtime/appsec/ctox-dev/authz/user-a/owner-baseline.json",
+          },
+          {
+            type: "cross-subject-replay",
+            actor: "user-b",
+            owner: "user-a",
+            object: "account:user-a",
+            endpoint: "/api/accounts/user-a",
+            method: "GET",
+            expected: "deny",
+            actual: "deny",
+            bodyClass: "denied",
+            leakDecision: "no-leak",
+            evidenceArtifact: "runtime/appsec/ctox-dev/authz/replay/user-a-as-user-b.json",
+          },
+          {
+            type: "cross-subject-replay",
+            actor: "unauthenticated",
+            owner: "user-a",
+            object: "account:user-a",
+            endpoint: "/api/accounts/user-a",
+            method: "GET",
+            expected: "deny",
+            actual: "deny",
+            bodyClass: "login-required",
+            leakDecision: "no-leak",
+            evidenceArtifact: "runtime/appsec/ctox-dev/authz/replay/user-a-as-unauthenticated.json",
+          },
+        ],
       },
       ...appsecAuthzE2e,
     },
@@ -136,6 +177,40 @@ test("ctox.dev auth e2e release evidence rejects incomplete AppSec authz matrix 
   assert.match(errors, /requiredFieldsPresent must be true/);
   assert.match(errors, /crossSubjectReplayCaseCount must be at least 1/);
   assert.match(errors, /reportArtifact must be present/);
+});
+
+test("ctox.dev auth e2e release evidence rejects AppSec authz counters without concrete cases", async () => {
+  const { validateCtoxDevAuthE2e } = await validator();
+  const result = validateCtoxDevAuthE2e(validEvidence({
+    appsecAuthzE2e: {
+      authzMatrix: {
+        imported: true,
+        requiredFieldsPresent: true,
+        subjectCount: 3,
+        ownerBaselineCaseCount: 1,
+        crossSubjectReplayCaseCount: 1,
+        caseCount: 2,
+        cases: [
+          {
+            type: "cross-subject-replay",
+            actor: "user-b",
+            owner: "user-a",
+            object: "account:user-a",
+            endpoint: "/api/accounts/user-a",
+            method: "GET",
+            expected: "deny",
+            actual: "allow",
+            bodyClass: "owner-data",
+          },
+        ],
+      },
+    },
+  }));
+  assert.equal(result.ok, false);
+  const errors = result.errors.join("\n");
+  assert.match(errors, /cases must include at least one owner-baseline case/);
+  assert.match(errors, /leak, mutation, or access decision must be present/);
+  assert.match(errors, /evidence artifact must be present/);
 });
 
 test("ctox.dev auth e2e release evidence rejects auth secret leaks", async () => {
