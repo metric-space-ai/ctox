@@ -1,33 +1,40 @@
-<section class="ats-module ats-nachweise" data-ats-root data-credentials-root>
-  <header class="ats-head">
-    <h1 data-ats-title>Nachweise</h1>
-    <p class="ats-sub" data-ats-sub>Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.</p>
-  </header>
+<main class="ctox-workspace ctox-workspace--single ats-module ats-nachweise" data-ats-root data-credentials-root>
+  <section class="ctox-pane">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-ats-sub>Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.</span>
+          <h2 class="ctox-pane-title" data-ats-title>Nachweise</h2>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-pane-scroll ats-body">
+      <form class="ats-form" data-ats-form data-credentials-form>
+        <input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID (Kandidat/Mitarbeiter)" required data-f />
+        <select class="ctox-select" name="credential_type" data-credential-type data-f></select>
+        <input class="ctox-input" type="text" name="issuer" placeholder="Aussteller" data-f />
+        <input class="ctox-input" type="date" name="valid_until" data-f />
+        <button type="submit" class="ctox-button is-primary">Nachweis hinzufügen</button>
+      </form>
 
-  <form class="ats-form" data-ats-form data-credentials-form>
-    <input type="text" name="subject_id" placeholder="Subjekt-ID (Kandidat/Mitarbeiter)" required data-f />
-    <select name="credential_type" data-credential-type data-f></select>
-    <input type="text" name="issuer" placeholder="Aussteller" data-f />
-    <input type="date" name="valid_until" data-f />
-    <button type="submit">Nachweis hinzufügen</button>
-  </form>
+      <form class="ats-form ats-form--gate" data-ats-gate-form>
+        <input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID für Einsatz-Prüfung" required data-f />
+        <input class="ctox-input" type="text" name="required_types" placeholder="Pflicht-Typen (kommagetrennt)" data-f />
+        <button type="submit" class="ctox-button">Einsatzbereitschaft prüfen</button>
+      </form>
 
-  <form class="ats-form ats-form--gate" data-ats-gate-form>
-    <input type="text" name="subject_id" placeholder="Subjekt-ID für Einsatz-Prüfung" required data-f />
-    <input type="text" name="required_types" placeholder="Pflicht-Typen (kommagetrennt)" data-f />
-    <button type="submit">Einsatzbereitschaft prüfen</button>
-  </form>
+      <form class="ats-form ats-form--signoff" data-ats-signoff-form>
+        <input class="ctox-input" type="text" name="record_id" placeholder="Leistungsnachweis-ID (Sign-off)" required data-f />
+        <input class="ctox-input" type="number" name="charge_rate" step="0.01" min="0" placeholder="Verrechnungssatz €/h (Pflicht für Abrechnung)" data-f />
+        <input class="ctox-input" type="text" name="entleiher_account_id" placeholder="Entleiher-Account-ID (Rechnungsempfänger)" data-f />
+        <input class="ctox-input" type="text" name="signature_request_id" placeholder="Signatur-Anfrage-ID (falls Entleiher-Signatur erzwungen)" data-f />
+        <input class="ctox-input" type="text" name="collection" placeholder="Collection (optional, Standard: planning_time_records)" data-f />
+        <button type="submit" class="ctox-button">Entleiher-Sign-off → Abrechnung freigeben</button>
+      </form>
 
-  <form class="ats-form ats-form--signoff" data-ats-signoff-form>
-    <input type="text" name="record_id" placeholder="Leistungsnachweis-ID (Sign-off)" required data-f />
-    <input type="number" name="charge_rate" step="0.01" min="0" placeholder="Verrechnungssatz €/h (Pflicht für Abrechnung)" data-f />
-    <input type="text" name="entleiher_account_id" placeholder="Entleiher-Account-ID (Rechnungsempfänger)" data-f />
-    <input type="text" name="signature_request_id" placeholder="Signatur-Anfrage-ID (falls Entleiher-Signatur erzwungen)" data-f />
-    <input type="text" name="collection" placeholder="Collection (optional, Standard: planning_time_records)" data-f />
-    <button type="submit">Entleiher-Sign-off → Abrechnung freigeben</button>
-  </form>
-
-  <div class="ats-gate" data-ats-gate></div>
-  <div class="ats-count" data-ats-count></div>
-  <div class="ats-list" data-ats-list data-credentials-list></div>
-</section>
+      <div class="ats-gate" data-ats-gate></div>
+      <div class="ats-count" data-ats-count></div>
+      <div class="ats-list" data-ats-list data-credentials-list></div>
+    </div>
+  </section>
+</main>

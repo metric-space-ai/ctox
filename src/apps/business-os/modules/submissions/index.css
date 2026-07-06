@@ -1,34 +1,37 @@
-.ats-submissions { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
-.ats-submissions .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
-.ats-submissions .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
-.ats-submissions .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.ats-submissions .ats-form input { padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); background: color-mix(in srgb, currentColor 4%, transparent); color: inherit; font-size: 13px; min-width: 140px; }
-.ats-submissions .ats-form button { padding: 6px 14px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); color: inherit; font-size: 13px; cursor: pointer; }
-.ats-submissions .ats-count { font-size: 13px; opacity: .8; }
+/* Submissions — module-specific layer on top of shared/base.css.
+   Frame, header, inputs, buttons, badges and empty state come from the kit;
+   this file only keeps the card list (variable content) and the gate callout. */
 
-.ats-submissions .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+.ats-submissions .ats-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+/* Horizontal wrap form: undo the kit's block-level input width. */
+.ats-submissions .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ats-submissions .ats-form .ctox-input { width: auto; flex: 1 1 180px; min-width: 140px; }
+
+.ats-submissions .ats-count { font-size: 13px; color: var(--muted); }
+.ats-submissions .ats-count:empty { display: none; }
+
+/* Card list — module-owned (variable content), tokens only. */
+.ats-submissions .ats-item { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin-bottom: 6px; font-size: 13px; }
 .ats-submissions .ats-item--rich { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
 .ats-submissions .ats-item-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ats-submissions .ats-item-main .ctox-badge { align-self: flex-start; }
 .ats-submissions .ats-item-title { font-weight: 600; }
-.ats-submissions .ats-item-meta { font-size: 12px; opacity: .75; word-break: break-word; }
-.ats-submissions .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
-
-.ats-submissions .ats-badge { display: inline-block; align-self: flex-start; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); }
-.ats-submissions .ats-badge--sent { color: color-mix(in srgb, #2f7d31 85%, currentColor); border-color: color-mix(in srgb, green 40%, transparent); background: color-mix(in srgb, green 12%, transparent); }
-.ats-submissions .ats-badge--withdrawn { color: color-mix(in srgb, #b3541e 85%, currentColor); border-color: color-mix(in srgb, orange 45%, transparent); background: color-mix(in srgb, orange 12%, transparent); }
-.ats-submissions .ats-badge--rejected { color: color-mix(in srgb, #c23b3b 85%, currentColor); border-color: color-mix(in srgb, red 40%, transparent); background: color-mix(in srgb, red 12%, transparent); }
-.ats-submissions .ats-badge--hired { color: color-mix(in srgb, #2f7d31 85%, currentColor); border-color: color-mix(in srgb, green 45%, transparent); background: color-mix(in srgb, green 14%, transparent); }
+.ats-submissions .ats-item-meta { font-size: 12px; color: var(--muted); word-break: break-word; }
 
 .ats-submissions .ats-actions { display: flex; gap: 6px; align-items: center; }
-.ats-submissions .ats-action { padding: 4px 10px; border-radius: 7px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 6%, transparent); color: inherit; font-size: 12px; cursor: pointer; }
-.ats-submissions .ats-action:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 
-.ats-submissions .ats-gate { font-size: 13px; }
+/* Gate callout (check result / blockers) — no kit alert component yet. */
+.ats-submissions .ats-gate { font-size: 13px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .ats-submissions .ats-gate:empty { display: none; }
-.ats-submissions .ats-gate { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-.ats-submissions .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
-.ats-submissions .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
-.ats-submissions .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
-.ats-submissions .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
+.ats-submissions .ats-gate--ok { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); background: var(--success-soft); }
+.ats-submissions .ats-gate--block { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); }
+.ats-submissions .ats-gate--offline { border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); background: var(--warning-soft); }
+.ats-submissions .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .ats-submissions .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
 .ats-submissions .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }

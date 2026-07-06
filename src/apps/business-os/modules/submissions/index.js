@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const TITLE = 'submissions';
@@ -39,7 +39,7 @@ export async function mount(ctx) {
     rows.sort((a, b) => Number(b?.sent_at_ms || b?.created_at_ms || 0) - Number(a?.sent_at_ms || a?.created_at_ms || 0));
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => submissionRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => submissionRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   // The submissions module has exactly one native command (ats.submission.present);
@@ -154,6 +154,21 @@ function fmtTime(ms) {
   try { return new Date(n).toLocaleString(); } catch { return ''; }
 }
 
+// Status → kit badge state (base.css .ctox-badge modifiers).
+function badgeStateClass(status) {
+  switch (status) {
+    case 'sent':
+    case 'hired':
+      return ' is-success';
+    case 'withdrawn':
+      return ' is-warning';
+    case 'rejected':
+      return ' is-danger';
+    default:
+      return '';
+  }
+}
+
 function submissionRow(r) {
   const status = String(r?.status || 'sent');
   const sentAt = fmtTime(r?.sent_at_ms || r?.created_at_ms);
@@ -167,7 +182,7 @@ function submissionRow(r) {
   if (sentAt) meta.push('Gesendet: ' + esc(sentAt));
   const main = esc(r?.candidate_id || '—') + ' &rarr; ' + esc(r?.client_account_id || '—');
   const action = r?.id
-    ? '<div class="ats-actions"><button type="button" class="ats-action" data-copy-id="' + esc(r.id) + '">ID kopieren</button></div>'
+    ? '<div class="ats-actions"><button type="button" class="ctox-button" data-copy-id="' + esc(r.id) + '">ID kopieren</button></div>'
     : '';
   const ctxLabel = r?.candidate_id || r?.id || '';
   return ''
@@ -176,7 +191,7 @@ function submissionRow(r) {
     + ' data-context-record-type="submission"'
     + ' data-context-label="' + esc(ctxLabel) + '">'
     + '<div class="ats-item-main">'
-    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'
+    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(status) + '</span>'
     + '<span class="ats-item-title">' + main + '</span>'
     + '<div class="ats-item-meta">' + meta.join(' · ') + '</div>'
     + '</div>'

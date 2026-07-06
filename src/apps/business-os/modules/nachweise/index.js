@@ -5,7 +5,7 @@ import {
   isDeploymentBlocking,
 } from './core/credential.js';
 
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'nachweise';
 const PRIMARY = 'business_credentials';
 const DEPLOY_COMMAND = 'ats.deployment.check';
@@ -63,7 +63,7 @@ export async function mount(ctx) {
       const now = Date.now();
       listEl.innerHTML = rows.length
         ? rows.map((r) => credentialRow(r, now)).join('')
-        : '<div class="ats-empty">Noch keine Nachweise erfasst.</div>';
+        : '<div class="ctox-empty">Noch keine Nachweise erfasst.</div>';
     }
   }
 
@@ -255,6 +255,22 @@ export async function mount(ctx) {
   };
 }
 
+// Credential status → kit badge state (base.css .ctox-badge modifiers).
+function badgeStateClass(status) {
+  switch (status) {
+    case 'valid':
+      return ' is-success';
+    case 'expiring':
+      return ' is-warning';
+    case 'expired':
+      return ' is-danger';
+    case 'not_yet_valid':
+      return ' is-info';
+    default:
+      return ''; // unverified & unknown states stay neutral
+  }
+}
+
 function credentialRow(r, now) {
   const status = credentialStatus(r, now);
   const blocking = isDeploymentBlocking(r, now);
@@ -271,7 +287,7 @@ function credentialRow(r, now) {
     r.id ? 'ID: ' + r.id : '',
   ].filter(Boolean).join(' · ');
   const checkBtn = r.subject_id
-    ? '<button type="button" class="ats-action" data-deploy-check="' + esc(r.subject_id) + '">Einsatz prüfen</button>'
+    ? '<button type="button" class="ctox-button" data-deploy-check="' + esc(r.subject_id) + '">Einsatz prüfen</button>'
     : '';
   const recordId = r.id || '';
   const contextLabel = typeLabel(r.credential_type) + ' · ' + subject;
@@ -282,8 +298,8 @@ function credentialRow(r, now) {
     + '<div class="ats-item-main">' + esc(typeLabel(r.credential_type))
     + '<span class="ats-item-sub"> · ' + esc(subject) + '</span></div>'
     + '<div class="ats-item-side">'
-    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'
-    + (blocking ? '<span class="ats-badge ats-badge--blocking">Einsatz blockierend</span>' : '')
+    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(status) + '</span>'
+    + (blocking ? '<span class="ctox-badge is-danger">Einsatz blockierend</span>' : '')
     + checkBtn
     + '</div>'
     + '<div class="ats-item-meta">' + esc(meta) + '</div>'

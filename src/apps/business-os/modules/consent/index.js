@@ -1,5 +1,5 @@
 
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'consent';
 const PRIMARY = 'business_consents';
 const TITLE = 'consent';
@@ -42,7 +42,7 @@ export async function mount(ctx) {
     }
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => consentRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => consentRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   // ats.consent.check — reads { subject_id, purpose? }, returns { ok, allowed, purpose }.
@@ -180,6 +180,21 @@ function consentStatus(r) {
 
 const STATUS_LABEL = { active: 'gültig', withdrawn: 'widerrufen', expired: 'abgelaufen', pending: 'offen' };
 
+// Consent status → kit badge state (base.css .ctox-badge modifiers).
+function badgeStateClass(status) {
+  switch (status) {
+    case 'active':
+      return ' is-success';
+    case 'withdrawn':
+      return ' is-danger';
+    case 'expired':
+    case 'pending':
+      return ' is-warning';
+    default:
+      return '';
+  }
+}
+
 function fmtDate(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return '—';
@@ -206,13 +221,13 @@ function consentRow(r) {
     + ' data-context-record-type="consent"'
     + ' data-context-label="' + esc(ctxLabel) + '">'
     + '<div class="ats-item-main">'
-    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(STATUS_LABEL[status] || status) + '</span>'
+    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(STATUS_LABEL[status] || status) + '</span>'
     + '<span class="ats-item-title">' + esc(purpose) + '</span>'
     + '<div class="ats-item-meta">' + metaBits.join(' · ') + '</div>'
     + '</div>'
     + '<div class="ats-item-actions">'
-    + '<button type="button" class="ats-action" data-subject-export="' + esc(subjectId) + '" title="Recht auf Auskunft (DSGVO Art. 15)">Auskunft</button>'
-    + '<button type="button" class="ats-action ats-action--danger" data-subject-erase="' + esc(subjectId) + '" title="Recht auf Löschung (DSGVO Art. 17)">Löschen</button>'
+    + '<button type="button" class="ctox-button" data-subject-export="' + esc(subjectId) + '" title="Recht auf Auskunft (DSGVO Art. 15)">Auskunft</button>'
+    + '<button type="button" class="ctox-button is-danger" data-subject-erase="' + esc(subjectId) + '" title="Recht auf Löschung (DSGVO Art. 17)">Löschen</button>'
     + '</div>'
     + '</div>';
 }
