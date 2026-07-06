@@ -58,15 +58,9 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C1 (S): conflictStrategy für runtime-installierte Module.**
-  `collections.schema.json` (Installations-Manifest) um die Sibling-
-  Deklaration erweitern und im nativen Registrierungspfad + Browser-
-  Registrierung durchreichen. Heute können nur statische Module Feld-Merge
-  deklarieren (§8.2 in docs/ctox-rxdb.md).
-- **OS-C2 (S): Weitere Presence/Merge-Consumer.** threads/conversations und
-  calendar publizieren `ctx.presence` und zeigen Badges (Muster aus
-  customers kopieren); Record-Collections mit parallelem Editieren auf
-  field-merge umstellen.
+- **OS-C2b (S): Threads/Conversations als Presence-Consumer.** Restposten
+  aus OS-C2 (notes + calendar sind gelandet): threads/conversations
+  publizieren `ctx.presence` und zeigen Badges nach dem customers-Muster.
 - **OS-C3 (M): E2E-/Soak-Mode für Presence + Merge.** browser_rust_smoke-
   Mode mit zwei Browser-Peers: konkurrierende Feld-Edits konvergieren ohne
   Verlust; Presence-Badge erscheint/verschwindet (Peer-Close, TTL).
@@ -179,3 +173,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - Idle-Loop-Ratchet `background_loops_use_a_sanctioned_idle_strategy`: `a20d1436`
 - Presence-Consumer customers (Badge, Referenzimplementierung): `3fed531d`
 - Feld-Merge-Konfliktstrategie pro Collection (§8.2 docs/ctox-rxdb.md): `a045b1d7`
+- OS-X1 verifiziert + re-scoped (Token-Flag ist bereits Store-basiert): `ce1e6e48`
+- OS-C1 Wrapper-Toleranz im nativen installed-module-Schema-Parser: `21e7e1f4`
+- OS-C2 (teilweise) Presence + Feld-Merge in notes und calendar: `e1af73fc`
