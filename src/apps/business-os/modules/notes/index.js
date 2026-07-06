@@ -761,7 +761,7 @@ function renderSidebar() {
       html += `
         <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-notebook="${escapeHtml(nb)}">
           <div class="notes-folder-item-left">
-            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
               <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
             </svg>
@@ -800,10 +800,7 @@ function renderSidebar() {
       html += `
         <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-tag="${escapeHtml(tg)}">
           <div class="notes-folder-item-left">
-            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-              <line x1="7" y1="7" x2="7.01" y2="7"></line>
-            </svg>
+            ${state.ctx?.getActionIcon?.('tag') || ''}
             <span class="notes-folder-name">${escapeHtml(tg)}</span>
           </div>
           <span class="notes-folder-count">${count}</span>
@@ -951,7 +948,7 @@ function renderNotesList() {
       t: state.t
     });
     els.notesList.innerHTML = `
-      <div class="nn-empty-state nn-empty-state-${escapeHtml(emptyState.kind)}">
+      <div class="ctox-empty nn-empty-state-${escapeHtml(emptyState.kind)}">
         <strong>${escapeHtml(emptyState.title)}</strong>
         ${emptyState.body ? `<span>${escapeHtml(emptyState.body)}</span>` : ''}
       </div>
@@ -1009,8 +1006,8 @@ function renderNotesList() {
         <div class="nn-card-row">
           <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
           <div class="nn-card-icons">
-            ${note.is_favorite ? '<svg class="nn-card-icon starred" style="fill: var(--nn-accent);" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' : ''}
-            ${note.is_locked ? '<svg class="nn-card-icon locked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' : ''}
+            ${note.is_favorite ? '<svg class="nn-card-icon starred" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' : ''}
+            ${note.is_locked ? '<svg class="nn-card-icon locked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' : ''}
           </div>
         </div>
         <div class="notes-card-meta">
@@ -1126,10 +1123,10 @@ function renderEditor() {
   if (note.is_trashed && els.editorWorkspace) {
     const banner = document.createElement('div');
     banner.className = 'nn-restore-banner';
-    banner.style.cssText = 'background: rgba(0, 136, 55, 0.08); border-bottom: 1px solid var(--nn-border); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--nn-accent); margin-bottom: 10px; border-radius: 4px;';
+    banner.style.cssText = 'background: var(--accent-soft); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--accent); margin-bottom: 10px; border-radius: 4px;';
     banner.innerHTML = `
       <span>⚠️ Diese Notiz ist im Papierkorb.</span>
-      <button type="button" data-action="restore-note" style="background: var(--nn-accent); color: white; border: 0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">Wiederherstellen</button>
+      <button type="button" data-action="restore-note" style="background: var(--accent); color: var(--surface); border: 0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">Wiederherstellen</button>
     `;
     els.editorWorkspace.prepend(banner);
     banner.querySelector('[data-action="restore-note"]')?.addEventListener('click', handleRestoreNoteClick);
@@ -1325,7 +1322,7 @@ function processContentInput(newHtml) {
       els.status.textContent = state.t('draftStatus');
     } else {
       els.status.innerHTML = `
-        <svg class="nn-sync-icon pulse" style="color: var(--nn-accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
+        <svg class="nn-sync-icon pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
         <span>${state.t('saving')}</span>
       `;
     }
@@ -1392,7 +1389,7 @@ async function commitSave(note) {
       
       if (els.status) {
         els.status.innerHTML = `
-          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
+          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
           <span>${state.t('saved')}</span>
         `;
       }
@@ -1699,8 +1696,8 @@ async function handleDecryptNoteClick() {
   } catch (error) {
     console.error('Decryption failed', error);
     if (els.notePasscodeInput) {
-      els.notePasscodeInput.style.borderColor = '#d32f2f';
-      els.notePasscodeInput.style.boxShadow = '0 0 0 3px rgba(211,47,47,0.2)';
+      els.notePasscodeInput.style.borderColor = 'var(--danger)';
+      els.notePasscodeInput.style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent)';
       setTimeout(() => {
         els.notePasscodeInput.style.borderColor = '';
         els.notePasscodeInput.style.boxShadow = '';

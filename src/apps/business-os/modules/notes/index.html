@@ -40,18 +40,16 @@
 
   <!-- Spalte 1: Linke Sidebar (Notesnook Navigation) -->
   <section class="notes-sidebar-pane" aria-label="Notesnook Sidebar" data-left-content>
-    <header class="ctox-pane-header nn-brand-head">
+    <header class="ctox-pane-header ctox-pane-band nn-brand-head">
       <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles" style="flex-direction: row; align-items: center; gap: 8px;">
-          <div class="nn-logo-container" style="width: 20px; height: 20px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--accent);">
-            <svg class="nn-logo-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;">
+        <div class="ctox-pane-titles">
+          <span class="nn-logo-container" aria-hidden="true">
+            <svg class="nn-logo-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
               <polyline points="9 11 11 13 15 9"></polyline>
             </svg>
-          </div>
-          <div class="nn-brand-texts" style="display: flex; align-items: baseline; gap: 6px;">
-            <h2 class="ctox-pane-title" style="margin:0;">Notesnook</h2>
-          </div>
+          </span>
+          <h2 class="ctox-pane-title">Notesnook</h2>
         </div>
       </div>
     </header>
@@ -60,12 +58,8 @@
       <!-- Kategorie: Alle Notizen -->
       <div class="notes-folder-item active" data-nav-category="notes">
         <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="16" y1="13" x2="8" y2="13"></line>
-            <line x1="16" y1="17" x2="8" y2="17"></line>
-            <polyline points="10 9 9 9 8 9"></polyline>
+          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 3h7l4 4v14H7V3ZM14 3v4h4"></path>
           </svg>
           <span class="notes-folder-name" data-t="notes">Notizen</span>
         </div>
@@ -75,10 +69,12 @@
       <!-- Kategorie: Notizbücher (Notebooks) -->
       <div class="nn-nav-header" data-toggle-nav="notebooks">
         <div class="nn-nav-header-left">
-          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
           <span>Notizbücher</span>
         </div>
-        <button class="nn-add-sidebar-btn" type="button" data-action="create-notebook" title="Neues Notizbuch">+</button>
+        <button class="nn-add-sidebar-btn" type="button" data-action="create-notebook" title="Neues Notizbuch" aria-label="Neues Notizbuch">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
       </div>
       <div class="nn-sidebar-sublist" data-notebooks-list>
         <!-- Wird via JS befüllt -->
@@ -87,10 +83,12 @@
       <!-- Kategorie: Tags -->
       <div class="nn-nav-header" data-toggle-nav="tags">
         <div class="nn-nav-header-left">
-          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          <svg class="nn-nav-arrow active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
           <span>Tags</span>
         </div>
-        <button class="nn-add-sidebar-btn" type="button" data-action="create-tag" title="Neuer Tag">+</button>
+        <button class="nn-add-sidebar-btn" type="button" data-action="create-tag" title="Neuer Tag" aria-label="Neuer Tag">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
       </div>
       <div class="nn-sidebar-sublist" data-tags-list>
         <!-- Wird via JS befüllt -->
@@ -102,8 +100,8 @@
       <!-- Kategorie: Favoriten -->
       <div class="notes-folder-item" data-nav-category="favorites">
         <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z"></path>
           </svg>
           <span>Favoriten</span>
         </div>
@@ -113,9 +111,8 @@
       <!-- Kategorie: Papierkorb -->
       <div class="notes-folder-item" data-nav-category="trash">
         <div class="notes-folder-item-left">
-          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path>
           </svg>
           <span>Papierkorb</span>
         </div>
@@ -125,7 +122,7 @@
 
     <div class="notes-sidebar-footer nn-sidebar-footer">
       <button class="nn-lock-client-btn" type="button" data-action="lock-app" title="Notesnook sperren">
-        <svg class="nn-footer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="nn-footer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
         </svg>
@@ -139,7 +136,7 @@
 
   <!-- Spalte 2: Mittlere Notizliste -->
   <section class="notes-list-pane" aria-label="Notes List">
-    <header class="ctox-pane-header nn-list-head" style="position: relative; overflow: visible;">
+    <header class="ctox-pane-header ctox-pane-band nn-list-head" style="position: relative; overflow: visible;">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker nn-kicker" data-list-kicker>Notesnook</span>
@@ -147,17 +144,9 @@
         </div>
         <div class="ctox-pane-actions" style="position: relative;">
           <!-- Sort/Filter Auslöser -->
-          <button class="ctox-pane-icon nn-filter-trigger" type="button" data-action="toggle-filter" title="Sortieren & Filtern">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="4" y1="21" x2="4" y2="14"></line>
-              <line x1="4" y1="10" x2="4" y2="3"></line>
-              <line x1="12" y1="21" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12" y2="3"></line>
-              <line x1="20" y1="21" x2="20" y2="16"></line>
-              <line x1="20" y1="12" x2="20" y2="3"></line>
-              <line x1="1" y1="14" x2="7" y2="14"></line>
-              <line x1="9" y1="8" x2="15" y2="8"></line>
-              <line x1="17" y1="16" x2="23" y2="16"></line>
+          <button class="ctox-pane-icon nn-filter-trigger" type="button" data-action="toggle-filter" title="Sortieren & Filtern" aria-label="Sortieren & Filtern">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 6h16M7 12h10M10 18h4"></path>
             </svg>
           </button>
 
@@ -199,9 +188,9 @@
         <!-- Notizbuch Zuweisung -->
         <div class="nn-meta-select-wrap">
           <button class="nn-meta-btn nn-notebook-select-btn" type="button" data-action="select-notebook-trigger">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
             <span data-note-notebook-label>Kein Notizbuch</span>
-            <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
           </button>
           <div class="nn-dropdown-menu" data-notebook-dropdown hidden>
             <!-- Dynamische Auswahl von Notebooks -->
@@ -211,9 +200,9 @@
         <!-- Tags Zuweisung -->
         <div class="nn-meta-select-wrap">
           <button class="nn-meta-btn nn-tags-select-btn" type="button" data-action="select-tags-trigger">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7l9 9-7 7-9-9V4ZM8.5 8.5h.01"></path></svg>
             <span>Tags verwalten</span>
-            <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
           </button>
           <div class="nn-dropdown-menu nn-tags-dropdown" data-tags-dropdown hidden>
             <!-- Dynamische Checkboxen für Tags -->
@@ -221,36 +210,33 @@
         </div>
       </div>
 
-      <div class="notes-center-controls nn-editor-controls">
+      <div class="notes-center-controls nn-editor-controls ctox-pane-actions">
         <!-- Notiz Aktionen -->
-        <button class="nn-action-btn" type="button" data-action="star-note" title="Favorit umschalten" aria-label="Favorit umschalten">
-          <svg class="nn-star-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+        <button class="ctox-pane-icon nn-action-btn" type="button" data-action="star-note" title="Favorit umschalten" aria-label="Favorit umschalten">
+          <svg class="nn-star-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z"></path>
           </svg>
         </button>
 
-        <button class="nn-action-btn" type="button" data-action="lock-note" title="Notiz verschlüsseln" aria-label="Notiz verschlüsseln">
-          <svg class="nn-lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="ctox-pane-icon nn-action-btn" type="button" data-action="lock-note" title="Notiz verschlüsseln" aria-label="Notiz verschlüsseln">
+          <svg class="nn-lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
             <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
           </svg>
         </button>
 
-        <button class="nn-action-btn nn-trash-btn" type="button" data-action="delete-note" title="Notiz löschen" aria-label="Notiz löschen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        <button class="ctox-pane-icon nn-action-btn nn-trash-btn" type="button" data-action="delete-note" title="Notiz löschen" aria-label="Notiz löschen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5"></path>
           </svg>
         </button>
 
         <div class="toolbar-separator" data-sep-trash></div>
 
-        <button class="nn-action-btn nn-new-note-trigger" type="button" data-action="create-note" title="Neuen Entwurf starten">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
+        <button class="ctox-pane-icon nn-new-note-trigger" type="button" data-action="create-note" title="Neuen Entwurf starten" aria-label="Neuen Entwurf starten">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"></path>
           </svg>
-          <span>Neuer Entwurf</span>
         </button>
       </div>
     </header>
@@ -261,7 +247,7 @@
       <div class="nn-note-lock-overlay" data-note-lock-screen hidden>
         <div class="nn-note-lock-pad">
           <div class="nn-lock-icon-huge">
-            <svg viewBox="0 0 24 24" fill="none" stroke="#008837" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
               <rect x="9" y="11" width="6" height="5" rx="1"></rect>
               <path d="M12 11V9a2 2 0 1 1 4 0v2"></path>
@@ -270,8 +256,8 @@
           <h3>Notiz ist verschlüsselt</h3>
           <p>Diese Notiz ist mit einem Zero-Knowledge-Passwort gesichert.</p>
           <div class="nn-decrypt-row">
-            <input class="nn-decrypt-input" type="password" data-note-passcode-input placeholder="Passwort eingeben..." />
-            <button class="nn-decrypt-btn" type="button" data-action="decrypt-note">Entschlüsseln</button>
+            <input class="ctox-input nn-decrypt-input" type="password" data-note-passcode-input placeholder="Passwort eingeben..." />
+            <button class="ctox-button is-primary nn-decrypt-btn" type="button" data-action="decrypt-note">Entschlüsseln</button>
           </div>
           <span class="nn-lock-hint">Standard-Passwort: <strong>1234</strong></span>
         </div>
@@ -418,7 +404,7 @@
       <div class="nn-footer-left">
         <!-- Reaktive Sync-Cloud -->
         <div class="nn-sync-indicator">
-          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path>
           </svg>
           <span data-notes-status>Synchronisiert</span>
