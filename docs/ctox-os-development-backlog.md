@@ -114,10 +114,6 @@ ein Creator-Formular mit vorausgefüllten Werten.
 
 Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 
-- **OS-G1 (M): Fehlerklassifikation als Contract.** Die Klassifikations-
-  Kaskade (sync.js ~791 ↔ Rust-Pendant) fixture-getrieben machen: Testkorpus
-  aus (Fehlerbild → Klasse)-Paaren, beide Seiten laufen gegen denselben
-  Korpus (Muster: query-fingerprint-Korpus).
 - **OS-G2 (L): Gemeinsame Rust-Lib + WASM-Build.** Kanonisches JSON /
   Schema-Hashes / Query-Signaturen / Checkpoint-Regeln in ein Crate mit
   wasm-bindgen-Build, Browser-Bundle konsumiert es anstelle der JS-Zwillinge.
@@ -187,3 +183,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-A4 Diagnose-CLI `ctox business-os rxdb status [--json]` (Heartbeat,
   replicationUp, Loop-Ticks, External-Poll-Wakeups; liest die
   Heartbeat-Statusdatei, prozessübergreifend): `8bc1c7c4`
+- OS-G1 Fehlerklassifikations-Korpus (14 Fälle inkl. Order-Pins,
+  classifyReplicationErrorKind, Rust-Alignment auf Contract-Codes):
+  `654cc570`
