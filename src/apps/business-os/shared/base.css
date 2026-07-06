@@ -303,6 +303,19 @@
   cursor: not-allowed;
 }
 
+/* Ghost/tertiary: borderless low-emphasis action. */
+.ctox-button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.ctox-button--ghost:hover {
+  background: var(--surface-2);
+  border-color: transparent;
+  color: var(--text);
+}
+
 /* Compact density for tight table rows and dense action cells. */
 .ctox-button--sm,
 .ctox-icon-button--sm {
@@ -648,6 +661,11 @@
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+}
+
+.ctox-pane-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ----------------------------------------------------------------------------
