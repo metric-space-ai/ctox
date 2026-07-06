@@ -32,6 +32,7 @@ const CONTRACT_FIELDS = [
   'db',
   'desktopApps',
   'eventBus',
+  'getActionIcon',
   'getDesktopApps',
   'getModules',
   'getSvgIcon',

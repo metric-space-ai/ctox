@@ -315,6 +315,69 @@ const iconMap = {
   `
 };
 
+/**
+ * Functional action icons — the standard glyph set for .ctox-pane-icon and
+ * .ctox-icon-button controls. Unlike the gradient module icons above, action
+ * icons are monochrome (stroke: currentColor) so they inherit the button's
+ * hover/active/disabled color. One style for every app: 24 viewBox, round
+ * caps, no fills. Modules must use getActionIcon() instead of inlining SVGs.
+ */
+const actionIconPaths = {
+  add: 'M12 5v14M5 12h14',
+  close: 'M6 6l12 12M18 6L6 18',
+  check: 'M4.5 12.5l5 5L19.5 7',
+  search: 'M10.8 4a6.8 6.8 0 1 1 0 13.6 6.8 6.8 0 0 1 0-13.6ZM15.8 15.8 20.5 20.5',
+  filter: 'M4 6h16M7 12h10M10 18h4',
+  sort: 'M8 5v14M8 5 5 8M8 5l3 3M16 19V5M16 19l-3-3M16 19l3-3',
+  edit: 'M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3ZM14.5 6.5l3 3',
+  trash: 'M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5',
+  refresh: 'M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4',
+  download: 'M12 4v11M12 15l-4-4M12 15l4-4M5 19h14',
+  upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
+  copy: 'M9 9h10v11H9zM5 15V4h10',
+  link: 'M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.6-5.6L12 7.2M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.6 5.6L12 16.8',
+  open: 'M14 5h5v5M19 5l-8 8M11 5H5v14h14v-6',
+  send: 'M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronUp: 'M6 15l6-6 6 6',
+  chevronLeft: 'M15 6l-6 6 6 6',
+  chevronRight: 'M9 6l6 6-6 6',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+  calendar: 'M5 6h14v14H5zM5 10h14M9 4v4M15 4v4',
+  clock: 'M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 8v4.5l3 2',
+  tag: 'M4 4h7l9 9-7 7-9-9V4ZM8.5 8.5h.01',
+  user: 'M12 5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM5 20a7 7 0 0 1 14 0',
+  users: 'M9 6a3 3 0 1 1 0 6 3 3 0 0 1 0-6ZM3.5 19a5.5 5.5 0 0 1 11 0M15.5 6.5a3 3 0 0 1 0 5.5M17 13.5a5.5 5.5 0 0 1 3.5 5',
+  eye: 'M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z',
+  pin: 'M9 4h6l-1 7 3 2v2H7v-2l3-2-1-7ZM12 15v5',
+  star: 'M12 4l2.35 4.9 5.4.7-4 3.75 1 5.35L12 16.1l-4.75 2.6 1-5.35-4-3.75 5.4-.7L12 4Z',
+  folder: 'M4 6h5l2 2h9v11H4V6Z',
+  file: 'M7 3h7l4 4v14H7V3ZM14 3v4h4',
+  print: 'M7 8V4h10v4M7 16H4V8h16v8h-3M7 13h10v7H7v-7Z',
+  archive: 'M4 5h16v4H4zM6 9v10h12V9M10 13h4',
+  bell: 'M6 16v-5a6 6 0 0 1 12 0v5l1.5 2.5h-15L6 16ZM10 21a2 2 0 0 0 4 0',
+  comment: 'M4 5h16v11H9l-5 4V5Z',
+  attach: 'M8 12.5 15.5 5a3.5 3.5 0 0 1 5 5l-9 9a5.5 5.5 0 0 1-7.8-7.8L11 4',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+  columns: 'M4 4h16v16H4zM10 4v16M16 4v16',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  play: 'M8 5.5v13l10-6.5-10-6.5Z',
+  pause: 'M8 5h3v14H8zM13 5h3v14h-3z',
+  warning: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4M12 17h.01',
+  info: 'M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 11v5M12 8h.01',
+};
+
+export function getActionIcon(name, size = 16, strokeWidth = 1.8) {
+  const path = actionIconPaths[name] || actionIconPaths.more;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ctox-action-icon ctox-action-${name}"><path d="${path}"></path></svg>`;
+}
+
+export function listActionIcons() {
+  return Object.keys(actionIconPaths);
+}
+
 const registeredIcons = new Map();
 
 export function registerSvgIcon(moduleId, svgString) {

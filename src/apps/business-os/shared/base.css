@@ -445,3 +445,454 @@
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
 }
+
+/* ----------------------------------------------------------------------------
+   11. Pane header building blocks — actions row, header icon buttons, filter.
+   Typography (.ctox-pane-kicker / .ctox-pane-title) comes from app.css.
+   Canonical pane header:
+
+     <header class="ctox-pane-header ctox-pane-band">
+       <div class="ctox-pane-title-row">
+         <div class="ctox-pane-titles">
+           <span class="ctox-pane-kicker">Modulname</span>
+           <h2 class="ctox-pane-title">Bereich</h2>
+         </div>
+         <div class="ctox-pane-actions">
+           <button class="ctox-pane-icon" type="button" aria-label="…">
+             <svg viewBox="0 0 24 24">…</svg>
+           </button>
+         </div>
+       </div>
+       <div class="ctox-pane-tools">
+         <input class="ctox-pane-search" type="search" placeholder="Suchen…" />
+         <select class="ctox-pane-filter">…</select>
+       </div>
+     </header>
+
+   Primary actions in a pane header are ALWAYS compact icon buttons with an
+   aria-label — never full-width text buttons. Text buttons (.ctox-button)
+   belong in toolbars, forms, and modal footers.
+   -------------------------------------------------------------------------- */
+.ctox-pane-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.ctox-pane-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ctox-pane-icon svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.ctox-pane-icon:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.ctox-pane-icon:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.ctox-pane-icon.is-active,
+.ctox-pane-icon[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--text);
+}
+
+.ctox-pane-icon:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Compact select for the pane tools row (grouping/state filters). */
+.ctox-pane-filter {
+  min-width: 0;
+  min-height: 32px;
+  flex: 0 1 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.ctox-pane-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* ----------------------------------------------------------------------------
+   12. Segmented tabs (view switchers inside a pane header or toolbar).
+   State via aria-selected (preferred) or .is-active.
+   -------------------------------------------------------------------------- */
+.ctox-pane-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: max-content;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.ctox-pane-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ctox-pane-tab.is-active,
+.ctox-pane-tab.active,
+.ctox-pane-tab[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--text);
+}
+
+.ctox-pane-tab:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* ----------------------------------------------------------------------------
+   13. Data table — the standard column view for record lists and reports.
+   Wrap in .ctox-table-wrap so wide tables scroll inside their pane.
+   Column headers stay sticky against the wrap's scroll.
+   -------------------------------------------------------------------------- */
+.ctox-table-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ctox-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.ctox-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ctox-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  color: var(--text);
+  vertical-align: top;
+  min-width: 0;
+}
+
+.ctox-table tbody tr {
+  cursor: default;
+}
+
+.ctox-table tbody tr:hover {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+
+.ctox-table tbody tr.is-selected,
+.ctox-table tbody tr[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+/* Numeric columns: right-aligned, tabular digits. Apply to th and td. */
+.ctox-table .is-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sortable column header: a bare button inside the th. */
+.ctox-table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.ctox-table-sort:hover {
+  color: var(--text);
+}
+
+/* ----------------------------------------------------------------------------
+   14. Field list — key/value details in inspector panes and cards.
+   Markup: <dl class="ctox-fields"><dt>Label</dt><dd>Wert</dd>…</dl>
+   Default is a two-column grid; --stacked puts each label above its value.
+   -------------------------------------------------------------------------- */
+.ctox-fields {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+.ctox-fields dt {
+  margin: 0;
+  padding-top: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ctox-fields dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.ctox-fields--stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
+.ctox-fields--stacked dd {
+  margin-bottom: 8px;
+}
+
+/* ----------------------------------------------------------------------------
+   15. Modal — occasional detail work on top of the module. Sits above module
+   content (z-index 240) and below every shell layer (notifications 260,
+   menus 300, shell dialogs 400, context menu 1200). Toggle with [hidden].
+   Module-level toasts do NOT belong here — use ctx.notifications.
+
+     <div class="ctox-modal" hidden role="dialog" aria-modal="true"
+          aria-labelledby="…">
+       <div class="ctox-modal-card">
+         <header class="ctox-modal-header">
+           <h3 class="ctox-modal-title" id="…">…</h3>
+           <button class="ctox-pane-icon" type="button" aria-label="Schließen">…</button>
+         </header>
+         <div class="ctox-modal-body">…</div>
+         <footer class="ctox-modal-footer">
+           <button class="ctox-button">Abbrechen</button>
+           <button class="ctox-button is-primary">Speichern</button>
+         </footer>
+       </div>
+     </div>
+   -------------------------------------------------------------------------- */
+.ctox-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--text) 26%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.ctox-modal[hidden] {
+  display: none !important;
+}
+
+.ctox-modal-card {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(72vh, 640px);
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+
+.ctox-modal-card--wide {
+  width: min(860px, 100%);
+}
+
+.ctox-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+.ctox-modal-title {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-modal-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.ctox-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--hairline, var(--line));
+}
+
+/* ----------------------------------------------------------------------------
+   16. Avatar — person/entity marker with image or initials fallback.
+   <span class="ctox-avatar">AB</span> or with an <img> child.
+   -------------------------------------------------------------------------- */
+.ctox-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  overflow: hidden;
+  user-select: none;
+}
+
+.ctox-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ctox-avatar--sm {
+  width: 22px;
+  height: 22px;
+  font-size: 9px;
+}
+
+.ctox-avatar--lg {
+  width: 40px;
+  height: 40px;
+  font-size: 14px;
+}
+
+/* ----------------------------------------------------------------------------
+   17. Choice rows — radio/checkbox groups as selectable bordered rows.
+     <div class="ctox-choice-group" role="radiogroup">
+       <label class="ctox-choice">
+         <input type="radio" name="…" value="…" />
+         <span>Option</span>
+       </label>
+     </div>
+   -------------------------------------------------------------------------- */
+.ctox-choice-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ctox-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ctox-choice:hover {
+  border-color: var(--line-strong);
+}
+
+.ctox-choice:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.ctox-choice:has(input:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.ctox-choice input {
+  margin: 0;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}

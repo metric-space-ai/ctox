@@ -509,6 +509,10 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
   return shellIconsModule?.getSvgIcon?.(id, size, strokeWidth) || '';
 }
 
+function getRegisteredActionIcon(name, size, strokeWidth) {
+  return shellIconsModule?.getActionIcon?.(name, size, strokeWidth) || '';
+}
+
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
     businessDbModulePromise = importBusinessOsModule(`./shared/db.js?v=${APP_BUILD}`, 'business db')
@@ -4137,6 +4141,7 @@ function createModuleContext(mod) {
     windowManager: state.windowManager,
     desktopApps: listDesktopApps(),
     getSvgIcon: getRegisteredSvgIcon,
+    getActionIcon: getRegisteredActionIcon,
     openDesktopApp,
     openBusinessChat,
     reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`module:${mod.id}`, error, {

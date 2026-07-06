@@ -83,7 +83,8 @@ Grundregeln (aus `docs/ctox-rxdb.md` und den AGENTS-Guardrails):
 | `desktopApps` | array | Momentaufnahme der Desktop-Apps. |
 | `getDesktopApps()` | fn → array | Live-Liste. |
 | `openDesktopApp(id, options)` | fn | Desktop-App öffnen. |
-| `getSvgIcon(name)` | fn | Registrierte Shell-Icons. |
+| `getSvgIcon(name)` | fn | Registrierte Shell-Icons (Modul-/Kachel-Icons, Gradient-Stil). |
+| `getActionIcon(name, size?, strokeWidth?)` | fn → string | Funktionale Aktions-Icons (monochrom, `currentColor`) für `.ctox-pane-icon`/`.ctox-icon-button`; Namen via `listActionIcons()` in `shared/icons.js`. |
 | `isTaskbarPinned(target)` / `pinToTaskbar` / `unpinFromTaskbar` / `toggleTaskbarPin` | fn | Taskbar-Pinning. |
 
 ### Fehler & Meldungen
@@ -95,7 +96,8 @@ Grundregeln (aus `docs/ctox-rxdb.md` und den AGENTS-Guardrails):
 
 ## Stabilität
 
-- v1 umfasst exakt die 41 oben gelisteten Felder (Pin im Assert-Skript).
+- v1 umfasst exakt die 42 oben gelisteten Felder (Pin im Assert-Skript;
+  `getActionIcon` kam additiv hinzu).
 - Additiv erweitern ist erlaubt (Pin + Doku im selben Commit).
 - Entfernen/Umbenennen ⇒ `business-os-module-context-v2` mit
   Migrationshinweisen für alle Module.
