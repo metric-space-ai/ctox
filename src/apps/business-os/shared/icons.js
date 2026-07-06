@@ -367,6 +367,9 @@ const actionIconPaths = {
   pause: 'M8 5h3v14H8zM13 5h3v14h-3z',
   warning: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4M12 17h.01',
   info: 'M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 11v5M12 8h.01',
+  lock: 'M6 11h12v9H6v-9ZM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 14.5v2',
+  unlock: 'M6 11h12v9H6v-9ZM8.5 11V8a3.5 3.5 0 0 1 6.8-1.2M12 14.5v2',
+  book: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15ZM4 18a2.5 2.5 0 0 1 2.5-2.5H20M8 7h8',
 };
 
 export function getActionIcon(name, size = 16, strokeWidth = 1.8) {
