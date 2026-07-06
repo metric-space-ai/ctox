@@ -56,10 +56,10 @@ customers ist Referenz-Consumer (`3fed531d`).
 - **OS-C3 (M): E2E-/Soak-Mode für Presence + Merge.** browser_rust_smoke-
   Mode mit zwei Browser-Peers: konkurrierende Feld-Edits konvergieren ohne
   Verlust; Presence-Badge erscheint/verschwindet (Peer-Close, TTL).
-- **OS-C4 (M): Merge-Semantik härten.** Offene Kanten aus v1: Base-Refresh
-  im Push-Retry (aktuell behält der lokale Store die alte Base bis zum
-  Roundtrip), optional Feld-Merge unterhalb Top-Level für deklarierte
-  Objektfelder, Metrik "merges/conflicts pro Collection" in die Diagnose.
+- **OS-C4b (S, optional): Feld-Merge unterhalb Top-Level.** Rest aus OS-C4:
+  für deklarierte Objektfelder rekursiv mergen statt Top-Level-atomar.
+  Braucht eine Deklarationsform (welche Felder) — erst angehen, wenn ein
+  realer Konfliktfall Top-Level-Granularität sprengt.
 
 ## Cluster D — Modul-Contract als Plattform-API
 
@@ -184,3 +184,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-B1 (Repo-Teil) TURN-Architekturentscheidung + Operator-CLI
   (`docs/ctox-turn.md`, `ctox business-os turn set/status`): `545ddf91`;
   Fleet-Teil als OS-B1b offen.
+- OS-C4 Base-Refresh im Push-Retry (explizite Base via baseById) +
+  Merge-Zähler in der Sync-Diagnose: `ff60bbf6`; Sub-Top-Level-Merge als
+  OS-C4b optional offen.
