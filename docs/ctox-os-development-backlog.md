@@ -53,9 +53,18 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C3 (M): E2E-/Soak-Mode für Presence + Merge.** browser_rust_smoke-
-  Mode mit zwei Browser-Peers: konkurrierende Feld-Edits konvergieren ohne
-  Verlust; Presence-Badge erscheint/verschwindet (Peer-Close, TTL).
+- **OS-C3 (M, umgebungsblockiert 2026-07-06): E2E-/Soak-Mode für
+  Presence + Merge.** browser_rust_smoke-Mode mit zwei Browser-Peers:
+  konkurrierende Feld-Edits konvergieren ohne Verlust; Presence-Badge
+  erscheint/verschwindet (Peer-Close, TTL). Vorarbeit erledigt: Playwright
+  liegt unter /tmp/ctox-pw-smoke (Kandidatenpfad des Harness), System-Chrome
+  wird erkannt. BLOCKER: der BESTEHENDE Mode `rust-to-browser` ist auf
+  dieser macOS-Maschine deterministisch rot — Datei-Doc repliziert, aber
+  `desktop_file_chunks` kommen nie an (`chunkCount:0`); identisch am
+  Baseline-Commit 989319b4 (Worktree-Gegenprobe), also VORBESTEHEND, nicht
+  von den Juli-Commits. Erst den Chunk-Pfad-Befund klären (CI-ubuntu vs.
+  macOS?), dann den neuen Mode bauen — ein unverifizierbarer Soak-Mode wäre
+  wertlos.
 - **OS-C4b (S, optional): Feld-Merge unterhalb Top-Level.** Rest aus OS-C4:
   für deklarierte Objektfelder rekursiv mergen statt Top-Level-atomar.
   Braucht eine Deklarationsform (welche Felder) — erst angehen, wenn ein
