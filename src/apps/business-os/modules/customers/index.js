@@ -6,7 +6,7 @@ import {
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260605-rxdb-cancel1';
+const BUILD = '20260706-presence1';
 const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',
@@ -110,6 +110,8 @@ const TASK_STATUS_LABELS = Object.freeze({
 const labels = {
   de: {
     title: 'Kunden',
+    presenceEditing: '{0} bearbeitet gerade',
+    presenceViewing: '{0} sieht sich das gerade an',
     scope: 'Segmente',
     sync: 'Abgleich',
     savedViews: 'Ansichten',
@@ -269,6 +271,8 @@ const labels = {
   },
   en: {
     title: 'Customers',
+    presenceEditing: '{0} is editing right now',
+    presenceViewing: '{0} is viewing this',
     scope: 'Scope',
     sync: 'Sync',
     savedViews: 'Views',
@@ -486,6 +490,16 @@ export async function mount(ctx) {
   state.cleanup.push(setupResizers(root));
   await refreshData({ renderLoading: true });
   state.cleanup.push(wireRealtime());
+  // Presence (advisory UX): show who else is on the selected record, and
+  // publish what this user is looking at / editing. Cleared on unmount so a
+  // closed module leaves no stale hints on other peers.
+  if (ctx.presence?.subscribe) {
+    state.cleanup.push(ctx.presence.subscribe((entries) => {
+      state.presenceRemote = Array.isArray(entries) ? entries : [];
+      render();
+    }));
+    state.cleanup.push(() => { try { ctx.presence.clear(); } catch {} });
+  }
   render();
 
   return () => {
@@ -526,6 +540,7 @@ function resetState(ctx) {
   state.diagnostics = { loading: false, error: '', lastLoadedAt: 0, commandState: '' };
   state.cleanup = [];
   state.renderTimer = 0;
+  state.presenceRemote = [];
 }
 
 function translateFallback(lang) {
@@ -1144,9 +1159,68 @@ function syncSelection() {
 function render() {
   const root = state.ctx?.host?.querySelector('[data-customers-root]');
   if (!root) return;
+  syncPresence();
   renderLeft();
   renderCenter();
   renderRight();
+}
+
+// Publish this user's current focus as a presence entry. Derived from the
+// selection/form state on every render — the presence registry dedups
+// unchanged sets, so this is idempotent and cheap. One entry, the most
+// specific selected record.
+function syncPresence() {
+  const presence = state.ctx?.presence;
+  if (!presence?.set) return;
+  const focus = presenceFocus();
+  presence.set(focus ? [focus] : []);
+}
+
+function presenceFocus() {
+  if (state.selectedContactId) {
+    return {
+      collection: 'customer_contacts',
+      recordId: state.selectedContactId,
+      mode: state.formMode === 'contact-edit' && state.formRecordId === state.selectedContactId
+        ? 'editing' : 'viewing',
+    };
+  }
+  if (state.selectedOpportunityId) {
+    return {
+      collection: 'customer_opportunities',
+      recordId: state.selectedOpportunityId,
+      mode: state.formMode === 'opportunity-edit' && state.formRecordId === state.selectedOpportunityId
+        ? 'editing' : 'viewing',
+    };
+  }
+  if (state.selectedAccountId) {
+    return {
+      collection: 'customer_accounts',
+      recordId: state.selectedAccountId,
+      mode: state.formMode === 'account-edit' && state.formRecordId === state.selectedAccountId
+        ? 'editing' : 'viewing',
+    };
+  }
+  return null;
+}
+
+// Remote presence hint for one record: other users (not this actor) who are
+// viewing/editing it right now. Editing outranks viewing.
+function presenceChip(collection, recordId) {
+  if (!recordId || !Array.isArray(state.presenceRemote) || !state.presenceRemote.length) return '';
+  const ownActorId = state.ctx?.actor?.id || '';
+  const matches = state.presenceRemote.filter((entry) => entry
+    && entry.collection === collection
+    && entry.recordId === recordId
+    && entry.actorId
+    && entry.actorId !== ownActorId);
+  if (!matches.length) return '';
+  const editing = matches.filter((entry) => entry.mode === 'editing');
+  const shown = editing.length ? editing : matches;
+  const key = editing.length ? 'presenceEditing' : 'presenceViewing';
+  const names = [...new Set(shown.map((entry) => entry.actorName || entry.actorId))].join(', ');
+  const label = state.t(key, labels.de[key], names);
+  return `<span class="customers-badge presence${editing.length ? ' editing' : ''}" title="${escapeAttribute(label)}">${escapeHtml(label)}</span>`;
 }
 
 function renderLeft() {
@@ -1902,6 +1976,7 @@ function renderRecordChips(context) {
         <span class="customers-badge stage-${escapeAttribute(opportunity.stage || 'qualification')}">${escapeHtml(labelFor(OPPORTUNITY_STAGE_LABELS, opportunity.stage))}</span>
         <span class="customers-badge">${escapeHtml(labelFor(OPPORTUNITY_TYPE_LABELS, opportunity.opportunity_type))}</span>
         <span class="customers-badge">${escapeHtml(formatMoney(opportunity.amount_cents, opportunity.currency))}</span>
+        ${presenceChip('customer_opportunities', context.id)}
       </div>
     `;
   }
@@ -1912,6 +1987,7 @@ function renderRecordChips(context) {
         ${contact.is_primary_contact ? `<span class="customers-badge health-healthy">${escapeHtml(state.t('primary', labels.de.primary))}</span>` : ''}
         ${contact.email ? `<span class="customers-badge">${escapeHtml(contact.email)}</span>` : ''}
         ${contact.phone ? `<span class="customers-badge">${escapeHtml(contact.phone)}</span>` : ''}
+        ${presenceChip('customer_contacts', context.id)}
       </div>
     `;
   }
@@ -1921,6 +1997,7 @@ function renderRecordChips(context) {
       <span class="customers-badge">${escapeHtml(labelFor(ACCOUNT_STATUS_LABELS, account.account_status))}</span>
       <span class="customers-badge stage-${escapeAttribute(account.customer_stage || 'unknown')}">${escapeHtml(labelFor(STAGE_LABELS, account.customer_stage))}</span>
       <span class="customers-badge health-${escapeAttribute(account.health_status || 'unknown')}">${escapeHtml(labelFor(HEALTH_LABELS, account.health_status))}</span>
+      ${presenceChip('customer_accounts', context.id)}
     </div>
   `;
 }

@@ -734,6 +734,19 @@
   border-color: color-mix(in srgb, var(--customers-accent-strong) 30%, var(--customers-line));
 }
 
+/* Presence hint (advisory): another user is viewing/editing this record. */
+.customers-badge.presence {
+  color: var(--customers-accent-strong);
+  border-color: color-mix(in srgb, var(--customers-accent-strong) 45%, var(--customers-line));
+  background: color-mix(in srgb, var(--customers-accent-strong) 10%, transparent);
+}
+
+.customers-badge.presence.editing {
+  color: var(--customers-danger);
+  border-color: color-mix(in srgb, var(--customers-danger) 45%, var(--customers-line));
+  background: color-mix(in srgb, var(--customers-danger) 10%, transparent);
+}
+
 .customers-badge.stage-proposal,
 .customers-badge.stage-negotiation,
 .customers-badge.stage-committed {
