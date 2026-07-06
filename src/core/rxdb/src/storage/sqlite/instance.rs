@@ -138,6 +138,11 @@ static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS: AtomicU64 = AtomicU64::new(0);
+// Per-database wakeup counter for the external write poll. Global counters
+// are shared across parallel tests, so the idle-budget guard keys on the
+// database path to observe ONLY its own poll thread.
+static SQLITE_EXTERNAL_POLL_WAKEUPS_BY_DATABASE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
 static SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
     OnceLock::new();
 static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE: OnceLock<
@@ -445,6 +450,10 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS
     );
     out.insert(
+        "external_poll_wakeups_by_database".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_WAKEUPS_BY_DATABASE),
+    );
+    out.insert(
         "external_poll_notifications_by_table".to_string(),
         snapshot_counter_map(&SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE),
     );
@@ -657,8 +666,9 @@ pub(crate) fn record_sqlite_external_poll_connection_open_failure() {
     SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn record_sqlite_external_poll_wakeup(standby: bool) {
+pub(crate) fn record_sqlite_external_poll_wakeup(standby: bool, database_key: &str) {
     SQLITE_EXTERNAL_POLL_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    increment_counter_map(&SQLITE_EXTERNAL_POLL_WAKEUPS_BY_DATABASE, database_key);
     if standby {
         SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -4049,6 +4059,14 @@ mod tests {
         assert_eq!(bulk.events.len(), 1);
         assert_eq!(bulk.events[0].document_id, "external-readonly");
     }
+
+    // Backlog OS-A1: the idle-budget guard for the external write poll lives
+    // in tests/idle_budget.rs as an INTEGRATION test on purpose — it holds a
+    // live poll thread for several seconds, and in the shared lib-test
+    // process its connection opens inflated the exact global-counter deltas
+    // other tests assert (file_backed_reads_reuse_cached_read_only_connection,
+    // bulk_write_reads_only_written_ids_state_among_many_rows). A separate
+    // test binary gets its own counter statics.
 
     #[tokio::test]
     async fn change_stream_drains_multiple_external_batches_per_wake() {

@@ -197,6 +197,7 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                             }
                             crate::storage::sqlite::instance::record_sqlite_external_poll_wakeup(
                                 poll_interval >= SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL,
+                                &database_key,
                             );
                             let Ok(version) = read_data_version(&conn) else {
                                 break;
