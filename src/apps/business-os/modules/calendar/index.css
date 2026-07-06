@@ -39,10 +39,10 @@
 }
 
 .calendar-left-content {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  height: calc(100% - 60px);
+  min-height: 0;
 }
 
 /* Center Calendar Pane */
@@ -68,39 +68,10 @@
 }
 
 .calendar-right-content {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  height: calc(100% - 60px);
-}
-
-/* Headers */
-.calendar-pane-header {
-  padding: 16px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
-  flex-shrink: 0;
-  height: 60px;
-  box-sizing: border-box;
-}
-
-.calendar-pane-header .calendar-kicker {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-  font-weight: 700;
-  display: block;
-  margin-bottom: 4px;
-}
-
-.calendar-pane-header .calendar-title {
-  font-size: 15px;
-  font-weight: 700;
-  margin: 0;
-  color: var(--text-strong);
+  min-height: 0;
 }
 
 /* Sidebar lists styling */
@@ -208,11 +179,12 @@
   opacity: 1;
 }
 
+/* Compact variant of .ctox-icon-button for hover actions inside sidebar rows. */
 .calendar-row-action {
-  min-height: 24px;
-  max-width: 88px;
-  font-size: 11px;
-  white-space: nowrap;
+  width: 26px;
+  min-height: 26px;
+  height: 26px;
+  padding: 0;
 }
 
 /* Separator line */
@@ -328,32 +300,14 @@
   color: var(--text-strong);
 }
 
-.auditing-badge {
-  font-size: 9px;
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.badge-hold {
-  background: color-mix(in srgb, var(--warning) 20%, transparent);
-  color: var(--warning);
-}
-
-.badge-confirmed {
-  background: color-mix(in srgb, var(--success) 20%, transparent);
-  color: var(--success);
-}
-
-.badge-cancelled {
-  background: color-mix(in srgb, var(--danger) 20%, transparent);
-  color: var(--danger);
-}
-
 .auditing-card-detail {
   font-size: 11px;
   color: var(--muted);
+}
+
+.auditing-card-detail.is-expiry {
+  font-size: 10px;
+  color: var(--warning);
 }
 
 .auditing-empty-state {
@@ -366,6 +320,12 @@
 
 .calendar-booking-context {
   margin-bottom: 12px;
+}
+
+.calendar-booking-detail-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-strong);
 }
 
 .calendar-booking-context-card,
@@ -417,80 +377,14 @@
   gap: 12px;
 }
 
-/* Buttons and Controls */
-.os-btn {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text);
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.os-btn:hover {
-  background: var(--surface-2);
-  color: var(--text-strong);
-}
-
-.os-btn-primary {
-  background: var(--accent);
-  color: var(--surface);
-  border: none;
-}
-
-.os-btn:disabled,
-.os-btn[aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.52;
-  transform: none;
-}
-
-.os-btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 80%, #000);
-  color: var(--surface);
-}
-
-.os-btn-danger {
-  background: color-mix(in srgb, var(--danger) 15%, transparent);
-  color: var(--danger);
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-}
-
-.os-btn-danger:hover {
-  background: var(--danger);
-  color: var(--surface);
-}
-
-.os-input, .os-textarea, .os-select {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  color: var(--text);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.os-input:focus, .os-textarea:focus, .os-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.os-input[aria-invalid="true"],
-.os-textarea[aria-invalid="true"],
-.os-select[aria-invalid="true"] {
+/* Form controls come from shared/base.css (.ctox-button / .ctox-input /
+   .ctox-select / .ctox-textarea). Module-specific: invalid-field marker used
+   by the drawer form validation (aria-invalid is set from JS). */
+.calendar-app .ctox-input[aria-invalid="true"],
+.calendar-app .ctox-textarea[aria-invalid="true"],
+.calendar-app .ctox-select[aria-invalid="true"] {
   border-color: var(--danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+  box-shadow: 0 0 0 3px var(--danger-soft);
 }
 
 .calendar-field-error {
@@ -502,18 +396,6 @@
 
 .calendar-field-error:empty {
   display: none;
-}
-
-.calendar-col-resizer {
-  min-height: 0;
-  cursor: col-resize;
-  border-radius: 8px;
-}
-
-.calendar-col-resizer:hover,
-.calendar-col-resizer:focus-visible {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: 0;
 }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
@@ -633,22 +515,6 @@
   color: var(--text-strong);
 }
 
-.ctox-drawer-close {
-  background: transparent;
-  border: 0;
-  color: var(--text);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.ctox-drawer-close:hover {
-  background: var(--surface-2);
-  color: var(--text-strong);
-}
-
 .ctox-drawer-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -718,5 +584,5 @@
   margin-top: 4px;
   font-size: 11px;
   font-weight: 600;
-  color: #c45a1a;
+  color: var(--warning);
 }

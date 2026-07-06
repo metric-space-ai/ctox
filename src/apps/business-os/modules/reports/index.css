@@ -38,28 +38,11 @@
   --reports-feature: #8dc4f0;
 }
 
-.reports-module .ctox-pane-header {
-  min-width: 0;
-}
-
-.reports-module .reports-refresh-button {
-  width: 34px;
-  height: 34px;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-}
-
-.reports-module .reports-refresh-button svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-}
-
 .reports-module .reports-refresh-button[aria-busy="true"] svg {
   animation: reports-refresh-spin 0.9s linear infinite;
 }
 
+/* Module-specific tools layout: search on its own row, both filters below. */
 .reports-module .ctox-pane-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -71,53 +54,12 @@
   min-width: 0;
 }
 
-.reports-module .ctox-pane-filter,
-.reports-module .ctox-pane-sort {
-  appearance: none;
-  border: 1px solid var(--reports-line);
-  border-radius: 8px;
-  background:
-    linear-gradient(45deg, transparent 50%, currentColor 50%) right 14px center / 6px 6px no-repeat,
-    linear-gradient(135deg, currentColor 50%, transparent 50%) right 9px center / 6px 6px no-repeat,
-    color-mix(in srgb, var(--reports-surface-2) 86%, transparent);
-  color: var(--text);
-  font: inherit;
-  line-height: 1.2;
-  min-height: 34px;
-  padding: 0 28px 0 10px;
-  width: 100%;
-  min-width: 0;
-}
-
-.reports-module .ctox-pane-filter:focus-visible,
-.reports-module .ctox-pane-sort:focus-visible,
-.reports-module .ctox-pane-search:focus-visible,
-.reports-module .reports-refresh-button:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: 2px;
-}
-
-.reports-head,
-.reports-filters,
-.reports-detail-head,
 .reports-section,
 .reports-rollback {
   padding: 16px;
 }
 
-.reports-head,
-.reports-detail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--reports-line);
-}
-
-.reports-head span,
-.reports-detail-head span,
-.reports-section h3,
-.reports-fact dt {
+.reports-section h3 {
   color: var(--reports-muted);
   font-size: 11px;
   font-weight: 700;
@@ -125,21 +67,6 @@
   text-transform: uppercase;
 }
 
-.reports-head h2,
-.reports-detail-head h1 {
-  margin: 2px 0 0;
-  font-size: 18px;
-  line-height: 1.15;
-}
-
-.reports-filters {
-  display: grid;
-  gap: 8px;
-  border-bottom: 1px solid var(--reports-line);
-}
-
-.reports-filters input,
-.reports-filters select,
 .reports-rollback select {
   width: 100%;
 }
@@ -194,12 +121,10 @@
 .report-row span,
 .reports-empty,
 .reports-section p,
-.reports-fact dd,
 .reports-attachment-meta {
   color: var(--reports-muted);
 }
 
-.report-row-meta,
 .reports-badges {
   display: flex;
   flex-wrap: wrap;
@@ -207,26 +132,9 @@
   align-items: center;
 }
 
-.reports-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  border: 1px solid var(--reports-line);
-  border-radius: 8px;
-  padding: 0 8px;
-  background: color-mix(in srgb, var(--reports-surface-2) 78%, transparent);
-  color: var(--reports-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.reports-badge.is-bug {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
-}
-
-.reports-badge.is-feature {
+/* Module special: "feature" badge role on top of the shared .ctox-badge —
+   the shell has no matching semantic token (see --reports-feature above). */
+.reports-module .ctox-badge.is-feature {
   color: var(--reports-feature);
   background: color-mix(in srgb, var(--reports-feature) 10%, transparent);
   border-color: color-mix(in srgb, var(--reports-feature) 30%, transparent);
@@ -258,25 +166,6 @@
   margin: 0;
   max-width: 76ch;
   line-height: 1.45;
-}
-
-.reports-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.reports-fact {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.reports-fact dd {
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .reports-attachment {
@@ -312,35 +201,6 @@
   line-height: 1.4;
 }
 
-.reports-empty.is-diagnostic,
-.reports-detail-empty {
-  display: grid;
-  align-content: center;
-  gap: 8px;
-}
-
-.reports-empty.is-diagnostic strong,
-.reports-detail-empty strong {
-  color: var(--text);
-}
-
-.reports-empty.is-diagnostic span,
-.reports-detail-empty p {
-  margin: 0;
-  color: var(--reports-muted);
-  line-height: 1.45;
-}
-
-.reports-detail-empty {
-  min-height: 100%;
-  padding: 24px;
-  text-align: center;
-}
-
-.reports-detail-empty.is-diagnostic strong {
-  color: var(--warning);
-}
-
 .reports-sr-only {
   position: absolute;
   width: 1px;
@@ -367,10 +227,6 @@
 
   .reports-rail {
     border-right: 0;
-  }
-
-  .reports-facts {
-    grid-template-columns: 1fr;
   }
 
   .reports-module .ctox-pane-tools {

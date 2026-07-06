@@ -1,14 +1,16 @@
 <div class="calendar-app" data-calendar-root data-resize-frame>
   <!-- LEFT PANEL: Mini-Calendar, Calendars List & Booking Links -->
   <aside class="calendar-panel calendar-left-pane" id="calendar-left">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-t="calendar">Kalender</span>
           <h2 class="ctox-pane-title" data-t="myCalendars">Meine Kalender</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" id="addNewCalendarBtn" type="button" title="Kalender hinzufügen" aria-label="Kalender hinzufügen">+</button>
+          <button class="ctox-pane-icon" id="addNewCalendarBtn" type="button" title="Kalender hinzufügen" aria-label="Kalender hinzufügen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
         </div>
       </div>
     </header>
@@ -28,7 +30,9 @@
         <div class="calendar-sidebar-section">
           <div class="calendar-section-title-bar">
             <span class="calendar-section-title" data-t="bookingPages">Buchungsseiten</span>
-            <button class="os-btn" id="addBookingPageBtn" type="button" style="padding: 2px 8px; font-size: 11px;" aria-label="Buchungsseite hinzufügen">+ Seite</button>
+            <button class="ctox-pane-icon" id="addBookingPageBtn" type="button" title="Buchungsseite hinzufügen" aria-label="Buchungsseite hinzufügen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
           </div>
           <div class="booking-pages-list" id="bookingPagesListContainer">
             <!-- Dynamic Booking Links -->
@@ -43,7 +47,7 @@
 
   <!-- CENTER PANEL: EventCalendar View -->
   <main class="calendar-panel calendar-center-pane" id="calendar-center">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" id="calendarViewTitle">Heute</span>
@@ -51,11 +55,19 @@
           <span class="calendar-data-status" id="calendarDataStatus" aria-live="polite">Daten werden geladen</span>
         </div>
         <div class="ctox-pane-actions">
-          <button class="os-btn os-btn-primary" id="btnNewEvent" type="button" data-t="newEvent" style="height: 26px; font-size: 11px; padding: 0 10px;">Neuer Termin</button>
-          <div class="calendar-navigation" style="display: flex; align-items: center; gap: 4px; margin-left: 6px;">
-            <button class="ctox-pane-icon" id="prevPeriodBtn" type="button" title="Zurück" aria-label="Vorheriger Zeitraum">&lt;</button>
-            <button class="os-btn" id="todayPeriodBtn" type="button" data-t="today" style="height: 26px; font-size: 11px; padding: 0 10px;">Heute</button>
-            <button class="ctox-pane-icon" id="nextPeriodBtn" type="button" title="Vorwärts" aria-label="Nächster Zeitraum">&gt;</button>
+          <button class="ctox-pane-icon" id="btnNewEvent" type="button" data-t-title="newEvent" data-t-aria="newEvent" title="Neuer Termin" aria-label="Neuer Termin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <div class="calendar-navigation">
+            <button class="ctox-pane-icon" id="prevPeriodBtn" type="button" title="Zurück" aria-label="Vorheriger Zeitraum">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+            </button>
+            <button class="ctox-pane-icon" id="todayPeriodBtn" type="button" data-t-title="today" data-t-aria="today" title="Heute" aria-label="Heute">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14v14H5zM5 10h14M9 4v4M15 4v4"/></svg>
+            </button>
+            <button class="ctox-pane-icon" id="nextPeriodBtn" type="button" title="Vorwärts" aria-label="Nächster Zeitraum">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -72,7 +84,7 @@
 
   <!-- RIGHT PANEL: Bookings & Active Holds Auditing -->
   <aside class="calendar-panel calendar-right-pane" id="calendar-right">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-t="bookingHolds">Reservierungen</span>
@@ -119,7 +131,9 @@
         <span class="ctox-drawer-kicker" id="drawerKicker">Kalender</span>
         <h3 class="ctox-drawer-title" id="drawerTitle">Details</h3>
       </div>
-      <button type="button" class="ctox-drawer-close" id="closeDrawerBtn" aria-label="Schließen">&times;</button>
+      <button type="button" class="ctox-pane-icon" id="closeDrawerBtn" title="Schließen" aria-label="Schließen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </header>
     <div class="ctox-drawer-body os-scrollbar" id="drawerContent">
       <!-- Forms loaded dynamically -->

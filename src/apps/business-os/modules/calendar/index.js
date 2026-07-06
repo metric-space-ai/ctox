@@ -652,7 +652,7 @@ function renderCalendarsSidebar() {
           <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
         </div>
         <div class="calendar-item-actions">
-          <button type="button" class="icon-button calendar-row-action" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">Bearbeiten</button>
+          <button type="button" class="ctox-icon-button calendar-row-action" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" title="Bearbeiten" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">${actionIcon('edit')}</button>
         </div>
       </div>
     `;
@@ -704,8 +704,8 @@ function renderBookingPagesSidebar() {
           </div>
         </div>
         <div class="booking-page-item-actions">
-          <a class="os-btn calendar-row-action" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen" style="padding: 4px 6px; font-size:11px;">Öffnen</a>
-          <button type="button" class="icon-button calendar-row-action" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">Bearbeiten</button>
+          <a class="ctox-icon-button calendar-row-action" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen">${actionIcon('open')}</a>
+          <button type="button" class="ctox-icon-button calendar-row-action" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" title="Bearbeiten" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">${actionIcon('edit')}</button>
         </div>
       </div>
     `;
@@ -747,7 +747,7 @@ function renderAuditingLists() {
           <span class="calendar-context-kicker">Ausgewählte Buchungsseite</span>
           <strong>${escapeHtml(selectedPage.title)}</strong>
           <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
-          <button type="button" class="os-btn" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
+          <button type="button" class="ctox-button" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
         </div>
       `;
       els.bookingContext.querySelector('[data-action="clear-booking-selection"]')?.addEventListener('click', () => {
@@ -776,10 +776,10 @@ function renderAuditingLists() {
           <div class="auditing-card">
             <div class="auditing-card-header">
               <span class="auditing-card-title">${escapeHtml(bp?.title || 'Buchung hold')}</span>
-              <span class="auditing-badge badge-hold">Hold</span>
+              <span class="ctox-badge is-warning">Hold</span>
             </div>
             <div class="auditing-card-detail">Zeit: ${startStr}</div>
-            <div class="auditing-card-detail" style="font-size:10px; color: #f59e0b;">Läuft ab um ${expiresStr}</div>
+            <div class="auditing-card-detail is-expiry">Läuft ab um ${expiresStr}</div>
           </div>
         `;
       }).join('');
@@ -797,12 +797,12 @@ function renderAuditingLists() {
       els.bookingsList.innerHTML = sortedBookings.map(bk => {
         const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
         const startStr = new Date(bk.slot_start_ms).toLocaleString();
-        const statusBadge = bk.status === 'confirmed' ? 'confirmed' : 'cancelled';
+        const statusBadge = bk.status === 'confirmed' ? 'is-success' : 'is-danger';
         return `
           <div class="auditing-card" data-action="view-booking" data-id="${bk.id}" style="cursor:pointer;">
             <div class="auditing-card-header">
               <span class="auditing-card-title">${escapeHtml(bk.attendee_name)}</span>
-              <span class="auditing-badge badge-${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
+              <span class="ctox-badge ${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
             </div>
             <div class="auditing-card-detail">Event: ${escapeHtml(bp?.title || 'Beratung')}</div>
             <div class="auditing-card-detail">Zeit: ${startStr}</div>
@@ -969,40 +969,40 @@ function openEventForm(eventId = null, defaults = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Titel</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" aria-describedby="event-title-error" />
+          <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" aria-describedby="event-title-error" />
           <div class="calendar-field-error" id="event-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Kalender</label>
-            <select class="os-select" name="calendar_id" id="drawerEventCalendarSelect" required aria-describedby="event-calendar-error">
+            <select class="ctox-select" name="calendar_id" id="drawerEventCalendarSelect" required aria-describedby="event-calendar-error">
               ${calsOptions || '<option value="" disabled selected>Keine Kalender verfügbar</option>'}
             </select>
             <div class="calendar-field-error" id="event-calendar-error" data-error-for="calendar_id"></div>
           </div>
           <div class="calendar-form-group">
             <label>Ort / Meeting URL</label>
-            <input type="text" class="os-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
+            <input type="text" class="ctox-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Startzeit</label>
-            <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required aria-describedby="event-start-error" />
+            <input type="datetime-local" class="ctox-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required aria-describedby="event-start-error" />
             <div class="calendar-field-error" id="event-start-error" data-error-for="start_time"></div>
           </div>
           <div class="calendar-form-group">
             <label>Endzeit</label>
-            <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required aria-describedby="event-end-error" />
+            <input type="datetime-local" class="ctox-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required aria-describedby="event-end-error" />
             <div class="calendar-field-error" id="event-end-error" data-error-for="end_time"></div>
           </div>
         </div>
 
         <div class="calendar-form-group">
           <label>Wiederholung</label>
-          <select class="os-select" name="recurrence_rule">
+          <select class="ctox-select" name="recurrence_rule">
             <option value="" ${!dbEvent?.recurrence_rule ? 'selected' : ''}>Keine</option>
             <option value="FREQ=DAILY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('DAILY') ? 'selected' : ''}>Täglich</option>
             <option value="FREQ=WEEKLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('WEEKLY') ? 'selected' : ''}>Wöchentlich</option>
@@ -1012,17 +1012,17 @@ function openEventForm(eventId = null, defaults = null) {
 
         <div class="calendar-form-group">
           <label>Beschreibung</label>
-          <textarea class="os-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
+          <textarea class="ctox-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
         </div>
       </div>
 
       <div class="calendar-drawer-actions">
         <div>
-          ${dbEvent ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteEvent">Termin löschen</button>' : ''}
+          ${dbEvent ? '<button type="button" class="ctox-button is-danger" id="btnDeleteEvent">Termin löschen</button>' : ''}
         </div>
         <div class="calendar-drawer-actions-right">
-          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
+          <button type="button" class="ctox-button" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="ctox-button is-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -1141,19 +1141,19 @@ function openBookingPageForm(bpId = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Titel des Buchungs-Links</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" aria-describedby="booking-title-error" />
+          <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" aria-describedby="booking-title-error" />
           <div class="calendar-field-error" id="booking-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Link-Kürzel (Slug)</label>
-            <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" aria-describedby="booking-slug-error" />
+            <input type="text" class="ctox-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" aria-describedby="booking-slug-error" />
             <div class="calendar-field-error" id="booking-slug-error" data-error-for="slug"></div>
           </div>
           <div class="calendar-form-group">
             <label>Dauer (Minuten)</label>
-            <input type="number" class="os-input" name="duration_minutes" min="5" max="480" value="${dbBp?.duration_minutes || 30}" required aria-describedby="booking-duration-error" />
+            <input type="number" class="ctox-input" name="duration_minutes" min="5" max="480" value="${dbBp?.duration_minutes || 30}" required aria-describedby="booking-duration-error" />
             <div class="calendar-field-error" id="booking-duration-error" data-error-for="duration_minutes"></div>
           </div>
         </div>
@@ -1161,29 +1161,29 @@ function openBookingPageForm(bpId = null) {
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Puffer Davor (Minuten)</label>
-            <input type="number" class="os-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
+            <input type="number" class="ctox-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
           </div>
           <div class="calendar-form-group">
             <label>Puffer Danach (Minuten)</label>
-            <input type="number" class="os-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
+            <input type="number" class="ctox-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Mindestvorlauf (Minuten)</label>
-            <input type="number" class="os-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
+            <input type="number" class="ctox-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
           </div>
           <div class="calendar-form-group">
             <label>Max. Tage im Voraus</label>
-            <input type="number" class="os-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
+            <input type="number" class="ctox-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Standort-Typ</label>
-            <select class="os-select" name="location_mode">
+            <select class="ctox-select" name="location_mode">
               <option value="link" ${dbBp?.location_mode === 'link' ? 'selected' : ''}>Online-Meeting Link</option>
               <option value="phone" ${dbBp?.location_mode === 'phone' ? 'selected' : ''}>Telefonnummer</option>
               <option value="physical" ${dbBp?.location_mode === 'physical' ? 'selected' : ''}>Physischer Ort</option>
@@ -1191,7 +1191,7 @@ function openBookingPageForm(bpId = null) {
           </div>
           <div class="calendar-form-group">
             <label>Status</label>
-            <select class="os-select" name="status">
+            <select class="ctox-select" name="status">
               <option value="active" ${dbBp?.status === 'active' ? 'selected' : ''}>Aktiv</option>
               <option value="inactive" ${dbBp?.status === 'inactive' ? 'selected' : ''}>Inaktiv</option>
             </select>
@@ -1200,17 +1200,17 @@ function openBookingPageForm(bpId = null) {
 
         <div class="calendar-form-group">
           <label>Beschreibung</label>
-          <textarea class="os-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
+          <textarea class="ctox-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
         </div>
       </div>
 
       <div class="calendar-drawer-actions">
         <div>
-          ${dbBp ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteBp">Löschen</button>' : ''}
+          ${dbBp ? '<button type="button" class="ctox-button is-danger" id="btnDeleteBp">Löschen</button>' : ''}
         </div>
         <div class="calendar-drawer-actions-right">
-          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
+          <button type="button" class="ctox-button" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="ctox-button is-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -1304,23 +1304,23 @@ function openCalendarForm(calId = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Kalendertitel</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" aria-describedby="calendar-title-error" />
+          <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" aria-describedby="calendar-title-error" />
           <div class="calendar-field-error" id="calendar-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-group">
           <label>Farbe</label>
-          <input type="color" class="os-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
+          <input type="color" class="ctox-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
         </div>
       </div>
 
       <div class="calendar-drawer-actions">
         <div>
-          ${dbCal ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteCal">Kalender löschen</button>' : ''}
+          ${dbCal ? '<button type="button" class="ctox-button is-danger" id="btnDeleteCal">Kalender löschen</button>' : ''}
         </div>
         <div class="calendar-drawer-actions-right">
-          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
+          <button type="button" class="ctox-button" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="ctox-button is-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -1401,42 +1401,30 @@ function openBookingDetail(bkId) {
   const endStr = new Date(bk.slot_end_ms).toLocaleTimeString();
 
   const html = `
-    <div class="calendar-drawer-form-inner" style="gap: 12px;">
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Kunde</strong>
-        <div style="font-size:16px; font-weight:700; color: var(--text-strong);">${escapeHtml(bk.attendee_name)}</div>
-      </div>
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">E-Mail</strong>
-        <div>${escapeHtml(bk.attendee_email)}</div>
-      </div>
-      ${bk.attendee_phone ? `
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Telefonnummer</strong>
-        <div>${escapeHtml(bk.attendee_phone)}</div>
-      </div>` : ''}
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Terminart</strong>
-        <div>${escapeHtml(bp?.title || 'Beratung')}</div>
-      </div>
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Zeitfenster</strong>
-        <div>${startStr} - ${endStr}</div>
-      </div>
-      <div>
-        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Status</strong>
-        <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
-          <span class="auditing-badge badge-${bk.status === 'confirmed' ? 'confirmed' : 'cancelled'}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
-        </div>
-      </div>
+    <div class="calendar-drawer-form-inner">
+      <dl class="ctox-fields ctox-fields--stacked">
+        <dt>Kunde</dt>
+        <dd class="calendar-booking-detail-name">${escapeHtml(bk.attendee_name)}</dd>
+        <dt>E-Mail</dt>
+        <dd>${escapeHtml(bk.attendee_email)}</dd>
+        ${bk.attendee_phone ? `
+        <dt>Telefonnummer</dt>
+        <dd>${escapeHtml(bk.attendee_phone)}</dd>` : ''}
+        <dt>Terminart</dt>
+        <dd>${escapeHtml(bp?.title || 'Beratung')}</dd>
+        <dt>Zeitfenster</dt>
+        <dd>${startStr} - ${endStr}</dd>
+        <dt>Status</dt>
+        <dd><span class="ctox-badge ${bk.status === 'confirmed' ? 'is-success' : 'is-danger'}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span></dd>
+      </dl>
     </div>
 
     <div class="calendar-drawer-actions">
       <div>
-        ${bk.status === 'confirmed' ? '<button type="button" class="os-btn os-btn-danger" id="btnCancelBooking">Termin Stornieren</button>' : ''}
+        ${bk.status === 'confirmed' ? '<button type="button" class="ctox-button is-danger" id="btnCancelBooking">Termin Stornieren</button>' : ''}
       </div>
       <div class="calendar-drawer-actions-right">
-        <button type="button" class="os-btn os-btn-primary" id="btnCancelDrawer">Schließen</button>
+        <button type="button" class="ctox-button is-primary" id="btnCancelDrawer">Schließen</button>
       </div>
     </div>
   `;
@@ -1474,6 +1462,10 @@ function openBookingDetail(bkId) {
 // ----------------------------------------------------
 // UTILITIES
 // ----------------------------------------------------
+
+function actionIcon(name) {
+  return state.ctx?.getActionIcon?.(name) || '';
+}
 
 function formToObject(form) {
   return Object.fromEntries(new FormData(form).entries());

@@ -142,7 +142,7 @@ function applyStaticLabels(host, t) {
   const refreshBtn = root.querySelector('[data-refresh-reports]');
   if (refreshBtn) {
     const label = t('refresh', 'Aktualisieren');
-    refreshBtn.innerHTML = `${refreshIconSvg()}<span class="reports-sr-only">${escapeHtml(label)}</span>`;
+    refreshBtn.innerHTML = `${actionIcon('refresh')}<span class="reports-sr-only">${escapeHtml(label)}</span>`;
     refreshBtn.title = label;
     refreshBtn.setAttribute('aria-label', label);
   }
@@ -358,15 +358,15 @@ function renderListEmptyState(allItems) {
 
 function renderDetailEmptyState({ normalized, filtered }) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><p>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</p></div>`;
+    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><span>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</span></div>`;
   }
   if (!normalized.length) {
-    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Bugs oder Features'))}</strong><p>${escapeHtml(reportStoreEmptyMessage(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wünsche vorliegen, erscheinen Liste und Details hier.')))}</p></div>`;
+    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Bugs oder Features'))}</strong><span>${escapeHtml(reportStoreEmptyMessage(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wünsche vorliegen, erscheinen Liste und Details hier.')))}</span></div>`;
   }
   if (!filtered.length) {
-    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><p>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter ändern, um wieder Details zu sehen.'))}</p></div>`;
+    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><span>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter ändern, um wieder Details zu sehen.'))}</span></div>`;
   }
-  return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Eintrag auswählen'))}</strong><p>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</p></div>`;
+  return `<div class="ctox-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Eintrag auswählen'))}</strong><span>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</span></div>`;
 }
 
 function syncSelectionToVisibleItems() {
@@ -399,9 +399,9 @@ function renderList() {
   list.innerHTML = items.map((report) => `
     <button type="button" class="report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}">
       <div class="reports-badges">
-        <span class="reports-badge ${report.kind === 'bug' ? 'is-bug' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
-        <span class="reports-badge">${escapeHtml(displayStatus(report.status))}</span>
-        <span class="reports-badge">${escapeHtml(report.severity || 'medium')}</span>
+        <span class="ctox-badge ${report.kind === 'bug' ? 'is-danger' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
+        <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
+        <span class="ctox-badge">${escapeHtml(report.severity || 'medium')}</span>
       </div>
       <strong>${escapeHtml(report.title)}</strong>
       <small>${escapeHtml(report.moduleId)} · ${escapeHtml(formatDate(report.updatedAt || report.createdAt))}</small>
@@ -434,24 +434,28 @@ function renderDetail() {
   const attachment = report.attachment;
   const hasCtoxTask = Boolean(report.commandId || report.taskId);
   detail.innerHTML = `
-    <header class="reports-detail-head">
-      <div>
-        <span>${escapeHtml(report.kindLabel)} · ${escapeHtml(displayStatus(report.status))}</span>
-        <h1>${escapeHtml(report.title)}</h1>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(report.kindLabel)} · ${escapeHtml(displayStatus(report.status))}</span>
+          <h1 class="ctox-pane-title">${escapeHtml(report.title)}</h1>
+        </div>
+        <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-focus-task title="${escapeAttr(state.t('showCtoxTask', 'CTOX Task zeigen'))}" aria-label="${escapeAttr(state.t('showCtoxTask', 'CTOX Task zeigen'))}" ${hasCtoxTask ? '' : 'disabled'}>${actionIcon('open')}</button>
+        </div>
       </div>
-      <button type="button" class="os-btn" data-focus-task ${hasCtoxTask ? '' : 'disabled'}>${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}</button>
     </header>
     <div class="reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
       <section class="reports-section">
         <h3>${escapeHtml(state.t('report', 'Eintrag'))}</h3>
-        <div class="reports-facts">
+        <dl class="ctox-fields">
           ${fact(state.t('module', 'Modul'), report.moduleId)}
           ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
           ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
           ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
           ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
           ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
-        </div>
+        </dl>
       </section>
       <section class="reports-section">
         <h3>${escapeHtml(state.t('description', 'Beschreibung'))}</h3>
@@ -479,10 +483,10 @@ function renderDetail() {
         <div class="reports-rollback">
           <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
           <div class="reports-rollback-actions">
-            <select class="os-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
+            <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
               ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
             </select>
-            <button type="button" class="os-btn os-btn-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
+            <button type="button" class="ctox-button is-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
           </div>
           <small data-rollback-status></small>
         </div>
@@ -803,7 +807,19 @@ async function waitForCommandProjection(commandId, timeoutMs = 45000) {
 }
 
 function fact(label, value) {
-  return `<dl class="reports-fact"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd></dl>`;
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd>`;
+}
+
+function actionIcon(name) {
+  return state.ctx?.getActionIcon?.(name) || '';
+}
+
+function statusBadgeClass(status) {
+  const normalized = normalizeStatus(status);
+  if (normalized === 'completed') return ' is-success';
+  if (normalized === 'blocked') return ' is-danger';
+  if (normalized === 'running') return ' is-warning';
+  return '';
 }
 
 function changeFallback(report) {
@@ -919,17 +935,6 @@ function reportStoreEmptyMessage(prefix = '') {
   return `${base} ${state.t('emptyStoreCounts', 'Einträge')}: ${count}.`;
 }
 
-function refreshIconSvg() {
-  return `
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-      <path d="M20 12a8 8 0 0 1-13.7 5.7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-      <path d="M4 12A8 8 0 0 1 17.7 6.3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-      <path d="M7 18H4v-3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-      <path d="M17 6h3v3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-    </svg>
-  `;
-}
-
 function initReportsContextMenu(state) {
   state.contextMenu?.remove();
   const menu = document.createElement('div');
@@ -1020,8 +1025,10 @@ export function resolveReportsContextRecord({
 
 function reportsColumnFromElement(element, clickedRow) {
   if (!element) return 'module';
+  // The detail pane header now uses the shared .ctox-pane-header markup too,
+  // so the detail check must run before the header/rail heuristics.
+  if (!clickedRow && element.closest?.('[data-reports-detail]')) return 'detail';
   if (clickedRow || element.closest?.('[data-reports-list], .reports-rail, .ctox-pane-tools, .ctox-pane-header')) return 'list';
-  if (element.closest?.('[data-reports-detail]')) return 'detail';
   return 'module';
 }
 
