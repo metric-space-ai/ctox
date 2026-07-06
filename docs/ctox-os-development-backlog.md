@@ -53,12 +53,6 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C3 (M): E2E-/Soak-Mode für Presence +
-  Merge.** browser_rust_smoke-Mode mit zwei Browser-Peers: konkurrierende
-  Feld-Edits konvergieren ohne Verlust; Presence-Badge erscheint/
-  verschwindet (Peer-Close, TTL). Vorarbeit erledigt: Playwright unter
-  /tmp/ctox-pw-smoke (Harness-Kandidatenpfad), System-Chrome erkannt;
-  Basis-Modes seit OS-X3 (dcda96bc) wieder grün — ENTBLOCKT.
 - **OS-X3b (M): workspace-artifacts-Soak-Familie reparieren.** Rest aus
   OS-X3: die Multi-Datei-Modes (`waitForWorkspaceArtifacts`) erwarten
   weiterhin background-gepullte Chunk-Docs und sind unter dem App-DB-Pfad
@@ -210,3 +204,9 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
   rxdb.file.fetch, notGenerationId-Gate, expliziter Pull nach externem
   CLI-Write); rust-to-browser + workspace-update lokal verifiziert grün:
   `dcda96bc`. Rest: OS-X3b (artifacts-Familie), OS-X4 (CLI-Wake).
+- OS-C3 Zwei-Browser-E2E-Mode `presence-merge-two-browsers` grün mit 5
+  Evidence-Flags (`3da3cdfe`); fand vor dem Landen zwei echte
+  Produktlücken: fehlendes Presence-Join-Snapshot für spät beitretende
+  Peers (`ace2d2bc`) und TTL-Sweep-Liveness (Generation-Supersession →
+  Sweep feuerte nie bei periodischen Refreshes; jetzt Armed+Dirty-Flags,
+  `cd25b8e1`).
