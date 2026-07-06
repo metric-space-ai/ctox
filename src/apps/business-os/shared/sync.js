@@ -1809,11 +1809,39 @@ function extractReplicationErrorDetails(error) {
   return codeOnlyFallback || { direction: '', code: '', batchSize: null, rowCount: null };
 }
 
+// OS-G1: the load-bearing classification ORDER as a pure function — control
+// plane (fatal) -> schema (fatal) -> replication IO -> transient shutdown ->
+// peer lifecycle -> signaling blip -> generic. The live error$ subscriber in
+// startWebRtcReplication implements the SAME chain (with state-dependent
+// side effects); the shared corpus fixture
+// src/core/rxdb/tests/fixtures/replication-error-classification.json pins
+// both the order and each classifier's verdict, so a reorder or a drifted
+// error shape fails error-classification-corpus-smoke instead of shipping as
+// "network flakiness". Returns { kind, classified } where `classified` is
+// the classifier's normalized error (null for blip/generic).
+export function classifyReplicationErrorKind(collection, error) {
+  const controlPlane = classifySignalingControlPlaneError(error);
+  if (controlPlane) return { kind: 'control-plane', classified: controlPlane };
+  const schema = classifySchemaProtocolError(collection, error);
+  if (schema) return { kind: 'schema-protocol', classified: schema };
+  const io = classifyReplicationIoError(collection, error);
+  if (io) return { kind: 'replication-io', classified: io };
+  const shutdown = classifyTransientShutdownEvent(error);
+  if (shutdown) return { kind: 'transient-shutdown', classified: shutdown };
+  const lifecycle = classifyPeerLifecycleEvent(error);
+  if (lifecycle) return { kind: 'peer-lifecycle', classified: lifecycle };
+  if (isTransientSignalingSocketError(error)) return { kind: 'signaling-blip', classified: null };
+  return { kind: 'generic', classified: null };
+}
+
 export const __ctoxSyncTestHooks = {
   classifySignalingControlPlaneError,
   classifyPeerLifecycleEvent,
   classifySchemaProtocolError,
   classifyReplicationIoError,
+  classifyTransientShutdownEvent,
+  classifyReplicationErrorKind,
+  isTransientSignalingSocketError,
   extractReplicationErrorDetails,
   initialReplicationProgressSignature,
   isDemandOnlyPullCollection,

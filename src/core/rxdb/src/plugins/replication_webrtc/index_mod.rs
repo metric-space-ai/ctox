@@ -1959,6 +1959,53 @@ fn rx_error_to_value(error: &RxError) -> Value {
 mod tests {
     use super::*;
 
+    /// Backlog OS-G1: the error-classification corpus
+    /// (tests/fixtures/replication-error-classification.json) is consumed by
+    /// the browser suite to pin the classification cascade. This side pins
+    /// the PRODUCER: every `ctox_rxdb_*` code the corpus expects must be one
+    /// of the generated protocol-contract error codes this crate emits — a
+    /// one-sided rename (fixture regenerated, corpus forgotten, or vice
+    /// versa) fails here instead of shipping as unclassifiable errors.
+    #[test]
+    fn error_classification_corpus_codes_match_protocol_contract() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/replication-error-classification.json"
+        ))
+        .expect("corpus fixture must parse");
+        let contract_codes = [
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_MISSING,
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_MISMATCH,
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING,
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
+            protocol_contract_generated::CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+        ];
+        let cases = corpus
+            .get("cases")
+            .and_then(serde_json::Value::as_array)
+            .expect("corpus must carry cases");
+        assert!(cases.len() >= 10, "corpus must not silently shrink");
+        let mut checked = 0usize;
+        for case in cases {
+            let Some(code) = case.get("expectedCode").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if !code.starts_with("ctox_rxdb_") {
+                continue;
+            }
+            assert!(
+                contract_codes.contains(&code),
+                "corpus expects `{code}`, which is not a generated protocol \
+                 contract error code — regenerate the contract or fix the corpus"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 1,
+            "corpus must cover at least one generated ctox_rxdb_* code"
+        );
+    }
+
     struct StaticReplicationHandler {
         pull_error: Option<RxError>,
         push_error: Option<RxError>,

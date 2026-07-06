@@ -676,6 +676,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `demand-loader-smoke` | Window cache hit/miss, single remote fetch, dedup. |
 | `demand-loading-transport-smoke` | `replicateWebRTC` builds the demand transport; request/chunk correlation. |
 | `end-to-end-loop-smoke` | Full V1.5 demand-loading loop. |
+| `error-classification-corpus-smoke` | Shared corpus for the load-bearing error$ cascade order (control-plane → schema → IO → shutdown → lifecycle → blip → generic), incl. order-pin cases; the rxdb-rs twin keeps `ctox_rxdb_*` codes aligned with the generated contract. |
 | `eviction-scheduler-smoke` | Sidecar eviction over budget. |
 | `feature-flag-handshake-smoke` | Query-fetch capability lights only with capability + flag. |
 | `field-merge-conflict-smoke` | Opt-in field-merge strategy (§8.2): three-way merge semantics, merge-base tracking, merged docs stored as local pushable writes, and untouched LWW pass-through for default collections. |

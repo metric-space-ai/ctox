@@ -1,0 +1,103 @@
+{
+  "description": "Shared corpus for the browser error-classification cascade (sync.js classifyReplicationErrorKind). Order is load-bearing: control-plane -> schema-protocol -> replication-io -> transient-shutdown -> peer-lifecycle -> signaling-blip -> generic. Consumed by error-classification-corpus-smoke.mjs (JS classifiers) and the rxdb-rs contract test (ctox_rxdb_* codes must exist in the generated protocol contract).",
+  "cases": [
+    {
+      "name": "control-plane rejection by error name",
+      "collection": "business_commands",
+      "error": { "name": "CtoxSignalingControlPlaneError", "code": "control_plane_token_expired", "message": "signaling token expired" },
+      "expectedKind": "control-plane",
+      "expectedCode": "control_plane_token_expired"
+    },
+    {
+      "name": "control-plane rejection as raw ctoxError frame",
+      "collection": "business_commands",
+      "error": { "type": "ctoxError", "scope": "control-plane", "reason": "instance suspended" },
+      "expectedKind": "control-plane",
+      "expectedCode": "control_plane_rejected"
+    },
+    {
+      "name": "ORDER PIN: control-plane wins over schema markers in the same payload",
+      "collection": "business_commands",
+      "error": { "name": "CtoxSignalingControlPlaneError", "code": "control_plane_rejected", "message": "rejected while validating schemaHash" },
+      "expectedKind": "control-plane",
+      "expectedCode": "control_plane_rejected"
+    },
+    {
+      "name": "schema hash mismatch via generated protocol code",
+      "collection": "customer_accounts",
+      "error": { "name": "CtoxRxdbProtocolError", "code": "ctox_rxdb_schema_hash_mismatch", "message": "collection schema hash mismatch" },
+      "expectedKind": "schema-protocol",
+      "expectedCode": "ctox_rxdb_schema_hash_mismatch"
+    },
+    {
+      "name": "schema protocol mismatch via RC_WEBRTC_PROTOCOL marker",
+      "collection": "customer_accounts",
+      "error": { "code": "RC_WEBRTC_PROTOCOL", "message": "remote protocol mismatch: expected ctox-rxdb-protocol-v1" },
+      "expectedKind": "schema-protocol",
+      "expectedCode": "ctox_schema_protocol_mismatch"
+    },
+    {
+      "name": "replication pull failure",
+      "collection": "business_notes",
+      "error": { "code": "RC_PULL", "message": "pull failed", "parameters": { "direction": "pull", "batchSize": 20 } },
+      "expectedKind": "replication-io",
+      "expectedCode": "ctox_replication_pull_failed"
+    },
+    {
+      "name": "replication push contract violation",
+      "collection": "business_notes",
+      "error": { "code": "RC_PUSH_NO_AR", "message": "push returned no array" },
+      "expectedKind": "replication-io",
+      "expectedCode": "ctox_replication_push_contract_invalid"
+    },
+    {
+      "name": "transient shutdown: local database closing during browser restart",
+      "collection": "desktop_files",
+      "error": { "name": "InvalidStateError", "message": "Failed to execute transaction: The database connection is closing." },
+      "expectedKind": "transient-shutdown",
+      "expectedCode": "local_database_closing"
+    },
+    {
+      "name": "transient shutdown: peer channel not open during replacement",
+      "collection": "desktop_files",
+      "error": { "message": "WebRTC peer peer-abc123 is not open" },
+      "expectedKind": "transient-shutdown",
+      "expectedCode": "peer_channel_not_open"
+    },
+    {
+      "name": "peer lifecycle: connection failure",
+      "collection": "business_commands",
+      "error": { "message": "ERR_CONNECTION_FAILURE: dtls transport closed" },
+      "expectedKind": "peer-lifecycle",
+      "expectedCode": "peer_connection_lost"
+    },
+    {
+      "name": "peer lifecycle: data channel closed during peer replacement",
+      "collection": "business_commands",
+      "error": { "code": "ctox_data_channel_error", "message": "data channel error" },
+      "expectedKind": "peer-lifecycle",
+      "expectedCode": "peer_data_channel_closed"
+    },
+    {
+      "name": "ORDER PIN: lifecycle match wins over the signaling-blip code",
+      "collection": "business_commands",
+      "error": { "code": "ctox_signaling_socket_error", "message": "socket dropped after ERR_CONNECTION_FAILURE" },
+      "expectedKind": "peer-lifecycle",
+      "expectedCode": "peer_connection_lost"
+    },
+    {
+      "name": "signaling socket blip stays a reconnect hint, never fatal",
+      "collection": "business_commands",
+      "error": { "code": "ctox_signaling_socket_error", "message": "signaling socket closed" },
+      "expectedKind": "signaling-blip",
+      "expectedCode": null
+    },
+    {
+      "name": "unknown failure falls through to generic",
+      "collection": "business_commands",
+      "error": { "message": "some entirely unexpected failure" },
+      "expectedKind": "generic",
+      "expectedCode": null
+    }
+  ]
+}
