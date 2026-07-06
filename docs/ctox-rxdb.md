@@ -603,8 +603,13 @@ replication model).
   `storage-indexeddb.mjs::resolveIncomingWrite`. Pinned by
   `field-merge-conflict-smoke`. First consumers: the customers module's
   record collections (`modules/customers/schema.js`).
-- Runtime-installed modules currently cannot declare the strategy through
-  `collections.schema.json`; extending that manifest is an open follow-up.
+- Runtime-installed modules declare the strategy in their `schema.js` exactly
+  like static modules (the browser registers installed-module collections from
+  `schema.js`). The native `collections.schema.json` parser additionally
+  tolerates the same wrapper form per collection and unwraps it before
+  parsing/hashing (`runtime_installed_module_collection_schemas`,
+  rxdb_peer.rs), so generated apps may carry the declaration in both files
+  without drifting the schema hash.
 
 ## 9. Build & release
 

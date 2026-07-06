@@ -11670,7 +11670,21 @@ fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String
             if !declared.contains(name) || !is_runtime_module_collection_name(name) {
                 return None;
             }
-            match rx_schema_from_runtime_module_schema(name, schema.clone()) {
+            // A collection entry may be the schema object itself, or a wrapper
+            // `{ "schema": {...}, "conflictStrategy": "field-merge" }` matching
+            // the schema.js sibling convention (docs/ctox-rxdb.md §8.2). The
+            // native peer only needs the schema — conflict strategies are
+            // resolved browser-side — so unwrap BEFORE parsing/hashing, which
+            // keeps the native schema hash identical to the browser's hash of
+            // the unwrapped schema.js schema. Only unwrap when the entry is
+            // unambiguously a wrapper (has `schema`, lacks `primaryKey`).
+            let schema_value = match schema.get("schema") {
+                Some(inner) if inner.is_object() && schema.get("primaryKey").is_none() => {
+                    inner.clone()
+                }
+                _ => schema.clone(),
+            };
+            match rx_schema_from_runtime_module_schema(name, schema_value) {
                 Ok(schema) => Some((name.clone(), schema)),
                 Err(err) => {
                     eprintln!(
@@ -12755,6 +12769,64 @@ mod tests {
         assert_eq!(schema.version, 0);
         assert_eq!(schema.primary_key.primary_field(), "id");
         assert_eq!(schema.schema_type, "object");
+        Ok(())
+    }
+
+    // Backlog OS-C1: a runtime-installed module may declare per-collection
+    // options next to the schema (`{ "schema": {...}, "conflictStrategy":
+    // "field-merge" }`) — the same sibling convention as schema.js. The
+    // native peer must register the UNWRAPPED schema (it never consumes the
+    // strategy), so the advertised schema hash matches the browser's hash of
+    // the schema.js schema and the collection is not quiesced.
+    #[test]
+    fn runtime_installed_module_schema_accepts_conflict_strategy_wrapper() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let module_dir = temp
+            .path()
+            .join("runtime/business-os/installed-modules/subscriptions");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "subscriptions",
+                "entry": "installed-modules/subscriptions/index.html",
+                "install_scope": "installed",
+                "collections": ["subscriptions_records"]
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "subscriptions_records": {
+                        "conflictStrategy": "field-merge",
+                        "schema": {
+                            "primaryKey": "id",
+                            "properties": {
+                                "id": { "type": "string", "maxLength": 120 },
+                                "title": { "type": "string" }
+                            },
+                            "required": ["id", "title"]
+                        }
+                    }
+                }
+            }))?,
+        )?;
+
+        let creators = collection_creators_for_root(temp.path());
+        let schema = &creators
+            .get("subscriptions_records")
+            .context("wrapper-form collection must still register")?
+            .schema;
+        assert_eq!(schema.primary_key.primary_field(), "id");
+        assert_eq!(schema.schema_type, "object");
+        // The wrapper must be invisible to the parsed schema: no stray
+        // `schema`/`conflictStrategy` members survive into the RxJsonSchema
+        // (they would drift the native schema hash away from the browser's).
+        assert!(schema.properties.contains_key("title"));
+        assert!(!schema.properties.contains_key("schema"));
+        assert!(!schema.properties.contains_key("conflictStrategy"));
         Ok(())
     }
 
