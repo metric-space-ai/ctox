@@ -274,6 +274,7 @@ function createCodingAgentSmokeConfig(mode) {
 const supportedSmokeModes = [
   'browser-to-rust',
   'rust-to-browser',
+  'presence-merge-two-browsers',
   'workspace-rust-to-browser',
   'workspace-agent-artifacts-rust-to-browser',
   'workspace-agent-artifacts-stress-rust-to-browser',
@@ -343,6 +344,7 @@ if ([
   'business-os-roles-permissions-ui',
   'business-os-dynamic-apps-ui',
   'business-os-threads-rightclick-ui',
+  'presence-merge-two-browsers',
   ...businessOsProductionSmokeModes,
 ].includes(smokeMode) && !useAppDb) {
   throw new Error(`SMOKE_MODE=${smokeMode} requires an app shell SMOKE_PAGE_PATH such as /index.html or /business-os#ctox`);
@@ -2339,6 +2341,178 @@ function syncRustSeedFile(seed) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
   throw new Error(`ctox ${args.join(' ')} failed: ${lastOutput}`);
+}
+
+// Backlog OS-C3: two isolated browser peers on one CTOX room. Verifies the
+// multi-user promise end to end: (1) presence entries propagate through the
+// native in-memory hub (ctox-presence-v1) in both directions and disappear
+// when a peer closes; (2) concurrent edits to DIFFERENT fields of the same
+// field-merge document (notes: title vs content, docs/ctox-rxdb.md §8.2)
+// converge on both peers AND in the native store without losing either edit.
+async function runPresenceMergeTwoBrowsersMode(pageA) {
+  const evidence = { mode: 'presence-merge-two-browsers' };
+  const smokeHookReady = () => Boolean(
+    globalThis.ctoxBusinessOsSmoke
+      && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
+      && globalThis.CTOX_BUSINESS_OS_STATUS
+  );
+  const pollPage = async (page, label, fn, timeoutMs = 60000) => {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      last = await page.evaluate(fn);
+      if (last && last.ok) return last;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`${label} did not converge within ${timeoutMs}ms: ${JSON.stringify(last)}`);
+  };
+  const setupNotes = (page) => page.evaluate(async () => {
+    const state = globalThis.ctoxBusinessOsSmoke.state;
+    const schemaMod = await import('/modules/notes/schema.js');
+    await state.db.addCollections({ notes: schemaMod.collections.notes });
+    await state.sync.startCollection('notes');
+    return true;
+  });
+
+  const profileB = fs.mkdtempSync(path.join(runtimeRoot, 'browser-profile-b-'));
+  const browserB = await chromium.launchPersistentContext(profileB, chromiumLaunchOptions());
+  try {
+    const pageB = await browserB.newPage();
+    const urlB = new URL(pageA.url());
+    urlB.searchParams.set('smokeDbId', `${smokeDbId}_peer_b`);
+    await pageB.goto(urlB.toString(), { waitUntil: 'commit', timeout: 10000 });
+    await pageA.waitForFunction(smokeHookReady, null, { timeout: smokeHookWaitTimeoutMs });
+    await pageB.waitForFunction(smokeHookReady, null, { timeout: smokeHookWaitTimeoutMs });
+
+    // ---- Presence propagation A -> B ------------------------------------
+    await pageA.evaluate(() => {
+      const registry = globalThis.ctoxBusinessOsSmoke.state.db.rxdb.getPresenceRegistry();
+      registry.setLocal('presence-smoke', [{
+        collection: 'notes',
+        recordId: 'presence-merge-smoke-note',
+        actorId: 'smoke-user-a',
+        actorName: 'Smoke User A',
+        mode: 'editing',
+      }]);
+    });
+    await pollPage(pageB, 'presence A->B', () => {
+      const registry = globalThis.ctoxBusinessOsSmoke?.state?.db?.rxdb?.getPresenceRegistry?.();
+      const entries = registry?.remoteEntries || [];
+      return {
+        ok: entries.some((entry) => entry.recordId === 'presence-merge-smoke-note' && entry.actorId === 'smoke-user-a'),
+        entries,
+      };
+    });
+    evidence.presencePropagated = true;
+
+    // ---- Presence propagation B -> A (needed for the close test) --------
+    await pageB.evaluate(() => {
+      const registry = globalThis.ctoxBusinessOsSmoke.state.db.rxdb.getPresenceRegistry();
+      registry.setLocal('presence-smoke', [{
+        collection: 'notes',
+        recordId: 'presence-merge-smoke-note',
+        actorId: 'smoke-user-b',
+        actorName: 'Smoke User B',
+        mode: 'viewing',
+      }]);
+    });
+    await pollPage(pageA, 'presence B->A', () => {
+      const registry = globalThis.ctoxBusinessOsSmoke?.state?.db?.rxdb?.getPresenceRegistry?.();
+      const entries = registry?.remoteEntries || [];
+      return {
+        ok: entries.some((entry) => entry.actorId === 'smoke-user-b'),
+        entries,
+      };
+    });
+    evidence.presenceBidirectional = true;
+
+    // ---- Field-merge convergence -----------------------------------------
+    await setupNotes(pageA);
+    await setupNotes(pageB);
+    await pageA.evaluate(async () => {
+      const state = globalThis.ctoxBusinessOsSmoke.state;
+      await state.db.raw.notes.insert({
+        id: 'merge-smoke-note',
+        title: 'title-base',
+        content: 'content-base',
+        folder: '',
+        notebook: '',
+        tags: '',
+        is_favorite: false,
+        is_trashed: false,
+        is_locked: false,
+        updated_at_ms: Date.now(),
+      });
+    });
+    const readNote = async () => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.notes.findOne('merge-smoke-note').exec();
+      const note = doc?.toJSON?.() || doc || null;
+      return note ? { ok: true, title: note.title, content: note.content } : { ok: false };
+    };
+    await pollPage(pageB, 'note replication A->B', readNote);
+
+    // Both peers edit DIFFERENT fields at the same time.
+    await Promise.all([
+      pageA.evaluate(async () => {
+        const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.notes.findOne('merge-smoke-note').exec();
+        await doc.patch({ title: 'title-from-a', updated_at_ms: Date.now() });
+      }),
+      pageB.evaluate(async () => {
+        const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.notes.findOne('merge-smoke-note').exec();
+        await doc.patch({ content: 'content-from-b', updated_at_ms: Date.now() });
+      }),
+    ]);
+    const converged = (label, page) => pollPage(page, label, async () => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.notes.findOne('merge-smoke-note').exec();
+      const note = doc?.toJSON?.() || doc || null;
+      return {
+        ok: Boolean(note && note.title === 'title-from-a' && note.content === 'content-from-b'),
+        title: note?.title,
+        content: note?.content,
+      };
+    }, 90000);
+    await converged('merge convergence on A', pageA);
+    await converged('merge convergence on B', pageB);
+    evidence.mergeConverged = true;
+
+    // The native store must hold BOTH edits too (the master accepted the
+    // merged state, not one whole-doc winner).
+    const nativeDeadline = Date.now() + 30000;
+    let nativeRow = '';
+    while (Date.now() < nativeDeadline) {
+      nativeRow = sqlite(`
+        SELECT json_extract(data, '$.title') || char(9) || json_extract(data, '$.content')
+        FROM ctox_business_os__notes__v1
+        WHERE id='merge-smoke-note';
+      `).trim();
+      if (nativeRow === `title-from-a\tcontent-from-b`) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+    if (nativeRow !== `title-from-a\tcontent-from-b`) {
+      throw new Error(`native store did not converge to the merged note: ${JSON.stringify(nativeRow)}`);
+    }
+    evidence.nativeMergeConverged = true;
+
+    // ---- Peer close clears presence --------------------------------------
+    // Closing the whole browser is an ABRUPT disconnect: the native side may
+    // see no clean DataChannel close, so clearing rides the ICE/DTLS timeout
+    // + remove_peer dirty-mark + TTL sweep (45s) rather than an immediate
+    // broadcast. Budget covers timeout + sweep + slack.
+    await browserB.close();
+    await pollPage(pageA, 'presence cleared after peer close', () => {
+      const registry = globalThis.ctoxBusinessOsSmoke?.state?.db?.rxdb?.getPresenceRegistry?.();
+      const entries = registry?.remoteEntries || [];
+      return {
+        ok: !entries.some((entry) => entry.actorId === 'smoke-user-b'),
+        entries,
+      };
+    }, 120000);
+    evidence.presenceClearedOnPeerClose = true;
+  } finally {
+    try { await browserB.close(); } catch {}
+    removeSmokePath(profileB);
+  }
+  return evidence;
 }
 
 function corruptRustSeedChunkMetadata(seed) {
@@ -5682,7 +5856,11 @@ function ensureCtoxSmokeBinary() {
       }
     }
     const pageEvaluateStartedAt = Date.now();
-    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified }) => {
+    // Backlog OS-C3: the two-browser mode drives a second isolated peer from
+    // the node side instead of the single-page evaluate below.
+    const result = smokeMode === 'presence-merge-two-browsers'
+      ? await runPresenceMergeTwoBrowsersMode(page)
+      : await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -13423,6 +13601,17 @@ function ensureCtoxSmokeBinary() {
         console.log(`background_queue_task_created=${result.backgroundQueueTask?.created ? 1 : 0}`);
         console.log(`background_queue_task_id=${result.backgroundQueueTask?.taskId || ''}`);
         if (result.phaseTimings) console.log(`phase_timings=${JSON.stringify(result.phaseTimings)}`);
+      }
+    } else if (result.mode === 'presence-merge-two-browsers') {
+      for (const flag of [
+        'presencePropagated',
+        'presenceBidirectional',
+        'mergeConverged',
+        'nativeMergeConverged',
+        'presenceClearedOnPeerClose',
+      ]) {
+        if (result[flag] !== true) throw new Error(`presence-merge evidence missing: ${flag}`);
+        console.log(`${flag.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}=1`);
       }
     } else if (result.mode === 'rust-to-browser' || result.mode === 'workspace-rust-to-browser') {
       if (result.payload !== rustSeed.content) throw new Error(`browser payload mismatch: ${result.payload}`);
