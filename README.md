@@ -108,10 +108,10 @@ operation is available at
   configuration, runtime, operations
 - [CLI reference](https://metric-space-ai.github.io/ctox/cli.html) — the full
   command surface
+- [Project page](https://metric-space-ai.github.io/ctox/) — overview,
+  connectivity, downloads
 - [HARNESS.md](HARNESS.md) — review, task-spawn, subagent, and liveness-proof
   model
-- [docs/ctox-rxdb.md](docs/ctox-rxdb.md) — sync engine architecture, wire
-  protocol, failure/recovery semantics, invariants
 
 ## Development
 
@@ -127,7 +127,7 @@ Repository layout:
 - `src/core/` — daemon, runtime, mission systems, TUI, harness, local inference
 - `src/apps/` — Desktop, Business OS, and web app surfaces
 - `src/tools/` — supporting packages (web, PDF, document, speech)
-- `docs/` — technical documentation, RFCs, and the Pages site (`docs/site/`)
+- `docs/site/` — the project page (GitHub Pages)
 - `tests/` — integration, harness, fixture, and behavior tests
 
 Use the release workflow for production binaries; release builds gate on
