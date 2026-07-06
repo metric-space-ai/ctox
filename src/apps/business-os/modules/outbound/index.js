@@ -1891,9 +1891,9 @@ function wireEvents(root) {
           const originalBorder = copyBtn.style.borderColor;
 
           copyBtn.innerText = t('copied', 'Kopiert!');
-          copyBtn.style.background = '#10b981';
-          copyBtn.style.color = '#ffffff';
-          copyBtn.style.borderColor = '#10b981';
+          copyBtn.style.background = 'var(--success)';
+          copyBtn.style.color = 'var(--surface)';
+          copyBtn.style.borderColor = 'var(--success)';
 
           setTimeout(() => {
             copyBtn.innerText = originalText;
@@ -2654,16 +2654,21 @@ function renderLeft() {
     : { leadQueue: 0, engagements: 0, approvalInbox: 0, readyToSend: 0, replies: 0, done: 0 };
   const outreachPending = outreachCounts.leadQueue + outreachCounts.approvalInbox + outreachCounts.readyToSend + outreachCounts.replies;
   root.innerHTML = `
-    <header class="outbound-pane-header">
-      <div><span>${escapeHtml(t('outbound', 'Outbound'))}</span><h2>${escapeHtml(t('campaigns', 'Campaigns'))}</h2></div>
-      <div class="outbound-actions">
-        <button class="outbound-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
-        <button class="outbound-icon-button" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">+</button>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t('outbound', 'Outbound'))}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(t('campaigns', 'Campaigns'))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
+          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">${actionIcon('add')}</button>
+        </div>
       </div>
     </header>
     <div class="outbound-scroll">
       <section class="outbound-section" aria-label="${escapeHtml(t('campaigns', 'Campaigns'))}">
-        ${campaigns.map(renderCampaignItem).join('') || `<div class="outbound-empty">${escapeHtml(t('noCampaigns', 'Keine Campaigns vorhanden.'))}</div>`}
+        ${campaigns.map(renderCampaignItem).join('') || `<div class="ctox-empty">${escapeHtml(t('noCampaigns', 'Keine Campaigns vorhanden.'))}</div>`}
       </section>
     </div>
   `;
@@ -2829,8 +2834,8 @@ function renderCampaignEditItem(campaign) {
         </label>
       </div>
       <div class="outbound-campaign-edit-actions">
-        <button class="outbound-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
-        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save${canSave ? '' : ' disabled'}>${escapeHtml(t('save', 'Speichern'))}</button>
+        <button class="ctox-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
+        <button class="ctox-button is-primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save${canSave ? '' : ' disabled'}>${escapeHtml(t('save', 'Speichern'))}</button>
       </div>
     </article>
   `;
@@ -2947,7 +2952,7 @@ function renderCenter(force = false) {
   state.centerResizeCleanup = null;
   const campaign = selectedCampaign();
   if (!campaign) {
-    root.innerHTML = `<div class="outbound-empty">${escapeHtml(t('noCampaignSelected', 'Keine Campaign ausgewählt.'))}</div>`;
+    root.innerHTML = `<div class="ctox-empty">${escapeHtml(t('noCampaignSelected', 'Keine Campaign ausgewählt.'))}</div>`;
     return;
   }
   if (state.outreachView) {
@@ -3033,9 +3038,30 @@ function renderCenter(force = false) {
   const focusState = saveFocusState(root);
 
   root.innerHTML = `
-    <header class="outbound-pane-header">
-      <div><span>${escapeHtml(campaign.market || 'DACH')}</span><h2>${escapeHtml(campaign.name)}</h2></div>
-      <div class="outbound-header-actions">
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(campaign.market || 'DACH')}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(campaign.name)}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button
+            class="ctox-pane-icon"
+            type="button"
+            data-action="export-table"
+            title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
+            aria-label="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
+          >${actionIcon('export')}</button>
+          <button
+            class="ctox-pane-icon"
+            type="button"
+            data-action="open-research-settings"
+            title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
+            aria-label="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
+          >${actionIcon('settings')}</button>
+        </div>
+      </div>
+      <div class="ctox-pane-tools outbound-center-tools">
         <div class="outbound-active-research-container">
           ${renderActiveResearchSummary(campaign)}
         </div>
@@ -3045,37 +3071,21 @@ function renderCenter(force = false) {
           <span>${escapeHtml(t('compactView', 'Kompakte Ansicht'))}</span>
         </label>
 
-        <select id="status-filter" class="outbound-toolbar-select">
+        <select id="status-filter" class="ctox-pane-filter">
           <option value="">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
           ${campaignStatuses.map(s => `<option value="${escapeHtml(s)}" ${state.statusFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
         </select>
 
-        <select id="tag-filter" class="outbound-toolbar-select">
+        <select id="tag-filter" class="ctox-pane-filter">
           <option value="">${escapeHtml(t('allTags', 'Alle Tags'))}</option>
           ${campaignTags.map(t => `<option value="${escapeHtml(t)}" ${state.tagFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
         </select>
 
-        <button type="button" id="toggle-hidden-companies" class="outbound-button outbound-hidden-toggle" data-action="toggle-hidden-companies">
+        <button type="button" id="toggle-hidden-companies" class="ctox-button outbound-hidden-toggle" data-action="toggle-hidden-companies">
           <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
           <span>${hiddenCount}</span>
         </button>
 
-        <button
-          class="outbound-icon-button outbound-icon-mask"
-          type="button"
-          data-icon="export"
-          data-action="export-table"
-          title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
-          aria-label="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
-        ></button>
-        <button
-          class="outbound-icon-button outbound-icon-mask"
-          type="button"
-          data-icon="settings"
-          data-action="open-research-settings"
-          title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
-          aria-label="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
-        ></button>
         <div class="outbound-muted outbound-header-counts">${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}</div>
       </div>
     </header>
@@ -3298,15 +3308,15 @@ function resolveContactFieldHTML(row, contact, fieldId, contactKey) {
   if (fieldId === 'contact.status') {
     const statusChips = chipsFromMultiSelect(contact.status_field || contact.status);
     const statusHtml = statusChips.length
-      ? statusChips.map(c => `<span class="chip" data-kind="status">${escapeHtml(c)}</span>`).join('')
-      : '<span class="chip" style="opacity: 0.5;">+ Status</span>';
+      ? statusChips.map(c => `<span class="ctox-chip is-active" data-kind="status">${escapeHtml(c)}</span>`).join('')
+      : '<span class="ctox-chip" style="opacity: 0.5;">+ Status</span>';
     return `<div class="chip-row">${statusHtml}</div>`;
   }
   if (fieldId === 'contact.tags') {
     const tagChips = chipsFromMultiSelect(contact.tags);
     const tagHtml = tagChips.length
-      ? tagChips.map(c => `<span class="chip">${escapeHtml(c)}</span>`).join('')
-      : '<span class="chip" style="opacity: 0.5;">+ Tag</span>';
+      ? tagChips.map(c => `<span class="ctox-chip">${escapeHtml(c)}</span>`).join('')
+      : '<span class="ctox-chip" style="opacity: 0.5;">+ Tag</span>';
     return `<div class="chip-row">${tagHtml}</div>`;
   }
   if (fieldId === 'lead.reason') {
@@ -3381,10 +3391,10 @@ function renderCRMCompanyRows(row) {
               </div>
               <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
                 ${row.company.qualification_status === 'pending' ? `
-                  <button class="mini-btn" style="background: rgba(34, 197, 94, 0.2); color: #86efac; border-color: rgba(34, 197, 94, 0.4);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
-                  <button class="mini-btn" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
+                  <button class="mini-btn" style="background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
+                  <button class="mini-btn" style="background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
                 ` : `
-                  <span class="outbound-badge ${row.company.qualification_status === 'qualified' ? 'good' : 'warn'}">
+                  <span class="ctox-badge ${row.company.qualification_status === 'qualified' ? 'is-success' : 'is-danger'}">
                     ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
                   </span>
                   ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
@@ -3406,8 +3416,8 @@ function renderCRMCompanyRows(row) {
           html += `
             <td class="col-name" colspan="${contactCols.length}" style="vertical-align: middle;">
               ${row.item
-                ? `<button class="outbound-button" type="button" style="width: 100%; border-color: var(--outbound-accent); color: var(--outbound-accent);" data-action="research-contacts" data-id="${escapeHtml(row.item.id)}">Ansprechpartner recherchieren</button>`
-                : `<button class="outbound-button" type="button" style="width: 100%; background: var(--outbound-accent); color:#000; font-weight:800;" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline übernehmen</button>`
+                ? `<button class="ctox-button" type="button" style="width: 100%; border-color: var(--outbound-accent); color: var(--outbound-accent);" data-action="research-contacts" data-id="${escapeHtml(row.item.id)}">Ansprechpartner recherchieren</button>`
+                : `<button class="ctox-button" type="button" style="width: 100%; background: var(--outbound-accent); color:#000; font-weight:800;" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline übernehmen</button>`
               }
             </td>
           `;
@@ -3459,10 +3469,10 @@ function renderCRMCompanyRows(row) {
               </div>
               <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
                 ${row.company.qualification_status === 'pending' ? `
-                  <button class="mini-btn" style="background: rgba(34, 197, 94, 0.2); color: #86efac; border-color: rgba(34, 197, 94, 0.4);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
-                  <button class="mini-btn" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
+                  <button class="mini-btn" style="background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
+                  <button class="mini-btn" style="background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
                 ` : `
-                  <span class="outbound-badge ${row.company.qualification_status === 'qualified' ? 'good' : 'warn'}">
+                  <span class="ctox-badge ${row.company.qualification_status === 'qualified' ? 'is-success' : 'is-danger'}">
                     ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
                   </span>
                   ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
@@ -3531,7 +3541,7 @@ function renderCRMCompanyRows(row) {
               }).join('')}
             </div>
             <div style="margin-top: 8px;">
-              <button class="outbound-button" type="button" data-action="generate-outreach" style="width: 100%; font-size: 11px; padding: 4px 8px; border-color: var(--outbound-accent); color: var(--outbound-accent);" ${(state.generatingOutreach.has(contactKey) || contact.outreach_generating) ? 'disabled' : ''}>✨ ${t('generate', 'Generieren')}</button>
+              <button class="ctox-button" type="button" data-action="generate-outreach" style="width: 100%; font-size: 11px; padding: 4px 8px; border-color: var(--outbound-accent); color: var(--outbound-accent);" ${(state.generatingOutreach.has(contactKey) || contact.outreach_generating) ? 'disabled' : ''}>✨ ${t('generate', 'Generieren')}</button>
             </div>
           </td>
         `;
@@ -3786,10 +3796,10 @@ function renderTableEmptyState(message) {
     : t('emptyBeforeImportDetail', 'Lege einen Import aus Excel, PDF, URL oder Freitext an. Danach erscheinen die Firmen hier als prüfbare Arbeitsliste.');
   return `
     <div class="outbound-table-empty-overlay">
-        <div class="outbound-empty-state">
+        <div class="ctox-empty">
           <strong>${escapeHtml(title)}</strong>
           <span>${escapeHtml(detail)}</span>
-          <button class="outbound-button primary" type="button" data-action="import-source">${escapeHtml(t('importJob', 'Importjob anlegen'))}</button>
+          <button class="ctox-button is-primary" type="button" data-action="import-source">${escapeHtml(t('importJob', 'Importjob anlegen'))}</button>
         </div>
     </div>
   `;
@@ -3866,7 +3876,7 @@ function renderCompanyDataRow(row, columns) {
           return `<td><strong>${escapeHtml(column.value(row) || '-')}</strong>${renderInlineResearchStatus(labelResearch(status), status)}</td>`;
         }
         if (column.badge) {
-          return `<td><span class="outbound-badge ${company.qualification_status === 'qualified' ? 'good' : company.qualification_status === 'rejected' ? 'warn' : ''}">${escapeHtml(column.value(row) || '-')}</span></td>`;
+          return `<td><span class="ctox-badge ${company.qualification_status === 'qualified' ? 'is-success' : company.qualification_status === 'rejected' ? 'is-danger' : ''}">${escapeHtml(column.value(row) || '-')}</span></td>`;
         }
         return `<td>${escapeHtml(column.value(row) || '-')}</td>`;
       }).join('')}
@@ -3880,8 +3890,8 @@ function renderContactQualificationRow(row, columns) {
   const leadStatus = pipelineResearchStatus(item, 'lead_qualification');
   const rowClass = tableRowStatusClass(combinedAutomationStatus(contactStatus, leadStatus));
   const action = item
-    ? `<button class="outbound-button" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner</button>`
-    : `<button class="outbound-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>`;
+    ? `<button class="ctox-button" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner</button>`
+    : `<button class="ctox-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>`;
   return `
     <tr${rowClass} data-action="${item ? 'select-pipeline' : 'select-company'}" data-id="${escapeHtml(item?.id || company.id)}" aria-current="${company.id === state.selectedCompanyId || item?.id === state.selectedPipelineId}">
       ${columns.map((column) => {
@@ -3889,8 +3899,8 @@ function renderContactQualificationRow(row, columns) {
         if (column.primary) {
           return `<td><strong>${escapeHtml(column.value(row) || '-')}</strong>${renderInlineResearchStatus(item?.stage || labelPipeline(company.pipeline_status), combinedAutomationStatus(contactStatus, leadStatus))}</td>`;
         }
-        if (column.id === 'contact.status') return `<td><span class="outbound-badge ${badgeClassForStatus(contactStatus, isContactQualified(item))}">${escapeHtml(column.value(row))}</span></td>`;
-        if (column.id === 'lead.status') return `<td><span class="outbound-badge ${badgeClassForStatus(leadStatus, isLeadQualified(item))}">${escapeHtml(column.value(row))}</span></td>`;
+        if (column.id === 'contact.status') return `<td><span class="ctox-badge ${badgeClassForStatus(contactStatus, isContactQualified(item))}">${escapeHtml(column.value(row))}</span></td>`;
+        if (column.id === 'lead.status') return `<td><span class="ctox-badge ${badgeClassForStatus(leadStatus, isLeadQualified(item))}">${escapeHtml(column.value(row))}</span></td>`;
         return `<td>${escapeHtml(column.value(row) || '-')}</td>`;
       }).join('')}
     </tr>
@@ -4023,7 +4033,7 @@ function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
           <h3>${escapeHtml(definition.label)}</h3>
           <p>${escapeHtml(definition.description)}</p>
         </div>
-        <button class="outbound-icon-button" type="button" data-action="close-automation" aria-label="${escapeHtml(t('close', 'Schließen'))}">×</button>
+        <button class="ctox-pane-icon" type="button" data-action="close-automation" aria-label="${escapeHtml(t('close', 'Schließen'))}">${actionIcon('close')}</button>
       </header>
       <div class="outbound-automation-body">
         <dl>
@@ -4042,7 +4052,7 @@ function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
       </div>
       <footer class="outbound-automation-footer">
         <span class="outbound-muted">${openCount > OUTBOUND_BATCH_LIMIT ? escapeHtml(t('automationBatchWarning', 'Alle offenen Researches laufen als kontrollierte CTOX Runs mit je maximal {0} Datensätzen.', OUTBOUND_BATCH_LIMIT)) : escapeHtml(t('automationBatchInfo', 'Kontrollierter CTOX Batch-Run.'))}</span>
-        <button class="outbound-button primary" type="button" data-action="start-automation" ${openCount ? '' : 'disabled'}>${escapeHtml(definition.cta)}</button>
+        <button class="ctox-button is-primary" type="button" data-action="start-automation" ${openCount ? '' : 'disabled'}>${escapeHtml(definition.cta)}</button>
       </footer>
     </section>
   `;
@@ -4288,8 +4298,8 @@ function renderResearchSettingsDrawer(campaign) {
   if (state.researchSettingsActiveTab === 'columns') {
     tabBodyHtml = `
       <div class="outbound-research-toolbar">
-        <button class="outbound-button" type="button" data-action="research-settings-core">${escapeHtml(t('kernelFields', 'Kernfelder'))}</button>
-        <button class="outbound-button" type="button" data-action="research-settings-all">${escapeHtml(t('allFields', 'Alle Felder'))}</button>
+        <button class="ctox-button" type="button" data-action="research-settings-core">${escapeHtml(t('kernelFields', 'Kernfelder'))}</button>
+        <button class="ctox-button" type="button" data-action="research-settings-all">${escapeHtml(t('allFields', 'Alle Felder'))}</button>
       </div>
       <div class="outbound-column-settings-grid">
         ${renderResearchColumnSection('company', t('columnSectionCompanyTitle', 'Unternehmenshälfte'), t('columnSectionCompanyDesc', 'Stammdaten und Firmenqualifizierung'), RESEARCH_FIELD_DEFS, settings.fields, settings.customFields, settings)}
@@ -4356,14 +4366,14 @@ function renderResearchSettingsDrawer(campaign) {
     if (ms.loading) {
       msContent = `
         <div class="outbound-mailserver-loading" style="padding: 40px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;">
-          <div class="outbound-loading-spinner" style="width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top-color: var(--outbound-accent, #3b82f6); animation: spin 1s linear infinite;"></div>
+          <div class="outbound-loading-spinner" style="width: 32px; height: 32px; border: 3px solid color-mix(in srgb, var(--outbound-text) 10%, transparent); border-radius: 50%; border-top-color: var(--outbound-accent); animation: spin 1s linear infinite;"></div>
           <p style="color: var(--outbound-muted); font-size: 13px; margin: 0;">${escapeHtml(t('loadingMailserverConfig', 'Mailserver-Konfiguration wird geladen...'))}</p>
         </div>
       `;
     } else {
       if (ms.error) {
         msContent += `
-          <div class="outbound-mailserver-error" style="background: rgba(220, 53, 69, 0.1); border: 1px solid #ef4444; padding: 12px; border-radius: 6px; color: #ef4444; margin-bottom: 16px; font-size: 13px;">
+          <div class="outbound-mailserver-error" style="background: var(--danger-soft); border: 1px solid var(--danger); padding: 12px; border-radius: 6px; color: var(--danger); margin-bottom: 16px; font-size: 13px;">
             <strong>${escapeHtml(t('errorLabel', 'Fehler'))}:</strong> ${escapeHtml(ms.error)}
           </div>
         `;
@@ -4384,48 +4394,48 @@ function renderResearchSettingsDrawer(campaign) {
           const dkimTxtRecord = `v=DKIM1; k=rsa; p=${publicDkimClean}`;
           
           return `
-            <div class="outbound-mailserver-domain-card" style="border: 1px solid var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: rgba(255,255,255,0.02);">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                <h4 style="margin: 0; font-size: 14px; color: var(--outbound-text, #334155); font-weight: 600;">${escapeHtml(dom.domain_name)}</h4>
-                <button class="outbound-button danger-link" type="button" data-action="mailserver-delete-domain" data-domain="${escapeHtml(dom.domain_name)}" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: 500; padding: 0;">
+            <div class="outbound-mailserver-domain-card" style="border: 1px solid var(--outbound-line); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: color-mix(in srgb, var(--outbound-text) 2%, transparent);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid color-mix(in srgb, var(--outbound-text) 5%, transparent); padding-bottom: 8px;">
+                <h4 style="margin: 0; font-size: 14px; color: var(--outbound-text); font-weight: 600;">${escapeHtml(dom.domain_name)}</h4>
+                <button class="ctox-button danger-link" type="button" data-action="mailserver-delete-domain" data-domain="${escapeHtml(dom.domain_name)}" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 13px; font-weight: 500; padding: 0;">
                   ${escapeHtml(t('delete', 'Löschen'))}
                 </button>
               </div>
               
               <details class="outbound-dns-guide" style="cursor: pointer;">
-                <summary style="font-size: 13px; color: var(--outbound-accent, #3b82f6); font-weight: 500; outline: none; margin-bottom: 8px;">
+                <summary style="font-size: 13px; color: var(--outbound-accent); font-weight: 500; outline: none; margin-bottom: 8px;">
                   ${escapeHtml(t('dnsSetupGuide', 'DNS-Einrichtungsanleitung (DKIM, SPF, DMARC)'))}
                 </summary>
                 <div class="outbound-dns-records" style="padding-top: 10px; display: grid; gap: 12px;">
-                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: #94a3b8;">1. DKIM (TXT Record)</strong>
-                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: ${escapeHtml(dom.dkim_selector || 'default')}._domainkey</span>
+                      <strong style="font-size: 11px; color: var(--outbound-muted);">1. DKIM (TXT Record)</strong>
+                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: ${escapeHtml(dom.dkim_selector || 'default')}._domainkey</span>
                     </div>
                     <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981; max-height: 80px; overflow-y: auto;">${escapeHtml(dkimTxtRecord)}</code>
-                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dkimTxtRecord)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                    <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dkimTxtRecord)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>
 
-                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: #94a3b8;">2. SPF (TXT Record)</strong>
-                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: @</span>
+                      <strong style="font-size: 11px; color: var(--outbound-muted);">2. SPF (TXT Record)</strong>
+                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: @</span>
                     </div>
                     <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}</code>
-                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                    <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>
 
-                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: #94a3b8;">3. DMARC (TXT Record)</strong>
-                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: _dmarc</span>
+                      <strong style="font-size: 11px; color: var(--outbound-muted);">3. DMARC (TXT Record)</strong>
+                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: _dmarc</span>
                     </div>
                     <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}</code>
-                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                    <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>
@@ -4442,26 +4452,28 @@ function renderResearchSettingsDrawer(campaign) {
         usersListHtml = `<p class="outbound-muted-placeholder" style="color: var(--outbound-muted); font-style: italic; padding: 8px 0; font-size: 13px;">${escapeHtml(t('noUsersConfigured', 'Keine E-Mail-Konten konfiguriert.'))}</p>`;
       } else {
         usersListHtml = `
-          <table class="outbound-mailserver-users-table" style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px;">
-            <thead>
-              <tr style="border-bottom: 1px solid var(--outbound-border, #e2e8f0); color: var(--outbound-muted); text-align: left;">
-                <th style="padding: 8px 4px; font-weight: 500;">${escapeHtml(t('emailAddress', 'E-Mail-Adresse'))}</th>
-                <th style="padding: 8px 4px; font-weight: 500; text-align: right;">${escapeHtml(t('actions', 'Aktionen'))}</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${ms.users.map(u => `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">
-                  <td style="padding: 10px 4px; font-weight: 500; color: var(--outbound-text, #334155);">${escapeHtml(u.username)}</td>
-                  <td style="padding: 10px 4px; text-align: right;">
-                    <button class="outbound-button danger-link" type="button" data-action="mailserver-delete-user" data-username="${escapeHtml(u.username)}" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 12px; padding: 0;">
-                      ${escapeHtml(t('delete', 'Löschen'))}
-                    </button>
-                  </td>
+          <div class="ctox-table-wrap" style="margin-top: 8px;">
+            <table class="ctox-table outbound-mailserver-users-table">
+              <thead>
+                <tr>
+                  <th>${escapeHtml(t('emailAddress', 'E-Mail-Adresse'))}</th>
+                  <th class="is-num">${escapeHtml(t('actions', 'Aktionen'))}</th>
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${ms.users.map(u => `
+                  <tr>
+                    <td style="font-weight: 500;">${escapeHtml(u.username)}</td>
+                    <td class="is-num">
+                      <button class="ctox-button danger-link" type="button" data-action="mailserver-delete-user" data-username="${escapeHtml(u.username)}" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 12px; padding: 0;">
+                        ${escapeHtml(t('delete', 'Löschen'))}
+                      </button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
         `;
       }
 
@@ -4473,10 +4485,10 @@ function renderResearchSettingsDrawer(campaign) {
               ${escapeHtml(t('customDomainsDesc', 'Füge deine Domains hinzu. CTOX generiert automatisch DKIM-Signaturen und liefert dir die SPF- und DMARC-Einträge für deinen Domain-Registrar.'))}
             </p>
             
-            <div class="outbound-mailserver-add-domain-form" style="background: rgba(255,255,255,0.01); border: 1px dashed var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+            <div class="outbound-mailserver-add-domain-form" style="background: color-mix(in srgb, var(--outbound-text) 2%, transparent); border: 1px dashed var(--outbound-line); border-radius: 8px; padding: 14px; margin-bottom: 20px;">
               <div style="display: flex; gap: 8px;">
-                <input id="mailserver-new-domain-input" type="text" placeholder="z.B. meinefirma.de" style="flex: 1; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
-                <button class="outbound-button" type="button" data-action="mailserver-save-domain" style="white-space: nowrap; height: 32px; padding: 0 16px; font-size: 13px;">
+                <input id="mailserver-new-domain-input" type="text" placeholder="z.B. meinefirma.de" style="flex: 1; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
+                <button class="ctox-button" type="button" data-action="mailserver-save-domain" style="white-space: nowrap; height: 32px; padding: 0 16px; font-size: 13px;">
                   ${escapeHtml(t('addDomainButton', 'Domain hinzufügen'))}
                 </button>
               </div>
@@ -4487,19 +4499,19 @@ function renderResearchSettingsDrawer(campaign) {
             </div>
           </div>
 
-          <div class="outbound-settings-section" style="border-top: 1px solid var(--outbound-border, #e2e8f0); padding-top: 24px;">
+          <div class="outbound-settings-section" style="border-top: 1px solid var(--outbound-line); padding-top: 24px;">
             <h4 style="margin-top: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--outbound-muted);">${escapeHtml(t('emailAccountsTitle', 'E-Mail-Konten'))}</h4>
             <p style="font-size: 12px; color: var(--outbound-muted); margin-bottom: 16px; line-height: 1.4;">
               ${escapeHtml(t('emailAccountsDesc', 'Erstelle vollwertige Mail-Accounts für den Empfang und Versand über IMAP und SMTP.'))}
             </p>
             
-            <div class="outbound-mailserver-add-user-form" style="background: rgba(255,255,255,0.01); border: 1px dashed var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 14px; margin-bottom: 20px; display: grid; gap: 10px;">
+            <div class="outbound-mailserver-add-user-form" style="background: color-mix(in srgb, var(--outbound-text) 2%, transparent); border: 1px dashed var(--outbound-line); border-radius: 8px; padding: 14px; margin-bottom: 20px; display: grid; gap: 10px;">
               <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px;">
-                <input id="mailserver-new-username-input" type="email" placeholder="name@meinefirma.de" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
-                <input id="mailserver-new-password-input" type="password" placeholder="Passwort" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
+                <input id="mailserver-new-username-input" type="email" placeholder="name@meinefirma.de" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
+                <input id="mailserver-new-password-input" type="password" placeholder="Passwort" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
               </div>
               <div style="display: flex; justify-content: flex-end;">
-                <button class="outbound-button" type="button" data-action="mailserver-save-user" style="height: 32px; padding: 0 16px; font-size: 13px;">
+                <button class="ctox-button" type="button" data-action="mailserver-save-user" style="height: 32px; padding: 0 16px; font-size: 13px;">
                   ${escapeHtml(t('addUserButton', 'Konto erstellen'))}
                 </button>
               </div>
@@ -4518,15 +4530,15 @@ function renderResearchSettingsDrawer(campaign) {
   let footerHtml = `
     <footer class="outbound-research-footer">
       <span class="outbound-muted">${escapeHtml(t('settingsFooterHint', 'Gilt für diese Campaign. Änderungen an Spalten und Prompts werden direkt übernommen.'))}</span>
-      <button class="outbound-button" type="button" data-action="close-research-settings">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
-      <button class="outbound-button primary" type="button" data-action="save-research-settings">${escapeHtml(t('save', 'Speichern'))}</button>
+      <button class="ctox-button" type="button" data-action="close-research-settings">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
+      <button class="ctox-button is-primary" type="button" data-action="save-research-settings">${escapeHtml(t('save', 'Speichern'))}</button>
     </footer>
   `;
   if (state.researchSettingsActiveTab === 'mailserver') {
     footerHtml = `
       <footer class="outbound-research-footer">
         <span class="outbound-muted">${escapeHtml(t('mailserverFooterHint', 'Mailserver-Einstellungen gelten global für das gesamte System.'))}</span>
-        <button class="outbound-button" type="button" data-action="close-research-settings">${escapeHtml(t('close', 'Schließen'))}</button>
+        <button class="ctox-button" type="button" data-action="close-research-settings">${escapeHtml(t('close', 'Schließen'))}</button>
       </footer>
     `;
   }
@@ -4539,13 +4551,15 @@ function renderResearchSettingsDrawer(campaign) {
           <span>${escapeHtml(t('funnelSettings', 'Funnel Einstellungen'))}</span>
           <h3>${escapeHtml(t('configureCampaign', 'Campaign konfigurieren'))}</h3>
         </div>
-        <button class="outbound-icon-button" type="button" data-action="close-research-settings" aria-label="${escapeHtml(t('close', 'Schließen'))}">×</button>
+        <button class="ctox-pane-icon" type="button" data-action="close-research-settings" aria-label="${escapeHtml(t('close', 'Schließen'))}">${actionIcon('close')}</button>
       </header>
       <div class="outbound-drawer-tabs">
-        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="columns" ${state.researchSettingsActiveTab === 'columns' ? 'aria-selected="true"' : ''}>${escapeHtml(t('columnsAndFieldsTab', 'Spalten & Felder'))}</button>
-        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="prompts" ${state.researchSettingsActiveTab === 'prompts' ? 'aria-selected="true"' : ''}>${escapeHtml(t('outreachAndApiTab', 'Outreach & API Prompts'))}</button>
-        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="sources" ${state.researchSettingsActiveTab === 'sources' ? 'aria-selected="true"' : ''}>${escapeHtml(t('researchSourcesTab', 'Quellen'))}</button>
-        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="mailserver" ${state.researchSettingsActiveTab === 'mailserver' ? 'aria-selected="true"' : ''}>${escapeHtml(t('mailserverTab', 'Mailserver & Domains'))}</button>
+        <div class="ctox-pane-tabs">
+          <button class="ctox-pane-tab" type="button" data-action="research-settings-tab" data-tab="columns" ${state.researchSettingsActiveTab === 'columns' ? 'aria-selected="true"' : ''}>${escapeHtml(t('columnsAndFieldsTab', 'Spalten & Felder'))}</button>
+          <button class="ctox-pane-tab" type="button" data-action="research-settings-tab" data-tab="prompts" ${state.researchSettingsActiveTab === 'prompts' ? 'aria-selected="true"' : ''}>${escapeHtml(t('outreachAndApiTab', 'Outreach & API Prompts'))}</button>
+          <button class="ctox-pane-tab" type="button" data-action="research-settings-tab" data-tab="sources" ${state.researchSettingsActiveTab === 'sources' ? 'aria-selected="true"' : ''}>${escapeHtml(t('researchSourcesTab', 'Quellen'))}</button>
+          <button class="ctox-pane-tab" type="button" data-action="research-settings-tab" data-tab="mailserver" ${state.researchSettingsActiveTab === 'mailserver' ? 'aria-selected="true"' : ''}>${escapeHtml(t('mailserverTab', 'Mailserver & Domains'))}</button>
+        </div>
       </div>
       <div class="outbound-research-body">
         ${tabBodyHtml}
@@ -4567,7 +4581,7 @@ function renderResearchSourcesSettings(settings) {
             <span>${escapeHtml(t('researchSourcesKicker', 'Research Sources'))}</span>
             <strong>${escapeHtml(t('researchSourcesTitle', 'Quellen und Accounts'))}</strong>
           </div>
-          <button class="outbound-button" type="button" data-action="research-settings-reset-sources">${escapeHtml(t('resetSources', 'Standard'))}</button>
+          <button class="ctox-button" type="button" data-action="research-settings-reset-sources">${escapeHtml(t('resetSources', 'Standard'))}</button>
         </div>
         <div class="outbound-source-policy-summary">
           <span>${escapeHtml(t('enabledSourcesCount', '{0} aktiv', enabledCount))}</span>
@@ -4581,7 +4595,7 @@ function renderResearchSourcesSettings(settings) {
         <div class="outbound-research-source-add">
           <input data-research-source-new-url placeholder="https://www.example.com/" aria-label="${escapeHtml(t('sourceUrl', 'Quellen-URL'))}" />
           <input data-research-source-new-secret placeholder="OPTIONAL_SECRET_NAME" aria-label="${escapeHtml(t('credentialSecretName', 'Credential Secret Name'))}" />
-          <button class="outbound-button" type="button" data-action="research-settings-add-source">${escapeHtml(t('addSource', 'Hinzufügen'))}</button>
+          <button class="ctox-button" type="button" data-action="research-settings-add-source">${escapeHtml(t('addSource', 'Hinzufügen'))}</button>
         </div>
       </section>
     </div>
@@ -4677,7 +4691,7 @@ function renderResearchColumnSection(side, title, subtitle, baseDefs, selectedId
       </div>
       <div class="outbound-custom-field-form">
         <input data-custom-field-label="${escapeHtml(side)}" placeholder="${side === 'contact' ? escapeHtml(t('customContactPlaceholder', 'z.B. Buying Committee, Entscheider-Relevanz')) : escapeHtml(t('customCompanyPlaceholder', 'z.B. Zertifizierungen, Zielkunden, Technologien'))}" aria-label="${escapeHtml(t('newColumnAria', 'Neue Spalte'))}" />
-        <button class="outbound-button" type="button" data-action="${addAction}">${escapeHtml(t('addColumn', 'Hinzufügen'))}</button>
+        <button class="ctox-button" type="button" data-action="${addAction}">${escapeHtml(t('addColumn', 'Hinzufügen'))}</button>
       </div>
     </section>
   `;
@@ -5671,9 +5685,9 @@ function automationStatusLabel(value) {
 }
 
 function badgeClassForStatus(status, isDone) {
-  if (isDone) return 'good';
-  if (isAutomationActive(status)) return 'is-running';
-  if (isFailedStatus(status) || isCancelledStatus(status)) return 'warn';
+  if (isDone) return 'is-success';
+  if (isAutomationActive(status)) return 'is-info';
+  if (isFailedStatus(status) || isCancelledStatus(status)) return 'is-danger';
   return '';
 }
 
@@ -5767,12 +5781,12 @@ function renderCompanyWorkbench() {
           ['qualified', 'Qualifiziert'],
           ['pipeline', 'Pipeline'],
           ['rejected', 'Nicht passend'],
-        ].map(([id, label]) => `<button type="button" data-filter="${id}" aria-pressed="${state.filter === id}">${label}</button>`).join('')}
-        <input class="outbound-search" data-search placeholder="Firma suchen" value="${escapeHtml(state.search)}" />
+        ].map(([id, label]) => `<button class="ctox-chip" type="button" data-filter="${id}" aria-pressed="${state.filter === id}">${label}</button>`).join('')}
+        <input class="ctox-pane-search" data-search placeholder="Firma suchen" value="${escapeHtml(state.search)}" />
       </div>
       <div class="outbound-scroll">
         <div class="outbound-list">
-          ${companies.map(renderCompanyRow).join('') || '<div class="outbound-empty">Keine Firmen für diesen Filter.</div>'}
+          ${companies.map(renderCompanyRow).join('') || '<div class="ctox-empty">Keine Firmen für diesen Filter.</div>'}
         </div>
       </div>
     </div>
@@ -5787,17 +5801,17 @@ function renderCompanyRow(company) {
         <div class="outbound-muted">${escapeHtml(company.domain || company.website || 'Website offen')}</div>
       </div>
       <div>
-        <span class="outbound-badge ${company.research_status === 'researched' ? 'good' : 'warn'}">${labelResearch(company.research_status)}</span>
+        <span class="ctox-badge ${company.research_status === 'researched' ? 'is-success' : 'is-danger'}">${labelResearch(company.research_status)}</span>
       </div>
       <div>
-        <span class="outbound-badge ${company.qualification_status === 'qualified' ? 'good' : company.qualification_status === 'rejected' ? 'warn' : ''}">${labelQualification(company.qualification_status)}</span>
+        <span class="ctox-badge ${company.qualification_status === 'qualified' ? 'is-success' : company.qualification_status === 'rejected' ? 'is-danger' : ''}">${labelQualification(company.qualification_status)}</span>
       </div>
       <div class="outbound-row-actions">
-        <button class="outbound-button" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Research</button>
-        <button class="outbound-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Validiert</button>
-        <button class="outbound-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Log</button>
-        <button class="outbound-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
-        <button class="outbound-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>
+        <button class="ctox-button" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Research</button>
+        <button class="ctox-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Validiert</button>
+        <button class="ctox-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Log</button>
+        <button class="ctox-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
+        <button class="ctox-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">Pipeline</button>
       </div>
     </div>
   `;
@@ -5812,7 +5826,7 @@ function renderPipelineWorkbench() {
       </div>
       <div class="outbound-scroll">
         <div class="outbound-list">
-          ${items.map(renderPipelineItem).join('') || '<div class="outbound-empty">Noch keine Firmen in der Pipeline.</div>'}
+          ${items.map(renderPipelineItem).join('') || '<div class="ctox-empty">Noch keine Firmen in der Pipeline.</div>'}
         </div>
       </div>
     </div>
@@ -5827,11 +5841,11 @@ function renderPipelineItem(item) {
           <div class="outbound-title">${escapeHtml(item.company_name)}</div>
           <div class="outbound-muted">${escapeHtml(item.stage)} · ${escapeHtml(item.contact_research_status)}</div>
         </div>
-        <button class="outbound-button" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner</button>
+        <button class="ctox-button" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner</button>
       </div>
       <div class="outbound-badges">
-        <span class="outbound-badge">${escapeHtml(item.priority || 'normal')}</span>
-        <span class="outbound-badge">${escapeHtml(item.outreach_status || 'not_started')}</span>
+        <span class="ctox-badge">${escapeHtml(item.priority || 'normal')}</span>
+        <span class="ctox-badge">${escapeHtml(item.outreach_status || 'not_started')}</span>
       </div>
     </div>
   `;
@@ -5849,33 +5863,38 @@ function renderRight() {
 
 function renderCompanyDetail() {
   const company = selectedCompany();
-  if (!company) return '<div class="outbound-empty">Firma auswählen.</div>';
+  if (!company) return '<div class="ctox-empty">Firma auswählen.</div>';
   const runs = state.runs.filter((run) => run.company_id === company.id);
   const source = state.sources.find((item) => item.id === company.source_id);
   const item = pipelineItemForCompany(company);
   const diagnostics = companyDiagnostics(company, source, item, runs);
   return `
-    <header class="outbound-pane-header">
-      <div><span>Company Research</span><h2>${escapeHtml(company.name)}</h2></div>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Company Research</span>
+          <h2 class="ctox-pane-title">${escapeHtml(company.name)}</h2>
+        </div>
+      </div>
     </header>
     <div class="outbound-detail">
       <div class="outbound-detail-block">
-        <div class="outbound-field-list">
+        <dl class="ctox-fields ctox-fields--stacked">
           ${field('Website', company.website || company.company_data?.website || 'offen')}
           ${field('Ort', [company.city, company.country].filter(Boolean).join(', ') || 'offen')}
           ${field('Fit', `${labelQualification(company.qualification_status)} · ${company.fit_score || 0}/100`)}
           ${field('Pipeline', labelPipeline(company.pipeline_status))}
           ${field('Importjob', source ? `${source.title || source.id} · ${source.status || 'offen'}` : 'keine Quelle verknüpft')}
-        </div>
+        </dl>
       </div>
       <div class="outbound-detail-block">
         <div class="outbound-row-actions">
-          <button class="outbound-button primary" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Unternehmen recherchieren</button>
-          <button class="outbound-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Recherche validiert</button>
-          <button class="outbound-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Run-Log</button>
-          <button class="outbound-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
-          <button class="outbound-button" type="button" data-action="reject-company" data-id="${escapeHtml(company.id)}">Ablehnen</button>
-          <button class="outbound-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">In Pipeline</button>
+          <button class="ctox-button is-primary" type="button" data-action="research-company" data-id="${escapeHtml(company.id)}">Unternehmen recherchieren</button>
+          <button class="ctox-button" type="button" data-action="validate-company-research" data-id="${escapeHtml(company.id)}">Recherche validiert</button>
+          <button class="ctox-button" type="button" data-action="download-company-research-log" data-id="${escapeHtml(company.id)}">Run-Log</button>
+          <button class="ctox-button" type="button" data-action="qualify-company" data-id="${escapeHtml(company.id)}">Qualifizieren</button>
+          <button class="ctox-button" type="button" data-action="reject-company" data-id="${escapeHtml(company.id)}">Ablehnen</button>
+          <button class="ctox-button" type="button" data-action="send-pipeline" data-id="${escapeHtml(company.id)}">In Pipeline</button>
         </div>
       </div>
       <div class="outbound-detail-block">
@@ -5896,21 +5915,28 @@ function renderCompanyDetail() {
 
 function renderPipelineDetail() {
   const item = selectedPipelineItem();
-  if (!item) return '<div class="outbound-empty">Pipeline-Eintrag auswählen.</div>';
+  if (!item) return '<div class="ctox-empty">Pipeline-Eintrag auswählen.</div>';
   const company = state.companies.find((entry) => entry.id === item.company_id);
   const runs = state.runs.filter((run) => run.pipeline_id === item.id || run.company_id === item.company_id);
   return `
-    <header class="outbound-pane-header">
-      <div><span>Pipeline</span><h2>${escapeHtml(item.company_name)}</h2></div>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Pipeline</span>
+          <h2 class="ctox-pane-title">${escapeHtml(item.company_name)}</h2>
+        </div>
+      </div>
     </header>
     <div class="outbound-detail">
       <div class="outbound-detail-block">
-        ${field('Stage', item.stage)}
-        ${field('Contact Research', item.contact_research_status)}
-        ${field('Outreach', item.outreach_status)}
+        <dl class="ctox-fields ctox-fields--stacked">
+          ${field('Stage', item.stage)}
+          ${field('Contact Research', item.contact_research_status)}
+          ${field('Outreach', item.outreach_status)}
+        </dl>
       </div>
       <div class="outbound-detail-block">
-        <button class="outbound-button primary" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner recherchieren</button>
+        <button class="ctox-button is-primary" type="button" data-action="research-contacts" data-id="${escapeHtml(item.id)}">Ansprechpartner recherchieren</button>
       </div>
       <div class="outbound-detail-block">
         <div class="outbound-kicker">Kontakte</div>
@@ -5949,8 +5975,8 @@ function companyDiagnostics(company, source, item, runs) {
 
 function renderDiagnosticsList(items) {
   return `
-    <dl class="outbound-diagnostics">
-      ${items.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || 'offen')}</dd></div>`).join('')}
+    <dl class="ctox-fields">
+      ${items.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || 'offen')}</dd>`).join('')}
     </dl>
   `;
 }
@@ -7546,7 +7572,7 @@ async function removeWhere(collection, predicate) {
 }
 
 function field(label, value) {
-  return `<div><span class="outbound-field-label">${escapeHtml(label)}</span><div>${escapeHtml(value || '')}</div></div>`;
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '')}</dd>`;
 }
 
 function renderEvidence(company) {
@@ -7816,6 +7842,10 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function actionIcon(name) {
+  return state.ctx?.getActionIcon?.(name) || '';
 }
 
 async function updateContactInPipelineItem(pipelineItemId, contactIndex, mutator) {
@@ -8500,7 +8530,7 @@ export function buildHiddenCompaniesPanel() {
 
     const bulkBtn = document.createElement('button');
     bulkBtn.type = 'button';
-    bulkBtn.className = 'outbound-button';
+    bulkBtn.className = 'ctox-button';
     bulkBtn.style.fontSize = '10px';
     bulkBtn.style.padding = '4px 8px';
     bulkBtn.textContent = t('restoreAllCompanies', 'Alle wieder anzeigen');

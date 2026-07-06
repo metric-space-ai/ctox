@@ -1,14 +1,14 @@
 <div class="shiftflow-app" data-shiftflow-root data-resize-frame>
   <!-- LEFT PANEL: Team, Status & Projects -->
   <aside class="shiftflow-panel shiftflow-left-pane" id="shiftflow-left">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-t="overview">Übersicht</span>
           <h2 class="ctox-pane-title" data-t="teamAndStatus">Team & Status</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon icon-button" id="addEmployeeBtn" data-icon="add" data-t-title="addEmployee" data-t-aria="addEmployee" title="Mitarbeiter hinzufügen" aria-label="Mitarbeiter hinzufügen"></button>
+          <button class="ctox-pane-icon" id="addEmployeeBtn" data-t-title="addEmployee" data-t-aria="addEmployee" title="Mitarbeiter hinzufügen" aria-label="Mitarbeiter hinzufügen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
         </div>
       </div>
       <div class="ctox-pane-tools">
@@ -35,11 +35,11 @@
           </div>
           <div class="shiftflow-employee-list-container">
             <div class="shiftflow-employee-list-section">
-              <div class="shiftflow-section-title"><span data-t="onDuty">Im Dienst</span> <span class="shiftflow-badge badge-success" id="activeEmployeesCount">0</span></div>
+              <div class="shiftflow-section-title"><span data-t="onDuty">Im Dienst</span> <span class="ctox-badge is-success" id="activeEmployeesCount">0</span></div>
               <div class="shiftflow-employee-list" id="activeEmployeeList"></div>
             </div>
             <div class="shiftflow-employee-list-section">
-              <div class="shiftflow-section-title"><span data-t="absent">Abwesend</span> <span class="shiftflow-badge" id="inactiveEmployeesCount">0</span></div>
+              <div class="shiftflow-section-title"><span data-t="absent">Abwesend</span> <span class="ctox-badge" id="inactiveEmployeesCount">0</span></div>
               <div class="shiftflow-employee-list" id="inactiveEmployeeList"></div>
             </div>
           </div>
@@ -66,20 +66,20 @@
 
   <!-- CENTER PANEL: Main Scheduler, Timesheets & Billing -->
   <main class="shiftflow-panel shiftflow-center-pane" id="shiftflow-center">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" id="schedulerWeekRange">KW --: --. --. ---- – --. --. ----</span>
           <h2 class="ctox-pane-title" id="centerPaneTitle" data-t="schedulePlanning">Einsatzplanung</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs shiftflow-tabs" role="group" aria-label="Einsatzplanung Ansicht">
-            <button type="button" class="ctox-pane-tab shiftflow-tab-btn active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
-            <button type="button" class="ctox-pane-tab shiftflow-tab-btn" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
-            <button type="button" class="ctox-pane-tab shiftflow-tab-btn" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
+          <div class="ctox-pane-tabs" role="group" aria-label="Einsatzplanung Ansicht">
+            <button type="button" class="ctox-pane-tab active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
+            <button type="button" class="ctox-pane-tab" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
+            <button type="button" class="ctox-pane-tab" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
           </div>
-          <button class="ctox-pane-icon icon-button" id="prevWeekBtn" data-icon="prev" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"></button>
-          <button class="ctox-pane-icon icon-button" id="nextWeekBtn" data-icon="next" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"></button>
+          <button class="ctox-pane-icon" id="prevWeekBtn" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+          <button class="ctox-pane-icon" id="nextWeekBtn" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
         </div>
       </div>
     </header>
@@ -88,9 +88,9 @@
     <div class="shiftflow-view-content" id="schedulerView">
       <!-- Toolbar for Dual-Timeline Switcher -->
       <div class="shiftflow-scheduler-toolbar">
-        <div class="shiftflow-view-toggle" role="group" aria-label="Timeline Fokus">
-          <button type="button" class="shiftflow-toggle-btn active" id="toggleViewEmployeesBtn" data-t="employeeTimeline" aria-pressed="true">Mitarbeiter-Timeline</button>
-          <button type="button" class="shiftflow-toggle-btn" id="toggleViewProjectsBtn" data-t="projectTimeline" aria-pressed="false">Projekt-Timeline</button>
+        <div class="ctox-pane-tabs" role="group" aria-label="Timeline Fokus">
+          <button type="button" class="ctox-pane-tab active" id="toggleViewEmployeesBtn" data-t="employeeTimeline" aria-pressed="true">Mitarbeiter-Timeline</button>
+          <button type="button" class="ctox-pane-tab" id="toggleViewProjectsBtn" data-t="projectTimeline" aria-pressed="false">Projekt-Timeline</button>
         </div>
         <div class="flex-spacer"></div>
         <span class="shiftflow-publish-status" id="publishScheduleStatus" aria-live="polite"></span>
@@ -158,18 +158,18 @@
       </div>
 
       <!-- Aggregated Margins Table -->
-      <div class="shiftflow-billing-content-wrapper os-scrollbar">
-        <table class="shiftflow-billing-table">
+      <div class="ctox-table-wrap shiftflow-billing-content-wrapper os-scrollbar">
+        <table class="ctox-table">
           <thead>
             <tr>
               <th data-t="colProject">Projekt / Einsatzort</th>
               <th data-t="colCustomer">Kunde</th>
-              <th class="text-right" data-t="colApprovedHours">Freigegebene Std</th>
-              <th class="text-right" data-t="colRateExt">Satz (ext.)</th>
-              <th class="text-right" data-t="colTargetRevenue">Soll-Umsatz</th>
-              <th class="text-right" data-t="colWages">Lohnkosten</th>
-              <th class="text-right" data-t="colMargin">Marge</th>
-              <th class="text-right" data-t="colActions">Aktionen</th>
+              <th class="is-num" data-t="colApprovedHours">Freigegebene Std</th>
+              <th class="is-num" data-t="colRateExt">Satz (ext.)</th>
+              <th class="is-num" data-t="colTargetRevenue">Soll-Umsatz</th>
+              <th class="is-num" data-t="colWages">Lohnkosten</th>
+              <th class="is-num" data-t="colMargin">Marge</th>
+              <th class="is-num" data-t="colActions">Aktionen</th>
             </tr>
           </thead>
           <tbody id="billingAggregationBody">
@@ -187,7 +187,7 @@
   <aside class="shiftflow-panel shiftflow-right-pane" id="shiftflow-right">
     <!-- Tab 1: AI Planner Context -->
     <div class="shiftflow-right-pane-section" id="aiPlannerSection">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
             <span class="shiftflow-icon-mask" data-icon="spark" style="color:var(--shiftflow-accent);"></span>
@@ -219,14 +219,14 @@
     </div>
 
     <div class="shiftflow-right-pane-section shiftflow-detail-pane hidden" id="detailInspectorSection" data-detail-drawer>
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker" data-t="shiftDetails">Schicht-Details</span>
             <h2 class="ctox-pane-title" id="inspectorTitle">Details</h2>
           </div>
           <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon icon-button" data-icon="close" id="closeInspectorBtn" data-t-aria="close" aria-label="Schließen"></button>
+            <button type="button" class="ctox-pane-icon" id="closeInspectorBtn" data-t-aria="close" aria-label="Schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
           </div>
         </div>
       </header>

@@ -3,7 +3,7 @@
   <input class="cv-hidden-input" type="file" accept="image/*" data-cv-logo-upload />
 
   <aside class="ctox-pane ctox-pane--glass cv-sidebar" aria-label="Kandidaten">
-    <header class="ctox-pane-header cv-sidebar-head">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Kandidaten</span>
@@ -11,12 +11,9 @@
         </div>
         <span class="ctox-badge" data-cv-count>0 CVs</span>
       </div>
-      <div class="cv-list-tools">
-        <label class="cv-search-field">
-          <span aria-hidden="true">⌕</span>
-          <input type="search" data-cv-search placeholder="Suchen" autocomplete="off" />
-        </label>
-        <select class="cv-sort-select" data-cv-sort aria-label="Kandidaten sortieren">
+      <div class="ctox-pane-tools">
+        <input type="search" class="ctox-pane-search" data-cv-search placeholder="Suchen" autocomplete="off" aria-label="Kandidaten suchen" />
+        <select class="ctox-pane-filter" data-cv-sort aria-label="Kandidaten sortieren">
           <option value="updated_desc">Neueste</option>
           <option value="name_asc">Name</option>
           <option value="phase_asc">Status</option>

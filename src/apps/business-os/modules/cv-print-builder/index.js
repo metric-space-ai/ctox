@@ -360,7 +360,7 @@ function renderSidebar(state) {
     : `${state.items.length} CV${state.items.length === 1 ? '' : 's'}`;
   list.innerHTML = visible.length
     ? visible.map((item) => renderCandidateCard(state, item)).join('')
-    : '<div class="cv-list-empty">Keine Kandidaten gefunden.</div>';
+    : '<div class="ctox-empty">Keine Kandidaten gefunden.</div>';
   list.querySelectorAll('[data-cv-select]').forEach((button) => {
     button.addEventListener('click', (event) => {
       if (event.target.closest('[data-cv-action],[data-cv-view],[data-cv-template],[data-cv-toggle-anon],[data-cv-logo-control],[data-cv-open-task]')) return;
@@ -597,14 +597,14 @@ function renderCandidateCard(state, item) {
   return `
     <article class="cv-card${selected ? ' is-selected' : ''}" data-cv-select="${escapeHtml(item.record.id)}" data-context-record-id="${escapeHtml(item.record.id)}" data-context-record-type="cv_profile" data-context-label="${escapeHtml(item.record.title || item.record.name || item.record.id)}">
       <div class="cv-card-main">
-        <div class="cv-avatar">${escapeHtml(initials(candidate.name || item.record.title))}</div>
+        <span class="ctox-avatar ctox-avatar--lg">${escapeHtml(initials(candidate.name || item.record.title))}</span>
         <div class="cv-card-info">
           <h3 class="cv-card-name">${escapeHtml(displayCandidateName(model))}</h3>
           <div class="cv-card-line cv-card-role">${escapeHtml(role)}</div>
           <div class="cv-card-file">${escapeHtml(model.source?.filename || item.record.filename || 'cv.pdf')}</div>
           <div class="cv-card-line">${escapeHtml(location || phaseLabel(phase))}</div>
         </div>
-        <span class="${phase === 'uploaded' ? 'cv-pdf-pill' : 'cv-status-pill'}">${escapeHtml(statusShort(phase))}</span>
+        <span class="ctox-badge ${phase === 'uploaded' ? 'is-warning' : 'is-info'}">${escapeHtml(statusShort(phase))}</span>
       </div>
       ${selected ? `
         <div class="cv-card-controls">
@@ -612,18 +612,18 @@ function renderCandidateCard(state, item) {
             <button class="cv-icon-btn is-primary" type="button" title="${escapeHtml(action.title)}" aria-label="${escapeHtml(action.title)}" data-cv-action ${phase === 'parsing' ? 'disabled' : ''}>
               ${action.icon}
             </button>
-            <div class="cv-segment" role="tablist" aria-label="Ansicht">
+            <div class="ctox-pane-tabs" role="tablist" aria-label="Ansicht">
               ${Object.entries(VIEW_LABELS).map(([key, label]) => `
-                <button type="button" data-cv-view="${key}" class="${viewMode === key ? 'is-active' : ''}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(label)}</button>
+                <button type="button" data-cv-view="${key}" class="ctox-pane-tab${viewMode === key ? ' is-active' : ''}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(label)}</button>
               `).join('')}
             </div>
           </div>
           <div class="cv-template-row">
-            <select class="cv-template-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="Print Template">
+            <select class="ctox-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="Print Template">
               ${templateOptions}
             </select>
-            <button class="cv-small-btn${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="Anonymisieren" aria-label="Anonymisieren" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
-            <button class="cv-small-btn${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" aria-label="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
+            <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="Anonymisieren" aria-label="Anonymisieren" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
+            <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" aria-label="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
           </div>
         </div>
         <div class="cv-card-foot">${phaseFootnoteHtml(model)}</div>
@@ -637,7 +637,7 @@ function renderStage(state) {
   const item = getSelectedItem(state);
   if (!item) {
     stage.innerHTML = `
-      <div class="cv-empty-stage">
+      <div class="ctox-empty">
         <div>
           <strong>Kein CV ausgewählt</strong>
           <div>Links einen PDF-CV anlegen.</div>
@@ -2373,21 +2373,21 @@ function escapeAttr(value) {
 }
 
 function iconPlay() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 }
 
 function iconCheck() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
 }
 
 function iconPrinter() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4"/><path d="M7 17H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v6H7z"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V4h10v4"/><path d="M7 17H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v6H7z"/></svg>';
 }
 
 function iconImage() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m8 15 3-3 2 2 2-3 3 4"/><circle cx="9" cy="9" r="1"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m8 15 3-3 2 2 2-3 3 4"/><circle cx="9" cy="9" r="1"/></svg>';
 }
 
 function iconEyeOff() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.5 5.3A10.4 10.4 0 0 1 12 5c5 0 8.5 4.5 9.5 7a12 12 0 0 1-3 4.1"/><path d="M6.2 6.8A12 12 0 0 0 2.5 12c1 2.5 4.5 7 9.5 7a10 10 0 0 0 4-.8"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.5 5.3A10.4 10.4 0 0 1 12 5c5 0 8.5 4.5 9.5 7a12 12 0 0 1-3 4.1"/><path d="M6.2 6.8A12 12 0 0 0 2.5 12c1 2.5 4.5 7 9.5 7a10 10 0 0 0 4-.8"/></svg>';
 }

@@ -163,7 +163,7 @@ function countLeadQueue(campaignId) {
 
 export function renderActiveOutreachShell(campaign) {
   if (!campaign) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('selectCampaignFirst', 'Bitte zuerst eine Campaign wählen.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('selectCampaignFirst', 'Bitte zuerst eine Campaign wählen.'))}</div>`;
   }
   const counts = activeOutreachCounts(campaign.id);
   const view = stateRef.activeOutreach.view || 'lead_queue';
@@ -187,13 +187,13 @@ export function renderActiveOutreachShell(campaign) {
           <p>${escapeFn(translate('activeOutreachIntro', 'CTOX bereitet Nachrichten, Antworten und Termine vor. Versand erst nach expliziter Freigabe.'))}</p>
         </div>
         <div class="outbound-outreach-head-actions">
-          <button type="button" class="outbound-button" data-action="ao-reconcile-provider" title="${escapeFn(translate('reconcileProviderHint', 'Status der Mailserver-Queue mit Outbound-Messages abgleichen'))}">${escapeFn(translate('reconcileProvider', 'Provider-Status abgleichen'))}</button>
-          <button type="button" class="outbound-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Fällige Engagements verarbeiten: Drafts vorbereiten, Suppressed schließen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
-          <button type="button" class="outbound-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollstaendigen JSON-Export der Outbound-Daten dieser Campaign laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
+          <button type="button" class="ctox-button" data-action="ao-reconcile-provider" title="${escapeFn(translate('reconcileProviderHint', 'Status der Mailserver-Queue mit Outbound-Messages abgleichen'))}">${escapeFn(translate('reconcileProvider', 'Provider-Status abgleichen'))}</button>
+          <button type="button" class="ctox-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Fällige Engagements verarbeiten: Drafts vorbereiten, Suppressed schließen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
+          <button type="button" class="ctox-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollstaendigen JSON-Export der Outbound-Daten dieser Campaign laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
         </div>
       </header>
       ${errorBanner}
-      <nav class="outbound-outreach-tabs" role="tablist">
+      <nav class="ctox-pane-tabs outbound-outreach-tabs" role="tablist">
         ${tabs.map((tab) => renderOutreachTab(tab, view)).join('')}
       </nav>
       <div class="outbound-outreach-body" role="tabpanel">
@@ -211,7 +211,7 @@ function renderOutreachTab(tab, view) {
       type="button"
       role="tab"
       aria-selected="${active}"
-      class="outbound-outreach-tab${active ? ' is-active' : ''}"
+      class="ctox-pane-tab outbound-outreach-tab${active ? ' is-active' : ''}"
       data-action="ao-view"
       data-view="${escapeFn(tab.key)}"
     >
@@ -250,14 +250,14 @@ function renderSkillSettings(campaign) {
     <section class="outbound-outreach-settings">
       <header>
         <h4>${escapeFn(translate('skillbooks', 'Skillbooks'))}</h4>
-        <button type="button" class="outbound-button" data-action="ao-seed-skillbooks">${escapeFn(translate('seedDefaults', 'Defaults laden'))}</button>
+        <button type="button" class="ctox-button" data-action="ao-seed-skillbooks">${escapeFn(translate('seedDefaults', 'Defaults laden'))}</button>
       </header>
       ${skillbooks.length === 0
         ? `<p class="outbound-outreach-muted">${escapeFn(translate('noSkillbooksYet', 'Noch keine Skillbooks geseedet. Klick "Defaults laden".'))}</p>`
         : skillbooks.map((sb) => renderSkillbookEditor(sb)).join('')}
       <header>
         <h4>${escapeFn(translate('letterTemplates', 'Briefvorlagen'))}</h4>
-        <button type="button" class="outbound-button" data-action="ao-new-letter-template" data-campaign-id="${escapeFn(campaign.id)}">${escapeFn(translate('newTemplate', 'Neue Vorlage'))}</button>
+        <button type="button" class="ctox-button" data-action="ao-new-letter-template" data-campaign-id="${escapeFn(campaign.id)}">${escapeFn(translate('newTemplate', 'Neue Vorlage'))}</button>
       </header>
       ${templates.length === 0
         ? `<p class="outbound-outreach-muted">${escapeFn(translate('noLetterTemplatesYet', 'Noch keine Briefvorlagen für diese Campaign.'))}</p>`
@@ -288,7 +288,7 @@ function renderSkillbookEditor(sb) {
         <textarea rows="4" data-sb-field="workflow">${escapeFn(workflow)}</textarea>
       </label>
       <footer>
-        <button type="button" class="outbound-button primary" data-action="ao-save-skillbook" data-skillbook-id="${escapeFn(sb.id || sb.skillbook_id)}">${escapeFn(translate('saveDraft', 'Speichern'))}</button>
+        <button type="button" class="ctox-button is-primary" data-action="ao-save-skillbook" data-skillbook-id="${escapeFn(sb.id || sb.skillbook_id)}">${escapeFn(translate('saveDraft', 'Speichern'))}</button>
       </footer>
     </article>
   `;
@@ -318,7 +318,7 @@ function renderLetterTemplateEditor(tpl) {
         <textarea rows="2" data-tpl-field="closing">${escapeFn(tpl.closing || '')}</textarea>
       </label>
       <footer>
-        <button type="button" class="outbound-button primary" data-action="ao-save-template" data-template-id="${escapeFn(tpl.id)}">${escapeFn(translate('saveDraft', 'Speichern'))}</button>
+        <button type="button" class="ctox-button is-primary" data-action="ao-save-template" data-template-id="${escapeFn(tpl.id)}">${escapeFn(translate('saveDraft', 'Speichern'))}</button>
       </footer>
     </article>
   `;
@@ -337,12 +337,13 @@ function renderLeadQueue(campaign) {
     return status === 'qualified' || status === 'lead_qualified';
   });
   if (leads.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noQualifiedLeads', 'Keine qualifizierten Leads warten auf Engagement.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noQualifiedLeads', 'Keine qualifizierten Leads warten auf Engagement.'))}</div>`;
   }
   const defaultMailbox = campaign.communication_account_key || campaign.payload?.communication_account_key || '';
   const defaultChannel = campaign.payload?.active_outreach?.default_channel || 'email';
   return `
-    <table class="outbound-outreach-table">
+    <div class="ctox-table-wrap">
+    <table class="ctox-table outbound-outreach-table">
       <thead>
         <tr>
           <th>${escapeFn(translate('lead', 'Lead'))}</th>
@@ -356,6 +357,7 @@ function renderLeadQueue(campaign) {
         ${leads.map((lead) => renderLeadQueueRow(lead, campaign, defaultMailbox, defaultChannel)).join('')}
       </tbody>
     </table>
+    </div>
   `;
 }
 
@@ -376,8 +378,8 @@ function renderLeadQueueRow(lead, campaign, defaultMailbox, defaultChannel) {
       </td>
       <td>${escapeFn(channelLabel)} ${mailboxBadge}</td>
       <td class="outbound-outreach-actions-cell">
-        <button type="button" class="outbound-button primary" data-action="ao-start-engagement" data-lead-id="${escapeFn(lead.id)}">${escapeFn(translate('startEngagement', 'Engagement starten'))}</button>
-        <button type="button" class="outbound-button" data-action="ao-auto-draft" data-lead-id="${escapeFn(lead.id)}">${escapeFn(translate('autoDraft', 'Auto-Draft'))}</button>
+        <button type="button" class="ctox-button is-primary" data-action="ao-start-engagement" data-lead-id="${escapeFn(lead.id)}">${escapeFn(translate('startEngagement', 'Engagement starten'))}</button>
+        <button type="button" class="ctox-button" data-action="ao-auto-draft" data-lead-id="${escapeFn(lead.id)}">${escapeFn(translate('autoDraft', 'Auto-Draft'))}</button>
       </td>
     </tr>
   `;
@@ -388,7 +390,7 @@ function renderEngagementsView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => !['closed', 'meeting_booked'].includes(e.status || ''));
   if (engagements.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noActiveEngagements', 'Keine aktiven Engagements.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noActiveEngagements', 'Keine aktiven Engagements.'))}</div>`;
   }
   const slice = engagements.slice(0, ACTIVE_OUTREACH_PAGE_SIZE);
   const truncated = engagements.length > ACTIVE_OUTREACH_PAGE_SIZE;
@@ -429,7 +431,7 @@ function renderEngagementListItem(engagement, isSelected) {
 }
 
 function renderEngagementDetail(campaign, engagement) {
-  if (!engagement) return `<div class="outbound-outreach-empty">${escapeFn(translate('selectEngagement', 'Engagement wählen'))}</div>`;
+  if (!engagement) return `<div class="ctox-empty">${escapeFn(translate('selectEngagement', 'Engagement wählen'))}</div>`;
   const messages = stateRef.engagementMessages
     .filter((m) => m.engagement_id === engagement.id)
     .sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
@@ -459,13 +461,13 @@ function renderEngagementDetail(campaign, engagement) {
       ${engagement.next_action_at_ms ? `<p class="outbound-outreach-muted">${escapeFn(translate('whyNow', 'Geplant für'))} ${escapeFn(formatTimestamp(engagement.next_action_at_ms))}</p>` : ''}
       <div class="outbound-outreach-detail-actions">
         ${nextStep.actions.map((action) => renderActionButton(action, engagement, lastMessage)).join('')}
-        ${paused ? '' : `<button type="button" class="outbound-button" data-action="ao-pause-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('pause', 'Pausieren'))}</button>`}
-        ${paused ? `<button type="button" class="outbound-button" data-action="ao-resume-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('resume', 'Fortsetzen'))}</button>` : ''}
-        <button type="button" class="outbound-button" data-action="ao-close-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('close', 'Schließen'))}</button>
-        <button type="button" class="outbound-button" data-action="ao-open-sender" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('changeSender', 'Sender ändern'))}</button>
+        ${paused ? '' : `<button type="button" class="ctox-button" data-action="ao-pause-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('pause', 'Pausieren'))}</button>`}
+        ${paused ? `<button type="button" class="ctox-button" data-action="ao-resume-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('resume', 'Fortsetzen'))}</button>` : ''}
+        <button type="button" class="ctox-button" data-action="ao-close-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('close', 'Schließen'))}</button>
+        <button type="button" class="ctox-button" data-action="ao-open-sender" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('changeSender', 'Sender ändern'))}</button>
       </div>
     </section>
-    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section outbound-outreach-sequence-warning"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement läuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="outbound-button primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
+    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section outbound-outreach-sequence-warning"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement läuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="ctox-button is-primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
     ${renderSkillbookSnapshotSection(lastMessage)}
     ${replyClass ? `<section class="outbound-outreach-detail-section"><h5>${escapeFn(translate('replyClass', 'Antwort-Klassifikation'))}</h5><p><strong>${escapeFn(prettyReplyClass(replyClass))}</strong></p></section>` : ''}
     <section class="outbound-outreach-detail-section">
@@ -478,20 +480,20 @@ function renderEngagementDetail(campaign, engagement) {
 function renderActionButton(action, engagement, lastMessage) {
   switch (action) {
     case 'auto_draft_initial':
-      return `<button type="button" class="outbound-button primary" data-action="ao-draft-initial" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftInitial', 'Initial-Mail vorbereiten'))}</button>`;
+      return `<button type="button" class="ctox-button is-primary" data-action="ao-draft-initial" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftInitial', 'Initial-Mail vorbereiten'))}</button>`;
     case 'auto_draft_followup':
-      return `<button type="button" class="outbound-button primary" data-action="ao-draft-followup" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftFollowup', 'Follow-up vorbereiten'))}</button>`;
+      return `<button type="button" class="ctox-button is-primary" data-action="ao-draft-followup" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftFollowup', 'Follow-up vorbereiten'))}</button>`;
     case 'auto_draft_reply':
-      return `<button type="button" class="outbound-button primary" data-action="ao-draft-reply" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftReply', 'Antwort vorbereiten'))}</button>`;
+      return `<button type="button" class="ctox-button is-primary" data-action="ao-draft-reply" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftReply', 'Antwort vorbereiten'))}</button>`;
     case 'auto_draft_scheduling':
-      return `<button type="button" class="outbound-button primary" data-action="ao-draft-scheduling" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftScheduling', 'Terminantwort vorbereiten'))}</button>`;
+      return `<button type="button" class="ctox-button is-primary" data-action="ao-draft-scheduling" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('autoDraftScheduling', 'Terminantwort vorbereiten'))}</button>`;
     case 'request_approval':
       return lastMessage
-        ? `<button type="button" class="outbound-button" data-action="ao-request-approval" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('requestApproval', 'Freigabe anfordern'))}</button>`
+        ? `<button type="button" class="ctox-button" data-action="ao-request-approval" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('requestApproval', 'Freigabe anfordern'))}</button>`
         : '';
     case 'review_draft':
       return lastMessage
-        ? `<button type="button" class="outbound-button" data-action="ao-view-message" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('reviewDraft', 'Draft prüfen'))}</button>`
+        ? `<button type="button" class="ctox-button" data-action="ao-view-message" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('reviewDraft', 'Draft prüfen'))}</button>`
         : '';
     default:
       return '';
@@ -581,7 +583,7 @@ function renderApprovalInbox(campaign) {
     .filter((m) => m.campaign_id === campaign.id)
     .filter((m) => (m.approval_status || '') === 'awaiting_approval');
   if (messages.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noApprovalPending', 'Keine Nachrichten warten auf Freigabe.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noApprovalPending', 'Keine Nachrichten warten auf Freigabe.'))}</div>`;
   }
   const slice = messages.slice(0, ACTIVE_OUTREACH_PAGE_SIZE);
   const truncated = messages.length > ACTIVE_OUTREACH_PAGE_SIZE;
@@ -614,7 +616,7 @@ function renderApprovalCard(msg) {
           <strong>${escapeFn(msg.payload?.draft_engine || msg.payload?.message_type || 'draft')}</strong>
           <small>${escapeFn(recipient)}</small>
         </div>
-        <span class="outbound-outreach-badge outbound-outreach-channel-${escapeFn(channel)}">${escapeFn(isPhysical ? translate('physicalLetter', 'Brief') : translate('email', 'E-Mail'))}</span>
+        <span class="ctox-badge outbound-outreach-channel-${escapeFn(channel)}">${escapeFn(isPhysical ? translate('physicalLetter', 'Brief') : translate('email', 'E-Mail'))}</span>
       </header>
       ${replyContext}
       <label>
@@ -628,10 +630,10 @@ function renderApprovalCard(msg) {
       ${isPhysical ? `<label><span>${escapeFn(translate('postalAddress', 'Postadresse'))}</span><textarea rows="3" data-action="ao-edit-address" data-message-id="${escapeFn(msg.id)}">${escapeFn(recipientAddress)}</textarea></label>` : ''}
       ${renderProposedSlotsSection(msg)}
       <footer>
-        <button type="button" class="outbound-button" data-action="ao-save-draft" data-message-id="${escapeFn(msg.id)}" ${dirty ? '' : 'disabled'}>${escapeFn(translate('saveDraft', 'Draft speichern'))}</button>
-        <button type="button" class="outbound-button primary" data-action="ao-approve" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('approve', 'Freigeben'))}</button>
-        <button type="button" class="outbound-button" data-action="ao-reject" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('rejectWithComment', 'Ablehnen mit Kommentar'))}</button>
-        ${isPhysical ? `<button type="button" class="outbound-button" data-action="ao-print-letter" data-message-id="${escapeFn(msg.id)}">${escapeFn(translate('printLetter', 'Brief PDF/Print'))}</button>` : ''}
+        <button type="button" class="ctox-button" data-action="ao-save-draft" data-message-id="${escapeFn(msg.id)}" ${dirty ? '' : 'disabled'}>${escapeFn(translate('saveDraft', 'Draft speichern'))}</button>
+        <button type="button" class="ctox-button is-primary" data-action="ao-approve" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('approve', 'Freigeben'))}</button>
+        <button type="button" class="ctox-button" data-action="ao-reject" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('rejectWithComment', 'Ablehnen mit Kommentar'))}</button>
+        ${isPhysical ? `<button type="button" class="ctox-button" data-action="ao-print-letter" data-message-id="${escapeFn(msg.id)}">${escapeFn(translate('printLetter', 'Brief PDF/Print'))}</button>` : ''}
       </footer>
       ${busy ? `<div class="outbound-outreach-busy">${escapeFn(translate('processing', 'Wird verarbeitet…'))}</div>` : ''}
     </article>
@@ -644,7 +646,7 @@ function renderReadyToSend(campaign) {
     .filter((m) => (m.approval_status || '') === 'approved')
     .filter((m) => !['sent', 'queued_for_provider'].includes(m.send_status || ''));
   if (messages.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noReadyToSend', 'Keine freigegebenen Nachrichten in der Versand-Queue.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noReadyToSend', 'Keine freigegebenen Nachrichten in der Versand-Queue.'))}</div>`;
   }
   return `
     <ol class="outbound-outreach-ready">
@@ -673,13 +675,13 @@ function renderReadyToSendItem(msg) {
       <div>
         <strong>${escapeFn(subject)}</strong>
         <small>${escapeFn(recipient)}</small>
-        ${blocked ? `<span class="outbound-outreach-badge outbound-outreach-badge-blocked" title="${escapeFn(lastError)}">${escapeFn(translate('sendBlocked', 'Versand blockiert'))}: ${escapeFn(prettyBlockReason(blockReason))}</span>` : ''}
+        ${blocked ? `<span class="ctox-badge outbound-outreach-badge-blocked" title="${escapeFn(lastError)}">${escapeFn(translate('sendBlocked', 'Versand blockiert'))}: ${escapeFn(prettyBlockReason(blockReason))}</span>` : ''}
       </div>
       <div class="outbound-outreach-actions-cell">
         ${isPhysical
-          ? `<button type="button" class="outbound-button primary" data-action="ao-mark-letter-sent" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('markLetterSent', 'Als verschickt markieren'))}</button>`
-          : `<button type="button" class="outbound-button primary" data-action="ao-send-approved" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(sendLabel)}</button>`}
-        <button type="button" class="outbound-button" data-action="ao-cancel-message" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('cancel', 'Abbrechen'))}</button>
+          ? `<button type="button" class="ctox-button is-primary" data-action="ao-mark-letter-sent" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('markLetterSent', 'Als verschickt markieren'))}</button>`
+          : `<button type="button" class="ctox-button is-primary" data-action="ao-send-approved" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(sendLabel)}</button>`}
+        <button type="button" class="ctox-button" data-action="ao-cancel-message" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('cancel', 'Abbrechen'))}</button>
       </div>
     </li>
   `;
@@ -690,7 +692,7 @@ function renderRepliesView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => (e.status || '') === 'reply_received');
   if (engagements.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noRepliesYet', 'Noch keine Antworten zugeordnet.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noRepliesYet', 'Noch keine Antworten zugeordnet.'))}</div>`;
   }
   return `
     <ol class="outbound-outreach-replies">
@@ -709,7 +711,7 @@ function renderReplyCard(engagement) {
           <strong>${escapeFn(engagement.payload?.contact_name || engagement.id)}</strong>
           <small>${escapeFn(engagement.payload?.contact_email || '')}</small>
         </div>
-        <span class="outbound-outreach-badge outbound-outreach-reply-${escapeFn(replyClass)}">${escapeFn(prettyReplyClass(replyClass))}</span>
+        <span class="ctox-badge outbound-outreach-reply-${escapeFn(replyClass)}">${escapeFn(prettyReplyClass(replyClass))}</span>
       </header>
       <p>${escapeFn(subject || translate('noLastSubject', '(kein letzter Betreff)'))}</p>
       <div class="outbound-outreach-actions-cell">
@@ -719,9 +721,9 @@ function renderReplyCard(engagement) {
             ${REPLY_CLASSES.map((cls) => `<option value="${escapeFn(cls)}" ${cls === replyClass ? 'selected' : ''}>${escapeFn(prettyReplyClass(cls))}</option>`).join('')}
           </select>
         </label>
-        <button type="button" class="outbound-button primary" data-action="ao-draft-reply" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('prepareReply', 'Antwort vorbereiten'))}</button>
-        ${replyClass === 'positive' ? `<button type="button" class="outbound-button" data-action="ao-draft-scheduling" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('prepareScheduling', 'Termin vorbereiten'))}</button>` : ''}
-        ${replyClass === 'unsubscribe' ? `<button type="button" class="outbound-button" data-action="ao-add-suppression" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('addSuppression', 'Suppression-Eintrag erstellen'))}</button>` : ''}
+        <button type="button" class="ctox-button is-primary" data-action="ao-draft-reply" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('prepareReply', 'Antwort vorbereiten'))}</button>
+        ${replyClass === 'positive' ? `<button type="button" class="ctox-button" data-action="ao-draft-scheduling" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('prepareScheduling', 'Termin vorbereiten'))}</button>` : ''}
+        ${replyClass === 'unsubscribe' ? `<button type="button" class="ctox-button" data-action="ao-add-suppression" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('addSuppression', 'Suppression-Eintrag erstellen'))}</button>` : ''}
       </div>
     </li>
   `;
@@ -732,10 +734,11 @@ function renderDoneView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => ['closed', 'meeting_booked'].includes(e.status || ''));
   if (engagements.length === 0) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('noFinishedYet', 'Noch keine abgeschlossenen Engagements.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noFinishedYet', 'Noch keine abgeschlossenen Engagements.'))}</div>`;
   }
   return `
-    <table class="outbound-outreach-table">
+    <div class="ctox-table-wrap">
+    <table class="ctox-table outbound-outreach-table">
       <thead>
         <tr>
           <th>${escapeFn(translate('contact', 'Kontakt'))}</th>
@@ -755,6 +758,7 @@ function renderDoneView(campaign) {
         `).join('')}
       </tbody>
     </table>
+    </div>
   `;
 }
 
@@ -768,7 +772,7 @@ function renderSenderModal(campaign) {
         <h4 id="ao-sender-modal-title">${escapeFn(translate('chooseSender', 'Sender wählen'))}</h4>
         <ul class="outbound-outreach-sender-list">
           ${candidates.length === 0
-            ? `<li class="outbound-outreach-empty">${escapeFn(translate('noSenderCandidates', 'Kein Postfach für diese Campaign verknüpft.'))}</li>`
+            ? `<li class="ctox-empty">${escapeFn(translate('noSenderCandidates', 'Kein Postfach für diese Campaign verknüpft.'))}</li>`
             : candidates.map((cand) => `
               <li class="outbound-outreach-sender-item">
                 <button type="button" class="outbound-outreach-sender-pick${cand.healthClass ? ' is-' + cand.healthClass : ''}" data-action="ao-assign-sender" data-engagement-id="${escapeFn(modal.engagementId)}" data-account-key="${escapeFn(cand.account_key)}">
@@ -780,7 +784,7 @@ function renderSenderModal(campaign) {
           }
         </ul>
         <footer>
-          <button type="button" class="outbound-button" data-action="ao-close-sender">${escapeFn(translate('cancel', 'Abbrechen'))}</button>
+          <button type="button" class="ctox-button" data-action="ao-close-sender">${escapeFn(translate('cancel', 'Abbrechen'))}</button>
         </footer>
       </div>
     </div>
@@ -859,7 +863,7 @@ function renderReplyContextForMessage(msg) {
   return `
     <aside class="outbound-outreach-reply-context" role="note">
       <strong>${escapeFn(translate('replyContext', 'Reply-Kontext'))}</strong>
-      ${replyClass ? `<span class="outbound-outreach-badge outbound-outreach-reply-${escapeFn(replyClass)}">${escapeFn(prettyReplyClass(replyClass))}</span>` : ''}
+      ${replyClass ? `<span class="ctox-badge outbound-outreach-reply-${escapeFn(replyClass)}">${escapeFn(prettyReplyClass(replyClass))}</span>` : ''}
       ${replyMessageKey ? `<small>${escapeFn(replyMessageKey)}</small>` : ''}
     </aside>
   `;
@@ -881,11 +885,11 @@ function renderProposedSlotsSection(msg) {
             return `
             <li class="${unavailable ? 'is-unavailable' : ''}">
               <span>${escapeFn(formatSlotLabel(slot))}${unavailable ? ` <em class="outbound-outreach-slot-busy">${escapeFn(translate('slotBusy', 'belegt'))}</em>` : ''}</span>
-              ${meetingRequestId ? `<button type="button" class="outbound-button" data-action="ao-book-slot" data-meeting-request-id="${escapeFn(meetingRequestId)}" data-slot-index="${idx}" ${unavailable ? 'disabled' : ''}>${escapeFn(translate('bookSlot', 'Termin buchen'))}</button>` : ''}
+              ${meetingRequestId ? `<button type="button" class="ctox-button" data-action="ao-book-slot" data-meeting-request-id="${escapeFn(meetingRequestId)}" data-slot-index="${idx}" ${unavailable ? 'disabled' : ''}>${escapeFn(translate('bookSlot', 'Termin buchen'))}</button>` : ''}
             </li>
           `;
           }).join('')}</ul>`}
-      ${meetingRequestId ? `<button type="button" class="outbound-button" data-action="ao-regenerate-slots" data-meeting-request-id="${escapeFn(meetingRequestId)}" data-message-id="${escapeFn(msg.id)}">${escapeFn(translate('regenerateSlots', 'Slots neu generieren'))}</button>` : ''}
+      ${meetingRequestId ? `<button type="button" class="ctox-button" data-action="ao-regenerate-slots" data-meeting-request-id="${escapeFn(meetingRequestId)}" data-message-id="${escapeFn(msg.id)}">${escapeFn(translate('regenerateSlots', 'Slots neu generieren'))}</button>` : ''}
     </section>
   `;
 }
