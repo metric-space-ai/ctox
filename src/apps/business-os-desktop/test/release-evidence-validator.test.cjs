@@ -56,6 +56,7 @@ function validEvidence(overrides = {}) {
             method: "GET",
             expected: "allow",
             actual: "allow",
+            actualStatus: 200,
             bodyClass: "owner-data",
             accessDecision: "baseline-allow",
             evidenceArtifact: "runtime/appsec/ctox-dev/authz/user-a/owner-baseline.json",
@@ -69,6 +70,7 @@ function validEvidence(overrides = {}) {
             method: "GET",
             expected: "deny",
             actual: "deny",
+            actualStatus: 404,
             bodyClass: "denied",
             leakDecision: "no-leak",
             evidenceArtifact: "runtime/appsec/ctox-dev/authz/replay/user-a-as-user-b.json",
@@ -82,6 +84,7 @@ function validEvidence(overrides = {}) {
             method: "GET",
             expected: "deny",
             actual: "deny",
+            actualStatus: 302,
             bodyClass: "login-required",
             leakDecision: "no-leak",
             evidenceArtifact: "runtime/appsec/ctox-dev/authz/replay/user-a-as-unauthenticated.json",
@@ -211,6 +214,55 @@ test("ctox.dev auth e2e release evidence rejects AppSec authz counters without c
   assert.match(errors, /cases must include at least one owner-baseline case/);
   assert.match(errors, /leak, mutation, or access decision must be present/);
   assert.match(errors, /evidence artifact must be present/);
+});
+
+test("ctox.dev auth e2e release evidence accepts native AppSec authz matrix fields", async () => {
+  const { validateCtoxDevAuthE2e } = await validator();
+  const result = validateCtoxDevAuthE2e(validEvidence({
+    appsecAuthzE2e: {
+      authzMatrix: {
+        imported: true,
+        requiredFieldsPresent: true,
+        subjectCount: 3,
+        ownerBaselineCaseCount: 1,
+        crossSubjectReplayCaseCount: 1,
+        caseCount: 2,
+        cases: [
+          {
+            id: "owner-baseline-allow",
+            endpoint: "/api/instances/tenant-a/health",
+            method: "GET",
+            actor_subject: "user-a",
+            owner_subject: "user-a",
+            object_type: "tenant",
+            object_ref: "tenant-a",
+            expected: "allow",
+            actual_status: 200,
+            result: "pass",
+            body_class: "tenant-json",
+            evidence_artifact: "authz/owner-baseline-allow-redacted.json",
+          },
+          {
+            id: "case-001",
+            endpoint: "/api/instances/tenant-a/health",
+            method: "GET",
+            actor_subject: "user-b",
+            owner_subject: "user-a",
+            object_type: "tenant",
+            object_ref: "tenant-a",
+            expected: "deny",
+            actual_status: 404,
+            result: "pass",
+            body_class: "not-found",
+            leak: false,
+            mutation: false,
+            evidence_artifact: "authz/replay/user-a-as-user-b.json",
+          },
+        ],
+      },
+    },
+  }));
+  assert.deepEqual(result, { ok: true, errors: [] });
 });
 
 test("ctox.dev auth e2e release evidence rejects auth secret leaks", async () => {

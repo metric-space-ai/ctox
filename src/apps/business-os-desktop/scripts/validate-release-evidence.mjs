@@ -164,10 +164,20 @@ function validateAuthzMatrixCase(item, index, errors) {
   if (firstPresent(item, ["expected", "expectedAccess", "expected_access", "expectedDecision", "expected_decision"]) === undefined) {
     errors.push(`${prefix} expected decision must be present`);
   }
-  if (firstPresent(item, ["actual", "actualAccess", "actual_access", "actualDecision", "actual_decision"]) === undefined) {
+  if (firstPresent(item, ["actual", "actualAccess", "actual_access", "actualDecision", "actual_decision", "result"]) === undefined) {
     errors.push(`${prefix} actual decision must be present`);
   }
-  if (!isNonEmptyString(firstPresent(item, ["bodyClass", "body_class", "responseBodyClass", "response_body_class"]))) {
+  if (firstPresent(item, ["actualStatus", "actual_status", "status", "statusCode", "status_code"]) === undefined) {
+    errors.push(`${prefix} actual status must be present`);
+  }
+  if (!isNonEmptyString(firstPresent(item, [
+    "bodyClass",
+    "body_class",
+    "responseBodyClass",
+    "response_body_class",
+    "response_class",
+    "responseClass",
+  ]))) {
     errors.push(`${prefix} body class must be present`);
   }
   if (firstPresent(item, [
@@ -177,6 +187,10 @@ function validateAuthzMatrixCase(item, index, errors) {
     "mutation_decision",
     "accessDecision",
     "access_decision",
+    "leak",
+    "mutation",
+    "unauthorized_success",
+    "result",
   ]) === undefined) {
     errors.push(`${prefix} leak, mutation, or access decision must be present`);
   }
@@ -191,6 +205,11 @@ function authzCaseKind(item) {
   if (raw.includes("cross") && (raw.includes("subject") || raw.includes("account")) && raw.includes("replay")) {
     return "cross-subject-replay";
   }
+  const actor = String(firstPresent(item || {}, ["actor", "actorSubject", "actor_subject", "actorSubjectId", "actor_subject_id"]) || "");
+  const owner = String(firstPresent(item || {}, ["owner", "ownerSubject", "owner_subject", "ownerSubjectId", "owner_subject_id"]) || "");
+  const expected = String(firstPresent(item || {}, ["expected", "expectedAccess", "expected_access", "expectedDecision", "expected_decision"]) || "").toLowerCase();
+  if (actor && owner && actor === owner && (!expected || expected === "allow")) return "owner-baseline";
+  if (actor && owner && actor !== owner) return "cross-subject-replay";
   return raw;
 }
 
