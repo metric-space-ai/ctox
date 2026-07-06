@@ -38,6 +38,16 @@
 - Style the app with Business OS theme tokens such as `--bg`, `--surface`,
   `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`, and verify the
   result in light, dark, and one custom-brand fixture.
+- Build the frame and every recurring control from the preloaded
+  `shared/base.css` kit classes (design-guide "Component Kit"): pane headers
+  (`.ctox-pane-header`/`.ctox-pane-band` + kicker/title + `.ctox-pane-actions`),
+  `.ctox-pane-search`/`.ctox-pane-filter`, `.ctox-button`/`.ctox-pane-icon`,
+  `.ctox-input`/`.ctox-select`, `.ctox-table`, `.ctox-fields`, `.ctox-badge`,
+  `.ctox-chip`, `.ctox-modal`, `.ctox-empty`. The static check fails an app
+  that renders no kit classes.
+- Make header/list primary actions compact icon buttons (`.ctox-pane-icon`)
+  with `aria-label` and `title`, using `ctx.getActionIcon('<name>')` glyphs.
+  Text buttons belong in toolbars, forms, and modal footers only.
 - Treat standalone vanilla apps as portable only when storage and automation
   already sit behind `mount(ctx)`, `ctx.db.collection(...)`, and
   `ctx.commandBus.dispatch(...)`.
@@ -109,6 +119,12 @@
   them. Every pane must have a real repeated workflow use.
 - Do not hard-code a dark-only app surface, force `color-scheme`, or ship CSS
   that becomes unreadable when the shell switches between light and dark theme.
+- Do not hard-code hex/rgb theme colors on surfaces, text, borders, or accents
+  anywhere in app CSS; the static check fails color-bearing declarations that
+  do not resolve through Business OS tokens.
+- Do not rebuild kit components locally (own button/badge/table/modal/search
+  CSS that mirrors `shared/base.css`), and do not put wide text buttons into
+  pane headers where the standard is a `.ctox-pane-icon` icon button.
 - Do not define Business OS tokens on `:root`, `html`, or `body`; workspace
   branding owns those token values.
 - Do not port standalone package-manager setup, auth, HTTP APIs, localStorage

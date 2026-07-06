@@ -40,6 +40,13 @@ Use this before claiming a Business OS app is done.
   an empty copy of shell context/topics.
 - `index.css` uses Business OS theme tokens for surfaces, borders, and text,
   does not force `color-scheme`, and does not define root Business OS tokens.
+- No color-bearing CSS declaration hard-codes hex/rgb theme colors; everything
+  resolves through tokens or `color-mix(...)` over tokens.
+- The UI is built from `shared/base.css` kit classes (pane header with
+  kicker/title and `.ctox-pane-actions`, kit controls, `.ctox-table`,
+  `.ctox-fields`, `.ctox-badge`, `.ctox-modal`, `.ctox-empty`) instead of
+  app-local rebuilds; header primary actions are `.ctox-pane-icon` icon
+  buttons with `aria-label`/`title` and `ctx.getActionIcon` glyphs.
 - The app was visually checked in light and dark theme at desktop and narrow
   viewport sizes; text, buttons, cards, dialogs, and bottom actions remain
   readable and do not overlap.

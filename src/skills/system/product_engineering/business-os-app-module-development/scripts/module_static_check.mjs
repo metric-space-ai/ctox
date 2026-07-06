@@ -681,6 +681,38 @@ function hasCtoxTicketCommandType(text) {
   return /(?:command_type\s*:\s*['"]ctox\.ticket\.[^'"]+['"]|["']command_type["']\s*:\s*["']ctox\.ticket\.[^'"]+["'])/.test(text);
 }
 
+const COLOR_BEARING_PROPERTY = /^(?:background|background-color|color|fill|stroke|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline(?:-color)?)$/;
+const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(|\boklch\s*\(|\boklab\s*\(/i;
+// Neutral alpha overlays (pure black/white shadows and scrims) are
+// theme-independent and allowed.
+const NEUTRAL_ALPHA = /^rgba?\(\s*(?:0|255)\s*,\s*(?:0|255)\s*,\s*(?:0|255)\s*[,)]/i;
+
+function collectHardcodedColorFailures(indexCss) {
+  const css = stripJsComments(indexCss);
+  const offenders = [];
+  for (const match of css.matchAll(/([a-z-]+)\s*:\s*([^;{}]+)/gi)) {
+    const property = match[1].trim().toLowerCase();
+    const value = match[2].trim();
+    if (!COLOR_BEARING_PROPERTY.test(property)) continue;
+    if (!COLOR_LITERAL.test(value)) continue;
+    if (/var\s*\(/.test(value)) continue;
+    if (NEUTRAL_ALPHA.test(value)) continue;
+    offenders.push(`${property}: ${value.length > 48 ? `${value.slice(0, 45)}...` : value}`);
+    if (offenders.length >= 8) break;
+  }
+  if (offenders.length === 0) return [];
+  return [
+    `index.css hard-codes theme colors (${offenders.join('; ')}); every surface/text/border/accent color must come from Business OS tokens via var(--bg), var(--surface), var(--text), var(--muted), var(--line), var(--accent), status tokens, or color-mix over them — see design-guide Token Contract`,
+  ];
+}
+
+function collectKitUsageFailures(runtimeText) {
+  if (/\bctox-[a-z]/.test(String(runtimeText || ''))) return [];
+  return [
+    'app renders no shared kit classes (ctox-*); build the frame and controls from shared/base.css — .ctox-pane/.ctox-pane-header, .ctox-button/.ctox-pane-icon, .ctox-input/.ctox-select, .ctox-table, .ctox-fields, .ctox-badge, .ctox-modal, .ctox-empty — instead of app-local rebuilds; see design-guide Component Kit',
+  ];
+}
+
 function collectThemeTokenFailures(indexCss) {
   const css = stripJsComments(indexCss);
   const messages = [];
@@ -927,6 +959,8 @@ if (!/\bctx\.host\b|\bhost\.innerHTML\b|\bhost\.append/.test(indexJs)) {
 
 if (installedMode) {
   for (const message of collectThemeTokenFailures(indexCss)) fail(message);
+  for (const message of collectHardcodedColorFailures(indexCss)) fail(message);
+  for (const message of collectKitUsageFailures(runtimeText)) fail(message);
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }

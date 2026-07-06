@@ -85,6 +85,14 @@ records so the agent knows what was clicked.
   command-bus buttons by default. Add visible automation only when the user asks
   for it or the workflow clearly needs it, and only when it dispatches a real
   command and shows a trackable result.
+- Build the UI from the preloaded `shared/base.css` component kit — pane
+  headers, `.ctox-button`/`.ctox-pane-icon` actions, kit form controls,
+  `.ctox-table`, `.ctox-fields`, `.ctox-badge`, `.ctox-modal`, `.ctox-empty` —
+  instead of app-local rebuilds. Header primary actions are compact icon
+  buttons with `ctx.getActionIcon(...)` glyphs, never wide text buttons.
+  Static validation fails an app that renders no kit classes or hard-codes
+  theme colors. Load `references/design-guide.md` ("Component Kit",
+  "Icon Rules") before styling anything.
 - Use the Business OS shell tokens for colors and controls. App CSS must inherit
   light/dark theme state from the shell through tokens such as `--bg`,
   `--surface`, `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`.
