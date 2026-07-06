@@ -1,12 +1,22 @@
 <section class="ats-module ats-esign" data-ats-root>
-  <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
-  <form class="ats-form" data-ats-form>
-    <input type="text" name="document_id" placeholder="Dokument-ID" required data-f />
-    <select name="subject_kind" data-f><option value="arbeitsvertrag">arbeitsvertrag</option><option value="vermittlungsvertrag">vermittlungsvertrag</option><option value="ueberlassungsvertrag">ueberlassungsvertrag</option></select>
-    <input type="text" name="signers" placeholder="Unterzeichner-IDs (Komma-getrennt)" data-f />
-    <button type="submit">Anlegen</button>
-  </form>
-  <div class="ats-gate" data-ats-gate></div>
-  <div class="ats-count" data-ats-count></div>
-  <div class="ats-list" data-ats-list></div>
+  <header class="ctox-pane-header ctox-pane-band ats-head">
+    <div class="ctox-pane-title-row">
+      <div class="ctox-pane-titles">
+        <span class="ctox-pane-kicker">E-Signatur</span>
+        <h1 class="ctox-pane-title" data-ats-title></h1>
+      </div>
+    </div>
+    <p class="ats-sub" data-ats-sub></p>
+  </header>
+  <div class="ats-body">
+    <form class="ats-form" data-ats-form>
+      <input class="ctox-input" type="text" name="document_id" placeholder="Dokument-ID" required data-f />
+      <select class="ctox-select" name="subject_kind" data-f><option value="arbeitsvertrag">arbeitsvertrag</option><option value="vermittlungsvertrag">vermittlungsvertrag</option><option value="ueberlassungsvertrag">ueberlassungsvertrag</option></select>
+      <input class="ctox-input" type="text" name="signers" placeholder="Unterzeichner-IDs (Komma-getrennt)" data-f />
+      <button class="ctox-button is-primary" type="submit">Anlegen</button>
+    </form>
+    <div class="ats-gate" data-ats-gate></div>
+    <div class="ats-count" data-ats-count></div>
+    <div class="ats-list" data-ats-list></div>
+  </div>
 </section>

@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260620-ats9';
+const MOD_BUILD = '20260706-kit1';
 const MODULE_ID = 'esign';
 const PRIMARY = 'signature_requests';
 const TITLE = 'esign';
@@ -41,7 +41,7 @@ export async function mount(ctx) {
     rows.sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => signatureRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => signatureRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
   }
 
   async function onListClick(event) {
@@ -155,6 +155,15 @@ export async function mount(ctx) {
   };
 }
 
+// Maps a signature-request status onto the kit badge states
+// (created/neutral, waiting/warning, completed/success, terminal-negative/danger).
+function statusBadgeClass(status) {
+  if (status === 'completed') return 'is-success';
+  if (status === 'declined' || status === 'expired') return 'is-danger';
+  if (status === 'sent' || status === 'partially_signed') return 'is-warning';
+  return '';
+}
+
 function signatureRow(r) {
   const status = String(r.status || 'created');
   const signers = Array.isArray(r.signers) ? r.signers : [];
@@ -171,9 +180,10 @@ function signatureRow(r) {
   const completed = status === 'completed' || status === 'declined' || status === 'expired';
   const actions = completed ? '' : signers
     .filter((s) => s && s.id && s.state !== 'signed' && s.state !== 'declined')
-    .map((s) => '<button type="button" class="ats-action" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">Signieren: ' + esc(s.id) + '</button>')
+    .map((s) => '<button type="button" class="ctox-button" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">Signieren: ' + esc(s.id) + '</button>')
     .join('');
 
+  const badgeClass = ('ctox-badge ' + statusBadgeClass(status)).trim();
   const recordId = r.id || r.document_id || '';
   const recordLabel = r.document_id || r.id || '—';
   return '<div class="ats-item ats-item--rich"'
@@ -181,7 +191,7 @@ function signatureRow(r) {
     + ' data-context-record-type="esign_document"'
     + ' data-context-label="' + esc(recordLabel) + '">'
     + '<div class="ats-item-main">'
-    + '<div><span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span> ' + main + '</div>'
+    + '<div><span class="' + badgeClass + '" data-status="' + esc(status) + '">' + esc(status) + '</span> ' + main + '</div>'
     + '<div class="ats-item-meta">' + meta + '</div>'
     + '</div>'
     + '<div class="ats-item-actions">' + actions + '</div>'

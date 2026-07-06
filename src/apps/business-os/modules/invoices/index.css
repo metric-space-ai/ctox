@@ -1,117 +1,253 @@
-/* invoices/index.css — minimal 3-pane layout. */
+/* invoices/index.css — module-specific styling on top of shared/base.css.
+   Kit classes (.ctox-pane-*, .ctox-list, .ctox-chip, .ctox-table, .ctox-badge,
+   .ctox-button, .ctox-fields, .ctox-empty) come from the shell; only genuinely
+   invoice-specific layout lives here. Shell-token aliases only — no raw hex. */
 
 .invoices-shell {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bo-bg, #0f172a);
-  color: var(--bo-fg, #e2e8f0);
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .invoices-loading {
   padding: 24px;
   font-size: 14px;
-  color: var(--bo-muted, #94a3b8);
+  color: var(--muted);
 }
 
 .invoices-grid {
   display: grid;
   grid-template-columns: 320px 1fr 320px;
   gap: 1px;
-  background: var(--bo-divider, #1e293b);
+  background: var(--line);
   flex: 1;
   min-height: 0;
 }
 
 .invoices-pane {
-  background: var(--bo-pane, #111827);
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* Scrollable pane body under a .ctox-pane-band header. Flex column instead of
+   fixed-height calc() so header-padding changes never break the scroll area. */
+.invoices-pane-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  padding: 14px;
 }
 
-.invoices-list header {
-  font-size: 12px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--bo-muted, #94a3b8);
-  margin-bottom: 8px;
+.invoices-filter-row {
+  flex-wrap: wrap;
 }
 
+/* Left list: kit rows on a plain <ul>. */
 .invoices-list-items {
   list-style: none;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 0;
+  flex: 1 1 auto;
 }
 
-.invoices-list-item {
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
+.invoices-list-item strong {
+  display: block;
   font-size: 13px;
 }
 
-.invoices-list-item:hover {
-  background: var(--bo-hover, #1f2937);
+.invoices-list-item span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
 }
 
-.invoices-list-item.selected {
-  background: var(--bo-accent, #0f766e);
-  color: #fff;
-}
-
-.invoices-create-button {
-  width: 100%;
-  background: var(--bo-accent, #0f766e);
-  color: #fff;
-  border: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.invoices-center h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-}
-
-.invoices-state-chip {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
+.invoices-list-item em {
+  font-style: normal;
   font-size: 11px;
-  background: var(--bo-chip, #1e293b);
-  margin-bottom: 12px;
+  color: var(--muted);
 }
 
-.invoices-line-items {
-  list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
+/* Editor */
+.invoices-editor,
+.invoices-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.invoices-editor h3,
+.invoices-detail h3 {
+  margin: 4px 0 0;
   font-size: 13px;
+}
+
+.invoices-editor-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.invoices-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.invoices-lines-table .ctox-input {
+  min-height: 28px;
+  font-size: 12.5px;
+}
+
+.invoices-lines-table td.is-num .ctox-input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.invoices-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.invoices-totals strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .invoices-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.invoices-actions button {
-  background: var(--bo-button, #1f2937);
-  color: var(--bo-fg, #e2e8f0);
-  border: 0;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
+.invoices-issues {
+  width: 100%;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--danger);
   font-size: 12px;
 }
 
-.invoices-empty {
-  color: var(--bo-muted, #94a3b8);
+/* Detail tabs content */
+.invoices-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   font-size: 13px;
 }
 
-.invoices-inspector {
-  color: var(--bo-muted, #94a3b8);
+.invoices-tab h4,
+.invoices-inspector h4 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.invoices-tab .ctox-table-wrap,
+.invoices-detail .ctox-table-wrap {
+  align-self: stretch;
+  width: 100%;
+}
+
+.invoices-xrechnung-preview {
+  margin: 0;
+  max-width: 100%;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.invoices-payment-form {
+  display: grid;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.invoices-payment-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.invoices-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Inspector */
+.invoices-inspector h4 {
+  margin-top: 14px;
+}
+
+.invoices-inspector-open .ctox-fields {
+  margin-top: 6px;
+}
+
+.invoices-inspector-party h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.invoices-inspector-party p,
+.invoices-inspector-open p,
+.invoices-inspector-actions {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invoices-inspector .muted {
+  color: var(--muted);
+}
+
+/* Blocker / error surfaces */
+.invoices-blocker,
+.invoices-error {
+  padding: 24px;
+  font-size: 13px;
+}
+
+.invoices-blocker h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.invoices-error-banner {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: var(--danger-soft);
+  color: var(--danger);
   font-size: 12px;
 }

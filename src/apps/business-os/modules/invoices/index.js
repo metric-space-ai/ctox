@@ -31,9 +31,53 @@ import {
 } from './commands/builders.js';
 import { validateInvoice } from './core/invoice-validate.js';
 
-const BUILD = '20260612-rxdb-v5-totals1';
+const BUILD = '20260706-kit1';
 const MODULE_ID = 'invoices';
 const SKILL_TAG = 'product_engineering/business-os-app-module-development';
+
+// Left-pane scope filters (rendered as .ctox-chip pills).
+const FILTERS = Object.freeze([
+  { id: 'all', label: 'Alle' },
+  { id: 'overdue', label: 'Überfällig' },
+  { id: 'open', label: 'Offen' },
+  { id: 'draft', label: 'Entwürfe' },
+]);
+
+// Editor/detail line table columns; `num` columns render right-aligned
+// (.ctox-table .is-num).
+const LINE_COLUMNS = Object.freeze([
+  { label: 'Pos' },
+  { label: 'Beschreibung' },
+  { label: 'Menge (‰)', num: true },
+  { label: 'Einheit' },
+  { label: 'Einzelpreis (Cent)', num: true },
+  { label: 'USt %', num: true },
+  { label: 'SKR' },
+  { label: '' },
+]);
+
+// Inline fallbacks (same paths as shared/icons.js actionIconPaths) for
+// contexts without ctx.getActionIcon, e.g. the node test shims.
+const FALLBACK_ICON_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  close: 'M6 6l12 12M18 6L6 18',
+});
+
+function actionIcon(name) {
+  const svg = STATE.ctx?.getActionIcon?.(name, 16);
+  if (svg) return svg;
+  const path = FALLBACK_ICON_PATHS[name];
+  if (!path) return '';
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
+// Maps an invoice lifecycle state onto the kit badge states.
+function stateBadgeClass(state) {
+  if (state === 'paid') return 'is-success';
+  if (state === 'overdue' || state === 'cancelled') return 'is-danger';
+  if (state === 'partially_paid') return 'is-warning';
+  return '';
+}
 
 // Collections whose mutations should re-render the invoices shell. Includes
 // module-owned collections plus the cross-module dependencies the inspector
@@ -169,6 +213,8 @@ function renderDependencyBlocker() {
     'Bitte installiere "buchhaltung" (FIBU/Journal) und "customers" (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.';
   card.appendChild(note);
   const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'ctox-button';
   retry.textContent = 'Neu laden';
   retry.addEventListener('click', () => {
     if (isReady()) {
@@ -264,35 +310,64 @@ function renderList() {
   pane.dataset.contextModule = MODULE_ID;
   pane.dataset.contextSubmodule = 'list';
   pane.dataset.contextRecordType = 'accounting_invoices';
+
   const header = document.createElement('header');
-  header.textContent = `Rechnungen (${visibleInvoices().length})`;
-  pane.appendChild(header);
+  header.className = 'ctox-pane-header ctox-pane-band';
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'ctox-pane-title-row';
+  const titles = document.createElement('div');
+  titles.className = 'ctox-pane-titles';
+  const kicker = document.createElement('span');
+  kicker.className = 'ctox-pane-kicker';
+  kicker.textContent = 'Rechnungen';
+  titles.appendChild(kicker);
+  const title = document.createElement('h2');
+  title.className = 'ctox-pane-title';
+  const activeFilter = FILTERS.find((f) => f.id === STATE.filter) || FILTERS[0];
+  title.textContent = `${activeFilter.label} (${visibleInvoices().length})`;
+  titles.appendChild(title);
+  titleRow.appendChild(titles);
+
+  const actions = document.createElement('div');
+  actions.className = 'ctox-pane-actions';
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'ctox-pane-icon invoices-create-button';
+  createBtn.innerHTML = actionIcon('add');
+  createBtn.setAttribute('aria-label', 'Neue Rechnung');
+  createBtn.title = 'Neue Rechnung';
+  createBtn.disabled = STATE.busy;
+  createBtn.addEventListener('click', () => createDraft());
+  actions.appendChild(createBtn);
+  titleRow.appendChild(actions);
+  header.appendChild(titleRow);
+
   const filterRow = document.createElement('div');
-  filterRow.className = 'invoices-filter-row';
-  for (const f of [
-    { id: 'all', label: 'Alle' },
-    { id: 'overdue', label: 'Überfällig' },
-    { id: 'open', label: 'Offen' },
-    { id: 'draft', label: 'Entwürfe' },
-  ]) {
+  filterRow.className = 'ctox-pane-tools invoices-filter-row';
+  for (const f of FILTERS) {
     const btn = document.createElement('button');
     btn.type = 'button';
+    btn.className = 'ctox-chip';
     btn.textContent = f.label;
     btn.dataset.filter = f.id;
-    if (STATE.filter === f.id) btn.classList.add('active');
+    btn.setAttribute('aria-pressed', STATE.filter === f.id ? 'true' : 'false');
+    if (STATE.filter === f.id) btn.classList.add('is-active');
     btn.addEventListener('click', () => {
       STATE.filter = f.id;
       render();
     });
     filterRow.appendChild(btn);
   }
-  pane.appendChild(filterRow);
+  header.appendChild(filterRow);
+  pane.appendChild(header);
+
   const list = document.createElement('ul');
-  list.className = 'invoices-list-items';
+  list.className = 'ctox-list invoices-list-items';
   for (const inv of visibleInvoices()) {
     const item = document.createElement('li');
-    item.className = 'invoices-list-item';
-    if (inv.id === STATE.selectedInvoiceId) item.classList.add('selected');
+    item.className = 'ctox-list-item invoices-list-item';
+    if (inv.id === STATE.selectedInvoiceId) item.classList.add('is-selected');
     item.dataset.invoiceId = inv.id;
     item.dataset.contextModule = MODULE_ID;
     item.dataset.contextSubmodule = 'list-item';
@@ -312,12 +387,6 @@ function renderList() {
     list.appendChild(item);
   }
   pane.appendChild(list);
-  const createBtn = document.createElement('button');
-  createBtn.className = 'invoices-create-button';
-  createBtn.textContent = '+ Neue Rechnung';
-  createBtn.disabled = STATE.busy;
-  createBtn.addEventListener('click', () => createDraft());
-  pane.appendChild(createBtn);
   return pane;
 }
 
@@ -342,29 +411,51 @@ function renderCenter() {
   const inv = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
   if (!inv) {
     const empty = document.createElement('div');
-    empty.className = 'invoices-empty';
+    empty.className = 'ctox-empty invoices-empty';
     empty.textContent = 'Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.';
     pane.appendChild(empty);
     return pane;
   }
   pane.dataset.contextRecordId = inv.id;
   pane.dataset.contextLabel = inv.invoice_number || inv.id;
+
+  const header = document.createElement('header');
+  header.className = 'ctox-pane-header ctox-pane-band';
+  const titleRow = document.createElement('div');
+  titleRow.className = 'ctox-pane-title-row';
+  const titles = document.createElement('div');
+  titles.className = 'ctox-pane-titles';
+  const kicker = document.createElement('span');
+  kicker.className = 'ctox-pane-kicker';
+  kicker.textContent = 'Rechnung';
+  titles.appendChild(kicker);
   const title = document.createElement('h2');
+  title.className = 'ctox-pane-title';
   title.textContent = inv.invoice_number
     ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
     : `Entwurf · ${partyName(inv.party_id)}`;
-  pane.appendChild(title);
+  titles.appendChild(title);
+  titleRow.appendChild(titles);
+  const headerActions = document.createElement('div');
+  headerActions.className = 'ctox-pane-actions';
   const stateChip = document.createElement('span');
-  stateChip.className = 'invoices-state-chip';
+  stateChip.className = ['ctox-badge', stateBadgeClass(inv.state), 'invoices-state-chip']
+    .filter(Boolean).join(' ');
   stateChip.dataset.state = inv.state;
   stateChip.textContent = STATE_LABELS[inv.state] || inv.state || 'unbekannt';
-  pane.appendChild(stateChip);
+  headerActions.appendChild(stateChip);
+  titleRow.appendChild(headerActions);
+  header.appendChild(titleRow);
+  pane.appendChild(header);
 
+  const body = document.createElement('div');
+  body.className = 'invoices-pane-scroll';
   if (inv.state === 'draft') {
-    pane.appendChild(renderEditor(inv));
+    body.appendChild(renderEditor(inv));
   } else {
-    pane.appendChild(renderDetail(inv));
+    body.appendChild(renderDetail(inv));
   }
+  pane.appendChild(body);
   return pane;
 }
 
@@ -375,8 +466,10 @@ function renderEditor(inv) {
   const meta = document.createElement('div');
   meta.className = 'invoices-editor-meta';
   const partyLabel = document.createElement('label');
+  partyLabel.className = 'invoices-field';
   partyLabel.textContent = 'Kunde';
   const partySelect = document.createElement('select');
+  partySelect.className = 'ctox-select';
   // Always include a placeholder option so the user can intentionally clear
   // or re-pick a customer; otherwise the previous selection would render as a
   // non-deletable default and silently leak to the post command.
@@ -401,8 +494,10 @@ function renderEditor(inv) {
   meta.appendChild(partyLabel);
 
   const dateLabel = document.createElement('label');
+  dateLabel.className = 'invoices-field';
   dateLabel.textContent = 'Rechnungsdatum';
   const dateInput = document.createElement('input');
+  dateInput.className = 'ctox-input';
   dateInput.type = 'date';
   dateInput.value = isoDateInput(inv.invoice_date_ms || Date.now());
   dateInput.addEventListener('change', () => {
@@ -416,8 +511,10 @@ function renderEditor(inv) {
   meta.appendChild(dateLabel);
 
   const typeLabel = document.createElement('label');
+  typeLabel.className = 'invoices-field';
   typeLabel.textContent = 'Typ';
   const typeSelect = document.createElement('select');
+  typeSelect.className = 'ctox-select';
   for (const t of ['sale_out', 'sale_in', 'credit_note_out', 'credit_note_in', 'recurring_template']) {
     const opt = document.createElement('option');
     opt.value = t;
@@ -437,16 +534,22 @@ function renderEditor(inv) {
   linesHeader.textContent = 'Positionen';
   wrap.appendChild(linesHeader);
 
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'ctox-table-wrap';
   const linesTable = document.createElement('table');
-  linesTable.className = 'invoices-lines-table';
+  linesTable.className = 'ctox-table invoices-lines-table';
   linesTable.appendChild(renderLineHeader());
+  const linesBody = document.createElement('tbody');
   for (const line of inv.lines || []) {
-    linesTable.appendChild(renderLineRow(inv, line));
+    linesBody.appendChild(renderLineRow(inv, line));
   }
-  wrap.appendChild(linesTable);
+  linesTable.appendChild(linesBody);
+  tableWrap.appendChild(linesTable);
+  wrap.appendChild(tableWrap);
 
   const addLineBtn = document.createElement('button');
   addLineBtn.type = 'button';
+  addLineBtn.className = 'ctox-button';
   addLineBtn.textContent = '+ Position';
   addLineBtn.addEventListener('click', () => {
     inv.lines = inv.lines || [];
@@ -478,19 +581,24 @@ function renderEditor(inv) {
   actions.className = 'invoices-actions';
 
   const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'ctox-button';
   saveBtn.textContent = 'Entwurf speichern';
   saveBtn.disabled = STATE.busy;
   saveBtn.addEventListener('click', () => updateDraft(inv));
   actions.appendChild(saveBtn);
 
   const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.className = 'ctox-button is-danger';
   deleteBtn.textContent = 'Entwurf löschen';
   deleteBtn.disabled = STATE.busy;
   deleteBtn.addEventListener('click', () => deleteDraft(inv));
   actions.appendChild(deleteBtn);
 
   const postBtn = document.createElement('button');
-  postBtn.className = 'invoices-action-primary';
+  postBtn.type = 'button';
+  postBtn.className = 'ctox-button is-primary invoices-action-primary';
   postBtn.textContent = 'Buchen (GoBD-post)';
   const issues = computeValidationIssues(inv);
   const postDisabled = STATE.busy || !issues.canPost;
@@ -519,9 +627,10 @@ function renderEditor(inv) {
 function renderLineHeader() {
   const thead = document.createElement('thead');
   const row = document.createElement('tr');
-  for (const label of ['Pos', 'Beschreibung', 'Menge (‰)', 'Einheit', 'Einzelpreis (Cent)', 'USt %', 'SKR', '']) {
+  for (const column of LINE_COLUMNS) {
     const th = document.createElement('th');
-    th.textContent = label;
+    if (column.num) th.className = 'is-num';
+    th.textContent = column.label;
     row.appendChild(th);
   }
   thead.appendChild(row);
@@ -539,9 +648,11 @@ function renderLineRow(inv, line) {
     { type: 'number', value: ((line.tax_rate || 0) * 100).toFixed(0), set: (v) => (line.tax_rate = Math.max(0, Math.min(1, Number(v) / 100))) },
     { type: 'text', value: line.account_code || '', set: (v) => (line.account_code = v) },
   ];
-  for (const c of cells) {
+  for (const [index, c] of cells.entries()) {
     const td = document.createElement('td');
+    if (LINE_COLUMNS[index]?.num) td.className = 'is-num';
     const input = document.createElement('input');
+    input.className = 'ctox-input';
     input.type = c.type;
     input.value = c.value;
     input.addEventListener('change', () => {
@@ -562,7 +673,11 @@ function renderLineRow(inv, line) {
   }
   const removeTd = document.createElement('td');
   const removeBtn = document.createElement('button');
-  removeBtn.textContent = '×';
+  removeBtn.type = 'button';
+  removeBtn.className = 'ctox-icon-button';
+  removeBtn.innerHTML = actionIcon('close');
+  removeBtn.setAttribute('aria-label', 'Position entfernen');
+  removeBtn.title = 'Position entfernen';
   removeBtn.addEventListener('click', () => {
     inv.lines = (inv.lines || []).filter((l) => l.id !== line.id);
     render();
@@ -612,30 +727,33 @@ function renderDetail(inv) {
   const wrap = document.createElement('section');
   wrap.className = 'invoices-detail';
 
-  const summary = document.createElement('div');
-  summary.className = 'invoices-detail-summary';
+  const summary = document.createElement('dl');
+  summary.className = 'ctox-fields invoices-detail-summary';
   summary.innerHTML = `
-    <div><span>Rechnungsnummer</span><strong>${escapeHtml(inv.invoice_number || '—')}</strong></div>
-    <div><span>Kunde</span><strong>${escapeHtml(partyName(inv.party_id))}</strong></div>
-    <div><span>Datum</span><strong>${escapeHtml(isoDateInput(inv.invoice_date_ms))}</strong></div>
-    <div><span>Fällig</span><strong>${escapeHtml(isoDateInput(inv.due_date_ms))}</strong></div>
-    <div><span>Netto</span><strong>${formatCents(inv.subtotal_cents)}</strong></div>
-    <div><span>USt</span><strong>${formatCents(inv.tax_cents)}</strong></div>
-    <div><span>Brutto</span><strong>${formatCents(inv.total_cents)}</strong></div>
-    <div><span>Bezahlt</span><strong>${formatCents(inv.paid_cents)}</strong></div>
-    <div><span>Offen</span><strong>${formatCents(inv.open_cents)}</strong></div>
+    <dt>Rechnungsnummer</dt><dd>${escapeHtml(inv.invoice_number || '—')}</dd>
+    <dt>Kunde</dt><dd>${escapeHtml(partyName(inv.party_id))}</dd>
+    <dt>Datum</dt><dd>${escapeHtml(isoDateInput(inv.invoice_date_ms))}</dd>
+    <dt>Fällig</dt><dd>${escapeHtml(isoDateInput(inv.due_date_ms))}</dd>
+    <dt>Netto</dt><dd>${formatCents(inv.subtotal_cents)}</dd>
+    <dt>USt</dt><dd>${formatCents(inv.tax_cents)}</dd>
+    <dt>Brutto</dt><dd>${formatCents(inv.total_cents)}</dd>
+    <dt>Bezahlt</dt><dd>${formatCents(inv.paid_cents)}</dd>
+    <dt>Offen</dt><dd>${formatCents(inv.open_cents)}</dd>
   `;
   wrap.appendChild(summary);
 
   const linesHeader = document.createElement('h3');
   linesHeader.textContent = 'Positionen';
   wrap.appendChild(linesHeader);
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'ctox-table-wrap';
   const linesTable = document.createElement('table');
-  linesTable.className = 'invoices-lines-table invoices-lines-readonly';
+  linesTable.className = 'ctox-table invoices-lines-table invoices-lines-readonly';
   linesTable.appendChild(renderLineHeader());
+  const linesBody = document.createElement('tbody');
   for (const line of inv.lines || []) {
     const tr = document.createElement('tr');
-    for (const value of [
+    const values = [
       line.position,
       line.description,
       formatMilli(line.quantity),
@@ -643,19 +761,23 @@ function renderDetail(inv) {
       formatCents(line.unit_price_cents),
       `${((line.tax_rate || 0) * 100).toFixed(0)}%`,
       line.account_code,
-    ]) {
+    ];
+    for (const [index, value] of values.entries()) {
       const td = document.createElement('td');
+      if (LINE_COLUMNS[index]?.num) td.className = 'is-num';
       td.textContent = String(value ?? '');
       tr.appendChild(td);
     }
     const emptyTd = document.createElement('td');
     tr.appendChild(emptyTd);
-    linesTable.appendChild(tr);
+    linesBody.appendChild(tr);
   }
-  wrap.appendChild(linesTable);
+  linesTable.appendChild(linesBody);
+  tableWrap.appendChild(linesTable);
+  wrap.appendChild(tableWrap);
 
   const tabs = document.createElement('div');
-  tabs.className = 'invoices-tabs';
+  tabs.className = 'ctox-pane-tabs invoices-tabs';
   const tabButtons = [
     { id: 'journal', label: 'Journal' },
     { id: 'xrechnung', label: 'XRechnung' },
@@ -665,8 +787,10 @@ function renderDetail(inv) {
   for (const t of tabButtons) {
     const btn = document.createElement('button');
     btn.type = 'button';
+    btn.className = 'ctox-pane-tab';
     btn.dataset.tab = t.id;
     btn.textContent = t.label;
+    btn.setAttribute('aria-selected', STATE.lineDraft === t.id ? 'true' : 'false');
     if (STATE.lineDraft === t.id) btn.classList.add('active');
     btn.addEventListener('click', () => {
       STATE.lineDraft = STATE.lineDraft === t.id ? null : t.id;
@@ -702,18 +826,20 @@ function renderJournalTab(inv) {
       <tr>
         <td>${escapeHtml(line.account_code || '8400')}</td>
         <td>${escapeHtml(line.description || '')}</td>
-        <td class="num">${formatCents(net)}</td>
-        <td class="num">—</td>
-        <td class="num">${formatCents(tax)}</td>
+        <td class="is-num">${formatCents(net)}</td>
+        <td class="is-num">—</td>
+        <td class="is-num">${formatCents(tax)}</td>
       </tr>
     `;
   }).join('');
   wrap.innerHTML = `
     <h4>Journal ${escapeHtml(inv.post_journal_entry_id)}</h4>
-    <table class="invoices-journal-table">
-      <thead><tr><th>Konto</th><th>Beschreibung</th><th class="num">Soll</th><th class="num">Haben</th><th class="num">USt</th></tr></thead>
-      <tbody>${lines}</tbody>
-    </table>
+    <div class="ctox-table-wrap">
+      <table class="ctox-table invoices-journal-table">
+        <thead><tr><th>Konto</th><th>Beschreibung</th><th class="is-num">Soll</th><th class="is-num">Haben</th><th class="is-num">USt</th></tr></thead>
+        <tbody>${lines}</tbody>
+      </table>
+    </div>
   `;
   return wrap;
 }
@@ -729,6 +855,7 @@ function renderXRechnungTab(inv) {
     wrap.appendChild(pre);
     const download = document.createElement('button');
     download.type = 'button';
+    download.className = 'ctox-button';
     download.textContent = 'XRechnung-XML herunterladen';
     download.addEventListener('click', () => {
       const blob = new Blob([xml], { type: 'application/xml' });
@@ -753,10 +880,10 @@ function renderPaymentsTab(inv) {
   wrap.innerHTML = `
     <p>Offen: <strong>${formatCents(openCents)}</strong></p>
     <form class="invoices-payment-form">
-      <label>Betrag (Cent)<input type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
-      <label>Skonto (Cent)<input type="number" name="skonto_cents" value="0" min="0" /></label>
-      <label>Zahlungs-ID<input type="text" name="payment_id" placeholder="pay_…" required /></label>
-      <button type="submit" ${STATE.busy ? 'disabled' : ''}>Zuordnen</button>
+      <label>Betrag (Cent)<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
+      <label>Skonto (Cent)<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
+      <label>Zahlungs-ID<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
+      <button class="ctox-button is-primary" type="submit" ${STATE.busy ? 'disabled' : ''}>Zuordnen</button>
     </form>
     <p class="invoices-hint">Skonto wird nur abgezogen, wenn das Zahlungsdatum vor dem Skonto-Deadline liegt. Das berechnet der native Handler.</p>
   `;
@@ -791,7 +918,7 @@ function renderDunningTab(inv) {
   }
   wrap.innerHTML = `
     <p>Diese Rechnung ist überfällig. Starte einen Mahnlauf, um einen Brief zu erzeugen.</p>
-    <button type="button" class="invoices-action-primary" ${STATE.busy ? 'disabled' : ''}>Mahnlauf für diese Rechnung</button>
+    <button type="button" class="ctox-button is-primary invoices-action-primary" ${STATE.busy ? 'disabled' : ''}>Mahnlauf für diese Rechnung</button>
   `;
   const btn = wrap.querySelector('button');
   btn.addEventListener('click', async () => {
@@ -815,12 +942,26 @@ function renderInspector() {
   pane.dataset.rightContent = '';
   const inv = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
   if (!inv) {
-    pane.textContent = 'Inspector: keine Rechnung ausgewählt.';
+    const empty = document.createElement('div');
+    empty.className = 'ctox-empty';
+    empty.textContent = 'Inspector: keine Rechnung ausgewählt.';
+    pane.appendChild(empty);
     return pane;
   }
   const header = document.createElement('header');
-  header.textContent = 'Inspector';
+  header.className = 'ctox-pane-header ctox-pane-band';
+  header.innerHTML = `
+    <div class="ctox-pane-title-row">
+      <div class="ctox-pane-titles">
+        <span class="ctox-pane-kicker">Rechnungen</span>
+        <h2 class="ctox-pane-title">Inspector</h2>
+      </div>
+    </div>
+  `;
   pane.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'invoices-pane-scroll';
 
   const party = STATE.parties[inv.party_id] || {};
   const partyDiv = document.createElement('div');
@@ -830,26 +971,29 @@ function renderInspector() {
     <p>${escapeHtml(party.address || 'Keine Adresse hinterlegt.')}</p>
     <p class="muted">${escapeHtml(party.email || '')}</p>
   `;
-  pane.appendChild(partyDiv);
+  body.appendChild(partyDiv);
 
   const openDiv = document.createElement('div');
   openDiv.className = 'invoices-inspector-open';
   const openCents = inv.open_cents ?? Math.max(0, (inv.total_cents || 0) - (inv.paid_cents || 0));
   openDiv.innerHTML = `
     <h4>Offene Posten</h4>
-    <p>Offen: <strong>${formatCents(openCents)}</strong></p>
-    <p>Bezahlt: ${formatCents(inv.paid_cents || 0)}</p>
+    <dl class="ctox-fields">
+      <dt>Offen</dt><dd><strong>${formatCents(openCents)}</strong></dd>
+      <dt>Bezahlt</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
+    </dl>
   `;
-  pane.appendChild(openDiv);
+  body.appendChild(openDiv);
 
   const actionsHeader = document.createElement('h4');
   actionsHeader.textContent = 'Aktionen';
-  pane.appendChild(actionsHeader);
+  body.appendChild(actionsHeader);
   const actionsList = document.createElement('div');
   actionsList.className = 'invoices-inspector-actions';
   actionsList.textContent =
     'Verfuegbare Aktionen erscheinen hier, sobald sie in der Befehls-Schiene freigeschaltet sind.';
-  pane.appendChild(actionsList);
+  body.appendChild(actionsList);
+  pane.appendChild(body);
   return pane;
 }
 

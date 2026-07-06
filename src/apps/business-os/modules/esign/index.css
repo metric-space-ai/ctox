@@ -1,35 +1,131 @@
-.ats-esign { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
-.ats-esign .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
-.ats-esign .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
-.ats-esign .ats-form { display: flex; flex-wrap: wrap; gap: 8px; }
-.ats-esign .ats-form input, .ats-esign .ats-form select { padding: 6px 8px; font-size: 13px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); background: transparent; color: inherit; }
-.ats-esign .ats-form button { padding: 6px 14px; font-size: 13px; border-radius: 6px; cursor: pointer; }
-.ats-esign .ats-count { font-size: 13px; opacity: .8; }
+/* esign/index.css — module-specific styling on top of shared/base.css.
+   Header, inputs, buttons, badges and empty state come from the kit
+   (.ctox-pane-*, .ctox-input/.ctox-select, .ctox-button, .ctox-badge,
+   .ctox-empty); only the esign frame and gate/result rows live here. */
 
-.ats-esign .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
-.ats-esign .ats-item--rich { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
-.ats-esign .ats-item-main { min-width: 0; }
-.ats-esign .ats-item-meta { margin-top: 3px; font-size: 12px; opacity: .7; }
-.ats-esign .ats-item-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.ats-esign .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
+.ats-esign {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  color: var(--text);
+}
 
-.ats-esign .ats-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
-.ats-esign .ats-badge--created { color: color-mix(in srgb, currentColor 60%, gray); border-color: color-mix(in srgb, gray 40%, transparent); }
-.ats-esign .ats-badge--sent { color: color-mix(in srgb, currentColor 50%, blue); border-color: color-mix(in srgb, blue 40%, transparent); }
-.ats-esign .ats-badge--partially_signed { color: color-mix(in srgb, currentColor 45%, orange); border-color: color-mix(in srgb, orange 45%, transparent); }
-.ats-esign .ats-badge--completed { color: color-mix(in srgb, currentColor 45%, green); border-color: color-mix(in srgb, green 45%, transparent); }
-.ats-esign .ats-badge--declined { color: color-mix(in srgb, currentColor 45%, red); border-color: color-mix(in srgb, red 45%, transparent); }
-.ats-esign .ats-badge--expired { color: color-mix(in srgb, currentColor 45%, red); border-color: color-mix(in srgb, red 35%, transparent); }
+.ats-esign .ats-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
 
-.ats-esign .ats-action { padding: 4px 10px; font-size: 12px; border-radius: 6px; cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: transparent; color: inherit; }
-.ats-esign .ats-action:hover { border-color: color-mix(in srgb, green 45%, transparent); }
+.ats-esign .ats-sub:empty {
+  display: none;
+}
 
-.ats-esign .ats-gate { font-size: 13px; }
-.ats-esign .ats-gate:empty { display: none; }
-.ats-esign .ats-gate { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-.ats-esign .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
-.ats-esign .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
-.ats-esign .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
-.ats-esign .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
-.ats-esign .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.ats-esign .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
+.ats-esign .ats-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ats-esign .ats-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ats-esign .ats-form .ctox-input {
+  width: auto;
+  flex: 1 1 180px;
+}
+
+.ats-esign .ats-form .ctox-select {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.ats-esign .ats-count {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ats-esign .ats-item {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  background: var(--surface);
+}
+
+.ats-esign .ats-item--rich {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ats-esign .ats-item-main {
+  min-width: 0;
+}
+
+.ats-esign .ats-item-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ats-esign .ats-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ats-esign .ats-gate {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.ats-esign .ats-gate:empty {
+  display: none;
+}
+
+.ats-esign .ats-gate--ok {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: var(--success-soft);
+}
+
+.ats-esign .ats-gate--block {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: var(--danger-soft);
+}
+
+.ats-esign .ats-gate--offline {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: var(--warning-soft);
+}
+
+.ats-esign .ats-gate .ats-result-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ats-esign .ats-gate .ats-blockers {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ats-esign .ats-gate .ats-blockers li {
+  font-size: 12px;
+  margin: 2px 0;
+}
