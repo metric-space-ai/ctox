@@ -662,7 +662,7 @@ function render() {
   if (els.viewToggle) {
     for (const btn of els.viewToggle.querySelectorAll('[data-view]')) {
       const active = btn.dataset.view === state.viewMode;
-      btn.classList.toggle('active', active);
+      btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
@@ -683,7 +683,7 @@ function renderCatalogBody(items) {
 
 function renderEmptyCatalogState({ title, body }) {
   const empty = document.createElement('section');
-  empty.className = 'store-empty-state';
+  empty.className = 'ctox-empty store-empty-state';
   empty.setAttribute('role', 'status');
   empty.innerHTML = `
     <strong>${escapeHtml(title)}</strong>
@@ -772,7 +772,7 @@ function renderCard(item) {
     ${actionsHtml}
     ${operationHtml}
     <footer class="app-card-footer">
-      <span class="app-status-badge ${escapeHtml(cardStatus)}">${escapeHtml(statusLabel(cardStatus))}</span>
+      <span class="ctox-badge ${statusBadgeClass(cardStatus)}">${escapeHtml(statusLabel(cardStatus))}</span>
       <span class="app-card-source">${escapeHtml(sourceShort(item))}</span>
     </footer>
   `;
@@ -803,6 +803,17 @@ function statusForCard(item, operation = operationForItem(item)) {
   if (operation?.kind === 'error') return 'error';
   if (operation?.kind === 'success') return 'installed';
   return item?.status || '';
+}
+
+// Maps the card status onto the shared .ctox-badge state modifiers
+// (shared/base.css §10). "local" keeps its module-specific purple tint.
+function statusBadgeClass(status) {
+  if (status === 'installed') return 'is-success';
+  if (status === 'installing') return 'is-warning';
+  if (status === 'error') return 'is-danger';
+  if (status === 'core' || status === 'system' || status === 'template') return 'is-info';
+  if (status === 'local') return 'app-badge-local';
+  return '';
 }
 
 function progressButtonHtml(label) {
@@ -1230,7 +1241,7 @@ async function openVersionsDialog(item) {
   }
 
   const overlay = document.createElement('div');
-  overlay.className = 'app-store-version-overlay';
+  overlay.className = 'ctox-modal';
   const rows = versions.map((version) => {
     const date = version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '';
     const seal = version.sealed ? '' : ' · offen';
@@ -1241,17 +1252,19 @@ async function openVersionsDialog(item) {
           <strong>${escapeHtml(version.label || originLabel(version.origin))}</strong>
           <span>${meta}</span>
         </div>
-        <button type="button" class="card-btn secondary" data-rollback-version="${escapeHtml(version.version_id)}">Wiederherstellen</button>
+        <button type="button" class="ctox-button" data-rollback-version="${escapeHtml(version.version_id)}">Wiederherstellen</button>
       </li>`;
   }).join('');
 
   overlay.innerHTML = `
-    <div class="app-store-version-dialog" role="dialog" aria-modal="true" aria-label="Versionen von ${escapeHtml(item.title)}">
-      <header class="app-version-head">
-        <h3>Versionen – ${escapeHtml(item.title)}</h3>
-        <button type="button" class="card-btn link" data-version-close aria-label="Schließen">Schließen</button>
+    <div class="ctox-modal-card" role="dialog" aria-modal="true" aria-label="Versionen von ${escapeHtml(item.title)}">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title">Versionen – ${escapeHtml(item.title)}</h3>
+        <button type="button" class="ctox-pane-icon" data-version-close aria-label="Schließen" title="Schließen">${state.ctx?.getActionIcon?.('close') || ''}</button>
       </header>
-      <ul class="app-version-list">${rows}</ul>
+      <div class="ctox-modal-body">
+        <ul class="app-version-list">${rows}</ul>
+      </div>
     </div>`;
 
   const close = () => {
@@ -1293,7 +1306,7 @@ async function rollbackToVersion(item, versionId) {
 async function openReleaseDialog(item) {
   const model = releaseWizardModel(item, state);
   const overlay = document.createElement('div');
-  overlay.className = 'app-store-version-overlay';
+  overlay.className = 'ctox-modal';
   const dataRows = model.dataAreas.length
     ? model.dataAreas.map((area) => `
       <li class="app-release-data-row">
@@ -1314,38 +1327,38 @@ async function openReleaseDialog(item) {
   const sourceOptions = releaseVersionOptionsHtml(model.versions, model.sourceVersionId, 'Aktuelle Quelle');
   const rollbackOptions = releaseVersionOptionsHtml(model.versions, model.rollbackVersionId, 'Kein Rollback-Ziel');
   overlay.innerHTML = `
-    <form class="app-store-version-dialog app-release-dialog" role="dialog" aria-modal="true" aria-label="Freigabe von ${escapeAttr(item.title)}">
-      <header class="app-version-head">
-        <h3>Freigabe vorbereiten - ${escapeHtml(item.title)}</h3>
-        <button type="button" class="card-btn link" data-release-close aria-label="Schließen">Schließen</button>
+    <form class="ctox-modal-card ctox-modal-card--wide app-release-dialog" role="dialog" aria-modal="true" aria-label="Freigabe von ${escapeAttr(item.title)}">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title">Freigabe vorbereiten - ${escapeHtml(item.title)}</h3>
+        <button type="button" class="ctox-pane-icon" data-release-close aria-label="Schließen" title="Schließen">${state.ctx?.getActionIcon?.('close') || ''}</button>
       </header>
-      <div class="app-release-form">
+      <div class="ctox-modal-body app-release-form">
         <label>
-          <span>Zielversion</span>
-          <input name="target_version" value="${escapeAttr(model.targetVersion)}" required pattern="\\d+\\.\\d+\\.\\d+">
+          <span class="ctox-field-label">Zielversion</span>
+          <input class="ctox-input" name="target_version" value="${escapeAttr(model.targetVersion)}" required pattern="\\d+\\.\\d+\\.\\d+">
         </label>
         <label>
-          <span>Sichtbarkeit nach Freigabe</span>
-          <select name="release_channel">
+          <span class="ctox-field-label">Sichtbarkeit nach Freigabe</span>
+          <select class="ctox-select" name="release_channel">
             <option value="team" ${model.releaseChannel === 'team' ? 'selected' : ''}>Team</option>
             <option value="restricted" ${model.releaseChannel === 'restricted' ? 'selected' : ''}>Eingeschränkt</option>
           </select>
         </label>
         <label>
-          <span>Quell-Snapshot</span>
-          <select name="source_version_id">${sourceOptions}</select>
+          <span class="ctox-field-label">Quell-Snapshot</span>
+          <select class="ctox-select" name="source_version_id">${sourceOptions}</select>
         </label>
         <label>
-          <span>Rollback-Ziel</span>
-          <select name="rollback_version_id">${rollbackOptions}</select>
+          <span class="ctox-field-label">Rollback-Ziel</span>
+          <select class="ctox-select" name="rollback_version_id">${rollbackOptions}</select>
         </label>
         <label>
-          <span>App-Verantwortliche</span>
-          <input name="responsible_user_ids" value="${escapeAttr(model.responsibleUserIds.join(', '))}" placeholder="user-id, user-id">
+          <span class="ctox-field-label">App-Verantwortliche</span>
+          <input class="ctox-input" name="responsible_user_ids" value="${escapeAttr(model.responsibleUserIds.join(', '))}" placeholder="user-id, user-id">
         </label>
         <label>
-          <span>Release-Notiz</span>
-          <textarea name="notes" rows="3" placeholder="Was wird für das Team freigegeben?">${escapeHtml(model.notes)}</textarea>
+          <span class="ctox-field-label">Release-Notiz</span>
+          <textarea class="ctox-textarea" name="notes" rows="3" placeholder="Was wird für das Team freigegeben?">${escapeHtml(model.notes)}</textarea>
         </label>
         <section class="app-release-data-review" aria-label="Datenzugriff Review">
           <h4>Datenzugriff Review</h4>
@@ -1353,9 +1366,9 @@ async function openReleaseDialog(item) {
           <ul>${dataRows}</ul>
         </section>
       </div>
-      <footer class="app-release-actions">
-        <button type="button" class="card-btn secondary" data-release-close>Abbrechen</button>
-        <button type="submit" class="card-btn primary">Freigabe senden</button>
+      <footer class="ctox-modal-footer">
+        <button type="button" class="ctox-button" data-release-close>Abbrechen</button>
+        <button type="submit" class="ctox-button is-primary">Freigabe senden</button>
       </footer>
     </form>`;
 

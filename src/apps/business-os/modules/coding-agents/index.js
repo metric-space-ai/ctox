@@ -614,7 +614,7 @@ function wireEvents() {
       state.isAutomating = true;
       els.btnTriggerSignup.disabled = true;
       els.authStatus.textContent = t('automating', 'AUTOMATING...');
-      els.authStatus.className = 'card-status-indicator active';
+      els.authStatus.className = 'ctox-badge is-success';
 
       els.browserLogBox.innerHTML = '';
       appendBrowserLog(`Starting ${state.activeApp.toUpperCase()} provider authentication on the host...`);
@@ -716,7 +716,7 @@ function createWorkspaceStateNode(status, error = '') {
     body.textContent = error || 'Backend oder Command-Bus antwortet nicht.';
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.className = 'fibu-btn fibu-btn-secondary';
+    retry.className = 'ctox-button';
     retry.textContent = 'Erneut versuchen';
     retry.addEventListener('click', () => startInitialLoadWithTimeout());
     wrap.append(title, body, retry);
@@ -836,14 +836,14 @@ function updateUI() {
   // Service indicator
   if (els.serviceStatus) {
     els.serviceStatus.textContent = isOnline ? t('active') : t('inactive');
-    els.serviceStatus.className = `card-status-indicator ${isOnline ? 'active' : ''}`;
+    els.serviceStatus.className = `ctox-badge ${isOnline ? 'is-success' : ''}`;
   }
 
   // Auth Status indicator
   const hasAuth = Boolean(diag.authorized || diag.authReady);
   if (els.authStatus) {
     els.authStatus.textContent = hasAuth ? t('authorized') : t('unauthorized');
-    els.authStatus.className = `card-status-indicator ${hasAuth ? 'active' : ''}`;
+    els.authStatus.className = `ctox-badge ${hasAuth ? 'is-success' : ''}`;
   }
 }
 

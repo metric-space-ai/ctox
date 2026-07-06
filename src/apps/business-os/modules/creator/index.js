@@ -319,15 +319,30 @@ function renderInstalledAppCard(app) {
         ${app.description ? `<p>${escapeHtml(app.description)}</p>` : ''}
       </div>
       <div class="creator-mini-actions">
-        <button type="button" class="os-icon-btn" data-open-installed-app="${escapeHtml(app.id)}" title="App öffnen" aria-label="${escapeHtml(app.title)} öffnen">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>
+        <button type="button" class="ctox-icon-button" data-open-installed-app="${escapeHtml(app.id)}" title="App öffnen" aria-label="${escapeHtml(app.title)} öffnen">
+          ${creatorActionIcon('open')}
         </button>
-        <button type="button" class="os-icon-btn" data-upgrade-installed-app="${escapeHtml(app.id)}" title="Upgrade vorbereiten" aria-label="${escapeHtml(app.title)} Upgrade vorbereiten">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>
+        <button type="button" class="ctox-icon-button" data-upgrade-installed-app="${escapeHtml(app.id)}" title="Upgrade vorbereiten" aria-label="${escapeHtml(app.title)} Upgrade vorbereiten">
+          ${creatorActionIcon('upload')}
         </button>
       </div>
     </article>
   `;
+}
+
+// Monochrome stroke icon in the shared action-icon style. Falls back to the
+// shell-provided ctx.getActionIcon when available (same glyph set).
+function creatorActionIcon(name, size = 16) {
+  const shellIcon = state.ctx?.getActionIcon?.(name, size);
+  if (shellIcon) return shellIcon;
+  const paths = {
+    open: 'M14 5h5v5M19 5l-8 8M11 5H5v14h14v-6',
+    upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
+    download: 'M12 4v11M12 15l-4-4M12 15l4-4M5 19h14',
+    close: 'M6 6l12 12M18 6L6 18',
+  };
+  const d = paths[name] || paths.close;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 }
 
 function renderCreatorRequestCard(item) {
@@ -340,8 +355,8 @@ function renderCreatorRequestCard(item) {
         <p>${escapeHtml(request)}</p>
       </div>
       <div class="creator-mini-actions">
-        <button type="button" class="os-icon-btn" data-use-creator-request="${escapeHtml(item.id)}" title="Auftrag uebernehmen" aria-label="Auftrag uebernehmen">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        <button type="button" class="ctox-icon-button" data-use-creator-request="${escapeHtml(item.id)}" title="Auftrag uebernehmen" aria-label="Auftrag uebernehmen">
+          ${creatorActionIcon('download')}
         </button>
       </div>
     </article>
@@ -434,8 +449,8 @@ function wireUi(host) {
       row.className = 'collection-row';
       row.innerHTML = `
         <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${coll}</span>
-        <button type="button" class="os-icon-btn is-danger" data-remove-idx="${idx}" aria-label="Datentabelle ${coll} entfernen" title="Datentabelle entfernen">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        <button type="button" class="ctox-icon-button is-danger" data-remove-idx="${idx}" aria-label="Datentabelle ${coll} entfernen" title="Datentabelle entfernen">
+          ${creatorActionIcon('close')}
         </button>
       `;
       row.querySelector('[data-remove-idx]').addEventListener('click', async (e) => {

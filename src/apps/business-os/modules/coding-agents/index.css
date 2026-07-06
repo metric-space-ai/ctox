@@ -125,7 +125,7 @@
 .sessions-list-panel::-webkit-scrollbar-thumb,
 .coding-agents-workbench-body::-webkit-scrollbar-thumb,
 .right-subpanel::-webkit-scrollbar-thumb {
-  background: hsla(0, 0%, 100%, 0.08);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   border-radius: 3px;
 }
 .coding-agents-scroll-pane::-webkit-scrollbar-thumb:hover,
@@ -133,7 +133,7 @@
 .sessions-list-panel::-webkit-scrollbar-thumb:hover,
 .coding-agents-workbench-body::-webkit-scrollbar-thumb:hover,
 .right-subpanel::-webkit-scrollbar-thumb:hover {
-  background: hsla(0, 0%, 100%, 0.16);
+  background: color-mix(in srgb, var(--text) 18%, transparent);
 }
 
 /* Three Pane Layout with Gutters and Floating Cards */
@@ -421,13 +421,13 @@
 }
 
 .status-dot.online {
-  background-color: hsl(142, 70%, 45%);
-  box-shadow: 0 0 8px hsl(142, 70%, 45%);
+  background-color: var(--success);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 70%, transparent);
 }
 
 .status-dot.offline {
-  background-color: hsl(350, 70%, 50%);
-  box-shadow: 0 0 8px hsl(350, 70%, 50%);
+  background-color: var(--danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 70%, transparent);
 }
 
 .status-badge {
@@ -435,20 +435,6 @@
   font-weight: 700;
   letter-spacing: 0.5px;
   opacity: 0.7;
-}
-
-/* Glassmorphism panels */
-.glass-panel {
-  background: var(--bg-card);
-  border: 1px solid var(--border-glow);
-  border-radius: var(--radius-panel);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  transition: all var(--transition-normal);
-}
-
-.glass-panel:hover {
-  border-color: var(--border-glow-active);
 }
 
 /* Diagnostics Panel */
@@ -497,115 +483,17 @@
   margin: 0;
 }
 
-/* Buttons style */
-.btn,
-.fibu-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  font-weight: 600;
-  border-radius: var(--radius-control);
-  padding: 8px 16px;
-  cursor: pointer;
-  outline: none;
-  border: 1px solid transparent;
-  transition: all var(--transition-fast);
-}
-
-.btn-block {
-  width: 100%;
-}
-
-.btn-small {
-  padding: 5px 10px;
-  font-size: 11px;
-  border-radius: 6px;
-}
-
-.btn-large {
-  padding: 12px 24px;
-  font-size: 14px;
-  border-radius: 10px;
-}
-
-.btn-primary,
-.fibu-btn-primary {
-  background: var(--accent);
-  color: #fff;
-}
-.btn-primary:hover,
-.fibu-btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 85%, #fff);
-  box-shadow: 0 0 12px var(--accent-glow);
-}
-.btn-primary:active,
-.fibu-btn-primary:active {
-  transform: translateY(1px);
-}
-
-.btn:disabled,
-.fibu-btn:disabled,
-.fibu-input:disabled,
-.fibu-select:disabled,
-button[disabled],
-select[disabled],
-input[disabled],
-textarea[disabled] {
+/* Buttons/inputs come from the shared kit (.ctox-button / .ctox-input /
+   .ctox-select / .ctox-textarea in shared/base.css). Module keeps only the
+   disabled-state affordance for its own non-kit controls and the auth glow. */
+.coding-agents-module button[disabled]:not([class*="ctox-"]),
+.coding-agents-module select[disabled]:not([class*="ctox-"]),
+.coding-agents-module input[disabled]:not([class*="ctox-"]),
+.coding-agents-module textarea[disabled]:not([class*="ctox-"]) {
   cursor: not-allowed;
   opacity: 0.48;
   box-shadow: none !important;
   transform: none !important;
-}
-
-.btn:disabled:hover,
-.fibu-btn:disabled:hover,
-button[disabled]:hover {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--surface-2) 72%, var(--accent) 8%);
-}
-
-.btn-secondary,
-.fibu-btn-secondary {
-  background: hsla(0, 0%, 100%, 0.05);
-  border-color: hsla(0, 0%, 100%, 0.08);
-  color: var(--text-main);
-}
-.btn-secondary:hover,
-.fibu-btn-secondary:hover {
-  background: hsla(0, 0%, 100%, 0.08);
-  border-color: var(--border-glow-active);
-}
-
-.btn-success {
-  background: hsl(142, 70%, 45%);
-  color: #fff;
-}
-.btn-success:hover {
-  background: hsl(142, 70%, 48%);
-  box-shadow: 0 0 12px hsla(142, 70%, 45%, 0.35);
-}
-
-.btn-warning {
-  background: hsl(38, 92%, 50%);
-  color: #fff;
-}
-.btn-warning:hover {
-  background: hsl(38, 92%, 53%);
-  box-shadow: 0 0 12px hsla(38, 92%, 50%, 0.35);
-}
-
-.btn-danger,
-.fibu-btn-danger {
-  background: hsl(350, 70%, 50%);
-  color: #fff;
-}
-.btn-danger:hover,
-.fibu-btn-danger:hover {
-  background: hsl(350, 70%, 53%);
-  box-shadow: 0 0 12px hsla(350, 70%, 50%, 0.35);
 }
 
 .btn-glow {
@@ -621,29 +509,8 @@ button[disabled]:hover {
   }
 }
 
-/* Premium input style */
-.fibu-input {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  color: var(--text-main);
-  padding: 8px 12px;
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  outline: none;
-  transition: border-color var(--transition-fast);
-  width: 100%;
-}
-.fibu-input:focus {
-  border-color: var(--accent);
-}
-
-.fibu-input[aria-invalid="true"] {
-  border-color: hsl(350, 70%, 50%);
-}
-
 .form-error {
-  color: hsl(350, 70%, 62%);
+  color: var(--danger);
   font-size: 11.5px;
   line-height: 1.4;
 }
@@ -672,7 +539,7 @@ button[disabled]:hover {
 }
 
 .workspace-load-state.error {
-  border-color: color-mix(in srgb, hsl(350, 70%, 50%) 50%, var(--line) 50%);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--line) 50%);
 }
 
 .svg-inline {
@@ -719,17 +586,9 @@ button[disabled]:hover {
   color: var(--text-muted);
 }
 
+/* Connection pill is a kit .ctox-badge; only the dot gap is module-specific. */
 .connection-status-pill {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  background: hsla(0, 0%, 100%, 0.03);
-  border: 1px solid var(--border-glow);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 /* Workbench Dashboard panel */
@@ -784,23 +643,6 @@ button[disabled]:hover {
   font-weight: 700;
   margin: 0;
   text-transform: capitalize;
-}
-
-.card-status-indicator {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  padding: 3px 8px;
-  background: hsla(0, 0%, 100%, 0.04);
-  border: 1px solid var(--border-glow);
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-}
-
-.card-status-indicator.active {
-  color: hsl(142, 70%, 45%);
-  border-color: hsla(142, 70%, 45%, 0.3);
-  background: hsla(142, 70%, 45%, 0.05);
 }
 
 .section-desc {
@@ -864,7 +706,7 @@ button[disabled]:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: hsla(0, 0%, 100%, 0.02);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
   border: 1px solid var(--border-glow);
   border-radius: var(--radius-control);
   padding: 12px 14px;
@@ -904,10 +746,10 @@ button[disabled]:hover {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: hsla(0, 0%, 100%, 0.12);
+  background-color: color-mix(in srgb, var(--text) 14%, transparent);
   transition: .3s;
   border-radius: 24px;
-  border: 1px solid hsla(0, 0%, 100%, 0.06);
+  border: 1px solid var(--line);
 }
 
 .slider-round:before {
@@ -915,10 +757,10 @@ button[disabled]:hover {
   content: "";
   height: 18px; width: 18px;
   left: 2px; bottom: 2px;
-  background-color: #fff;
+  background-color: var(--surface);
   transition: .3s;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 40%, transparent);
 }
 
 .switch-toggle input:checked + .slider-round {
@@ -945,7 +787,7 @@ button[disabled]:hover {
 }
 
 .trusted-paths-list {
-  background: hsla(0, 0%, 0%, 0.25);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   border: 1px solid var(--border-glow);
   border-radius: var(--radius-control);
   min-height: 80px;
@@ -973,8 +815,8 @@ button[disabled]:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: hsla(0, 0%, 100%, 0.04);
-  border: 1px solid hsla(0, 0%, 100%, 0.05);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: 6px;
   padding: 6px 10px;
   font-family: var(--font-mono);
@@ -991,7 +833,7 @@ button[disabled]:hover {
 .btn-remove-path {
   background: transparent;
   border: none;
-  color: hsl(350, 70%, 50%);
+  color: var(--danger);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -1002,7 +844,7 @@ button[disabled]:hover {
 }
 
 .btn-remove-path:hover {
-  color: hsl(350, 70%, 55%);
+  color: color-mix(in srgb, var(--danger) 80%, var(--text));
 }
 
 .path-add-form {
@@ -1173,17 +1015,17 @@ button[disabled]:hover {
   opacity: 0.6;
 }
 
-.text-green { color: hsl(142, 70%, 45%); }
-.text-yellow { color: hsl(38, 92%, 50%); }
-.text-red { color: hsl(350, 70%, 50%); }
+.text-green { color: var(--success); }
+.text-yellow { color: var(--warning); }
+.text-red { color: var(--danger); }
 .text-bold { font-weight: 700; }
 .text-glow-green {
-  color: hsl(142, 70%, 45%);
-  text-shadow: 0 0 6px hsla(142, 70%, 45%, 0.6);
+  color: var(--success);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--success) 60%, transparent);
 }
 .text-glow-yellow {
-  color: hsl(38, 92%, 50%);
-  text-shadow: 0 0 6px hsla(38, 92%, 50%, 0.6);
+  color: var(--warning);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--warning) 60%, transparent);
 }
 
 /* CLI inputs */
@@ -1254,7 +1096,7 @@ button[disabled]:hover {
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: hsla(0, 0%, 100%, 0.02);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
   border: 1px solid var(--border-glow);
   border-radius: 10px;
   cursor: pointer;
@@ -1262,7 +1104,7 @@ button[disabled]:hover {
 }
 
 .session-item-card:hover {
-  background: hsla(0, 0%, 100%, 0.05);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   border-color: var(--border-glow-active);
   transform: translateY(-1px);
 }
@@ -1277,33 +1119,6 @@ button[disabled]:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.badge {
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 2.5px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-}
-
-.badge-blue {
-  background: hsla(217, 91%, 60%, 0.15);
-  color: hsl(217, 91%, 60%);
-  border: 1px solid hsla(217, 91%, 60%, 0.25);
-}
-
-.badge-orange {
-  background: hsla(24, 85%, 55%, 0.15);
-  color: hsl(24, 85%, 55%);
-  border: 1px solid hsla(24, 85%, 55%, 0.25);
-}
-
-.badge-green {
-  background: hsla(150, 80%, 45%, 0.15);
-  color: hsl(150, 80%, 45%);
-  border: 1px solid hsla(150, 80%, 45%, 0.25);
 }
 
 .session-short-id {
@@ -1444,8 +1259,8 @@ button[disabled]:hover {
 }
 
 .feed-chat-bubble.user {
-  background: hsla(0, 0%, 100%, 0.03);
-  border: 1px solid hsla(0, 0%, 100%, 0.05);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  border: 1px solid var(--hairline, var(--line));
   align-self: flex-start;
   border-bottom-left-radius: 3px;
 }
@@ -1470,7 +1285,7 @@ button[disabled]:hover {
 }
 
 .feed-chat-bubble.assistant .bubble-sender {
-  color: hsl(142, 70%, 45%);
+  color: var(--success);
 }
 
 .bubble-time {
@@ -1487,8 +1302,8 @@ button[disabled]:hover {
   font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 8px 12px;
-  background: hsla(0, 0%, 0%, 0.25);
-  border: 1px solid hsla(0, 0%, 100%, 0.04);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: 6px;
   width: fit-content;
   margin-left: 20px;
@@ -1498,15 +1313,15 @@ button[disabled]:hover {
   font-size: 10px;
 }
 
-.tool-log-indicator.success { color: hsl(142, 70%, 45%); }
-.tool-log-indicator.fail { color: hsl(350, 70%, 50%); }
+.tool-log-indicator.success { color: var(--success); }
+.tool-log-indicator.fail { color: var(--danger); }
 
 .tool-log-text {
   color: var(--text-muted);
 }
 
 .tool-name-highlight {
-  color: hsl(265, 80%, 70%);
+  color: var(--accent);
 }
 
 .detail-footer {
@@ -1540,61 +1355,10 @@ button[disabled]:hover {
    2-PANE REDESIGN: WORKSPACE ITEMS AND MODAL OVERLAYS
    ============================================================================== */
 
-/* Modal overlays */
-.settings-modal-overlay {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 30px;
-}
-.settings-modal-overlay[hidden] {
-  display: none !important;
-}
+/* Modal overlays use the kit .ctox-modal/.ctox-modal-card; the settings
+   dialog only narrows the wide card to its previous 650px. */
 .settings-container {
-  width: 100%;
-  max-width: 650px;
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-  overflow: hidden;
-  border-radius: var(--radius-panel);
-  background: var(--bg-card);
-  border: 1px solid var(--border-glow);
-}
-.settings-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border-glow);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: hsla(0, 0%, 100%, 0.02);
-  flex-shrink: 0;
-}
-.settings-header h3 {
-  font-family: var(--font-brand);
-  font-size: 15px;
-  font-weight: 700;
-  margin: 0;
-  color: var(--text-main);
-}
-.btn-close-settings {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 26px;
-  cursor: pointer;
-  outline: none;
-  line-height: 1;
-}
-.btn-close-settings:hover {
-  color: var(--text-main);
+  width: min(650px, 100%);
 }
 
 /* Workspace Shards in left pane */
@@ -1603,18 +1367,18 @@ button[disabled]:hover {
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: hsla(0, 0%, 100%, 0.02);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
   border: 1px solid var(--border-glow);
   border-radius: var(--radius-panel);
   cursor: pointer;
   transition: all var(--transition-normal);
 }
 .workspace-item:hover {
-  background: hsla(0, 0%, 100%, 0.04);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   border-color: var(--border-glow-active);
 }
 .workspace-item.active {
-  background: hsla(0, 0%, 100%, 0.08);
+  background: var(--accent-soft);
   border-color: var(--accent);
   box-shadow: 0 0 14px var(--accent-glow);
 }
@@ -1641,7 +1405,7 @@ button[disabled]:hover {
   justify-content: space-between;
   gap: 8px;
   margin-top: 4px;
-  border-top: 1px solid hsla(0, 0%, 100%, 0.04);
+  border-top: 1px solid var(--hairline, var(--line));
   padding-top: 8px;
 }
 .workspace-agent-select {
@@ -1672,7 +1436,7 @@ button[disabled]:hover {
   outline: none;
 }
 .btn-remove-workspace:hover {
-  color: hsl(350, 70%, 50%);
+  color: var(--danger);
 }
 
 /* Chat feed alignments inside direct chat workbench */
@@ -1725,15 +1489,6 @@ button[disabled]:hover {
 
   .connection-status-pill {
     justify-content: center;
-  }
-
-  .settings-modal-overlay {
-    align-items: stretch;
-    padding: 12px;
-  }
-
-  .settings-container {
-    max-height: calc(100vh - 24px);
   }
 
   .lifecycle-controls-row,

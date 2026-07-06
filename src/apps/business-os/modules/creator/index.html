@@ -1,7 +1,7 @@
 <main class="creator-module" data-creator-root data-resize-frame>
   <section class="creator-pane creator-left" aria-label="App request configuration">
     <div class="creator-sidebar-content">
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker" data-t="kicker">CTOX</span>
@@ -12,8 +12,8 @@
 
       <div class="creator-sidebar-body">
         <div class="form-group">
-          <label class="form-label" for="app-request-input" data-t="requestLabel">App-Auftrag</label>
-          <textarea id="app-request-input" class="os-textarea" placeholder="Beschreibe deine Anwendung oder bitte CTOX, eine standalone HTML/JS App in Business OS zu portieren." data-t-placeholder="requestPlaceholder"></textarea>
+          <label class="ctox-field-label" for="app-request-input" data-t="requestLabel">App-Auftrag</label>
+          <textarea id="app-request-input" class="ctox-textarea creator-request-textarea" placeholder="Beschreibe deine Anwendung oder bitte CTOX, eine standalone HTML/JS App in Business OS zu portieren." data-t-placeholder="requestPlaceholder"></textarea>
           <p class="creator-request-diagnostics" id="creator-request-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Auftrag fehlt. Beschreibe zuerst die App.</p>
         </div>
 
@@ -21,34 +21,34 @@
         <div class="expert-accordion">
           <button type="button" class="accordion-trigger" id="expert-accordion-btn" aria-expanded="false" aria-controls="expert-accordion-content">
             <span class="accordion-label">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.07A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1A1.7 1.7 0 0 0 2.9 13H3a2 2 0 1 1 0-4h-.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 1 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v-.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9c.18.36.4.7.6 1 .3.3.7.5 1.1.5H21a2 2 0 1 1 0 4h.1c-.4 0-.8.2-1.1.5-.2.3-.42.64-.6 1Z"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
               <span data-t="advancedSettings">Erweiterte Einstellungen</span>
             </span>
-            <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
           </button>
 
           <div class="accordion-content is-collapsed" id="expert-accordion-content">
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label" for="input-app-id" data-t="fieldModuleId">Modul ID (Slug)</label>
-                <input type="text" id="input-app-id" class="os-input" placeholder="Optional, z.B. lagerverwaltung" value="" pattern="[a-z0-9\-]+">
+                <label class="ctox-field-label" for="input-app-id" data-t="fieldModuleId">Modul ID (Slug)</label>
+                <input type="text" id="input-app-id" class="ctox-input" placeholder="Optional, z.B. lagerverwaltung" value="" pattern="[a-z0-9\-]+">
               </div>
 
               <div class="form-group">
-                <label class="form-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
-                <input type="text" id="input-app-title" class="os-input" placeholder="Optional, z.B. Lagerverwaltung" value="">
+                <label class="ctox-field-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
+                <input type="text" id="input-app-title" class="ctox-input" placeholder="Optional, z.B. Lagerverwaltung" value="">
               </div>
             </div>
 
             <div class="form-group">
-              <label class="form-label" for="input-app-desc" data-t="fieldDescription">Beschreibung</label>
-              <input type="text" id="input-app-desc" class="os-input" placeholder="Optionaler Kurztext..." value="">
+              <label class="ctox-field-label" for="input-app-desc" data-t="fieldDescription">Beschreibung</label>
+              <input type="text" id="input-app-desc" class="ctox-input" placeholder="Optionaler Kurztext..." value="">
             </div>
 
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
-                <select id="select-app-category" class="os-select">
+                <label class="ctox-field-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
+                <select id="select-app-category" class="ctox-select">
                   <option value="" selected data-t="optionalChoice">Optional</option>
                   <option value="Productivity">Productivity</option>
                   <option value="Management">Management</option>
@@ -59,8 +59,8 @@
               </div>
 
               <div class="form-group">
-                <label class="form-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
-                <select id="select-app-layout" class="os-select">
+                <label class="ctox-field-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
+                <select id="select-app-layout" class="ctox-select">
                   <option value="" selected data-t="optionalChoice">Optional</option>
                   <option value="pane" data-t="layoutPane">Standard-Spalten (links/center/rechts)</option>
                   <option value="full-workspace" data-t="layoutFull">Volle Breite (Custom Columns)</option>
@@ -69,15 +69,15 @@
             </div>
 
             <div class="form-group">
-              <label class="form-label" data-t="fieldCollections">Datentabellen</label>
+              <label class="ctox-field-label" data-t="fieldCollections">Datentabellen</label>
               <div class="collections-editor">
                 <div id="collections-list">
                   <!-- Dynamically populated collection rows -->
                 </div>
                 <div class="collection-row" style="margin-top: 8px;">
-                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Datentabelle..." data-t-placeholder="newCollectionPlaceholder" style="flex: 1; padding: 6px 10px; font-size: 11px;">
-                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Datentabelle hinzufügen" data-t-title="addCollection" aria-label="Datentabelle hinzufügen" data-t-aria="addCollection">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  <input type="text" id="input-new-collection" class="ctox-input" placeholder="Neue Datentabelle..." data-t-placeholder="newCollectionPlaceholder" style="flex: 1;">
+                  <button type="button" id="btn-add-collection" class="ctox-icon-button" title="Datentabelle hinzufügen" data-t-title="addCollection" aria-label="Datentabelle hinzufügen" data-t-aria="addCollection">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                 </div>
               </div>
@@ -100,8 +100,8 @@
 
       <div class="creator-card-body">
         <div class="deploy-action-section">
-          <button type="button" id="btn-deploy-app" class="os-btn is-primary" disabled>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <button type="button" id="btn-deploy-app" class="ctox-button is-primary" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             <span data-t="deployButton">App-Erstellung starten</span>
           </button>
 
@@ -131,7 +131,7 @@
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen" data-t-aria="resizeRight"></button>
 
   <section class="creator-pane creator-right" aria-label="Installed custom apps and CTOX app requests">
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-t="rightKicker">Installiert</span>

@@ -4,14 +4,16 @@
   <section class="coding-agents-pane coding-agents-left" aria-label="Coding Agents Sidebar">
     <div class="coding-agents-sidebar">
 
-      <header class="ctox-pane-header">
+      <header class="ctox-pane-header ctox-pane-band">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
             <span class="ctox-pane-kicker">CTOX</span>
             <h2 class="ctox-pane-title">Workspaces</h2>
           </div>
           <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace" aria-label="Add workspace">+</button>
+            <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace" aria-label="Add workspace">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
           </div>
         </div>
       </header>
@@ -23,8 +25,8 @@
 
       <!-- Left Sidebar Footer -->
       <div class="sidebar-footer" style="padding: 12px; border-top: 1px solid var(--line); flex-shrink: 0;">
-        <button type="button" class="fibu-btn fibu-btn-secondary" id="open-settings-btn" style="width: 100%; justify-content: center; gap: 8px;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-inline" style="width:14px; height:14px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <button type="button" class="ctox-button" id="open-settings-btn" style="width: 100%;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="svg-inline" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
           System Settings
         </button>
       </div>
@@ -38,17 +40,17 @@
   <!-- Column 2: Center Pane (Workbench - Multi-turn Session View) -->
   <section class="coding-agents-pane coding-agents-center" aria-label="Coding Agents Workbench">
 
-    <header class="ctox-pane-header workbench-header">
+    <header class="ctox-pane-header ctox-pane-band workbench-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" id="active-app-desc">Select a Workspace</span>
           <h2 class="ctox-pane-title" id="active-app-title">Coding Agent Workbench</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="connection-status-pill" id="workbench-status-badge">
+          <span class="ctox-badge connection-status-pill" id="workbench-status-badge">
             <span class="status-dot online" id="workbench-status-dot"></span>
             <span id="workbench-status-text">Connected</span>
-          </div>
+          </span>
         </div>
       </div>
     </header>
@@ -58,11 +60,11 @@
       <div class="workbench-sessions-bar" style="padding: 10px 16px; border-bottom: 1px solid var(--line); display:flex; align-items:center; justify-content:space-between; background: var(--surface-2); flex-shrink:0;">
         <div style="display:flex; align-items:center; gap: 8px;">
           <label for="workbench-session-select" style="font-size:11.5px; font-weight:600; color:var(--text-muted);">Active Session:</label>
-          <select id="workbench-session-select" class="fibu-select" style="padding: 3px 8px; font-size:11px; height:24px; min-width:200px;" disabled>
+          <select id="workbench-session-select" class="ctox-select" style="min-width:200px; width:auto;" disabled>
             <option value="">No Active Sessions</option>
           </select>
         </div>
-        <button type="button" class="fibu-btn fibu-btn-primary" id="new-session-btn" style="padding: 4px 10px; font-size:11px; height:24px;" disabled aria-describedby="new-session-help">+ New Session</button>
+        <button type="button" class="ctox-button is-primary" id="new-session-btn" disabled aria-describedby="new-session-help">+ New Session</button>
       </div>
       <div id="new-session-help" class="sr-only">Requires a selected workspace. Opens a confirmation dialog before creating a session.</div>
 
@@ -74,37 +76,39 @@
       <!-- Bottom Form Prompt Input -->
       <div class="workbench-chat-input-bar" style="padding: 14px 18px; border-top: 1px solid var(--line); background: var(--surface-2); flex-shrink:0;">
         <form id="workbench-prompt-form" style="display: flex; gap: 10px; width: 100%;">
-          <input type="text" id="workbench-prompt-input" class="fibu-input" placeholder="Type instruction for active coding agent session..." required disabled>
-          <button type="submit" class="fibu-btn fibu-btn-primary" id="workbench-prompt-submit" disabled>Send Instruction</button>
+          <input type="text" id="workbench-prompt-input" class="ctox-input" placeholder="Type instruction for active coding agent session..." required disabled>
+          <button type="submit" class="ctox-button is-primary" id="workbench-prompt-submit" disabled>Send Instruction</button>
         </form>
       </div>
     </div>
   </section>
 
   <!-- Overlay Modal: System Settings & Subscription -->
-  <div class="settings-modal-overlay" id="settings-modal" hidden role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
-    <div class="settings-container glass-panel">
-      <header class="settings-header">
-        <h3 id="settings-modal-title">System Settings & Subscriptions</h3>
-        <button type="button" class="btn-close-settings" id="close-settings-btn" aria-label="Close system settings">&times;</button>
+  <div class="ctox-modal" id="settings-modal" hidden role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="ctox-modal-card ctox-modal-card--wide settings-container">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="settings-modal-title">System Settings & Subscriptions</h3>
+        <button type="button" class="ctox-pane-icon" id="close-settings-btn" aria-label="Close system settings" title="Close system settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </header>
 
-      <div class="settings-body" style="padding: 20px; overflow-y:auto; display:flex; flex-direction:column; gap: 24px;">
+      <div class="ctox-modal-body settings-body" style="display:flex; flex-direction:column; gap: 24px;">
 
         <!-- Lifecycle & Port selection -->
         <div class="settings-section">
           <h4>Lifecycle & Service Control</h4>
           <p class="section-desc">Manage the local background Electron GUI and headless daemon service.</p>
           <div class="lifecycle-controls-row" style="display:flex; flex-wrap:wrap; gap: 12px; align-items:center; justify-content:space-between; margin-top:8px;">
-            <div style="display:flex; gap:8px;">
-              <button type="button" class="fibu-btn fibu-btn-secondary" data-action="install-provider">Install / Repair CLI</button>
-              <button type="button" class="fibu-btn fibu-btn-primary" data-action="start-app">Launch GUI App</button>
-              <button type="button" class="fibu-btn fibu-btn-secondary" data-action="start-headless">Spawn Headless</button>
-              <button type="button" class="fibu-btn fibu-btn-danger" data-action="stop-app">Terminate App</button>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <button type="button" class="ctox-button" data-action="install-provider">Install / Repair CLI</button>
+              <button type="button" class="ctox-button is-primary" data-action="start-app">Launch GUI App</button>
+              <button type="button" class="ctox-button" data-action="start-headless">Spawn Headless</button>
+              <button type="button" class="ctox-button is-danger" data-action="stop-app">Terminate App</button>
             </div>
             <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
               <label for="daemon-port-input">Headless Port:</label>
-              <input type="number" id="daemon-port-input" value="8083" class="fibu-input" style="width: 80px; padding: 4px 8px;" placeholder="8083">
+              <input type="number" id="daemon-port-input" value="8083" class="ctox-input" style="width: 80px;" placeholder="8083">
             </div>
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding: 8px 12px; background:var(--surface-2); border-radius:8px; font-size:11.5px;">
@@ -134,11 +138,11 @@
         <div class="settings-section">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <h4>Account Subscription Registration</h4>
-            <span class="card-status-indicator" id="auth-status">UNAUTHORIZED</span>
+            <span class="ctox-badge" id="auth-status">UNAUTHORIZED</span>
           </div>
           <p class="section-desc">Use the provider-owned CLI authentication flow on this machine.</p>
           <form class="subscription-auth-form" id="sub-login-form" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
-            <button type="submit" class="fibu-btn fibu-btn-primary btn-glow" id="btn-trigger-signup" style="justify-content:center; margin-top:4px;">
+            <button type="submit" class="ctox-button is-primary btn-glow" id="btn-trigger-signup" style="margin-top:4px;">
               Start Provider Authentication
             </button>
           </form>
@@ -158,36 +162,40 @@
   </div>
 
   <!-- Overlay Modal: Add Workspace Path -->
-  <div class="settings-modal-overlay" id="add-workspace-modal" hidden role="dialog" aria-modal="true" aria-labelledby="add-workspace-title">
-    <div class="settings-container glass-panel" style="max-width: 450px; min-height: 200px;">
-      <header class="settings-header">
-        <h3 id="add-workspace-title">Add Workspace</h3>
-        <button type="button" class="btn-close-settings" id="close-add-workspace-btn" aria-label="Close add workspace">&times;</button>
+  <div class="ctox-modal" id="add-workspace-modal" hidden role="dialog" aria-modal="true" aria-labelledby="add-workspace-title">
+    <div class="ctox-modal-card" style="width: min(450px, 100%);">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="add-workspace-title">Add Workspace</h3>
+        <button type="button" class="ctox-pane-icon" id="close-add-workspace-btn" aria-label="Close add workspace" title="Close add workspace">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </header>
-      <div class="settings-body" style="padding: 16px 20px;">
+      <div class="ctox-modal-body">
         <form id="add-workspace-form" style="display:flex; flex-direction:column; gap: 14px;">
           <p class="section-desc">Enter the absolute directory path to authorize as a clean Coding Workspace.</p>
-          <input type="text" id="add-workspace-input" class="fibu-input" placeholder="e.g. ~/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
+          <input type="text" id="add-workspace-input" class="ctox-input" placeholder="e.g. ~/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
           <div id="add-workspace-error" class="form-error" role="alert" hidden></div>
-          <button type="submit" class="fibu-btn fibu-btn-primary" id="add-workspace-submit" style="justify-content:center;" disabled>Authorize & Add Workspace</button>
+          <button type="submit" class="ctox-button is-primary" id="add-workspace-submit" disabled>Authorize & Add Workspace</button>
         </form>
       </div>
     </div>
   </div>
 
   <!-- Overlay Modal: New Agent Session -->
-  <div class="settings-modal-overlay" id="new-session-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-session-title">
-    <div class="settings-container glass-panel" style="max-width: 520px; min-height: 250px;">
-      <header class="settings-header">
-        <h3 id="new-session-title">New Coding Session</h3>
-        <button type="button" class="btn-close-settings" id="close-new-session-btn" aria-label="Close new session">&times;</button>
+  <div class="ctox-modal" id="new-session-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+    <div class="ctox-modal-card" style="width: min(520px, 100%);">
+      <header class="ctox-modal-header">
+        <h3 class="ctox-modal-title" id="new-session-title">New Coding Session</h3>
+        <button type="button" class="ctox-pane-icon" id="close-new-session-btn" aria-label="Close new session" title="Close new session">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </header>
-      <div class="settings-body" style="padding: 16px 20px;">
+      <div class="ctox-modal-body">
         <form id="new-session-form" style="display:flex; flex-direction:column; gap: 14px;">
           <p class="section-desc" id="new-session-context">Select a workspace first, then describe the first task for the agent.</p>
-          <textarea id="new-session-prompt" class="fibu-input" rows="5" placeholder="Describe the initial task for this coding agent session..." required aria-describedby="new-session-error"></textarea>
+          <textarea id="new-session-prompt" class="ctox-textarea" rows="5" placeholder="Describe the initial task for this coding agent session..." required aria-describedby="new-session-error"></textarea>
           <div id="new-session-error" class="form-error" role="alert" hidden></div>
-          <button type="submit" class="fibu-btn fibu-btn-primary" id="new-session-submit" style="justify-content:center;" disabled>Create Session</button>
+          <button type="submit" class="ctox-button is-primary" id="new-session-submit" disabled>Create Session</button>
         </form>
       </div>
     </div>

@@ -7,7 +7,7 @@
   width: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
   overflow: hidden;
   box-sizing: border-box;
   position: relative;
@@ -64,27 +64,10 @@
   min-width: 0;
 }
 
+/* Pane header styling (band padding, kicker/title typography) comes from the
+   shared kit (base.css + app.css). */
 .creator-right .ctox-pane-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
-}
-
-.creator-right .ctox-pane-kicker {
-  display: block;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 4px;
-}
-
-.creator-right .ctox-pane-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text);
 }
 
 .creator-right-body {
@@ -182,7 +165,7 @@
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
 }
 
 .creator-sidebar-content {
@@ -212,37 +195,11 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-sizing: border-box;
-}
-
-.creator-pane-head {
-  padding: 16px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-  height: 64px;
-  box-sizing: border-box;
-}
-.creator-pane-head span {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-  font-weight: 700;
-  display: block;
-  margin-bottom: 4px;
-}
-.creator-pane-head h2 {
-  font-size: 16px;
-  font-weight: 700;
-  margin: 0;
-  color: var(--text);
 }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
@@ -279,7 +236,7 @@
   font-weight: 800;
   line-height: 1.2;
   color: var(--text);
-  font-family: var(--font-outfit), sans-serif;
+  font-family: var(--font-sans);
 }
 
 .os-subtitle {
@@ -309,40 +266,13 @@
   gap: 16px;
 }
 
-.form-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-/* Sleek inputs, dropdowns & select options */
-.os-input, .os-select, .os-textarea {
-  width: 100%;
-  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: var(--control-radius);
-  padding: 10px 14px;
-  font-family: var(--font-inter), sans-serif;
-  font-size: 13px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-  box-sizing: border-box;
-}
-
-.os-textarea {
+/* Inputs, selects, textareas and field labels come from the shared kit
+   (.ctox-input / .ctox-select / .ctox-textarea / .ctox-field-label). Only the
+   request textarea keeps its module-specific sizing. */
+.creator-request-textarea {
   min-height: 90px;
   max-height: 180px;
-  resize: vertical;
   line-height: 1.5;
-}
-
-.creator-wide-action {
-  width: 100%;
-  margin-top: 10px;
-  font-size: 11px;
-  gap: 6px;
 }
 
 .creator-request-diagnostics {
@@ -363,13 +293,6 @@
 
 .creator-request-diagnostics[data-state="blocked"] {
   color: var(--muted);
-}
-
-.os-input:focus, .os-select:focus, .os-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 /* Accordion Options Panel */
@@ -470,98 +393,12 @@
   margin-bottom: 0;
 }
 
-.os-icon-btn {
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  color: var(--text);
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-  flex: 0 0 auto;
-}
-
-.os-icon-btn:hover {
-  background: var(--surface-3);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.os-icon-btn.is-danger:hover {
+/* Icon buttons and buttons come from the shared kit (.ctox-icon-button /
+   .ctox-button). Module keeps only the danger hover for row-delete icons. */
+.creator-module .ctox-icon-button.is-danger:hover {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-}
-
-/* Buttons */
-.os-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  padding: 10px 18px;
-  border-radius: var(--control-radius);
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-  transition: transform 0.1s ease, border-color 0.2s ease, background 0.2s ease;
-}
-
-.os-btn:active {
-  transform: scale(0.98);
-}
-
-.os-btn:disabled,
-.os-btn[aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.48;
-  box-shadow: none;
-  transform: none;
-}
-
-.os-btn:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--surface-3) 90%, transparent);
-}
-
-.os-btn:disabled:hover,
-.os-btn[aria-disabled="true"]:hover {
-  border-color: var(--line);
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-}
-
-.os-btn.is-primary {
-  background: var(--accent-gradient);
-  border-color: transparent;
-  color: #ffffff;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
-.os-btn.is-primary:hover {
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.os-btn.is-primary:disabled,
-.os-btn.is-primary[aria-disabled="true"] {
-  background: color-mix(in srgb, var(--surface-3) 70%, var(--line));
-  border-color: var(--line);
-  color: var(--muted);
-}
-
-.os-btn.is-accent {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  color: var(--text);
-}
-
-.os-btn.is-accent:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  background: var(--danger-soft);
 }
 
 /* Deploy and compile status layout */
