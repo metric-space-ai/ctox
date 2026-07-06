@@ -221,6 +221,7 @@ jobs:
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node src/apps/business-os/scripts/assert-sync-error-classification.mjs
+          node src/apps/business-os/scripts/assert-module-context-contract.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js

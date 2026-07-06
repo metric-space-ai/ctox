@@ -4088,11 +4088,19 @@ function moduleBasePath(mod) {
   return slash >= 0 ? entry.slice(0, slash) : `modules/${mod.id}`;
 }
 
+// The object literal below IS the platform API every Business OS module (and
+// every agent-generated app) programs against — `mount(ctx)` receives it.
+// The field list is pinned by docs/business-os-module-context.md and
+// scripts/assert-module-context-contract.mjs: adding a field means updating
+// the contract doc in the same change; removing or renaming one is a
+// BREAKING module-API change and needs an explicit decision. The markers
+// below are load-bearing for the contract scan — do not remove them.
 function createModuleContext(mod) {
   const actor = actorContext(state.session);
   const sessionUser = state.session?.user && typeof state.session.user === 'object'
     ? state.session.user
     : {};
+  // CTX-CONTRACT-BEGIN business-os-module-context-v1
   return {
     module: mod,
     modules: state.modules,
@@ -4146,6 +4154,7 @@ function createModuleContext(mod) {
     openBottomDrawer: (content) => openDrawer('bottom', content),
     closeDrawers,
   };
+  // CTX-CONTRACT-END business-os-module-context-v1
 }
 
 function createRuntimeCapabilityFacade(mod) {
