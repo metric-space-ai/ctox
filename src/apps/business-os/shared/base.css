@@ -711,6 +711,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.ctox-table .is-center {
+  text-align: center;
+}
+
 /* Sortable column header: a bare button inside the th. */
 .ctox-table-sort {
   display: inline-flex;
