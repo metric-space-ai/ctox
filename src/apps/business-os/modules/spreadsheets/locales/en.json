@@ -73,5 +73,7 @@
   "noRunbook": "No Runbook",
   "allTags": "All tags",
   "untagged": "Untagged",
-  "documentLoadFailed": "Spreadsheet failed to load:"
+  "documentLoadFailed": "Spreadsheet failed to load:",
+  "addRowLabel": "Add row",
+  "addColumnLabel": "Add column"
 }

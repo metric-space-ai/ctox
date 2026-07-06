@@ -65,39 +65,10 @@
   margin-top: 8px;
 }
 
-.documents-empty-actions button {
-  display: inline-flex;
-  min-width: 0;
-  min-height: 34px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
+.documents-empty-actions .ctox-button {
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 760;
-  padding: 0 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
-}
-
-.documents-empty-actions button:hover,
-.documents-empty-actions button:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent);
-  outline: none;
-}
-
-.documents-empty-actions svg {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
 }
 
 .documents-loading-shell {
@@ -139,87 +110,16 @@
   box-shadow: var(--panel-shadow);
 }
 
-.documents-column-head,
-.documents-panel-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.documents-column-head {
-  min-height: 52px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-
-.documents-column-title,
-.documents-panel-title {
-  font-size: 13px;
-  font-weight: 820;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.055em;
-}
-
-.documents-column-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .documents-runbook-header {
   flex: 0 0 auto;
 }
 
+/* Extras on top of .ctox-badge: capped width + uppercase document-type text. */
 .documents-runbook-state {
-  display: inline-flex;
   max-width: 112px;
-  min-height: 24px;
-  align-items: center;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 820;
-  line-height: 1;
-  padding: 0 9px;
   text-overflow: ellipsis;
   text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.documents-column-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--muted);
-  padding: 0;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-.documents-column-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-}
-
-.documents-column-icon:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.documents-column-icon:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .documents-filter-bar {
@@ -266,24 +166,6 @@
   }
 }
 
-.documents-upload input {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.documents-column-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.documents-column-tools input,
-.documents-column-tools select,
 .documents-runbook-form select,
 .documents-runbook-form textarea {
   width: 100%;
@@ -294,19 +176,6 @@
   color: var(--text);
   font: inherit;
   box-shadow: none;
-}
-
-.documents-column-tools input,
-.documents-column-tools select {
-  height: 32px;
-  padding: 0 9px;
-  font-size: 12px;
-}
-
-.documents-column-sort {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.58fr);
-  gap: 6px;
 }
 
 .documents-list {
@@ -370,7 +239,6 @@
 .documents-card-manage svg {
   width: 15px;
   height: 15px;
-  fill: currentColor;
 }
 
 .documents-card-main strong,
@@ -690,7 +558,6 @@
 .documents-knowledge-link svg {
   width: 14px;
   height: 14px;
-  fill: currentColor;
 }
 
 .documents-action-drawer {
@@ -1182,8 +1049,6 @@
 }
 
 /* Modern inputs, selects, and textareas */
-.documents-column-tools input,
-.documents-column-tools select,
 .documents-runbook-form select,
 .documents-runbook-form textarea,
 .documents-workflow textarea,
@@ -1200,8 +1065,6 @@
               transform 0.2s var(--spring-ease) !important;
 }
 
-.documents-column-tools input:focus,
-.documents-column-tools select:focus,
 .documents-runbook-form select:focus,
 .documents-runbook-form textarea:focus,
 .documents-workflow textarea:focus,
@@ -1212,11 +1075,6 @@
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
   transform: translateY(-0.5px) !important;
-}
-
-.documents-column-tools input,
-.documents-column-tools select {
-  height: 34px !important;
 }
 
 /* Modernized form and toolbar buttons */

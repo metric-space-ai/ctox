@@ -73,5 +73,7 @@
   "noRunbook": "Kein Runbook",
   "allTags": "Alle Tags",
   "untagged": "Ohne Tags",
-  "documentLoadFailed": "Tabelle konnte nicht geladen werden:"
+  "documentLoadFailed": "Tabelle konnte nicht geladen werden:",
+  "addRowLabel": "Zeile hinzufügen",
+  "addColumnLabel": "Spalte hinzufügen"
 }

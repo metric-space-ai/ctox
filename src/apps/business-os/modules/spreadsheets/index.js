@@ -522,16 +522,16 @@ function renderLeft(state) {
   const selected = selectedRecord(state);
 
   wrap.innerHTML = `
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Dateien</span>
-          <h2 class="ctox-pane-title spreadsheets-column-title">${escapeHtml(state.t('spreadsheetsTitle', 'Spreadsheets'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('spreadsheetsTitle', 'Spreadsheets'))}</h2>
         </div>
-        <div class="ctox-pane-actions spreadsheets-column-actions">
-          <button class="ctox-pane-icon spreadsheets-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" data-spreadsheets-new>${iconSvg('new')}</button>
-          <button class="ctox-pane-icon spreadsheets-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Tabelle importieren'))}" title="${escapeHtml(state.t('importDocument', 'Tabelle importieren'))}" data-spreadsheets-import-open>${iconSvg('import')}</button>
-          <button class="ctox-pane-icon spreadsheets-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" data-spreadsheets-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" data-spreadsheets-new>${actionIcon(state, 'add')}</button>
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Tabelle importieren'))}" title="${escapeHtml(state.t('importDocument', 'Tabelle importieren'))}" data-spreadsheets-import-open>${actionIcon(state, 'upload')}</button>
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" data-spreadsheets-export ${selected ? '' : 'disabled'}>${actionIcon(state, 'export')}</button>
         </div>
       </div>
       <div class="ctox-pane-tools spreadsheets-filter-bar">
@@ -542,14 +542,14 @@ function renderLeft(state) {
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select class="ctox-pane-sort spreadsheets-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status>
+        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status>
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
-        <select class="ctox-pane-sort spreadsheets-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag>
+        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag>
           ${tagFilterOptions(state)}
         </select>
       </div>
@@ -594,25 +594,26 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
     button.className = 'spreadsheets-card-main';
     button.dataset.sheetId = record.id;
 
-    const tagsHtml = (record.tags || []).map(t => `<span class="badge badge-tag" style="background: var(--surface-2, #eef3f7); color: var(--accent, #2b6f73); font-size: 10px; margin-inline-end: 4px; padding: 2px 4px; border-radius: 4px;">${escapeHtml(t)}</span>`).join('');
+    const tagsHtml = (record.tags || []).map(t => `<span class="spreadsheets-card-tag">${escapeHtml(t)}</span>`).join('');
 
     button.innerHTML = `
       <strong>${escapeHtml(record.title)}</strong>
       <span class="spreadsheets-card-filename">${escapeHtml(record.filename)}</span>
-      <div style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px;">
-        <span class="badge" style="background: var(--accent, #2b6f73); color: #fff; font-size: 10px; padding: 2px 4px; border-radius: 4px;">${escapeHtml(record.status)}</span>
+      <div class="spreadsheets-card-badges">
+        <span class="ctox-badge ${statusBadgeClass(record.status)}">${escapeHtml(record.status)}</span>
         ${tagsHtml}
       </div>
       <small class="spreadsheets-card-diagnostics">${escapeHtml(spreadsheetMetaLabel(state, record))}</small>
-      <small style="margin-top: 6px; font-size: 10px; color: var(--muted, #687684); display: block;">Updated: ${new Date(record.updated_at_ms).toLocaleString()}</small>
+      <small class="spreadsheets-card-updated">Updated: ${new Date(record.updated_at_ms).toLocaleString()}</small>
     `;
 
     const manageBtn = document.createElement('button');
     manageBtn.type = 'button';
     manageBtn.className = 'spreadsheets-card-manage';
     manageBtn.dataset.sheetId = record.id;
-    manageBtn.innerHTML = iconSvg('gear');
-    manageBtn.title = escapeHtml(state.t('manageDocument', 'Tabelle verwalten'));
+    manageBtn.innerHTML = actionIcon(state, 'settings');
+    manageBtn.title = state.t('manageDocument', 'Tabelle verwalten');
+    manageBtn.setAttribute('aria-label', state.t('manageDocument', 'Tabelle verwalten'));
 
     card.append(button, manageBtn);
     list.append(card);
@@ -720,6 +721,13 @@ function normalizeSpreadsheetStatus(status) {
   return ['Draft', 'Imported', 'Review', 'Final'].includes(value) ? value : 'Draft';
 }
 
+// Kit badge modifier for a record status (base .ctox-badge stays neutral).
+function statusBadgeClass(status) {
+  if (status === 'Final') return 'is-success';
+  if (status === 'Review') return 'is-warning';
+  return '';
+}
+
 function isActiveSpreadsheetRecord(record = {}) {
   return Boolean(record.id) && record.is_deleted !== true;
 }
@@ -817,19 +825,24 @@ async function renderCenter(state) {
   // Load editor UI frame
   const isDirtyClass = state.dirty ? 'is-dirty' : '';
   const saveLabel = state.saving ? state.t('saving', 'Speichert...') : (state.dirty ? state.t('unsavedChanges', 'Ungespeicherte Änderungen') : state.t('saved', 'Gespeichert'));
+  const addRowLabel = state.t('addRowLabel', 'Zeile hinzufügen');
+  const addColumnLabel = state.t('addColumnLabel', 'Spalte hinzufügen');
 
   shell.innerHTML = `
-    <header class="spreadsheets-editor-header">
-      <div class="spreadsheets-editor-title-area">
-        <div class="spreadsheets-editor-title" title="${escapeHtml(record.title)}">${escapeHtml(record.title)}</div>
-        <div class="spreadsheets-dirty-badge ${isDirtyClass} ${state.saving ? 'is-saving' : ''}" data-spreadsheets-dirty-indicator>
-          <i class="indicator-dot"></i>
-          <span>${escapeHtml(saveLabel)}</span>
+    <header class="ctox-pane-header ctox-pane-band spreadsheets-editor-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(record.filename)}</span>
+          <h2 class="ctox-pane-title" title="${escapeHtml(record.title)}">${escapeHtml(record.title)}</h2>
         </div>
-      </div>
-      <div class="spreadsheets-editor-actions">
-        <button type="button" data-spreadsheets-add-row>${iconSvg('plus')} Zeile</button>
-        <button type="button" data-spreadsheets-add-col>${iconSvg('plus')} Spalte</button>
+        <div class="ctox-pane-actions">
+          <span class="ctox-badge spreadsheets-dirty-badge ${isDirtyClass} ${state.saving ? 'is-saving' : ''}" data-spreadsheets-dirty-indicator>
+            <i class="indicator-dot"></i>
+            <span>${escapeHtml(saveLabel)}</span>
+          </span>
+          <button class="ctox-pane-icon" type="button" data-spreadsheets-add-row aria-label="${escapeHtml(addRowLabel)}" title="${escapeHtml(addRowLabel)}">${actionIcon(state, 'addRow')}</button>
+          <button class="ctox-pane-icon" type="button" data-spreadsheets-add-col aria-label="${escapeHtml(addColumnLabel)}" title="${escapeHtml(addColumnLabel)}">${actionIcon(state, 'addColumn')}</button>
+        </div>
       </div>
     </header>
     <div class="spreadsheets-editor-canvas" data-spreadsheets-canvas>
@@ -1079,7 +1092,7 @@ function markSpreadsheetAsDirty(state) {
 
   const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
   if (badge) {
-    badge.className = 'spreadsheets-dirty-badge is-dirty';
+    badge.className = 'ctox-badge spreadsheets-dirty-badge is-dirty';
     badge.querySelector('span').textContent = state.t('unsavedChanges', 'Ungespeicherte Änderungen');
   }
 
@@ -1095,7 +1108,7 @@ async function saveActiveSpreadsheetDraft(state) {
   state.saving = true;
   const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
   if (badge) {
-    badge.className = 'spreadsheets-dirty-badge is-saving';
+    badge.className = 'ctox-badge spreadsheets-dirty-badge is-saving';
     badge.querySelector('span').textContent = state.t('saving', 'Speichert...');
   }
 
@@ -1173,7 +1186,7 @@ async function saveActiveSpreadsheetDraft(state) {
     state.saving = false;
 
     if (badge) {
-      badge.className = 'spreadsheets-dirty-badge';
+      badge.className = 'ctox-badge spreadsheets-dirty-badge';
       badge.querySelector('span').textContent = state.t('saved', 'Gespeichert');
     }
 
@@ -1183,7 +1196,7 @@ async function saveActiveSpreadsheetDraft(state) {
   } catch (err) {
     state.saving = false;
     if (badge) {
-      badge.className = 'spreadsheets-dirty-badge is-dirty';
+      badge.className = 'ctox-badge spreadsheets-dirty-badge is-dirty';
       badge.querySelector('span').textContent = state.t('saveFailed', 'Fehler beim Speichern');
     }
     throw err;
@@ -1212,11 +1225,11 @@ function renderRight(state) {
   }
 
   wrap.innerHTML = `
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Automatisierung</span>
-          <h2 class="ctox-pane-title spreadsheets-column-title">${escapeHtml(state.t('runbook', 'Runbook'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('runbook', 'Runbook'))}</h2>
         </div>
       </div>
     </header>
@@ -1226,7 +1239,7 @@ function renderRight(state) {
     <div class="spreadsheets-runbook-workbench">
       <textarea placeholder="${escapeHtml(state.t('prompt', 'Prompt an CTOX senden...'))}" data-spreadsheets-prompt></textarea>
       <button type="button" data-spreadsheets-send ${record ? '' : 'disabled'}>
-        ${iconSvg('play')} ${escapeHtml(state.t('send', 'Prompt senden'))}
+        ${actionIcon(state, 'play')} ${escapeHtml(state.t('send', 'Prompt senden'))}
       </button>
     </div>
   `;
@@ -1891,14 +1904,14 @@ function ensureCtoxContextMenuStyles() {
       width: min(560px, calc(100vw - 24px));
       max-width: calc(100% - 16px);
       overflow: hidden;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: var(--radius-panel, 12px);
-      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      border: 1px solid var(--line);
+      border-radius: var(--panel-radius, 12px);
+      background: color-mix(in srgb, var(--surface) 75%, transparent);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      box-shadow: var(--panel-shadow);
       padding: 6px;
-      font-family: system-ui, -apple-system, sans-serif;
+      font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
       animation: ctox-menu-fade-in 0.15s ease-out;
     }
     @keyframes ctox-menu-fade-in {
@@ -1933,22 +1946,22 @@ function ensureCtoxContextMenuStyles() {
       gap: 7px;
       min-width: 0;
       min-height: 30px;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: var(--radius-control, 6px);
-      color: var(--bo-muted, var(--muted, #64747c));
+      border: 1px solid var(--line);
+      border-radius: var(--control-radius, 6px);
+      color: var(--muted);
       font-size: 11.5px;
       font-weight: 760;
       padding: 0 8px;
       cursor: pointer;
-      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      background: var(--surface-2);
       margin: 0;
     }
     .ctox-context-menu .ctox-context-mode label:hover {
-      border-color: var(--bo-accent, #23665f);
+      border-color: var(--accent);
     }
     .ctox-context-menu .ctox-context-mode input {
       margin: 0;
-      accent-color: var(--bo-accent, #23665f);
+      accent-color: var(--accent);
     }
     .ctox-context-menu form header div {
       min-width: 0;
@@ -1962,12 +1975,12 @@ function ensureCtoxContextMenuStyles() {
       white-space: nowrap;
     }
     .ctox-context-menu form strong {
-      color: var(--bo-text, var(--text, #18222d));
+      color: var(--text);
       font-size: 12.5px;
       font-weight: 820;
     }
     .ctox-context-menu form span {
-      color: var(--bo-muted, var(--muted, #64747c));
+      color: var(--muted);
       font-size: 11px;
       font-weight: 700;
     }
@@ -1978,7 +1991,7 @@ function ensureCtoxContextMenuStyles() {
       flex-wrap: wrap;
       white-space: normal;
       font-size: 11px;
-      color: var(--bo-muted, var(--muted, #64747c));
+      color: var(--muted);
     }
     .ctox-context-menu form textarea {
       width: 100%;
@@ -1986,26 +1999,26 @@ function ensureCtoxContextMenuStyles() {
       min-height: 92px;
       max-height: 180px;
       min-width: 0;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: var(--radius-control, 6px);
-      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-      color: var(--bo-text, var(--text, #18222d));
-      font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      border: 1px solid var(--line);
+      border-radius: var(--control-radius, 6px);
+      background: var(--surface-2);
+      color: var(--text);
+      font: 12.5px/1.4 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
       padding: 9px;
       resize: vertical;
     }
     .ctox-context-menu form textarea:focus {
       outline: none;
-      border-color: var(--bo-accent, #23665f);
-      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bo-accent, #23665f) 25%, transparent);
+      border-color: var(--accent);
+      box-shadow: var(--focus-ring);
     }
     .ctox-context-menu form button {
       flex: 0 0 auto;
       min-height: 30px;
-      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-      border-radius: var(--radius-control, 6px);
-      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-      color: var(--bo-text, var(--text, #18222d));
+      border: 1px solid var(--line);
+      border-radius: var(--control-radius, 6px);
+      background: var(--surface-2);
+      color: var(--text);
       font: inherit;
       font-size: 12px;
       font-weight: 760;
@@ -2013,15 +2026,15 @@ function ensureCtoxContextMenuStyles() {
       padding: 0 10px;
     }
     .ctox-context-menu form button:hover {
-      background: color-mix(in srgb, var(--bo-text, #18222d) 8%, var(--bo-surface-muted, #eef3f7));
+      background: color-mix(in srgb, var(--text) 8%, var(--surface-2));
     }
     .ctox-context-menu form button[type="submit"] {
-      border-color: var(--bo-accent, #23665f);
-      background: color-mix(in srgb, var(--bo-accent, #23665f) 14%, var(--bo-surface, #fff));
-      color: var(--bo-accent, #23665f);
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+      color: var(--accent);
     }
     .ctox-context-menu form button[type="submit"]:hover {
-      background: color-mix(in srgb, var(--bo-accent, #23665f) 22%, var(--bo-surface, #fff));
+      background: color-mix(in srgb, var(--accent) 22%, var(--surface));
     }
     .ctox-context-menu form [data-context-close] {
       width: 30px;
@@ -2196,14 +2209,34 @@ export const __spreadsheetsTestHooks = {
   rowsToCsv,
 };
 
-function iconSvg(name) {
-  const SVGS = {
-    new: `<svg viewBox="0 0 16 16"><path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
-    import: `<svg viewBox="0 0 16 16"><path d="M8 1v9M5 7l3 3 3-3M1 12h14v2H1z" fill="currentColor"/></svg>`,
-    export: `<svg viewBox="0 0 16 16"><path d="M8 10V1M5 4l3-3 3 3M1 12h14v2H1z" fill="currentColor"/></svg>`,
-    gear: `<svg viewBox="0 0 16 16"><path d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm-6.2 1.8l-1.3-.3a1 1 0 0 1-.7-.8V4.3a1 1 0 0 1 .7-.9l1.3-.3.3-1.3.9-.9a1 1 0 0 1 1-.2l1.2.5h1.6l1.2-.5a1 1 0 0 1 1 .2l.9.9.3 1.3 1.3.3c.5.1.8.5.8.9v1.4c0 .5-.3.8-.8.9l-1.3.3-.3 1.3-.9.9a1 1 0 0 1-1 .2l-1.2-.5H6.8l-1.2.5a1 1 0 0 1-1-.2l-.9-.9-.3-1.3z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`,
-    plus: `<svg viewBox="0 0 16 16" width="12" height="12"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
-    play: `<svg viewBox="0 0 16 16" width="12" height="12"><path d="M3 2l10 6-10 6z" fill="currentColor"/></svg>`
-  };
-  return SVGS[name] || '';
+// Module-only glyphs with no shared/icons.js equivalent, drawn in the same
+// stroke style as actionIconPaths (fill: none, currentColor, 1.8 stroke).
+const SPREADSHEETS_LOCAL_ICON_PATHS = Object.freeze({
+  addRow: 'M4 6h16M4 12h10M4 18h6M16 15v6M13 18h6',
+  addColumn: 'M6 4v16M12 4v10M18 4v6M15 16h6M18 13v6',
+});
+
+// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
+// the module runs without ctx.getActionIcon; the normal path is the shell
+// helper handed in through mount(ctx).
+const SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+  play: 'M8 5.5v13l10-6.5-10-6.5Z',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+});
+
+function strokeIconSvg(name, path, size = 16, strokeWidth = 1.8) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ctox-action-icon ctox-action-${name}"><path d="${path}"></path></svg>`;
+}
+
+function actionIcon(state, name, size = 16, strokeWidth = 1.8) {
+  if (SPREADSHEETS_LOCAL_ICON_PATHS[name]) {
+    return strokeIconSvg(name, SPREADSHEETS_LOCAL_ICON_PATHS[name], size, strokeWidth);
+  }
+  const fromCtx = state?.ctx?.getActionIcon?.(name, size, strokeWidth);
+  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
+  return strokeIconSvg(name, SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS[name] || SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS.more, size, strokeWidth);
 }

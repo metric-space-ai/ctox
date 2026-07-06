@@ -64,104 +64,8 @@
   background: transparent;
 }
 
-.spreadsheets-column-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 48px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-
-.spreadsheets-column-title {
-  font-size: 12px;
-  font-weight: 800;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.055em;
-}
-
-.spreadsheets-column-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.spreadsheets-column-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--muted);
-  padding: 0;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.spreadsheets-column-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-}
-
-.spreadsheets-column-icon:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--surface);
-  box-shadow: var(--sh-subtle);
-}
-
-.spreadsheets-column-icon:disabled {
-  opacity: 0.45;
-  cursor: default;
-  pointer-events: none;
-}
-
-.spreadsheets-upload input {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.spreadsheets-column-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-
-.spreadsheets-column-tools input,
-.spreadsheets-column-tools select {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  height: 32px;
-  padding: 0 9px;
-  font-size: 12px;
-  box-sizing: border-box;
-}
-
-.spreadsheets-column-tools input:focus,
-.spreadsheets-column-tools select:focus {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
+/* Module-specific grid for the pane tools row; the controls themselves are
+   the base.css .ctox-pane-search / .ctox-pane-filter components. */
 .spreadsheets-explorer .spreadsheets-filter-bar {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -181,30 +85,9 @@
 }
 
 .spreadsheets-explorer .spreadsheets-filter-control {
-  height: 32px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  box-sizing: border-box;
-}
-
-.spreadsheets-explorer .ctox-pane-search:focus-visible,
-.spreadsheets-explorer .spreadsheets-filter-control:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
-.spreadsheets-column-sort {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 6px;
 }
 
 .spreadsheets-list {
@@ -285,7 +168,6 @@
 .spreadsheets-card-manage svg {
   width: 15px;
   height: 15px;
-  fill: currentColor;
 }
 
 .spreadsheets-card-main strong {
@@ -334,53 +216,57 @@
   font-weight: 650;
 }
 
+.spreadsheets-card-main .spreadsheets-card-updated {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* Status badge (.ctox-badge) + tag pills row inside a card. */
+.spreadsheets-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.spreadsheets-card-tag {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Center Editor Header & Surface */
 
+/* Extras on top of the canonical .ctox-pane-header.ctox-pane-band frame:
+   the header must not shrink inside the flex editor shell and keeps its own
+   surface above the grid canvas. */
 .spreadsheets-editor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+  background: var(--surface);
 }
 
-.spreadsheets-editor-title-area {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.spreadsheets-editor-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.spreadsheets-dirty-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--surface-2);
-  color: var(--muted);
-}
-
+/* Save-state extras on top of .ctox-badge (state colors + pulsing dot). */
 .spreadsheets-dirty-badge.is-dirty {
-  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
 }
 
 .spreadsheets-dirty-badge.is-saving {
-  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   color: var(--accent);
 }
 
@@ -403,51 +289,6 @@
 @keyframes pulse-saving {
   0% { opacity: 0.3; }
   100% { opacity: 1; }
-}
-
-.spreadsheets-editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.spreadsheets-editor-actions select {
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  padding: 0 6px;
-}
-
-.spreadsheets-editor-actions button {
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 0 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  transition: all 0.15s ease;
-}
-
-.spreadsheets-editor-actions button:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--surface);
-  box-shadow: var(--sh-subtle);
-}
-
-.spreadsheets-editor-actions button svg {
-  width: 12px;
-  height: 12px;
-  fill: currentColor;
 }
 
 /* JSpreadsheet Premium Overrides */
@@ -733,7 +574,7 @@
 
 .spreadsheets-runbook-workbench button:hover:not(:disabled) {
   background: var(--accent);
-  color: #fff;
+  color: var(--surface);
   box-shadow: var(--sh-subtle);
 }
 

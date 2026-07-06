@@ -612,16 +612,16 @@ function renderLeft(state) {
   const visible = visibleDocuments(state);
   const selected = selectedRecord(state);
   wrap.innerHTML = `
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Dateien</span>
-          <h2 class="ctox-pane-title documents-column-title">${escapeHtml(state.t('documentsTitle', 'Documents'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('documentsTitle', 'Documents'))}</h2>
         </div>
-        <div class="ctox-pane-actions documents-column-actions">
-          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${iconSvg('new')}</button>
-          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${iconSvg('import')}</button>
-          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${canExportDocument(state) ? '' : 'disabled aria-disabled="true"'}>${iconSvg('export')}</button>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${actionIcon(state, 'add')}</button>
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${actionIcon(state, 'upload')}</button>
+          <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${canExportDocument(state) ? '' : 'disabled aria-disabled="true"'}>${actionIcon(state, 'export')}</button>
         </div>
       </div>
       <div class="ctox-pane-tools documents-filter-bar">
@@ -632,14 +632,14 @@ function renderLeft(state) {
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select class="ctox-pane-sort documents-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
+        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
-        <select class="ctox-pane-sort documents-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
+        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
           ${tagFilterOptions(state)}
         </select>
       </div>
@@ -688,7 +688,7 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     manage.dataset.documentManage = record.id;
     manage.title = `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`;
     manage.setAttribute('aria-label', `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`);
-    manage.innerHTML = iconSvg('settings');
+    manage.innerHTML = actionIcon(state, 'settings');
     manage.addEventListener('click', () => openManageDocumentDrawer(state, record));
     card.append(button, manage);
     list.append(card);
@@ -701,15 +701,15 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
         <strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong>
         <span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>
         <div class="documents-empty-actions">
-          <button type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
+          <button class="ctox-button" type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
         </div>
       `
       : `
         <strong>${escapeHtml(state.t('noDocuments', 'Keine Dokumente'))}</strong>
         <span>${escapeHtml(state.t('importPrompt', 'DOCX oder Markdown importieren oder ein neues Word-Dokument anlegen.'))}</span>
         <div class="documents-empty-actions">
-          <button type="button" data-documents-empty-import>${iconSvg('import')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
-          <button type="button" data-documents-empty-new>${iconSvg('new')} ${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
+          <button class="ctox-button" type="button" data-documents-empty-import>${actionIcon(state, 'upload')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
+          <button class="ctox-button" type="button" data-documents-empty-new>${actionIcon(state, 'add')} ${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
         </div>
       `;
     empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
@@ -938,7 +938,7 @@ function openNewDocumentDrawer(state) {
         <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
         <textarea name="prompt" required placeholder="${escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}"></textarea>
       </label>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
       <p class="documents-form-status" role="status" data-documents-form-status></p>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
@@ -1016,7 +1016,7 @@ function openImportDrawer(state) {
         <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
         <textarea name="prompt" data-documents-runbook-prompt disabled placeholder="${escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import'))}"></textarea>
       </label>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
       <p class="documents-form-status" role="status" data-documents-form-status></p>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
@@ -1148,7 +1148,7 @@ function renderWorkflowPanel(state) {
   panel.innerHTML = `
     <div class="documents-workflow-head">
       <strong>${isImport ? escapeHtml(state.t('importDocumentTitle', 'Dokument importieren')) : escapeHtml(state.t('newDocumentTitle', 'Neues Dokument'))}</strong>
-      <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('close', 'Schließen'))}" title="${escapeHtml(state.t('close', 'Schließen'))}" data-documents-workflow-close>${iconSvg('close')}</button>
+      <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('close', 'Schließen'))}" title="${escapeHtml(state.t('close', 'Schließen'))}" data-documents-workflow-close>${actionIcon(state, 'close')}</button>
     </div>
     ${isImport ? `
       <label class="documents-workflow-field">
@@ -1182,7 +1182,7 @@ function renderWorkflowPanel(state) {
       <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
       <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import')) : escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}">${escapeHtml(flow.prompt || '')}</textarea>
     </label>
-    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
+    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
     <div class="documents-workflow-actions">
       <button type="button" data-documents-workflow-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
       <button type="submit">${isImport ? escapeHtml(state.t('import', 'Importieren')) : escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
@@ -1446,13 +1446,15 @@ function renderRight(state) {
   const wrap = document.createElement('div');
   wrap.className = 'documents-runbooks';
   wrap.innerHTML = `
-    <header class="ctox-pane-header documents-runbook-header">
+    <header class="ctox-pane-header ctox-pane-band documents-runbook-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">${escapeHtml(state.t('runbookKicker', 'Aktionen'))}</span>
-          <h2 class="ctox-pane-title documents-column-title">${escapeHtml(state.t('runbooksTitle', 'Runbooks'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('runbooksTitle', 'Runbooks'))}</h2>
         </div>
-        <strong class="documents-runbook-state">${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'keine'))}</strong>
+        <div class="ctox-pane-actions">
+          <strong class="ctox-badge documents-runbook-state">${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'keine'))}</strong>
+        </div>
       </div>
     </header>
     <form class="documents-runbook-form" data-documents-runbook-form>
@@ -1461,7 +1463,7 @@ function renderRight(state) {
       </select>
       <textarea data-documents-prompt ${record ? '' : 'disabled'} placeholder="${escapeHtml(state.t('promptPlaceholder', 'Prompt für dieses Dokument'))}"></textarea>
       <button type="submit" ${canRunbook ? '' : 'disabled aria-disabled="true"'}>${escapeHtml(state.t('runbookStart', 'Runbook starten'))}</button>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
     </form>
   `;
   wrap.querySelector('[data-documents-runbook-form]')?.addEventListener('submit', async (event) => {
@@ -2309,16 +2311,35 @@ function isMarkdownFilename(filename) {
   return /\.(md|markdown)$/i.test(String(filename || ''));
 }
 
-function iconSvg(name) {
-  const paths = {
-    new: 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z',
-    import: 'M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z',
-    export: 'M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z',
-    close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z',
-    knowledge: 'M5 4.5A2.5 2.5 0 0 1 7.5 2H19v16H7.5A2.5 2.5 0 0 0 5 20.5v-16Zm2.5-.5a.5.5 0 0 0-.5.5v12.55c.17-.03.34-.05.5-.05H17V4H7.5ZM8 7h7v2H8V7Zm0 4h6v2H8v-2Z',
-    settings: 'M19.4 13.5c.1-.5.1-1 .1-1.5s0-1-.1-1.5l2-1.5-2-3.5-2.4 1a8 8 0 0 0-2.6-1.5L14 2h-4l-.4 2.5A8 8 0 0 0 7 6L4.6 5l-2 3.5 2 1.5A8 8 0 0 0 4.5 12c0 .5 0 1 .1 1.5l-2 1.5 2 3.5 2.4-1a8 8 0 0 0 2.6 1.5L10 22h4l.4-2.5A8 8 0 0 0 17 18l2.4 1 2-3.5-2-1.5ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z',
-  };
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.new}"/></svg>`;
+// Module-only glyphs with no shared/icons.js equivalent, drawn in the same
+// stroke style as actionIconPaths (fill: none, currentColor, 1.8 stroke).
+const DOCUMENTS_LOCAL_ICON_PATHS = Object.freeze({
+  knowledge: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2ZM4 19.5A2.5 2.5 0 0 1 6.5 17H20',
+});
+
+// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
+// the module runs without ctx.getActionIcon; the normal path is the shell
+// helper handed in through mount(ctx).
+const DOCUMENTS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  close: 'M6 6l12 12M18 6L6 18',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+});
+
+function strokeIconSvg(name, path, size = 16, strokeWidth = 1.8) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ctox-action-icon ctox-action-${name}"><path d="${path}"></path></svg>`;
+}
+
+function actionIcon(state, name, size = 16, strokeWidth = 1.8) {
+  if (DOCUMENTS_LOCAL_ICON_PATHS[name]) {
+    return strokeIconSvg(name, DOCUMENTS_LOCAL_ICON_PATHS[name], size, strokeWidth);
+  }
+  const fromCtx = state?.ctx?.getActionIcon?.(name, size, strokeWidth);
+  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
+  return strokeIconSvg(name, DOCUMENTS_FALLBACK_ACTION_ICON_PATHS[name] || DOCUMENTS_FALLBACK_ACTION_ICON_PATHS.more, size, strokeWidth);
 }
 
 function titleFromFilename(filename) {
