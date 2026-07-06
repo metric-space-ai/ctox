@@ -58,9 +58,6 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C2b (S): Threads/Conversations als Presence-Consumer.** Restposten
-  aus OS-C2 (notes + calendar sind gelandet): threads/conversations
-  publizieren `ctx.presence` und zeigen Badges nach dem customers-Muster.
 - **OS-C3 (M): E2E-/Soak-Mode für Presence + Merge.** browser_rust_smoke-
   Mode mit zwei Browser-Peers: konkurrierende Feld-Edits konvergieren ohne
   Verlust; Presence-Badge erscheint/verschwindet (Peer-Close, TTL).
@@ -176,3 +173,7 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-X1 verifiziert + re-scoped (Token-Flag ist bereits Store-basiert): `ce1e6e48`
 - OS-C1 Wrapper-Toleranz im nativen installed-module-Schema-Parser: `21e7e1f4`
 - OS-C2 (teilweise) Presence + Feld-Merge in notes und calendar: `e1af73fc`
+- OS-A3 Checkpoint-Staleness (pull/pushCheckpointAgeMs) in Sync-Diagnose: `2b8de024`
+- OS-C2b Presence in threads (`user_threads`); conversations bewusst
+  ausgelassen: Bucket-keyed Timeline hat kein treues collection+recordId-
+  Mapping: `86fd9407`
