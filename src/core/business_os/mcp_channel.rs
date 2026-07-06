@@ -1189,6 +1189,16 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             ]),
         ),
         write_tool(
+            "appsec_authz_credential_proof_template",
+            "Use this when an authorized external agent needs to create a redacted credential-proof template from an AppSec authz subjects file before a live authenticated preflight. This writes no secret values.",
+            object_schema(vec![
+                required_string("subjects"),
+                optional_string("state_dir"),
+                optional_string("out"),
+                optional_boolean("force"),
+            ]),
+        ),
+        write_tool(
             "appsec_authz_preflight",
             "Use this before a live authenticated AppSec authz run to validate redacted subjects, credential references, optional Web-Stack evidence, and next commands without reading secret values or starting browser work.",
             object_schema(vec![
@@ -1198,6 +1208,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("subjects"),
                 optional_string("run"),
                 optional_string("evidence_dir"),
+                optional_string("credential_proof"),
                 optional_boolean("require_credentials"),
                 optional_boolean("require_evidence"),
             ]),
@@ -1210,6 +1221,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 required_string("subjects"),
                 optional_string("state_dir"),
                 optional_string("source_id"),
+                optional_string("credential_proof"),
             ]),
         ),
         write_tool(
@@ -2418,6 +2430,9 @@ fn call_tool_inner(
         "appsec_authz_plan" => {
             serde_json::to_value(appsec_authz_plan(root, &context, &arguments)?)?
         }
+        "appsec_authz_credential_proof_template" => serde_json::to_value(
+            appsec_authz_credential_proof_template(root, &context, &arguments)?,
+        )?,
         "appsec_authz_preflight" => {
             serde_json::to_value(appsec_authz_preflight(root, &context, &arguments)?)?
         }
@@ -2720,6 +2735,54 @@ fn appsec_authz_plan(
     Ok(output)
 }
 
+fn appsec_authz_credential_proof_template(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        "appsec_authz_credential_proof_template",
+        arguments,
+    )?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let subjects = required_arg(arguments, "subjects")?;
+    let subjects_path = appsec_mcp_workspace_path(root, "subjects", &subjects)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "credential-proof-template".to_string(),
+        "--subjects".to_string(),
+        path_string(&subjects_path),
+    ];
+    if let Some(out) = optional_string_arg(arguments, "out") {
+        let out_path = appsec_mcp_workspace_path(root, "out", &out)?;
+        args.extend(["--out".to_string(), path_string(&out_path)]);
+    }
+    if optional_bool_arg(arguments, "force") {
+        args.push("--force".to_string());
+    }
+    args.push("--json".to_string());
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_credential_proof_template".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
+    }
+    Ok(output)
+}
+
 fn appsec_authz_preflight(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -2750,6 +2813,10 @@ fn appsec_authz_preflight(
     if let Some(evidence_dir) = optional_string_arg(arguments, "evidence_dir") {
         let evidence_dir = appsec_mcp_workspace_path(root, "evidence_dir", &evidence_dir)?;
         args.extend(["--evidence-dir".to_string(), path_string(&evidence_dir)]);
+    }
+    if let Some(credential_proof) = optional_string_arg(arguments, "credential_proof") {
+        let proof_path = appsec_mcp_workspace_path(root, "credential_proof", &credential_proof)?;
+        args.extend(["--credential-proof".to_string(), path_string(&proof_path)]);
     }
     if optional_bool_arg(arguments, "require_credentials") {
         args.push("--require-credentials".to_string());
@@ -2798,6 +2865,10 @@ fn appsec_authz_run(
     if let Some(source_id) = optional_string_arg(arguments, "source_id") {
         args.push("--source-id".to_string());
         args.push(source_id);
+    }
+    if let Some(credential_proof) = optional_string_arg(arguments, "credential_proof") {
+        let proof_path = appsec_mcp_workspace_path(root, "credential_proof", &credential_proof)?;
+        args.extend(["--credential-proof".to_string(), path_string(&proof_path)]);
     }
     let mut output = crate::run_projected_appsec_command(root, &args)?;
     if let Some(object) = output.as_object_mut() {
@@ -4493,6 +4564,7 @@ fn business_os_mcp_policy_decision(
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_credential_proof_template"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
@@ -4945,6 +5017,7 @@ fn enforce_argument_scope_policy(
         | "appsec_completion_review"
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
+        | "appsec_authz_credential_proof_template"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
@@ -5043,6 +5116,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "appsec_lab_create"
         | "appsec_lab_run"
         | "appsec_authz_plan"
+        | "appsec_authz_credential_proof_template"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
@@ -6356,6 +6430,9 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_plan"));
         assert!(tools
             .iter()
+            .any(|tool| tool.name == "appsec_authz_credential_proof_template"));
+        assert!(tools
+            .iter()
             .any(|tool| tool.name == "appsec_authz_preflight"));
         assert!(tools.iter().any(|tool| tool.name == "appsec_authz_run"));
         assert!(tools
@@ -6512,11 +6589,45 @@ mod tests {
         )?;
         let authz_preflight = call_tool(
             root,
+            "appsec_authz_credential_proof_template",
+            serde_json::json!({
+                "subjects": "authz-subjects.json",
+                "force": true,
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            authz_preflight.get("mcp_tool").and_then(Value::as_str),
+            Some("appsec_authz_credential_proof_template")
+        );
+        assert_eq!(
+            authz_preflight.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            authz_preflight
+                .pointer("/credential_proof/version")
+                .and_then(Value::as_str),
+            Some("ctox.appsec_pentest.authz_credential_proof.v1")
+        );
+        let credential_proof_artifact = authz_preflight
+            .get("artifact")
+            .and_then(Value::as_str)
+            .expect("credential proof artifact")
+            .to_string();
+        assert!(Path::new(&credential_proof_artifact).is_file());
+
+        let authz_preflight = call_tool(
+            root,
             "appsec_authz_preflight",
             serde_json::json!({
                 "target": "https://example.test",
                 "subjects": "authz-subjects.json",
                 "source_id": "custom-web-app",
+                "credential_proof": credential_proof_artifact.clone(),
                 "require_credentials": true,
                 "_context": {
                     "actor": "chatgpt:test-user",
@@ -6549,6 +6660,7 @@ mod tests {
                 "target": "https://example.test",
                 "subjects": "authz-subjects.json",
                 "source_id": "custom-web-app",
+                "credential_proof": credential_proof_artifact,
                 "_context": {
                     "actor": "chatgpt:test-user",
                     "workspace": "test"
