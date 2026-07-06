@@ -152,9 +152,12 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
   Zweiter offener Teil: Strict-Default für Capability-Tokens (heute Opt-in,
   ohne Token wird auf unprivilegiert degradiert) — Produktentscheidung mit
   Migrationspfad.
-- **OS-X2 (S): Wire-Daemon in CI/lokal bauen.** Die zwei dauerhaft
-  geskippten Cross-Process-Smokes (`wire daemon not built`) laufen lassen —
-  Skips zählen als fehlende Abdeckung.
+- **OS-X2b (S): Wire-Daemon in CI bauen.** Lokal verifiziert (siehe
+  Erledigt): beide Cross-Process-Smokes laufen gegen den release-gebauten
+  `v15_wire_daemon` (Build-Pfad `runtime/build/cargo-target`, ~17 min
+  Release-Build). In CI baut der run-all-Job den Daemon nicht — die zwei
+  Tests skippen dort weiter. Abwägung für den Operator: +Buildzeit im
+  ci.yml-Job (oder Cargo-Cache) gegen echte E2E-Abdeckung pro PR.
 
 ## Empfohlene Reihenfolge
 
@@ -181,3 +184,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-A1 Idle-Budget-Guard für den External-Write-Poll (per-DB-Wakeup-Zähler
   + Integrationstest tests/idle_budget.rs, 0 Wakeups in 3s nach Standby):
   `a59e9c77`
+- OS-X2 (lokal) Wire-Daemon gebaut, Suite erstmals vollständig:
+  55 pass / 0 fail / 0 skip inkl. beider Cross-Process-E2E-Smokes;
+  CI-Verdrahtung als OS-X2b offen.
