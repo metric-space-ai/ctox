@@ -1188,6 +1188,24 @@ impl WebRTCRsConnectionHandler {
             .is_some_and(|report| !report.entries.is_empty())
     }
 
+    /// Push the current aggregate to ONE peer (join snapshot on data-channel
+    /// open). Best-effort like the broadcast.
+    async fn push_presence_snapshot_to(self: &Arc<Self>, recipient: &WebRTCRsPeer) {
+        let entries = self.presence_entries_excluding(recipient, now_ms());
+        if entries.is_empty() {
+            return;
+        }
+        let response = WebRTCResponse {
+            id: CTOX_PRESENCE_STREAM_ID.to_string(),
+            result: serde_json::json!({ "entries": entries }),
+            error: None,
+            collection: None,
+        };
+        let _ = self
+            .send(recipient, WebRTCWireFrame::Response(response))
+            .await;
+    }
+
     /// Push the current presence aggregate to every open peer as a
     /// `presence$` response frame. Each recipient gets everyone's entries but
     /// its own. Best-effort: a send failure surfaces through the normal
@@ -2105,6 +2123,21 @@ fn install_data_channel(
                 DataChannelEvent::OnOpen => {
                     if let Some(entry) = handler_for_task.peers.lock().get_mut(&peer_for_task) {
                         entry.data_channel_open = true;
+                    }
+                    // Presence join snapshot: broadcasts fire on CHANGE, peer
+                    // close and TTL sweep — a peer that connects while other
+                    // peers already publish presence would otherwise see
+                    // nothing until the next change (found by the two-browser
+                    // E2E mode). Push the current aggregate to the newly
+                    // opened peer; a no-presence room sends nothing.
+                    if !handler_for_task.presence.lock().is_empty() {
+                        let handler_presence = Arc::clone(&handler_for_task);
+                        let peer_presence = peer_for_task.clone();
+                        tokio::spawn(async move {
+                            handler_presence
+                                .push_presence_snapshot_to(&peer_presence)
+                                .await;
+                        });
                     }
                     connect_subject.next(peer_for_task.clone());
                 }
