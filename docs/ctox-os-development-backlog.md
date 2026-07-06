@@ -53,18 +53,29 @@ Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
-- **OS-C3 (M, umgebungsblockiert 2026-07-06): E2E-/Soak-Mode für
-  Presence + Merge.** browser_rust_smoke-Mode mit zwei Browser-Peers:
-  konkurrierende Feld-Edits konvergieren ohne Verlust; Presence-Badge
-  erscheint/verschwindet (Peer-Close, TTL). Vorarbeit erledigt: Playwright
-  liegt unter /tmp/ctox-pw-smoke (Kandidatenpfad des Harness), System-Chrome
-  wird erkannt. BLOCKER: der BESTEHENDE Mode `rust-to-browser` ist auf
-  dieser macOS-Maschine deterministisch rot — Datei-Doc repliziert, aber
-  `desktop_file_chunks` kommen nie an (`chunkCount:0`); identisch am
-  Baseline-Commit 989319b4 (Worktree-Gegenprobe), also VORBESTEHEND, nicht
-  von den Juli-Commits. Erst den Chunk-Pfad-Befund klären (CI-ubuntu vs.
-  macOS?), dann den neuen Mode bauen — ein unverifizierbarer Soak-Mode wäre
-  wertlos.
+- **OS-C3 (M, blockiert durch OS-X3): E2E-/Soak-Mode für Presence +
+  Merge.** browser_rust_smoke-Mode mit zwei Browser-Peers: konkurrierende
+  Feld-Edits konvergieren ohne Verlust; Presence-Badge erscheint/
+  verschwindet (Peer-Close, TTL). Vorarbeit erledigt: Playwright unter
+  /tmp/ctox-pw-smoke (Harness-Kandidatenpfad), System-Chrome erkannt.
+  Blockiert bis OS-X3 die Basis-Modes des Harness repariert.
+- **OS-X3 (M): Soak-Harness-Basis-Modes reparieren.** KORRIGIERTER Befund
+  (ersetzt die frühere "Chunk-Pfad vorbestehend rot"-Deutung; native Seite
+  ist verifiziert gesund — Datei `available`, Chunk-Row im Store). Der Mode
+  `rust-to-browser` ist im aktuellen Tree in BEIDEN Aufrufvarianten
+  konstruktionsbedingt rot: (a) mit `SMOKE_PAGE_PATH=/index.html` bootet
+  die App und repliziert, aber `waitForFile` erwartet Chunk-Docs per
+  Background-Pull, der für Chunk-Collections seit der Demand-Only-Härtung
+  BEWUSST aus ist (`isDemandOnlyPullCollection` ⇒ `pull:null`, auch für
+  Leases; §8.1 in docs/ctox-rxdb.md) — kann nie grün werden; (b) ohne
+  Page-Path 404t die Default-Seite `/__rxdb_smoke__.html` (einzige Referenz
+  im Tree, kein Creator, keine Server-Route) ⇒ nichts bootet
+  (`syncConfig:null`). Der Soak-Workflow ist manuell; letzter Grün-Stand
+  2026-06-10 liegt VOR der Demand-Only-Härtung. Reparaturoptionen:
+  (1) plain-Modes auf App-DB + `waitForFileViaDemandFetch` umstellen
+  (folgt der Produkt-Semantik), oder (2) synthetische Smoke-Seite
+  wiederherstellen/ausliefern. Zusätzlich: ungültige Mode/Page-Kombis früh
+  mit klarer Meldung ablehnen (Gegenstück zum bestehenden UI-Mode-Guard).
 - **OS-C4b (S, optional): Feld-Merge unterhalb Top-Level.** Rest aus OS-C4:
   für deklarierte Objektfelder rekursiv mergen statt Top-Level-atomar.
   Braucht eine Deklarationsform (welche Felder) — erst angehen, wenn ein
