@@ -1,7 +1,10 @@
 /* Reference migration to the shared design system: the frame, panes, stacked
-   pane bodies, empty states and the header search come from shared/base.css
-   (.ctox-workspace / .ctox-pane / .ctox-pane-body / .ctox-empty /
-   .ctox-pane-search). This file only keeps what is conversations-specific.
+   pane bodies, empty states, header band, search, filter selects, chips
+   (.ctox-chip/.ctox-chip-count), segmented tabs (.ctox-pane-tab), avatars
+   (.ctox-avatar), key/value fields (.ctox-fields) and text buttons
+   (.ctox-button) all come from shared/base.css + app.css. This file only
+   keeps what is conversations-specific (channel brand dots, thread cards,
+   timeline bubbles, right-pane cards).
    The width aliases keep the persisted resizer layout working — the shell
    resizer writes --conversations-*-width onto the frame element. */
 .conv-module {
@@ -12,7 +15,7 @@
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
 .conv-pane.conv-left {
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .conv-pane.conv-center {
@@ -23,57 +26,18 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
-/* Left pane — list of threads */
-.conv-left-header {
-  padding: 14px 14px 10px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-}
-
-.conv-left-header h2 {
-  margin: 0 0 2px;
-  font-size: 15px;
-  font-weight: 760;
-  color: var(--text);
-}
-
-.conv-left-sub {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
+/* Left pane — channel filter chips (.ctox-chip) with brand-colored dots */
 .conv-channel-filters {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 14px 10px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.conv-channel-chip {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.conv-channel-chip:hover {
-  color: var(--text);
-}
-
-.conv-channel-chip.is-active {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+/* Empty counts must not leave a dangling flex gap inside the chip. */
+.conv-channel-filters .ctox-chip-count:empty {
+  display: none;
 }
 
 .conv-channel-dot {
@@ -81,6 +45,7 @@
   height: 8px;
   border-radius: 50%;
   background: var(--muted);
+  flex: 0 0 auto;
 }
 
 .conv-channel-dot[data-dot="whatsapp"] { background: #25d366; }
@@ -96,28 +61,7 @@
 .conv-channel-dot[data-dot="zulip"]    { background: #52c2af; }
 .conv-channel-dot[data-dot="google_chat"] { background: #34a853; }
 
-.conv-channel-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.conv-channel-chip.is-active .conv-channel-count {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
-}
-
-.conv-channel-count:empty {
-  display: none;
-}
-
+/* Secondary filter row: kit .ctox-pane-filter selects on a module grid. */
 .conv-secondary-filters {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -126,26 +70,7 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.conv-secondary-select {
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  padding: 0 22px 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background:
-    linear-gradient(45deg, transparent 50%, var(--muted) 50%) calc(100% - 12px) 12px / 5px 5px no-repeat,
-    linear-gradient(135deg, var(--muted) 50%, transparent 50%) calc(100% - 7px) 12px / 5px 5px no-repeat,
-    var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.conv-secondary-select:first-child {
+.conv-secondary-filters .ctox-pane-filter:first-child {
   grid-column: 1 / -1;
 }
 
@@ -161,12 +86,6 @@
   color: var(--danger);
 }
 
-.conv-secondary-select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
 .conv-thread-list {
   min-height: 0;
   overflow: auto;
@@ -178,7 +97,7 @@
 
 .conv-thread-item {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   gap: 10px;
   padding: 9px 10px;
   border: 1px solid transparent;
@@ -200,7 +119,7 @@
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
 }
 
-.conv-thread-item .conv-avatar {
+.conv-thread-item .ctox-avatar {
   align-self: start;
 }
 
@@ -293,24 +212,6 @@
   font-weight: 800;
 }
 
-.conv-avatar {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.conv-avatar--lg {
-  width: 48px;
-  height: 48px;
-  font-size: 16px;
-}
-
 /* Center pane — detail timeline */
 .conv-center-header {
   display: flex;
@@ -351,6 +252,7 @@
   white-space: nowrap;
 }
 
+/* Channel view switcher: kit .ctox-pane-tab buttons on a module scroll row. */
 .conv-channel-tabs {
   display: flex;
   align-items: center;
@@ -366,54 +268,14 @@
   display: none;
 }
 
-.conv-channel-tab {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
+.conv-channel-tabs .ctox-pane-tab {
   gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
   flex: 0 0 auto;
 }
 
-.conv-channel-tab:hover {
-  color: var(--text);
-}
-
-.conv-channel-tab.is-active {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-  color: var(--accent);
-}
-
-.conv-channel-tab .conv-channel-dot {
+.conv-channel-tabs .conv-channel-dot {
   width: 7px;
   height: 7px;
-}
-
-.conv-channel-tab-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 16px;
-  height: 14px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.conv-channel-tab.is-active .conv-channel-tab-count {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
 }
 
 .conv-timeline {
@@ -451,7 +313,7 @@
 
 .conv-message.is-highlighted {
   border-color: color-mix(in srgb, var(--accent) 76%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .conv-message[data-direction="outbound"] {
@@ -565,7 +427,7 @@
 .conv-message[data-status="failed"] .conv-message-status {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  background: var(--danger-soft);
 }
 
 .conv-message[data-seen="0"][data-direction="inbound"] {
@@ -597,6 +459,8 @@
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
 }
 
+/* Deliberately white: the sandboxed iframe renders foreign email HTML, which
+   assumes a light background regardless of the shell theme. */
 .conv-message-html-frame {
   width: 100%;
   min-height: 120px;
@@ -641,7 +505,7 @@
 
 .conv-message-task-chip:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .conv-message-task-chip[data-kind="task"] .conv-message-task-chip-kind {
@@ -677,8 +541,8 @@
 .conv-message-task-chip-status[data-route-status="queued"],
 .conv-message-task-chip-status[data-route-status="pending"],
 .conv-message-task-chip-status[data-route-status="accepted"] {
-  background: color-mix(in srgb, #f6a050 22%, transparent);
-  color: #f6a050;
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .conv-message-task-chip-status[data-route-status="leased"],
@@ -691,8 +555,8 @@
 .conv-message-task-chip-status[data-route-status="done"],
 .conv-message-task-chip-status[data-route-status="completed"],
 .conv-message-task-chip-status[data-route-status="handled"] {
-  background: color-mix(in srgb, #25d366 18%, transparent);
-  color: #25d366;
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .conv-message-task-chip-status[data-route-status="failed"],
@@ -700,7 +564,7 @@
 .conv-message-task-chip-status[data-route-status="stale_missing_native"],
 .conv-message-task-chip-status[data-route-status="cancelled"],
 .conv-message-task-chip-status[data-route-status="canceled"] {
-  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -777,7 +641,7 @@ details[open] > .conv-message-details-summary::before {
   word-break: break-all;
 }
 
-/* Channel-specific tints inherit from --conv-channel-tint set via data-channel */
+/* Channel-specific tints (brand colors, deliberately hardcoded) */
 .conv-message[data-channel="whatsapp"][data-direction="outbound"] {
   background: color-mix(in srgb, #25d366 14%, var(--surface));
   border-color: color-mix(in srgb, #25d366 45%, var(--line));
@@ -809,22 +673,7 @@ details[open] > .conv-message-details-summary::before {
   border-color: color-mix(in srgb, #f6a050 45%, var(--line));
 }
 
-/* Right pane */
-.conv-right-empty {
-  display: grid;
-  gap: 6px;
-  place-content: center;
-  padding: 24px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.conv-right-empty strong {
-  color: var(--text);
-  font-size: 13px;
-}
-
+/* Right pane — base empty-state styling comes from .ctox-empty. */
 .conv-right-empty span {
   overflow-wrap: anywhere;
 }
@@ -918,31 +767,13 @@ details[open] > .conv-message-details-summary::before {
   line-height: 1.35;
 }
 
+/* Boxed variant of .ctox-fields inside the outbound card. */
 .conv-outbound-facts {
-  display: grid;
-  grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
-  gap: 5px 8px;
   margin: 2px 0;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
-}
-
-.conv-outbound-facts dt {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.conv-outbound-facts dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .conv-outbound-actions {
@@ -971,41 +802,6 @@ details[open] > .conv-message-details-summary::before {
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
-}
-
-.conv-outbound-reply-classifier select {
-  min-width: 0;
-  min-height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-}
-
-.conv-action-button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.conv-action-button:hover {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
-}
-
-.conv-action-button--primary {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
-  color: var(--accent);
 }
 
 .conv-channel-row {
@@ -1051,8 +847,8 @@ details[open] > .conv-message-details-summary::before {
   background: var(--muted);
 }
 
-.conv-account-health[data-state="ok"]   { background: #25d366; }
-.conv-account-health[data-state="warn"] { background: #f6a050; }
+.conv-account-health[data-state="ok"]   { background: var(--success); }
+.conv-account-health[data-state="warn"] { background: var(--warning); }
 .conv-account-health[data-state="bad"]  { background: var(--danger); }
 
 .conv-account-meta {
@@ -1115,32 +911,6 @@ details[open] > .conv-message-details-summary::before {
 .conv-load-older:hover {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-}
-
-.conv-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 0;
-}
-
-.conv-stats div {
-  display: grid;
-  gap: 2px;
-}
-
-.conv-stats dt {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.conv-stats dd {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .conv-link-row {

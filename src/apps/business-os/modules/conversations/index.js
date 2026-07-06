@@ -6,7 +6,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260605-rxdb-cancel1';
+const STYLE_BUILD = '20260706-kit-migration1';
 const SUPPORTED_CHANNELS = [
   'whatsapp',
   'email',
@@ -919,7 +919,7 @@ export async function mount(ctx) {
     if (view.selectedBucketKey === bucket.key) btn.classList.add('is-active');
 
     const avatar = document.createElement('span');
-    avatar.className = 'conv-avatar';
+    avatar.className = 'ctox-avatar';
     avatar.textContent = avatarGlyphFor(bucket.displayName);
     btn.appendChild(avatar);
 
@@ -1024,7 +1024,7 @@ export async function mount(ctx) {
     for (const channel of tabs) {
       const tab = document.createElement('button');
       tab.type = 'button';
-      tab.className = 'conv-channel-tab';
+      tab.className = 'ctox-pane-tab';
       tab.setAttribute('role', 'tab');
       tab.dataset.channel = channel;
       if (channel === view.selectedChannel) {
@@ -1032,22 +1032,22 @@ export async function mount(ctx) {
         tab.setAttribute('aria-selected', 'true');
       }
       if (channel === ALL_CHANNELS_TAB) {
-        tab.innerHTML = `<span></span><span class="conv-channel-tab-count"></span>`;
+        tab.innerHTML = `<span></span><span class="ctox-chip-count"></span>`;
         tab.querySelector('span:first-child').textContent = t('channelAll', 'Alle Channels');
-        tab.querySelector('.conv-channel-tab-count').textContent = String(bucket.messageCount || sumValues(messageCountByChannel));
+        tab.querySelector('.ctox-chip-count').textContent = String(bucket.messageCount || sumValues(messageCountByChannel));
       } else {
         tab.innerHTML = `
           <span class="conv-channel-dot" data-dot="${channel}"></span>
           <span></span>
-          <span class="conv-channel-tab-count"></span>
+          <span class="ctox-chip-count"></span>
         `;
         tab.querySelectorAll('span')[1].textContent = labelForChannel(channel, t);
-        tab.querySelector('.conv-channel-tab-count').textContent = String(messageCountByChannel.get(channel) || 0);
+        tab.querySelector('.ctox-chip-count').textContent = String(messageCountByChannel.get(channel) || 0);
       }
       tab.addEventListener('click', () => {
         view.selectedChannel = channel;
         view.timelineLimit = MESSAGE_PAGE_SIZE;
-        for (const other of refs.channelTabs.querySelectorAll('.conv-channel-tab')) {
+        for (const other of refs.channelTabs.querySelectorAll('.ctox-pane-tab')) {
           other.classList.toggle('is-active', other === tab);
           other.setAttribute('aria-selected', other === tab ? 'true' : 'false');
         }
@@ -1703,7 +1703,7 @@ export async function mount(ctx) {
     const rows = outboundFactRows({ message, engagement, latestApproval, leadName, t });
     if (rows.length) {
       const dl = document.createElement('dl');
-      dl.className = 'conv-outbound-facts';
+      dl.className = 'ctox-fields conv-outbound-facts';
       for (const [label, value] of rows) {
         const dt = document.createElement('dt');
         dt.textContent = label;
@@ -1719,7 +1719,7 @@ export async function mount(ctx) {
     actions.className = 'conv-outbound-actions';
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
-    openBtn.className = 'conv-action-button';
+    openBtn.className = 'ctox-button';
     openBtn.dataset.action = 'conv-outbound-open';
     openBtn.textContent = t('outboundOpenCampaign', 'In Outbound öffnen');
     openBtn.addEventListener('click', () => openOutboundContext(context));
@@ -1728,7 +1728,7 @@ export async function mount(ctx) {
     if (canApproveOutboundMessage(message)) {
       const approveBtn = document.createElement('button');
       approveBtn.type = 'button';
-      approveBtn.className = 'conv-action-button conv-action-button--primary';
+      approveBtn.className = 'ctox-button is-primary';
       approveBtn.dataset.action = 'conv-outbound-approve';
       approveBtn.dataset.messageId = message.id;
       approveBtn.textContent = t('outboundApprove', 'Freigeben');
@@ -1737,7 +1737,7 @@ export async function mount(ctx) {
 
       const rejectBtn = document.createElement('button');
       rejectBtn.type = 'button';
-      rejectBtn.className = 'conv-action-button';
+      rejectBtn.className = 'ctox-button';
       rejectBtn.dataset.action = 'conv-outbound-reject';
       rejectBtn.dataset.messageId = message.id;
       rejectBtn.textContent = t('outboundReject', 'Ablehnen');
@@ -1760,9 +1760,9 @@ export async function mount(ctx) {
     wrap.innerHTML = `
       <label>
         <span></span>
-        <select></select>
+        <select class="ctox-select"></select>
       </label>
-      <button type="button" class="conv-action-button conv-action-button--primary"></button>
+      <button type="button" class="ctox-button is-primary"></button>
       <small></small>
     `;
     wrap.querySelector('label span').textContent = t('outboundReplyClassification', 'Reply-Klasse');
