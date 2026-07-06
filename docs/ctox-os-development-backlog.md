@@ -21,11 +21,12 @@ Ziel: "Idle muss idle bleiben" ist ein rotes/grünes Signal, kein Prosa-Satz.
 Der Loop-Ratchet existiert (`background_loops_use_a_sanctioned_idle_strategy`,
 `a20d1436`); es fehlt die echte Messung.
 
-- **OS-A1 (M): Idle-CPU-Messtest.** Integrationstest, der den nativen Peer
-  (oder die Projektions-Loops isoliert) N Sekunden ohne Arbeit laufen lässt
-  und gemessene SQLite-Statement-Zahlen / Writer-Lock-Zeiten gegen ein Budget
-  prüft. Anker: `NativePeerLoopMetrics` (rxdb_peer.rs), `SQLITE_WRITER_*` /
-  `SQLITE_EXTERNAL_POLL_*`-Statics (instance.rs). Rot bei Budget-Riss.
+- **OS-A1b (M, optional): Idle-Budget auf Daemon-Ebene.** OS-A1 (erledigt)
+  misst den SQLite-External-Poll isoliert. Aufbauend: ein End-to-End-Test,
+  der den vollen nativen Peer (Projektions-Loops + Poll) N Sekunden idle
+  laufen lässt und Writer-Lock-Zeiten/Statements gegen ein Budget prüft —
+  die Loops selbst sind durch den Ratchet (a20d1436) und die
+  Backoff-Unit-Tests gedeckt, daher optional.
 - **OS-A2 (M): Query-Pfad-Benchmarks.** criterion-Benches für die kritischen
   SQLite-Pfade (compiled query, candidate plan, fallback scan) im
   `ctox-rxdb`-Crate, damit Datenpfad-Änderungen eine Zahl haben.
@@ -177,3 +178,6 @@ Reihenfolge nach Drift-Risiko; kein Big-Bang-WASM-Port (Nicht-Ziel).
 - OS-C2b Presence in threads (`user_threads`); conversations bewusst
   ausgelassen: Bucket-keyed Timeline hat kein treues collection+recordId-
   Mapping: `86fd9407`
+- OS-A1 Idle-Budget-Guard für den External-Write-Poll (per-DB-Wakeup-Zähler
+  + Integrationstest tests/idle_budget.rs, 0 Wakeups in 3s nach Standby):
+  `a59e9c77`
