@@ -763,6 +763,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     if (!frameTransport) return;
     recordCollection?.(collection, {
       frameTransport,
+      // OS-A3: checkpoint progress rides the transport-status events, so it
+      // only re-records on real replication activity — no timers, idle stays
+      // idle. Ages are derived at snapshot time (snapshotDiagnostics).
+      ...checkpointDiagnosticFields(replicationState),
     });
   };
   recordTransportStatus(replicationState.getTransportStatus?.());
@@ -1135,6 +1139,28 @@ function progressNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+// OS-A3: per-collection checkpoint progress for the diagnostics surface —
+// the lwt of the newest master row this browser pulled / pushed (max across
+// peers). Consumers read staleness as `pullCheckpointAgeMs` in the snapshot.
+function checkpointDiagnosticFields(replicationState) {
+  const fields = {};
+  const pullLwt = maxCheckpointLwt(replicationState?.pullCheckpointsByPeer);
+  const pushLwt = maxCheckpointLwt(replicationState?.pushCheckpointsByPeer);
+  if (pullLwt > 0) fields.pullCheckpointLwt = pullLwt;
+  if (pushLwt > 0) fields.pushCheckpointLwt = pushLwt;
+  return fields;
+}
+
+function maxCheckpointLwt(map) {
+  if (!map || typeof map.values !== 'function') return 0;
+  let max = 0;
+  for (const checkpoint of map.values()) {
+    const lwt = progressNumber(checkpoint?.lwt);
+    if (lwt > max) max = lwt;
+  }
+  return max;
+}
+
 function waitForCondition(predicate, timeoutMs, intervalMs, isStopped) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
@@ -1269,9 +1295,25 @@ function createDiagnostics(config, mode = 'webrtc') {
 }
 
 function snapshotDiagnostics(diagnostics) {
+  // OS-A3: staleness ages are derived AT SNAPSHOT TIME from the recorded
+  // checkpoint lwts, so no timer keeps them fresh (idle stays idle). An old
+  // age on an idle collection is expected (nothing was written); an old age
+  // while sibling collections advance points at a lagging pull.
+  const nowMs = Date.now();
+  const collections = {};
+  for (const [name, entry] of Object.entries(diagnostics.collections)) {
+    const next = { ...entry };
+    if (Number(entry?.pullCheckpointLwt) > 0) {
+      next.pullCheckpointAgeMs = Math.max(0, nowMs - Number(entry.pullCheckpointLwt));
+    }
+    if (Number(entry?.pushCheckpointLwt) > 0) {
+      next.pushCheckpointAgeMs = Math.max(0, nowMs - Number(entry.pushCheckpointLwt));
+    }
+    collections[name] = next;
+  }
   return {
     ...diagnostics,
-    collections: { ...diagnostics.collections },
+    collections,
   };
 }
 
@@ -1778,6 +1820,9 @@ export const __ctoxSyncTestHooks = {
   isModuleDemandOnlyCollection,
   moduleSyncCollections,
   DEMAND_ONLY_COLLECTION_START_ERROR,
+  checkpointDiagnosticFields,
+  maxCheckpointLwt,
+  snapshotDiagnostics,
 };
 
 function replicationIoMessageFor(code) {
