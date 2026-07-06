@@ -54,7 +54,13 @@ Presence v1 (`445cab7c`) und Feld-Merge (`a045b1d7`) sind gelandet;
 customers ist Referenz-Consumer (`3fed531d`).
 
 - **OS-X4 (M, Produkt-Beobachtung): Externe CLI-Store-Writes wecken den
-  Daemon nicht.** `ctox business-os files sync <path>` schreibt aus einem
+  Daemon nicht zuverlässig.** ZUSATZBEFUND aus dem Soak-Debugging: für
+  `files sync` unter einem Workspace-Scan-Root EXISTIERT eigentlich ein
+  zweiter Weckpfad — der In-Daemon-Desktop-File-Watcher
+  (DesktopFileIndexWatch, event-getrieben) hätte die geänderte Datei
+  binnen ms indizieren müssen, hat im Smoke aber nicht gefeuert
+  (macOS-FSEvents auf /var/folders-Temp-Pfaden? Watch-Root-Re-Arming nach
+  spät erzeugtem Workspace-Dir?). Untersuchung gehört zum Ticket.** `ctox business-os files sync <path>` schreibt aus einem
   separaten Prozess in die RxDB-SQLite; In-Prozess-Hooks feuern nicht, und
   der External-Write-Poll steht nach der Idle-Härtung bis zu 30 min im
   Standby — laufende Browser sehen das Update erst bei der nächsten
