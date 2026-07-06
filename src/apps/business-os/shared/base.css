@@ -594,6 +594,19 @@
   cursor: not-allowed;
 }
 
+/* Filled primary variant for the one dominant flow action in a header. */
+.ctox-pane-icon.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+
+.ctox-pane-icon.is-primary:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 86%, var(--text));
+  color: var(--surface);
+}
+
 /* Compact select for the pane tools row (grouping/state filters). */
 .ctox-pane-filter {
   min-width: 0;
