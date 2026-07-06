@@ -115,59 +115,80 @@ async function ensureStyles() {
   document.head.append(link);
 }
 
+// Monochrome stroke icons for header/close buttons. Delegates to the shell's
+// getActionIcon (shared/icons.js via mount ctx); the inline paths are the same
+// actionIconPaths glyphs as a fallback for older shells.
+const ACTION_ICON_FALLBACK_PATHS = {
+  add: 'M12 5v14M5 12h14',
+  close: 'M6 6l12 12M18 6L6 18',
+  download: 'M12 4v11M12 15l-4-4M12 15l4-4M5 19h14',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+};
+
+function actionIcon(name) {
+  const fromShell = state.ctx?.getActionIcon?.(name);
+  if (fromShell) return fromShell;
+  const path = ACTION_ICON_FALLBACK_PATHS[name] || ACTION_ICON_FALLBACK_PATHS.add;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
 function documentTemplate() {
   const copy = state.messages || labels[state.lang];
   return `
-    <main class="knowledge-module" data-knowledge-root>
-      <section class="knowledge-pane knowledge-left" aria-label="Knowledge">
-        <header class="ctox-pane-header">
+    <main class="knowledge-module" data-knowledge-root data-resize-frame>
+      <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
+        <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker">Research</span>
               <h2 class="ctox-pane-title">Knowledge</h2>
             </div>
             <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
+              <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">${actionIcon('add')}</button>
+              <button class="ctox-pane-icon" type="button" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren">${actionIcon('settings')}</button>
+              <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">${actionIcon('download')}</button>
+              <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">${actionIcon('export')}</button>
             </div>
           </div>
           <div class="ctox-pane-tools">
             <input class="ctox-pane-search" data-search placeholder="Suchen..." />
           </div>
         </header>
-        <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
-          <button type="button" data-scope="user" aria-pressed="false">User</button>
-          <button type="button" data-scope="system" aria-pressed="false">System</button>
-          <button type="button" data-scope="all" aria-pressed="true">Alle</button>
+        <div class="knowledge-scope-switch">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+          </div>
         </div>
         <div class="knowledge-scroll" data-knowledge-list>
-          <div class="empty-state"><strong>${copy.loading}</strong></div>
+          <div class="ctox-empty"><strong>${copy.loading}</strong></div>
         </div>
       </section>
-      <section class="knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
-        <header class="ctox-pane-header knowledge-center-head">
+      <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
+      <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
               <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
             </div>
             <div class="ctox-pane-actions">
-              <div class="ctox-pane-tabs segmented" role="tablist" aria-label="Knowledge Ansicht">
-                <button type="button" class="ctox-pane-tab" data-tab="skill" aria-pressed="true">Skill</button>
-                <button type="button" class="ctox-pane-tab" data-tab="runbooks" aria-pressed="false">Runbooks</button>
-                <button type="button" class="ctox-pane-tab" data-tab="data" aria-pressed="false">Data</button>
+              <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
               </div>
             </div>
           </div>
         </header>
         <div class="knowledge-tab-panel" data-panel="skill">
-          <div class="knowledge-edit-bar" data-skill-toolbar>
+          <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
             <div class="knowledge-edit-actions">
-              <button type="button" data-action="edit-markdown">Bearbeiten</button>
-              <button type="button" data-action="save-markdown" hidden>An CTOX geben</button>
-              <button type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
+              <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
+              <button class="ctox-button is-primary" type="button" data-action="save-markdown" hidden>An CTOX geben</button>
+              <button class="ctox-button" type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
             </div>
             <span class="knowledge-edit-status" data-skill-status></span>
           </div>
@@ -176,19 +197,19 @@ function documentTemplate() {
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
           <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
-          <div class="knowledge-edit-bar" data-runbook-toolbar>
+          <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
             <div class="knowledge-edit-actions">
-              <button type="button" data-action="edit-runbook">Bearbeiten</button>
-              <button type="button" data-action="save-runbook" hidden>An CTOX geben</button>
-              <button type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
-              <button type="button" data-action="execute-runbook">Ausführen</button>
+              <button class="ctox-button" type="button" data-action="edit-runbook">Bearbeiten</button>
+              <button class="ctox-button is-primary" type="button" data-action="save-runbook" hidden>An CTOX geben</button>
+              <button class="ctox-button" type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
+              <button class="ctox-button" type="button" data-action="execute-runbook">Ausführen</button>
             </div>
             <span class="knowledge-edit-status" data-runbook-status></span>
           </div>
           <article class="runbook-document" data-runbook-view></article>
           <form class="runbook-editor" data-runbook-form hidden>
-            <input data-runbook-title placeholder="Runbook-Titel" />
-            <textarea data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
+            <input class="ctox-input" data-runbook-title placeholder="Runbook-Titel" />
+            <textarea class="ctox-textarea" data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
           </form>
         </div>
         <div class="knowledge-tab-panel" data-panel="data" hidden>
@@ -196,9 +217,9 @@ function documentTemplate() {
           <div class="dataframe-bar">
             <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
             <div class="table-pager">
-              <button type="button" data-action="export-table-csv">CSV</button>
-              <button type="button" data-action="prev-rows">Zurück</button>
-              <button type="button" data-action="next-rows">Weiter</button>
+              <button class="ctox-button" type="button" data-action="export-table-csv">CSV</button>
+              <button class="ctox-button" type="button" data-action="prev-rows">Zurück</button>
+              <button class="ctox-button" type="button" data-action="next-rows">Weiter</button>
             </div>
           </div>
           <div class="dataframe-host" data-dataframe-host></div>
@@ -449,9 +470,9 @@ function renderEmptyKnowledgeSelection() {
   // The list-pane on the left already shows the "no entries" empty-state.
   // Don't repeat it inside the detail-view; show a brief hint instead.
   els.markdownView.innerHTML = `<p>${escapeHtml(copy.detailEmptyHint || (state.lang === 'en' ? 'Pick a knowledge entry on the left to view it here.' : 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.'))}</p>`;
-  els.tableHost.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
+  els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
-  if (els.runbookView) els.runbookView.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.noRunbooks)}</strong></div>`;
+  if (els.runbookView) els.runbookView.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.noRunbooks)}</strong></div>`;
   syncMarkdownEditControls();
   syncRunbookEditControls(false);
   syncKnowledgeTabControls();
@@ -979,7 +1000,7 @@ function renderKnowledgeList() {
       return `${group.title} ${group.summary || ''} ${group.domain || ''} ${group.entries.map((entry) => `${entry.title} ${entry.subtitle || ''} ${entry.summary || ''}`).join(' ')}`.toLowerCase().includes(term);
     });
   if (!visibleGroups.length) {
-    els.list.innerHTML = `<div class="empty-state"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
+    els.list.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
     return;
   }
   els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
@@ -1110,7 +1131,7 @@ function renderKnowledgeListLegacy() {
     return `${item.title} ${item.subtitle || ''} ${item.summary || ''}`.toLowerCase().includes(term);
   });
   if (!visible.length) {
-    els.list.innerHTML = `<div class="empty-state"><strong>${labels[state.lang].noItems}</strong></div>`;
+    els.list.innerHTML = `<div class="ctox-empty"><strong>${labels[state.lang].noItems}</strong></div>`;
     return;
   }
   const groups = groupBy(visible, (item) => item.kind || 'knowledge');
@@ -1183,7 +1204,7 @@ async function selectKnowledge(id) {
 function setSourceScope(scope) {
   state.sourceScope = ['system', 'user', 'all'].includes(scope) ? scope : 'user';
   for (const button of state.ctx.host.querySelectorAll('[data-scope]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.scope === state.sourceScope));
+    button.setAttribute('aria-selected', String(button.dataset.scope === state.sourceScope));
   }
   const firstVisibleGroup = state.groups.find((group) => group.entries.some((entry) => state.sourceScope === 'all' || sourceScopeFor(entry) === state.sourceScope));
   if (firstVisibleGroup) {
@@ -1206,7 +1227,7 @@ function renderRunbooks() {
     ? state.runbooks.filter((runbook) => groupRunbookIds.has(normaliseRunbookId(runbook.id || runbook.runbook_id)))
     : state.runbooks;
   if (!visibleRunbooks.length) {
-    els.runbookList.innerHTML = `<div class="empty-state"><strong>${copy.noRunbooks}</strong></div>`;
+    els.runbookList.innerHTML = `<div class="ctox-empty"><strong>${copy.noRunbooks}</strong></div>`;
     fillRunbookForm(null);
     return;
   }
@@ -1294,7 +1315,7 @@ function syncKnowledgeTabControls() {
     const disabled = isKnowledgeTabDisabled(button.dataset.tab, state.selectedId);
     button.disabled = disabled;
     button.setAttribute('aria-disabled', String(disabled));
-    button.setAttribute('aria-pressed', String(button.dataset.tab === state.activeTab));
+    button.setAttribute('aria-selected', String(button.dataset.tab === state.activeTab));
   }
   for (const panel of state.ctx.host.querySelectorAll('[data-panel]')) {
     panel.hidden = panel.dataset.panel !== state.activeTab;
@@ -1326,7 +1347,7 @@ async function renderRunbookWorkspace() {
   els.selectedTitle.textContent = context.skillbook?.title || activeGroup()?.title || 'Knowledge';
   if (!visibleRunbooks.length) {
     els.runbookSwitcher.hidden = true;
-    els.runbookView.innerHTML = `<div class="empty-state"><strong>${copy.noRunbooks}</strong></div>`;
+    els.runbookView.innerHTML = `<div class="ctox-empty"><strong>${copy.noRunbooks}</strong></div>`;
     fillRunbookForm(null);
     syncRunbookEditControls(false);
     return;
@@ -1338,6 +1359,8 @@ async function renderRunbookWorkspace() {
   els.runbookSwitcher.replaceChildren(...visibleRunbooks.map((runbook) => {
     const button = document.createElement('button');
     button.type = 'button';
+    const isActive = runbookIdMatches(runbook.id || runbook.runbook_id, state.selectedRunbookId);
+    button.className = `ctox-chip${isActive ? ' is-active' : ''}`;
     button.dataset.contextModule = 'knowledge';
     button.dataset.contextRecordType = 'runbook';
     button.dataset.contextRecordId = runbook.id || runbook.runbook_id || '';
@@ -1373,11 +1396,11 @@ function runbookDetailsHtml(runbook) {
       <span>${escapeHtml(runbook?.status || 'Runbook')}</span>
       <h1>${escapeHtml(runbook?.title || runbook?.id || runbook?.runbook_id || 'Runbook')}</h1>
     </header>
-    <dl class="runbook-meta">
-      <div><dt>Domain</dt><dd>${escapeHtml(runbook?.problem_domain || '-')}</dd></div>
-      <div><dt>ID</dt><dd>${escapeHtml(runbook?.id || runbook?.runbook_id || '-')}</dd></div>
+    <dl class="ctox-fields runbook-meta">
+      <dt>Domain</dt><dd>${escapeHtml(runbook?.problem_domain || '-')}</dd>
+      <dt>ID</dt><dd>${escapeHtml(runbook?.id || runbook?.runbook_id || '-')}</dd>
     </dl>
-    ${instruction ? `<pre><code>${escapeHtml(instruction)}</code></pre>` : '<div class="empty-state"><strong>Keine Runbook-Anweisung vorhanden.</strong></div>'}
+    ${instruction ? `<pre><code>${escapeHtml(instruction)}</code></pre>` : '<div class="ctox-empty"><strong>Keine Runbook-Anweisung vorhanden.</strong></div>'}
   `;
 }
 
@@ -1388,6 +1411,7 @@ function renderTableSwitcher() {
   els.tableSwitcher.replaceChildren(...tables.map((table) => {
     const button = document.createElement('button');
     button.type = 'button';
+    button.className = `ctox-chip${table.id === activeTableId() ? ' is-active' : ''}`;
     button.dataset.contextModule = 'knowledge';
     button.dataset.contextRecordType = 'dataframe';
     button.dataset.contextRecordId = table.id;
@@ -1418,7 +1442,7 @@ async function renderTable() {
   if (!tableSource?.has_table) {
     els.tableTitle.textContent = 'DataFrame';
     els.tableMeta.textContent = copy.tableUnavailable;
-    els.tableHost.innerHTML = `<div class="empty-state"><strong>${copy.tableUnavailable}</strong></div>`;
+    els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${copy.tableUnavailable}</strong></div>`;
     return;
   }
   try {
@@ -1436,7 +1460,7 @@ async function renderTable() {
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · ${total}`;
     renderDataFrameTable(schema.columns || [], rows.rows || []);
   } catch (error) {
-    els.tableHost.innerHTML = `<div class="knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
+    els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
   }
 }
 
@@ -1450,12 +1474,12 @@ function activeTableId() {
 
 function renderDataFrameTable(columns, rows) {
   if (!columns.length) {
-    els.tableHost.innerHTML = '<div class="empty-state"><strong>Keine Spalten</strong></div>';
+    els.tableHost.innerHTML = '<div class="ctox-empty"><strong>Keine Spalten</strong></div>';
     return;
   }
   const normalColumns = normalizeColumns(columns);
   const table = document.createElement('table');
-  table.className = 'dataframe-table';
+  table.className = 'ctox-table dataframe-table';
   table.innerHTML = `
     <thead><tr>${normalColumns.map((column) => dataframeHeaderHtml(column)).join('')}</tr></thead>
     <tbody>${rows.map((row) => `<tr>${normalColumns.map((column) => `<td>${escapeHtml(formatCell(valueForColumn(row, column), column))}</td>`).join('')}</tr>`).join('')}</tbody>
@@ -1765,13 +1789,13 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
         <h2>${escapeHtml(title)}</h2>
         <p>${escapeHtml(subtitle)}</p>
       </div>
-      <button class="icon-button" type="button" data-close-drawer aria-label="Schließen">×</button>
+      <button class="ctox-pane-icon" type="button" data-close-drawer aria-label="Schließen">${actionIcon('close')}</button>
     </header>
     <form class="knowledge-action-form">
       <div class="knowledge-action-fields">${fields}</div>
       <footer class="knowledge-drawer-actions">
         <span data-command-status></span>
-        <button type="submit" disabled aria-disabled="true">${escapeHtml(actionLabel)}</button>
+        <button class="ctox-button is-primary" type="submit" disabled aria-disabled="true">${escapeHtml(actionLabel)}</button>
       </footer>
     </form>
   `;
@@ -1832,17 +1856,17 @@ async function openKnowledgeConfig() {
         <h2>${escapeHtml(item?.title || 'Knowledge')}</h2>
         <p>${escapeHtml(`${groupLabel(item?.kind || 'knowledge')} · ${sourceScopeFor(item || {})}`)}</p>
       </div>
-      <button class="icon-button" type="button" data-close-drawer aria-label="Schließen">×</button>
+      <button class="ctox-pane-icon" type="button" data-close-drawer aria-label="Schließen">${actionIcon('close')}</button>
     </header>
-    <dl class="knowledge-drawer-meta">
-      <div><dt>Quelle</dt><dd>${escapeHtml(item?.source_path || 'CTOX Knowledge Store')}</dd></div>
-      <div><dt>Struktur</dt><dd>${escapeHtml(`${state.groups.length} Gruppen · ${state.items.length} Einträge · ${state.tables.length} Tabellen`)}</dd></div>
+    <dl class="ctox-fields knowledge-drawer-meta">
+      <dt>Quelle</dt><dd>${escapeHtml(item?.source_path || 'CTOX Knowledge Store')}</dd>
+      <dt>Struktur</dt><dd>${escapeHtml(`${state.groups.length} Gruppen · ${state.items.length} Einträge · ${state.tables.length} Tabellen`)}</dd>
     </dl>
     <div class="knowledge-drawer-editor">
       <textarea data-drawer-markdown required aria-label="Knowledge Markdown bearbeiten">${escapeHtml(markdown)}</textarea>
     </div>
     <footer class="knowledge-drawer-actions">
-      <button type="button" data-drawer-save disabled aria-disabled="true">An CTOX geben</button>
+      <button class="ctox-button is-primary" type="button" data-drawer-save disabled aria-disabled="true">An CTOX geben</button>
     </footer>
   `;
   body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
@@ -1879,9 +1903,9 @@ function drawerContent(title, rows) {
   const body = document.createElement('div');
   body.className = 'drawer-body';
   const content = Array.isArray(rows)
-    ? `<dl class="knowledge-config-list">${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`
+    ? `<dl class="ctox-fields knowledge-config-list">${rows.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}</dl>`
     : `<p>${escapeHtml(rows)}</p>`;
-  body.innerHTML = `<header class="drawer-header-row"><div><h2>${escapeHtml(title)}</h2></div><button class="icon-button" type="button" data-close-drawer aria-label="Schließen">×</button></header>${content}`;
+  body.innerHTML = `<header class="drawer-header-row"><div><h2>${escapeHtml(title)}</h2></div><button class="ctox-pane-icon" type="button" data-close-drawer aria-label="Schließen">${actionIcon('close')}</button></header>${content}`;
   body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
   return body;
 }
@@ -1943,18 +1967,18 @@ function renderKnowledgeContextMenu(context, x, y) {
           <strong>Chat to CTOX</strong>
           <span>${escapeHtml(contextSummary(context))}</span>
         </div>
-        <button type="button" data-context-close aria-label="Schließen">×</button>
+        <button class="ctox-pane-icon" type="button" data-context-close aria-label="Schließen">${actionIcon('close')}</button>
       </header>
       ${canModifyApp ? `
-        <div class="knowledge-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        <div class="ctox-choice-group knowledge-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label class="ctox-choice"><input type="radio" name="contextMode" value="data" checked /><span>Mit Daten arbeiten</span></label>
+          <label class="ctox-choice"><input type="radio" name="contextMode" value="app" /><span>App modifizieren</span></label>
         </div>
       ` : ''}
-      <textarea data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
+      <textarea class="ctox-textarea" data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
       <footer>
         <span data-context-status></span>
-        <button type="submit">Senden</button>
+        <button class="ctox-button is-primary" type="submit">Senden</button>
       </footer>
     </form>
   `;
@@ -2089,7 +2113,7 @@ async function dispatchContextChat(context, message, mode = 'data') {
   if (result?.ok && trackingId) rememberCtoxTask({ taskId: result.task_id, commandId: result.command_id, trackingId, context, mode: safeMode });
   if (status) {
     if (result?.ok) {
-      status.innerHTML = `Task-ID: <code>${escapeHtml(trackingId || 'unbekannt')}</code> <button type="button" data-open-ctox-task>Im CTOX Modul öffnen</button>`;
+      status.innerHTML = `Task-ID: <code>${escapeHtml(trackingId || 'unbekannt')}</code> <button class="ctox-button" type="button" data-open-ctox-task>Im CTOX Modul öffnen</button>`;
       status.querySelector('[data-open-ctox-task]')?.addEventListener('click', () => {
         hideKnowledgeContextMenu();
         location.hash = 'ctox';

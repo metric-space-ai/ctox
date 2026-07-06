@@ -86,5 +86,9 @@
   "auftrag.thenPrompt": "What should CTOX then do?",
   "auftrag.create": "Create order",
   "del.confirm": "Delete order “{0}”?",
-  "del.title": "Delete order"
+  "del.title": "Delete order",
+  "left.newAssetLabel": "Create asset",
+  "center.title": "Dashboards",
+  "center.viewLabel": "View",
+  "ed.title": "Edit widget"
 }

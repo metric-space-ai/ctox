@@ -1,7 +1,6 @@
 .knowledge-module {
   /* Module palette = aliases of the shell tokens (app.css/base.css own
-     light/dark). --km-line-strong mirrors matching's module special; its
-     dark value is overridden in the data-theme block below. */
+     light/dark). */
   --knowledge-bg: var(--bg);
   --knowledge-surface: var(--surface);
   --knowledge-surface-muted: var(--surface-2);
@@ -9,19 +8,14 @@
   --knowledge-muted: var(--muted);
   --knowledge-accent: var(--accent);
   --knowledge-line: var(--line);
-  --km-line-strong: #c8d4d9;
-  --knowledge-line-strong: var(--km-line-strong);
   --knowledge-soft-line: color-mix(in srgb, var(--knowledge-line) 78%, transparent);
   --knowledge-panel-radius: 14px;
   --knowledge-control-radius: 6px;
   --knowledge-shadow: var(--panel-shadow);
-  --knowledge-icon-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.3 7.3 0 0 0-1.7-.98L14.5 2.42A.5.5 0 0 0 14 2h-4a.5.5 0 0 0-.5.42L9.12 5.07c-.61.23-1.18.55-1.7.98l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.04.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.13.22.39.31.6.22l2.49-1c.52.4 1.09.73 1.7.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.38-2.65c.61-.25 1.18-.58 1.7-.98l2.49 1c.22.08.47 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z'/%3E%3C/svg%3E");
-  --knowledge-icon-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z'/%3E%3C/svg%3E");
-  --knowledge-icon-import: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z'/%3E%3C/svg%3E");
-  --knowledge-icon-export: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z'/%3E%3C/svg%3E");
   display: grid;
-  /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. CtoxResizer
-   * setzt --knowledge-left-width per drag (siehe modules/knowledge/index.js).
+  /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. Der shell-globale
+   * Resizer (.ctox-column-resizer[data-resizer-var="--knowledge-left-width"])
+   * setzt --knowledge-left-width per Drag.
    */
   grid-template-columns: minmax(300px, var(--knowledge-left-width, 390px)) 12px minmax(0, 1fr);
   gap: 0;
@@ -36,278 +30,46 @@
   -webkit-font-smoothing: antialiased;
 }
 
-:root[data-theme="dark"] .knowledge-module {
-  /* Dark-only special; the derived palette above flips with the shell. */
-  --km-line-strong: #3b484e;
+/* Re-assert [hidden] against module display rules (the module root is not a
+   .ctox-workspace, which normally provides this in base.css). */
+.knowledge-module [hidden] {
+  display: none !important;
 }
 
 .knowledge-module .knowledge-left {
   grid-column: 1;
+  /* .ctox-pane liefert auto/1fr; hier: Header, Scope-Switch, Liste. */
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .knowledge-module .knowledge-center {
   grid-column: 3;
 }
 
-.knowledge-module .knowledge-col-resizer {
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  left: calc(12px + var(--knowledge-left-width, 390px) + 6px);
-  width: 12px;
-  transform: translateX(-50%);
-  cursor: col-resize;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-
-.knowledge-module .knowledge-col-resizer[hidden] {
-  display: none;
-}
-
-.knowledge-module .knowledge-col-resizer::before {
-  content: "";
-  width: 4px;
-  height: 48px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--line);
-  opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.knowledge-module .knowledge-col-resizer:hover::before,
-.knowledge-module .knowledge-col-resizer.is-active::before {
-  opacity: 1;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--knowledge-accent) 18%, transparent);
-}
-
-body.is-knowledge-col-resizing,
-body.is-knowledge-col-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
-.knowledge-module .knowledge-pane {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-panel-radius);
-  background: var(--knowledge-surface);
-  box-shadow: var(--knowledge-shadow);
-}
-
-.knowledge-module .knowledge-left {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-}
-
-.knowledge-module .knowledge-center {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.knowledge-module .ctox-pane-header {
-  min-height: 58px;
-  border-bottom: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface);
-  padding: 10px 12px;
-}
-
-.knowledge-module .ctox-pane-title-row {
-  gap: 12px;
-}
-
-.knowledge-module .ctox-pane-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  min-width: 0;
-}
-
-.knowledge-module .ctox-pane-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  margin-top: 9px;
-}
-
-.knowledge-module .ctox-pane-search {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  outline: none;
-  padding: 0 10px;
-}
-
-.knowledge-module .ctox-pane-search::placeholder {
-  color: color-mix(in srgb, var(--knowledge-muted) 78%, transparent);
-}
-
-.knowledge-module .ctox-pane-search:focus-visible,
-.knowledge-module .icon-button:focus-visible,
-.knowledge-module .segmented button:focus-visible,
-.knowledge-module .knowledge-scope-switch button:focus-visible,
-.knowledge-module .knowledge-edit-actions button:focus-visible,
-.knowledge-module .table-pager button:focus-visible,
-.knowledge-module .table-switcher button:focus-visible,
-.knowledge-module .knowledge-secondary-switcher button:focus-visible {
-  border-color: var(--knowledge-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--knowledge-accent) 18%, transparent);
-  outline: none;
-}
-
-.knowledge-module .knowledge-pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 50px;
-  border-bottom: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface);
-  padding: 8px 12px;
-}
-
-.knowledge-module .knowledge-pane-head span {
-  display: block;
-  color: var(--knowledge-muted);
-  font-size: 11px;
-  font-weight: 780;
-  line-height: 1.1;
-}
-
-.knowledge-module .knowledge-pane-head h2 {
-  margin: 3px 0 0;
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 820;
-  line-height: 1.12;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-module .knowledge-center-head h2 {
-  font-size: 16px;
-}
-
-.knowledge-module .knowledge-pane-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
-.knowledge-module .icon-button {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-muted);
-  cursor: pointer;
-}
-
-.knowledge-module .icon-button::before {
-  content: "";
-  width: 15px;
-  height: 15px;
-  background: currentColor;
-  -webkit-mask: var(--knowledge-icon-mask, var(--knowledge-icon-settings)) center / contain no-repeat;
-  mask: var(--knowledge-icon-mask, var(--knowledge-icon-settings)) center / contain no-repeat;
-}
-
-.knowledge-module .icon-button[data-icon="settings"] {
-  --knowledge-icon-mask: var(--knowledge-icon-settings);
-}
-
-.knowledge-module .icon-button[data-icon="plus"] {
-  --knowledge-icon-mask: var(--knowledge-icon-plus);
-}
-
-.knowledge-module .icon-button[data-icon="import"] {
-  --knowledge-icon-mask: var(--knowledge-icon-import);
-}
-
-.knowledge-module .icon-button[data-icon="export"] {
-  --knowledge-icon-mask: var(--knowledge-icon-export);
-}
-
-.knowledge-module .icon-button:hover,
-.knowledge-module .segmented button[aria-pressed="true"],
-.knowledge-module .table-pager button:hover,
-.knowledge-module .runbook-actions button:hover {
-  color: var(--knowledge-accent);
-}
-
+/* Scope-Switch: volle Breite unter dem linken Header; Buttons sind
+   Standard-Kit-Tabs, nur die Zeilen-/Stretch-Geometrie ist modulspezifisch. */
 .knowledge-module .knowledge-scope-switch {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
   border-bottom: 1px solid var(--knowledge-line);
   background: var(--knowledge-surface);
   padding: 8px 12px;
 }
 
-.knowledge-module .knowledge-scope-switch button {
-  min-width: 0;
-  height: 30px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-muted);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.knowledge-module .knowledge-scope-switch button[aria-pressed="true"] {
-  border-color: var(--knowledge-accent);
-  background: color-mix(in srgb, var(--knowledge-accent) 14%, var(--knowledge-surface));
-  color: var(--knowledge-accent);
-}
-
-.knowledge-module .knowledge-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 7px;
-  border-bottom: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface);
-  padding: 9px 12px;
-}
-
-.knowledge-module .knowledge-tools input,
-.knowledge-module .knowledge-tools select {
+.knowledge-module .knowledge-scope-switch .ctox-pane-tabs {
+  display: flex;
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface);
-  color: var(--knowledge-text);
-  font: inherit;
 }
 
-.knowledge-module .knowledge-tools input,
-.knowledge-module .knowledge-tools select {
-  height: 34px;
-  padding: 0 10px;
-  font-size: 12px;
+.knowledge-module .knowledge-scope-switch .ctox-pane-tab {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* base.css hat (noch) keinen disabled-State für .ctox-pane-tab; Runbooks/Data
+   sind ohne Auswahl deaktiviert. */
+.knowledge-module .ctox-pane-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .knowledge-module .knowledge-scroll {
@@ -474,52 +236,9 @@ body.is-knowledge-col-resizing * {
   font-weight: 760;
 }
 
-.knowledge-module .segmented {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--knowledge-line-strong);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface);
-  padding: 0;
-}
-
-.knowledge-module .segmented button {
-  min-height: 30px;
-  min-width: 72px;
-  border: 0;
-  border-right: 1px solid var(--knowledge-line);
-  background: transparent;
-  color: var(--knowledge-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 760;
-  cursor: pointer;
-}
-
-.knowledge-module .segmented button[aria-pressed="true"] {
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-text);
-  border-radius: 0;
-}
-
-.knowledge-module .segmented button:disabled,
-.knowledge-module .knowledge-edit-actions button:disabled,
-.knowledge-drawer-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
-}
-
-.knowledge-module .segmented button:last-child {
-  border-right: 0;
-}
-
 .knowledge-module .knowledge-tab-panel {
   min-height: 0;
   overflow: hidden;
-}
-
-.knowledge-module .knowledge-tab-panel[hidden] {
-  display: none !important;
 }
 
 .knowledge-module .knowledge-tab-panel[data-panel="skill"] {
@@ -542,35 +261,26 @@ body.is-knowledge-col-resizing * {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 46px;
   border-bottom: 1px solid var(--knowledge-line);
   background: var(--knowledge-surface);
   padding: 8px 12px;
 }
 
-.knowledge-module .table-pager button,
-.knowledge-module .table-switcher button,
-.knowledge-module .knowledge-secondary-switcher button,
-.knowledge-module .knowledge-edit-actions button {
-  min-height: 32px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 760;
-  cursor: pointer;
-  padding: 0 10px;
+.knowledge-module .dataframe-bar strong,
+.knowledge-module .dataframe-bar span {
+  display: block;
 }
 
+.knowledge-module .dataframe-bar span {
+  color: var(--knowledge-muted);
+  font-size: 11px;
+}
+
+/* Edit-Toolbar: Kit-Toolbar plus Status rechtsbündig. */
 .knowledge-module .knowledge-edit-bar {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid var(--knowledge-line);
   background: var(--knowledge-surface);
-  padding: 8px 12px;
 }
 
 .knowledge-module .knowledge-edit-actions {
@@ -578,17 +288,6 @@ body.is-knowledge-col-resizing * {
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
-}
-
-.knowledge-module .knowledge-edit-actions button[hidden] {
-  display: none;
-}
-
-.knowledge-module .knowledge-edit-actions button[data-action="save-markdown"],
-.knowledge-module .knowledge-edit-actions button[data-action="save-runbook"] {
-  border-color: var(--knowledge-accent);
-  background: color-mix(in srgb, var(--knowledge-accent) 14%, var(--knowledge-surface));
-  color: var(--knowledge-accent);
 }
 
 .knowledge-module .knowledge-edit-status {
@@ -661,47 +360,11 @@ body.is-knowledge-col-resizing * {
   padding: 12px;
 }
 
-.knowledge-module .runbook-editor[hidden] {
-  display: none;
-}
-
-.knowledge-module .runbook-editor input,
-.knowledge-module .runbook-editor textarea {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface);
-  color: var(--knowledge-text);
-  font: inherit;
-}
-
-.knowledge-module .runbook-editor input {
-  height: 36px;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.knowledge-module .runbook-editor textarea {
+.knowledge-module .runbook-editor .ctox-textarea {
   min-height: 0;
-  padding: 10px;
+  height: 100%;
   font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   resize: none;
-}
-
-.knowledge-module .dataframe-bar {
-  min-height: 46px;
-}
-
-.knowledge-module .dataframe-bar strong,
-.knowledge-module .dataframe-bar span {
-  display: block;
-}
-
-.knowledge-module .dataframe-bar span {
-  color: var(--knowledge-muted);
-  font-size: 11px;
 }
 
 .knowledge-module .table-pager {
@@ -719,24 +382,15 @@ body.is-knowledge-col-resizing * {
   padding: 8px 12px;
 }
 
-.knowledge-module .table-switcher[hidden],
-.knowledge-module .knowledge-secondary-switcher[hidden] {
-  display: none;
-}
-
-.knowledge-module .table-switcher button,
-.knowledge-module .knowledge-secondary-switcher button {
+.knowledge-module .table-switcher .ctox-chip,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip {
+  flex: 0 0 auto;
+  display: inline-block;
   max-width: 230px;
+  line-height: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.knowledge-module .table-switcher button[aria-current="true"],
-.knowledge-module .knowledge-secondary-switcher button[aria-current="true"] {
-  border-color: var(--knowledge-accent);
-  background: color-mix(in srgb, var(--knowledge-accent) 14%, var(--knowledge-surface));
-  color: var(--knowledge-accent);
 }
 
 .knowledge-module .dataframe-host {
@@ -793,63 +447,24 @@ body.is-knowledge-col-resizing * {
 }
 
 .knowledge-module .runbook-meta {
-  display: grid;
-  gap: 8px;
   max-width: 760px;
   margin: 0 0 16px;
 }
 
-.knowledge-module .runbook-meta div {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: 10px;
-  border-bottom: 1px solid var(--knowledge-soft-line);
-  padding: 7px 0;
-}
-
-.knowledge-module .runbook-meta dt,
-.knowledge-module .runbook-meta dd {
-  margin: 0;
-  min-width: 0;
-  font-size: 12px;
-}
-
-.knowledge-module .runbook-meta dt {
-  color: var(--knowledge-muted);
-  font-weight: 800;
-}
-
-.knowledge-module .runbook-meta dd {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* DataFrame-Ansicht: Kit-Tabelle plus modul-eigene Breiten-/Ellipsis-Geometrie
+   und Spalten-Hilfe-Tooltips. */
 .knowledge-module .dataframe-table {
   width: max-content;
   min-width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
 }
 
 .knowledge-module .dataframe-table th,
 .knowledge-module .dataframe-table td {
   max-width: 260px;
-  border-bottom: 1px solid var(--knowledge-line);
   border-right: 1px solid var(--knowledge-line);
-  padding: 7px 9px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.knowledge-module .dataframe-table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-text);
-  text-align: left;
 }
 
 .knowledge-module .dataframe-table th .column-label {
@@ -904,37 +519,7 @@ body.is-knowledge-col-resizing * {
 }
 
 .knowledge-config-list {
-  display: grid;
-  gap: 8px;
   padding: 0 24px 24px;
-}
-
-.knowledge-config-list div {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 10px;
-  border-bottom: 1px solid var(--knowledge-soft-line);
-  padding: 8px 0;
-}
-
-.knowledge-config-list dt,
-.knowledge-config-list dd {
-  margin: 0;
-  min-width: 0;
-}
-
-.knowledge-config-list dt {
-  color: var(--knowledge-muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.knowledge-config-list dd {
-  overflow: hidden;
-  color: var(--knowledge-text);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .knowledge-edit-drawer {
@@ -982,56 +567,9 @@ body.is-knowledge-col-resizing * {
   line-height: 1.25;
 }
 
-.knowledge-edit-drawer .icon-button {
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
-}
-
 .knowledge-drawer-meta {
-  display: grid;
-  gap: 8px;
-  margin: 0;
   border-bottom: 1px solid var(--line);
   padding: 12px 16px;
-}
-
-.knowledge-drawer-meta div {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  min-width: 0;
-}
-
-.knowledge-drawer-meta dt,
-.knowledge-drawer-meta dd {
-  margin: 0;
-  min-width: 0;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.knowledge-drawer-meta dt {
-  color: var(--muted);
-  font-weight: 800;
-}
-
-.knowledge-drawer-meta dd {
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .knowledge-drawer-editor {
@@ -1124,46 +662,6 @@ body.is-knowledge-col-resizing * {
   white-space: nowrap;
 }
 
-.knowledge-drawer-actions button {
-  min-height: 32px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  color: var(--accent);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 780;
-  padding: 0 12px;
-}
-
-.knowledge-module .runbook-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.knowledge-module .runbook-status {
-  min-height: 18px;
-  margin: 0;
-  color: var(--knowledge-muted);
-  font-size: 11.5px;
-}
-
-.knowledge-module .empty-state,
-.knowledge-module .knowledge-error {
-  display: grid;
-  place-content: center;
-  gap: 6px;
-  min-height: 220px;
-  color: var(--knowledge-muted);
-  text-align: center;
-}
-
-.knowledge-module .empty-state strong,
-.knowledge-module .knowledge-error strong {
-  color: var(--knowledge-text);
-}
-
 .knowledge-module .ctox-context-menu {
   position: absolute;
   z-index: 2400;
@@ -1195,36 +693,13 @@ body.is-knowledge-col-resizing * {
 }
 
 .knowledge-module .knowledge-context-mode {
-  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  min-width: 0;
 }
 
-.knowledge-module .knowledge-context-mode label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 30px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  color: var(--knowledge-muted);
-  font-size: 11.5px;
-  font-weight: 760;
-  padding: 0 8px;
-}
-
-.knowledge-module .knowledge-context-mode label,
 .knowledge-module .knowledge-context-chat button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.knowledge-module .knowledge-context-mode input {
-  margin: 0;
-  accent-color: var(--knowledge-accent);
 }
 
 .knowledge-module .knowledge-context-chat header div {
@@ -1265,39 +740,10 @@ body.is-knowledge-col-resizing * {
   font: 11.5px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-.knowledge-module .knowledge-context-chat textarea {
-  width: 100%;
-  box-sizing: border-box;
+.knowledge-module .knowledge-context-chat .ctox-textarea {
   min-height: 92px;
   max-height: 180px;
-  min-width: 0;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface);
-  color: var(--knowledge-text);
-  font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 9px;
-  resize: vertical;
-}
-
-.knowledge-module .knowledge-context-chat button {
-  flex: 0 0 auto;
-  min-height: 30px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: var(--knowledge-control-radius);
-  background: var(--knowledge-surface-muted);
-  color: var(--knowledge-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 760;
-  cursor: pointer;
-  padding: 0 10px;
-}
-
-.knowledge-module .knowledge-context-chat button[type="submit"] {
-  border-color: var(--knowledge-accent);
-  background: color-mix(in srgb, var(--knowledge-accent) 14%, var(--knowledge-surface));
-  color: var(--knowledge-accent);
+  font-size: 12.5px;
 }
 
 .knowledge-module .knowledge-context-chat [data-open-ctox-task] {
@@ -1307,24 +753,10 @@ body.is-knowledge-col-resizing * {
   font-size: 11px;
 }
 
-.knowledge-module .knowledge-context-chat [data-context-close] {
-  width: 30px;
-  min-width: 30px;
-  padding: 0;
-  text-align: center;
-}
-
 @media (max-width: 1120px) {
   .knowledge-module {
     grid-template-columns: minmax(280px, var(--knowledge-left-width, 340px)) 10px minmax(0, 1fr);
     padding: 10px;
-  }
-
-  .knowledge-module .knowledge-col-resizer {
-    top: 10px;
-    bottom: 10px;
-    left: calc(10px + var(--knowledge-left-width, 340px) + 5px);
-    width: 10px;
   }
 }
 
@@ -1349,7 +781,7 @@ body.is-knowledge-col-resizing * {
     grid-row: 2;
   }
 
-  .knowledge-module .knowledge-col-resizer {
+  .knowledge-module .ctox-column-resizer {
     display: none;
   }
 
@@ -1358,13 +790,13 @@ body.is-knowledge-col-resizing * {
     flex-direction: column;
   }
 
-  .knowledge-module .ctox-pane-tabs.segmented {
+  .knowledge-module .knowledge-center-head .ctox-pane-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
   }
 
-  .knowledge-module .segmented button {
+  .knowledge-module .knowledge-center-head .ctox-pane-tab {
     min-width: 0;
   }
 }

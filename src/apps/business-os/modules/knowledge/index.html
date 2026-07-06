@@ -1,54 +1,64 @@
 <main class="knowledge-module" data-knowledge-root data-resize-frame>
-      <section class="knowledge-pane knowledge-left" aria-label="Knowledge">
-        <header class="ctox-pane-header">
+      <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge">
+        <header class="ctox-pane-header ctox-pane-band">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-i18n="leftEyebrow">Research</span>
               <h2 class="ctox-pane-title" data-i18n="leftTitle">Knowledge</h2>
             </div>
             <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
-              <button class="ctox-pane-icon icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
+              <button class="ctox-pane-icon" type="button" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              <button class="ctox-pane-icon" type="button" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+              </button>
+              <button class="ctox-pane-icon" type="button" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg>
+              </button>
+              <button class="ctox-pane-icon" type="button" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg>
+              </button>
             </div>
           </div>
           <div class="ctox-pane-tools">
             <input class="ctox-pane-search" data-search placeholder="Suchen..." />
           </div>
         </header>
-        <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
-          <button type="button" data-scope="user" aria-pressed="true">User</button>
-          <button type="button" data-scope="system" aria-pressed="false">System</button>
-          <button type="button" data-scope="all" aria-pressed="false">Alle</button>
+        <div class="knowledge-scope-switch">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Quelle">
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="user" aria-selected="false">User</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="system" aria-selected="false">System</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-scope="all" aria-selected="true">Alle</button>
+          </div>
         </div>
         <div class="knowledge-scroll" data-knowledge-list></div>
       </section>
 
       <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--knowledge-left-width" data-resizer-min="300" data-resizer-max="720" aria-label="Spaltenbreite anpassen"></button>
 
-      <section class="knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
-        <header class="ctox-pane-header knowledge-center-head">
+      <section class="ctox-pane knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <header class="ctox-pane-header ctox-pane-band knowledge-center-head">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
               <span class="ctox-pane-kicker" data-selected-kind>Ausgewählt</span>
               <h2 class="ctox-pane-title" data-selected-title>Kein Eintrag ausgewählt</h2>
             </div>
             <div class="ctox-pane-actions">
-              <div class="ctox-pane-tabs segmented" role="tablist" aria-label="Knowledge Ansicht">
-                <button type="button" class="ctox-pane-tab" data-tab="skill" aria-pressed="true">Skill</button>
-                <button type="button" class="ctox-pane-tab" data-tab="runbooks" aria-pressed="false">Runbooks</button>
-                <button type="button" class="ctox-pane-tab" data-tab="data" aria-pressed="false">Data</button>
+              <div class="ctox-pane-tabs" role="tablist" aria-label="Knowledge Ansicht">
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="skill" aria-selected="true">Skill</button>
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="runbooks" aria-selected="false">Runbooks</button>
+                <button type="button" class="ctox-pane-tab" role="tab" data-tab="data" aria-selected="false">Data</button>
               </div>
             </div>
           </div>
         </header>
         <div class="knowledge-tab-panel" data-panel="skill">
-          <div class="knowledge-edit-bar" data-skill-toolbar>
+          <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
             <div class="knowledge-edit-actions">
-              <button type="button" data-action="edit-markdown">Bearbeiten</button>
-              <button type="button" data-action="save-markdown" hidden>An CTOX geben</button>
-              <button type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
+              <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
+              <button class="ctox-button is-primary" type="button" data-action="save-markdown" hidden>An CTOX geben</button>
+              <button class="ctox-button" type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
             </div>
             <span class="knowledge-edit-status" data-skill-status></span>
           </div>
@@ -57,19 +67,19 @@
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
           <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
-          <div class="knowledge-edit-bar" data-runbook-toolbar>
+          <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
             <div class="knowledge-edit-actions">
-              <button type="button" data-action="edit-runbook">Bearbeiten</button>
-              <button type="button" data-action="save-runbook" hidden>An CTOX geben</button>
-              <button type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
-              <button type="button" data-action="execute-runbook">Ausführen</button>
+              <button class="ctox-button" type="button" data-action="edit-runbook">Bearbeiten</button>
+              <button class="ctox-button is-primary" type="button" data-action="save-runbook" hidden>An CTOX geben</button>
+              <button class="ctox-button" type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
+              <button class="ctox-button" type="button" data-action="execute-runbook">Ausführen</button>
             </div>
             <span class="knowledge-edit-status" data-runbook-status></span>
           </div>
           <article class="runbook-document" data-runbook-view></article>
           <form class="runbook-editor" data-runbook-form hidden>
-            <input data-runbook-title placeholder="Runbook-Titel" />
-            <textarea data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
+            <input class="ctox-input" data-runbook-title placeholder="Runbook-Titel" />
+            <textarea class="ctox-textarea" data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
           </form>
         </div>
         <div class="knowledge-tab-panel" data-panel="data" hidden>
@@ -80,13 +90,13 @@
               <span data-table-meta></span>
             </div>
             <div class="table-pager">
-              <button type="button" data-action="export-table-csv">CSV</button>
-              <button type="button" data-action="prev-rows">Zurück</button>
-              <button type="button" data-action="next-rows">Weiter</button>
+              <button class="ctox-button" type="button" data-action="export-table-csv">CSV</button>
+              <button class="ctox-button" type="button" data-action="prev-rows">Zurück</button>
+              <button class="ctox-button" type="button" data-action="next-rows">Weiter</button>
             </div>
           </div>
           <div class="dataframe-host" data-dataframe-host>
-            <div class="empty-state">
+            <div class="ctox-empty">
               <strong>Keine Tabelle ausgewählt</strong>
               <span>Wähle links eine Knowledge-Tabelle.</span>
             </div>

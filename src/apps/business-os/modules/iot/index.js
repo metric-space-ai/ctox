@@ -9,7 +9,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { createContextMenu } from '../../shared/context-menu.js';
 import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js';
 
-const BUILD = '20260606b-iot-automation';
+const BUILD = '20260706a-iot-kit';
 const COLLECTIONS = [
   'iot_realms', 'iot_assets', 'iot_attributes', 'iot_datapoints', 'iot_alarms',
   'iot_dashboards', 'iot_widgets',
@@ -41,6 +41,28 @@ function t(key, de, ...args) {
 function col(name) {
   const db = state.ctx?.db;
   return db?.collection?.(name) || null;
+}
+
+// Monochrome stroke icons for header/close buttons. Delegates to the shell's
+// getActionIcon (shared/icons.js via mount ctx); inline paths mirror
+// actionIconPaths as a fallback for older shells.
+const ACTION_ICON_FALLBACK_PATHS = {
+  add: 'M12 5v14M5 12h14',
+  close: 'M6 6l12 12M18 6L6 18',
+};
+function icon(name) {
+  const fromShell = state.ctx?.getActionIcon?.(name);
+  if (fromShell) return fromShell;
+  const path = ACTION_ICON_FALLBACK_PATHS[name] || ACTION_ICON_FALLBACK_PATHS.add;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
+// Map a widget status-dot key onto the base.css badge states.
+function statusBadgeClass(dot) {
+  if (dot === 'armed' || dot === 'ok') return ' is-success';
+  if (dot === 'fired') return ' is-warning';
+  if (dot === 'attention' || dot === 'warn') return ' is-danger';
+  return '';
 }
 
 export async function mount(ctx) {
@@ -187,14 +209,14 @@ function renderLeft() {
   const createForm = state.creating ? renderCreateForm() : '';
 
   return `
-    <header class="ctox-pane-header">
+    <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">CTOX IoT</span>
           <h2 class="ctox-pane-title">${esc(t('left.title', 'Assets & Signale'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="iot-btn primary" data-act="new-asset" data-parent="">${esc(t('left.newAsset', '+ Asset'))}</button>
+          <button class="ctox-pane-icon" type="button" data-act="new-asset" data-parent="" aria-label="${esc(t('left.newAssetLabel', 'Asset anlegen'))}" title="${esc(t('left.newAssetLabel', 'Asset anlegen'))}">${icon('add')}</button>
         </div>
       </div>
     </header>
@@ -227,7 +249,7 @@ function renderNode(asset, depth) {
       <span class="iot-twisty" data-act="toggle" data-id="${esc(asset.id)}">${twisty}</span>
       <span class="iot-status-dot ${dot}"></span>
       <span class="iot-node-name">${esc(asset.name)}</span>
-      <span class="iot-node-type">${esc(asset.asset_type)}</span>
+      <span class="ctox-badge">${esc(asset.asset_type)}</span>
       <button class="iot-node-add" title="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" data-act="new-asset" data-parent="${esc(asset.id)}">+</button>
     </div>
     ${childForm}
@@ -240,13 +262,13 @@ function renderCreateForm() {
   return `
     <form class="iot-form" data-form="create">
       <h4>${parent ? esc(t('asset.formUnder', 'Asset unter „{0}"', parent.name)) : esc(t('asset.formNew', 'Neues Asset'))}</h4>
-      <div class="iot-field"><label>${esc(t('field.name', 'Name'))}</label><input class="iot-input" name="name" placeholder="${esc(t('asset.namePlaceholder', 'z.B. Serverraum'))}" autofocus required></div>
-      <div class="iot-field"><label>${esc(t('field.type', 'Typ'))}</label><select class="iot-select" name="type">
+      <div class="iot-field"><label class="ctox-field-label">${esc(t('field.name', 'Name'))}</label><input class="ctox-input" name="name" placeholder="${esc(t('asset.namePlaceholder', 'z.B. Serverraum'))}" autofocus required></div>
+      <div class="iot-field"><label class="ctox-field-label">${esc(t('field.type', 'Typ'))}</label><select class="ctox-select" name="type">
         ${ASSET_TYPES.map((ty) => `<option value="${ty}">${ty}</option>`).join('')}
       </select></div>
       <div class="iot-form-actions">
-        <button type="button" class="iot-btn ghost" data-act="cancel-create">${esc(t('btn.cancel', 'Abbrechen'))}</button>
-        <button type="submit" class="iot-btn primary">${esc(t('btn.create', 'Anlegen'))}</button>
+        <button type="button" class="ctox-button iot-ghost" data-act="cancel-create">${esc(t('btn.cancel', 'Abbrechen'))}</button>
+        <button type="submit" class="ctox-button is-primary">${esc(t('btn.create', 'Anlegen'))}</button>
       </div>
     </form>`;
 }
@@ -254,26 +276,33 @@ function renderCreateForm() {
 /* ---------- center: dashboards of automation widgets ---------- */
 function renderCenter() {
   const ds = dashboards();
-  const tabs = ds.map((d) => `<button class="iot-dash-tab ${d.id === state.dashboardId ? 'active' : ''}" data-act="select-dash" data-id="${esc(d.id)}">${esc(d.name)}</button>`).join('');
+  const tabs = ds.map((d) => `<button class="ctox-chip ${d.id === state.dashboardId ? 'is-active' : ''}" type="button" data-act="select-dash" data-id="${esc(d.id)}">${esc(d.name)}</button>`).join('');
   const toolbar = `
-    <div class="iot-dash-head">
-      <div class="iot-dash-tabs">${tabs || `<span class="iot-dash-sub">${esc(t('dash.none', 'Noch kein Dashboard'))}</span>`}
-        <button class="iot-dash-tab add" data-act="new-dash" title="${esc(t('dash.new', 'Neues Dashboard'))}">+</button>
-      </div>
-      <div class="iot-dash-tools">
-        <div class="iot-segmented" role="tablist">
-          <button class="${state.viewMode === 'cards' ? 'active' : ''}" data-act="view" data-view="cards">${esc(t('view.cards', 'Karten'))}</button>
-          <button class="${state.viewMode === 'list' ? 'active' : ''}" data-act="view" data-view="list">${esc(t('view.list', 'Liste'))}</button>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">CTOX IoT</span>
+          <h2 class="ctox-pane-title">${esc(t('center.title', 'Dashboards'))}</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <div class="ctox-pane-tabs" role="tablist" aria-label="${esc(t('center.viewLabel', 'Ansicht'))}">
+            <button class="ctox-pane-tab ${state.viewMode === 'cards' ? 'active' : ''}" type="button" role="tab" aria-selected="${state.viewMode === 'cards'}" data-act="view" data-view="cards">${esc(t('view.cards', 'Karten'))}</button>
+            <button class="ctox-pane-tab ${state.viewMode === 'list' ? 'active' : ''}" type="button" role="tab" aria-selected="${state.viewMode === 'list'}" data-act="view" data-view="list">${esc(t('view.list', 'Liste'))}</button>
+          </div>
         </div>
       </div>
-    </div>`;
+      <div class="ctox-pane-tools iot-dash-tabs">
+        ${tabs || `<span class="iot-dash-sub">${esc(t('dash.none', 'Noch kein Dashboard'))}</span>`}
+        <button class="ctox-pane-icon" type="button" data-act="new-dash" aria-label="${esc(t('dash.new', 'Neues Dashboard'))}" title="${esc(t('dash.new', 'Neues Dashboard'))}">${icon('add')}</button>
+      </div>
+    </header>`;
 
   if (!ds.length) {
     return toolbar + `<div class="iot-center-empty">
       <div class="iot-center-empty-art">⌖</div>
       <h3>${esc(t('empty.title', 'Beauftrage CTOX, auf deine Signale aufzupassen'))}</h3>
       <p>${t('empty.body', 'Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.')}</p>
-      <button class="iot-btn primary" data-act="new-dash">${esc(t('empty.newDash', '+ Dashboard anlegen'))}</button>
+      <button class="ctox-button is-primary" data-act="new-dash">${esc(t('empty.newDash', '+ Dashboard anlegen'))}</button>
     </div>`;
   }
 
@@ -287,7 +316,7 @@ function renderCards(widgets) {
     return `<div class="iot-dash-grid"><div class="iot-center-empty inline">
       <h3>${esc(t('cards.emptyTitle', 'Noch keine Aufträge'))}</h3>
       <p>${t('cards.emptyBody', 'Rechtsklick auf ein Signal links → <b>„Auftrag von diesem Signal"</b>, oder:')}</p>
-      <button class="iot-btn primary" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button>
+      <button class="ctox-button is-primary" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button>
     </div></div>`;
   }
   const cards = widgets.map(renderWidgetCard).join('');
@@ -316,7 +345,7 @@ function renderWidgetCard(w) {
       <div class="iot-when"><span class="iot-tag">${esc(t('tag.when', 'Wenn'))}</span><span class="iot-when-text">${esc(w.cond_text || t('card.condPlaceholder', 'Bedingung wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-then"><span class="iot-tag then">${esc(t('tag.then', 'Dann'))}</span><span class="iot-then-text">${esc(w.action_prompt || t('card.actionPlaceholder', 'Aktion wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-widget-foot">
-        <span class="iot-widget-status ${st.dot}">${esc(st.label)}</span>
+        <span class="ctox-badge${statusBadgeClass(st.dot)} iot-widget-status">${esc(st.label)}</span>
         <button class="iot-foot-btn" data-act="open-editor" data-id="${esc(w.id)}" title="${esc(t('card.codeHint', 'Von CTOX programmierter Code'))}">&lt;/&gt; ${esc(t('card.code', 'Code'))}</button>
         <button class="iot-foot-btn" data-act="edit-cond" data-id="${esc(w.id)}">${esc(t('tag.when', 'Wenn'))} ✎</button>
         <button class="iot-foot-btn" data-act="edit-action" data-id="${esc(w.id)}">${esc(t('tag.then', 'Dann'))} ✎</button>
@@ -332,14 +361,14 @@ function renderList(widgets) {
       <td><span class="iot-status-dot ${st.dot}"></span> ${esc(signalLabel(w.signal_ref))}</td>
       <td>${esc(w.cond_text || '—')}</td>
       <td>${esc(w.action_prompt || '—')}</td>
-      <td><span class="iot-widget-status ${st.dot}">${esc(st.label)}</span></td>
+      <td><span class="ctox-badge${statusBadgeClass(st.dot)} iot-widget-status">${esc(st.label)}</span></td>
       <td style="text-align:right"><button class="iot-widget-more" data-act="widget-menu" data-id="${esc(w.id)}">⋯</button></td>
     </tr>`;
   }).join('');
-  return `<div class="iot-dash-grid list"><table class="iot-table">
+  return `<div class="iot-dash-grid list"><table class="ctox-table iot-table">
     <thead><tr><th>${esc(t('list.colAuftrag', 'Auftrag · Signal'))}</th><th>${esc(t('tag.when', 'Wenn'))}</th><th>${esc(t('tag.then', 'Dann'))}</th><th>${esc(t('list.colStatus', 'Status'))}</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-    <div class="iot-list-foot"><button class="iot-btn" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button></div>
+    <div class="iot-list-foot"><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button></div>
   </div>`;
 }
 
@@ -372,6 +401,7 @@ function mountRenderIframes(center) {
     bg: (cs.getPropertyValue('--surface') || '#171d20').trim() || '#171d20',
     text: (cs.getPropertyValue('--text') || '#cfe6e2').trim() || '#cfe6e2',
     accent: (cs.getPropertyValue('--accent') || '#6cb8aa').trim() || '#6cb8aa',
+    danger: (cs.getPropertyValue('--danger') || '#e06b60').trim() || '#e06b60',
   };
   center.querySelectorAll('[data-render-widget]').forEach((slot) => {
     const w = (state.collections.iot_widgets || []).find((x) => x.id === slot.dataset.renderWidget);
@@ -394,10 +424,10 @@ function mountRenderIframes(center) {
 function buildRenderSrcdoc(code, series, theme) {
   const safe = String(code).replace(/<\/(script|iframe|html|body)/gi, '<\\/$1');
   const data = JSON.stringify(series.map((p) => ({ t: p.t, v: p.v })));
-  const t = theme || { bg: '#171d20', text: '#cfe6e2', accent: '#6cb8aa' };
+  const t = theme || { bg: '#171d20', text: '#cfe6e2', accent: '#6cb8aa', danger: '#e06b60' };
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-<style>html,body{margin:0;height:100%;overflow:hidden;background:${t.bg};font:13px system-ui,sans-serif;color:${t.text}}.val{font-size:26px;font-weight:680;line-height:1}.unit{font-size:14px;opacity:.7;margin-left:3px}svg{width:100%;height:38px;color:${t.accent}}.err{color:#e06b60;font-size:12px}</style></head>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:${t.bg};font:13px system-ui,sans-serif;color:${t.text}}.val{font-size:26px;font-weight:680;line-height:1}.unit{font-size:14px;opacity:.7;margin-left:3px}svg{width:100%;height:38px;color:${t.accent}}.err{color:${t.danger || '#e06b60'};font-size:12px}</style></head>
 <body><div id="h"></div><script>
 (function(){
   var series=${data},vals=series.map(function(p){return p.v});
@@ -536,45 +566,45 @@ function openWidgetEditor(widgetId) {
   if (!w) return;
   let tab = 'auftrag';
   const host = document.createElement('div');
-  host.className = 'iot-modal-overlay';
+  host.className = 'ctox-modal iot-modal-overlay';
   const TABS = { auftrag: t('ed.tabAuftrag', 'Auftrag'), trigger: t('ed.tabTrigger', 'Trigger-Logik'), widget: t('ed.tabWidget', 'Widget-Code') };
 
   const tabBody = () => {
     if (tab === 'auftrag') return `
-      <label class="iot-ed-label">${esc(t('ed.whenLabel', 'Wenn — die Bedingung (Freitext)'))}</label>
-      <textarea class="iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(w.cond_text || '')}</textarea>
-      <label class="iot-ed-label">${esc(t('ed.thenLabel', 'Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)'))}</label>
-      <textarea class="iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(w.action_prompt || '')}</textarea>
-      <div class="iot-ed-actions"><button class="iot-btn primary" data-ed="save-auftrag">${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
+      <label class="ctox-field-label">${esc(t('ed.whenLabel', 'Wenn — die Bedingung (Freitext)'))}</label>
+      <textarea class="ctox-textarea iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(w.cond_text || '')}</textarea>
+      <label class="ctox-field-label">${esc(t('ed.thenLabel', 'Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)'))}</label>
+      <textarea class="ctox-textarea iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(w.action_prompt || '')}</textarea>
+      <div class="iot-ed-actions"><button class="ctox-button is-primary" data-ed="save-auftrag">${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
     if (tab === 'trigger') return `
       <div class="iot-ed-note">${t('ed.triggerNote', 'Von CTOX generierte <b>Wächter-Logik</b> (Rhai, läuft im Backend pro Messwert). Status: <b>{0}</b>', esc(statusOf(w).label))}</div>
-      <textarea class="iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.trigger_code || '')}</textarea>
+      <textarea class="ctox-textarea iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.trigger_code || '')}</textarea>
       <div class="iot-ed-actions">
-        <button class="iot-btn" data-ed="regen-trigger">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
-        <button class="iot-btn primary" data-ed="save-trigger">${esc(t('btn.save', 'Speichern'))}</button>
+        <button class="ctox-button" data-ed="regen-trigger">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
+        <button class="ctox-button is-primary" data-ed="save-trigger">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
     return `
       <div class="iot-ed-note">${t('ed.renderNote', 'Von CTOX generierter <b>Widget-Code</b> — <code>render(host, api)</code>, gesandboxt. Die Visualisierung ist dem Auftrag untergeordnet.')}</div>
-      <textarea class="iot-ed-area code" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.render_code || '')}</textarea>
+      <textarea class="ctox-textarea iot-ed-area code" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.render_code || '')}</textarea>
       <div class="iot-ed-actions">
-        <button class="iot-btn" data-ed="regen-render">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
-        <button class="iot-btn primary" data-ed="save-render">${esc(t('btn.save', 'Speichern'))}</button>
+        <button class="ctox-button" data-ed="regen-render">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
+        <button class="ctox-button is-primary" data-ed="save-render">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
   };
   const draw = () => {
     host.innerHTML = `
-      <div class="iot-modal" role="dialog" aria-label="Widget bearbeiten">
-        <div class="iot-modal-head">
-          <div>
+      <div class="ctox-modal-card iot-modal" role="dialog" aria-modal="true" aria-label="${esc(t('ed.title', 'Widget bearbeiten'))}">
+        <header class="ctox-modal-header">
+          <div class="iot-modal-titles">
             <div class="iot-modal-kicker">${esc(t('ed.kicker', 'CTOX-Auftrag · von CTOX programmiert'))}</div>
-            <div class="iot-modal-title">${esc(signalLabel(w.signal_ref))}</div>
+            <h3 class="ctox-modal-title">${esc(signalLabel(w.signal_ref))}</h3>
           </div>
-          <button class="iot-foot-btn" data-ed="close" aria-label="${esc(t('btn.close', 'Schließen'))}">✕</button>
+          <button class="ctox-pane-icon" type="button" data-ed="close" aria-label="${esc(t('btn.close', 'Schließen'))}">${icon('close')}</button>
+        </header>
+        <div class="ctox-pane-tabs iot-ed-tabs" role="tablist">
+          ${Object.keys(TABS).map((tk) => `<button class="ctox-pane-tab ${tab === tk ? 'active' : ''}" type="button" role="tab" aria-selected="${tab === tk}" data-ed-tab="${tk}">${esc(TABS[tk])}</button>`).join('')}
         </div>
-        <div class="iot-ed-tabs">
-          ${Object.keys(TABS).map((tk) => `<button class="iot-ed-tab ${tab === tk ? 'active' : ''}" data-ed-tab="${tk}">${esc(TABS[tk])}</button>`).join('')}
-        </div>
-        <div class="iot-ed-body">${tabBody()}</div>
+        <div class="ctox-modal-body iot-ed-body">${tabBody()}</div>
       </div>`;
   };
   const close = () => host.remove();

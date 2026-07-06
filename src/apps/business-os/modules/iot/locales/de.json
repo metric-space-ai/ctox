@@ -86,5 +86,9 @@
   "auftrag.thenPrompt": "Was soll CTOX dann tun?",
   "auftrag.create": "Auftrag anlegen",
   "del.confirm": "Auftrag „{0}“ löschen?",
-  "del.title": "Auftrag löschen"
+  "del.title": "Auftrag löschen",
+  "left.newAssetLabel": "Asset anlegen",
+  "center.title": "Dashboards",
+  "center.viewLabel": "Ansicht",
+  "ed.title": "Widget bearbeiten"
 }
