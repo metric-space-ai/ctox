@@ -52,6 +52,12 @@ export class CtoxIndexedDbCollection {
     this.schemaIndexReady = null;
     this.queryPerformancePolicy = { rejectAllDocumentsFallback: false };
     this.queryPerformanceStats = createQueryPerformanceStats();
+    // OS-C4: merge observability for field-merge collections. `pullFieldMerges`
+    // counts replication pulls that merged over an unsynced local row;
+    // `pushConflictMerges` counts masterWrite conflict retries that absorbed
+    // master state (incremented by the replication layer). Surfaced into the
+    // sync diagnostics per collection.
+    this.mergeStats = { pullFieldMerges: 0, pushConflictMerges: 0 };
     this.events = new CtoxEventEmitter();
   }
 
@@ -81,12 +87,18 @@ export class CtoxIndexedDbCollection {
   //     the replication-origin stamp, because it still carries state the
   //     master has not seen — with the incoming master doc as the new base.
   //   - Everything else: unchanged pass-through (whole-doc LWW semantics).
-  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin }) {
+  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin, explicitBase }) {
     const mergeEnabled = this.conflictStrategy === 'field-merge';
     if (!replicationOrigin?.role) {
-      const base = mergeEnabled && previous
-        ? (previous.replicationOriginRole ? previous.doc : previous.base)
-        : undefined;
+      // OS-C4: the push-conflict repair path already absorbed the master's
+      // row into `doc` and passes that row as the explicit new base — using
+      // the stale stored base there would re-win absorbed master fields on
+      // the next merge round.
+      const base = explicitBase !== undefined
+        ? (mergeEnabled ? explicitBase : undefined)
+        : (mergeEnabled && previous
+          ? (previous.replicationOriginRole ? previous.doc : previous.base)
+          : undefined);
       return { doc, lwt, replicationOrigin, base };
     }
     const existingIsLocalWrite = Boolean(previous) && !previous.doc?._meta?.ctoxReplicationOrigin;
@@ -105,6 +117,7 @@ export class CtoxIndexedDbCollection {
       // push set.
       return { doc, lwt, replicationOrigin, base: undefined };
     }
+    this.mergeStats.pullFieldMerges += 1;
     const mergedLwt = Math.max(Number(lwt) || 0, Number(previous.lwt) || 0) + 1;
     return { doc: merged, lwt: mergedLwt, replicationOrigin: null, base: doc };
   }
@@ -183,7 +196,7 @@ export class CtoxIndexedDbCollection {
     return { success, error };
   }
 
-  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null } = {}) {
+  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError('bulkWrite rows must be an array');
     }
@@ -213,7 +226,15 @@ export class CtoxIndexedDbCollection {
       if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
         continue;
       }
-      const resolved = this.resolveIncomingWrite({ previous, doc, lwt, replicationOrigin });
+      const resolved = this.resolveIncomingWrite({
+        previous,
+        doc,
+        lwt,
+        replicationOrigin,
+        explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id)
+          ? baseById[id]
+          : undefined,
+      });
       if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
         // Accepted master state whose payload timestamp did not advance:
         // keep the stored lwt monotonic so local checkpoint consumers

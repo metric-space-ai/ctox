@@ -174,6 +174,31 @@ const origin = { role: 'ctox_instance', peerId: 'peer-native' };
   });
   assert(lwwPull.doc === incomingMaster && lwwPull.replicationOrigin === origin,
     'lww replication write untouched (whole-doc semantics preserved)');
+
+  // OS-C4: the push-conflict repair passes the absorbed master row as the
+  // EXPLICIT new base — the stale stored base must not survive, or absorbed
+  // master fields would be re-won as "local changes" on the next round.
+  const absorbedMaster = { id: 'r1', name: 'Acme GmbH', phone: '222' };
+  const pushRepair = mergeCollection.resolveIncomingWrite({
+    previous: localRow,
+    doc: absorbedMaster,
+    lwt: 2600,
+    replicationOrigin: null,
+    explicitBase: incomingMaster,
+  });
+  assert(pushRepair.base === incomingMaster, 'explicit base overrides the stale stored base');
+  const lwwExplicit = lwwCollection.resolveIncomingWrite({
+    previous: localRow, doc: absorbedMaster, lwt: 2600, replicationOrigin: null,
+    explicitBase: incomingMaster,
+  });
+  assert(lwwExplicit.base === undefined, 'lww collections never store a base, explicit or not');
+
+  // OS-C4: merge observability — the pull merge above incremented the
+  // per-collection counter exactly once.
+  assert(mergeCollection.mergeStats.pullFieldMerges === 1,
+    `pull merge counter records field merges (got ${mergeCollection.mergeStats.pullFieldMerges})`);
+  assert(mergeCollection.mergeStats.pushConflictMerges === 0, 'push counter untouched by pulls');
+  assert(lwwCollection.mergeStats.pullFieldMerges === 0, 'lww collections never merge');
 }
 
 console.log('ctox-rxdb field-merge conflict smoke OK');

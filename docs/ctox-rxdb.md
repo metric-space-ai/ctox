@@ -594,8 +594,13 @@ replication model).
 - A `masterWrite` push conflict on a field-merge collection absorbs the
   master's conflict row the same way before the retry
   (`absorbMasterStateIntoConflictRows` in `replication-webrtc.mjs`) instead
-  of force-overwriting whole-doc. LWW collections keep the local-wins force
-  retry unchanged.
+  of force-overwriting whole-doc; the absorbed master row is written back as
+  the EXPLICIT new merge base (`bulkWrite` `baseById`), so absorbed fields
+  are not re-won as "local changes" on the next round. LWW collections keep
+  the local-wins force retry unchanged.
+- Observability: merge-enabled collections count `pullFieldMerges` /
+  `pushConflictMerges` (`storageCollection.mergeStats`), surfaced per
+  collection in the sync diagnostics alongside the checkpoint ages.
 - Deletions stay whole-doc: a master tombstone wins outright; an unsynced
   local tombstone survives until it pushes.
 - Merge logic lives in `src/conflict-merge.mjs`

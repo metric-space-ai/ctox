@@ -663,7 +663,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260706-fieldmerge-v1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260706-fieldmerge-v2');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -767,6 +767,8 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       // only re-records on real replication activity — no timers, idle stays
       // idle. Ages are derived at snapshot time (snapshotDiagnostics).
       ...checkpointDiagnosticFields(replicationState),
+      // OS-C4: field-merge observability for merge-enabled collections.
+      ...mergeDiagnosticFields(rxCollection),
     });
   };
   recordTransportStatus(replicationState.getTransportStatus?.());
@@ -1159,6 +1161,17 @@ function maxCheckpointLwt(map) {
     if (lwt > max) max = lwt;
   }
   return max;
+}
+
+// OS-C4: field-merge counters for merge-enabled collections (docs/ctox-rxdb.md
+// §8.2). Zero-noise: collections without the strategy record nothing.
+function mergeDiagnosticFields(rxCollection) {
+  const stats = rxCollection?.storageCollection?.mergeStats;
+  if (!stats) return {};
+  const pull = progressNumber(stats.pullFieldMerges);
+  const push = progressNumber(stats.pushConflictMerges);
+  if (pull === 0 && push === 0) return {};
+  return { pullFieldMerges: pull, pushConflictMerges: push };
 }
 
 function waitForCondition(predicate, timeoutMs, intervalMs, isStopped) {

@@ -1255,10 +1255,14 @@ class CtoxWebRtcReplicationState {
         row.assumedMasterState,
         { primaryPath },
       );
+      if (storage.mergeStats) storage.mergeStats.pushConflictMerges += 1;
       try {
-        // Keep the local store in step with what we are about to push. A
-        // plain local write: stays pushable until the push round-trips.
-        await storage.bulkWrite([merged]);
+        // Keep the local store in step with what we are about to push — a
+        // plain local write (stays pushable until the push round-trips),
+        // with the master's conflict row as the NEW base: the merged doc has
+        // absorbed that state, so the stale stored base must not re-win
+        // those fields on the next merge round (OS-C4).
+        await storage.bulkWrite([merged], { baseById: { [id]: row.assumedMasterState } });
       } catch {}
       mergedRows.push({ newDocumentState: merged, assumedMasterState: row.assumedMasterState });
     }

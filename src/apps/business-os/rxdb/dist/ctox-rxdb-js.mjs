@@ -717,6 +717,7 @@ var CtoxIndexedDbCollection = class {
     this.schemaIndexReady = null;
     this.queryPerformancePolicy = { rejectAllDocumentsFallback: false };
     this.queryPerformanceStats = createQueryPerformanceStats();
+    this.mergeStats = { pullFieldMerges: 0, pushConflictMerges: 0 };
     this.events = new CtoxEventEmitter();
   }
   observe(listener) {
@@ -743,10 +744,10 @@ var CtoxIndexedDbCollection = class {
   //     the replication-origin stamp, because it still carries state the
   //     master has not seen — with the incoming master doc as the new base.
   //   - Everything else: unchanged pass-through (whole-doc LWW semantics).
-  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin }) {
+  resolveIncomingWrite({ previous, doc, lwt, replicationOrigin, explicitBase }) {
     const mergeEnabled = this.conflictStrategy === "field-merge";
     if (!replicationOrigin?.role) {
-      const base = mergeEnabled && previous ? previous.replicationOriginRole ? previous.doc : previous.base : void 0;
+      const base = explicitBase !== void 0 ? mergeEnabled ? explicitBase : void 0 : mergeEnabled && previous ? previous.replicationOriginRole ? previous.doc : previous.base : void 0;
       return { doc, lwt, replicationOrigin, base };
     }
     const existingIsLocalWrite = Boolean(previous) && !previous.doc?._meta?.ctoxReplicationOrigin;
@@ -762,6 +763,7 @@ var CtoxIndexedDbCollection = class {
     if (identicalToMaster) {
       return { doc, lwt, replicationOrigin, base: void 0 };
     }
+    this.mergeStats.pullFieldMerges += 1;
     const mergedLwt = Math.max(Number(lwt) || 0, Number(previous.lwt) || 0) + 1;
     return { doc: merged, lwt: mergedLwt, replicationOrigin: null, base: doc };
   }
@@ -835,7 +837,7 @@ var CtoxIndexedDbCollection = class {
     }
     return { success, error };
   }
-  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null } = {}) {
+  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -864,7 +866,13 @@ var CtoxIndexedDbCollection = class {
       if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
         continue;
       }
-      const resolved = this.resolveIncomingWrite({ previous, doc, lwt, replicationOrigin });
+      const resolved = this.resolveIncomingWrite({
+        previous,
+        doc,
+        lwt,
+        replicationOrigin,
+        explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
+      });
       if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
         resolved.lwt = Number(previous.lwt) + 1;
       }
@@ -7159,8 +7167,9 @@ var CtoxWebRtcReplicationState = class {
         row.assumedMasterState,
         { primaryPath }
       );
+      if (storage.mergeStats) storage.mergeStats.pushConflictMerges += 1;
       try {
-        await storage.bulkWrite([merged]);
+        await storage.bulkWrite([merged], { baseById: { [id]: row.assumedMasterState } });
       } catch {
       }
       mergedRows.push({ newDocumentState: merged, assumedMasterState: row.assumedMasterState });
