@@ -54,3 +54,21 @@ tmp_intersolar_*.js
 
 # Generated RxDB port dashboard (regenerate from PORTING.md via tools/build_dashboard.py)
 /src/core/rxdb/dashboard.html
+
+# Internal docs are not part of the public repo.
+# Exceptions: the Pages site, legal notices, and files required by
+# the build (include_str!), CI contract scripts, and the release gate.
+/docs/*
+!/docs/site
+!/docs/legal
+!/docs/business-os-app-access-and-roles-guide.md
+!/docs/business-os-production-release-signoff.md
+!/docs/business-os-roles-permissions-operator-guide.md
+!/docs/business-os-roles-permissions-rollout.md
+!/docs/business-os-roles-permissions-plan.md
+!/docs/business-os-security-privacy-signoff.json
+!/docs/business-os-db-isolation-inventory.json
+!/docs/business-os-module-context.md
+!/docs/business-os.md
+!/docs/core_runtime_state_machine.md
+!/docs/harness-operating-model.md
