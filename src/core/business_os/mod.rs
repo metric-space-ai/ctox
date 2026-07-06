@@ -20,6 +20,7 @@ pub(crate) use rxdb_peer::browser_session_automation as run_browser_session_auto
 pub use rxdb_peer::browser_session_status;
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::ensure_native_peer;
+pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;
 pub use rxdb_peer::run_native_peer_foreground;
 pub use rxdb_peer::sync_desktop_file_from_path;
