@@ -213,6 +213,13 @@
   box-shadow: var(--focus-ring);
 }
 
+.ctox-input[aria-invalid="true"],
+.ctox-select[aria-invalid="true"],
+.ctox-textarea[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: var(--danger-soft);
+}
+
 .ctox-field-label {
   display: block;
   margin-bottom: 4px;
@@ -450,6 +457,12 @@
   background: var(--danger-soft);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
+}
+
+.ctox-badge.is-info {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
 }
 
 /* ----------------------------------------------------------------------------
