@@ -226,6 +226,22 @@ try {
     expect(after.inactiveFocusable === 0, `post-select inactive controls must stay out of tab order, got ${after.inactiveFocusable}`);
   });
 
+  await scenario(page, 'minimized-active-window-leaves-chip-only', { count: 2, activeIndex: 0 }, async () => {
+    const after = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-minimize]').click();
+      await window.chatHarness.waitFor(() => (
+        !document.querySelector('.ctox-chat-window[data-chat-id="chat_0"]')
+        && document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === 'chat_1'
+      ));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'minimized-active-window-after-click', metrics: after });
+    expect(after.windowCount === 1, `minimizing one of two chats must leave one rendered window, got ${after.windowCount}`);
+    expect(after.minimizedWindowCount === 0, `minimized chats must not stay rendered as gray windows, got ${after.minimizedWindowCount}`);
+    expect(after.minimizedChipCount === 1, `minimized chat must remain available as a chip, got ${after.minimizedChipCount}`);
+    expect(after.renderedWindowIds.join(',') === 'chat_1', `remaining rendered window should be chat_1, got ${after.renderedWindowIds.join(',')}`);
+  });
+
   await scenario(page, 'keyboard-focus-skips-hidden-and-inactive-controls', { count: 4, activeIndex: 1 }, async () => {
     const focusTrace = [];
     for (let i = 0; i < 18; i += 1) {
@@ -256,7 +272,10 @@ try {
     const minimizeLatency = await page.evaluate(async () => {
       const start = performance.now();
       document.querySelector('.ctox-chat-window.is-active [data-chat-minimize]').click();
-      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-minimized'));
+      await window.chatHarness.waitFor(() => (
+        document.querySelectorAll('.ctox-chat-window').length === 0
+        && document.querySelector('[data-chat-focus="chat_0"]')?.classList.contains('is-minimized')
+      ));
       return performance.now() - start;
     });
     results.push({ scenario: 'active-control-latency-ms', maximizeLatency, minimizeLatency });
@@ -737,9 +756,12 @@ function harnessHtml() {
         chipCount: document.querySelectorAll('[data-chat-focus]').length,
         windowCount: document.querySelectorAll('.ctox-chat-window').length,
         activeId: activeWindow?.dataset.chatId || '',
+        renderedWindowIds: Array.from(document.querySelectorAll('.ctox-chat-window')).map((node) => node.dataset.chatId || ''),
         stripClientWidth: strip?.clientWidth || 0,
         stripScrollWidth: strip?.scrollWidth || 0,
         stripHasOverflow: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
+        minimizedChipCount: document.querySelectorAll('.ctox-chat-chip.is-minimized').length,
+        minimizedWindowCount: document.querySelectorAll('.ctox-chat-window.is-minimized').length,
         inactiveFocusable: inactiveControls.filter((node) => node.tabIndex >= 0 && isVisible(node)).length,
         inactiveVisibleActions: inactiveActions.filter(isVisible).length,
         messagesClientHeight: activeMessages?.clientHeight || 0,

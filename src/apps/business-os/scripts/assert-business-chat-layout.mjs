@@ -42,6 +42,19 @@ expectIncludes(source, 'const MAX_RENDERED_CHAT_TABS = 12;', 'Rendered chat tabs
 expectIncludes(source, "openChats.length > 1 && openChats.length < MANY_CHAT_THRESHOLD ? 'has-few-chats' : ''", 'Few-chat mode must include mid-size chat counts without full-width dock');
 expectIncludes(source, "openChats.length >= MANY_CHAT_THRESHOLD ? 'has-many-chats' : ''", 'Many-chat mode must not activate before high tab counts');
 expectIncludes(source, 'function selectVisibleChats(openChats, activeChat)', 'Busy days must not render every chat tab/window');
+expectIncludes(source, 'const expandedChats = openChats.filter((chat) => !chat.minimized);', 'Minimized chats must be removed from the rendered window set');
+expectIncludes(source, 'const visibleWindowChats = selectVisibleChats(expandedChats, activeExpandedChat);', 'Chat tabs and rendered windows must be selected independently');
+expectIncludes(
+  source,
+  'const windowShapeUnchanged = existingWindows.length === visibleWindowChats.length',
+  'In-place updates must compare against expanded rendered windows only'
+);
+expectIncludes(source, 'visibleWindowChats.map((chat, idx)', 'Chat stage must render expanded chats, not every open tab');
+expectIncludes(
+  source,
+  '.ctox-chat-stage-inner.is-side-by-side .ctox-chat-window.is-minimized',
+  'Side-by-side layout must not override minimized window hiding'
+);
 expectIncludes(source, 'chatOverflowItem(hiddenChatCount', 'Busy days need an overflow affordance');
 expectIncludes(source, 'chatBusyPanel({ chats: openChats, selectedDate, state })', 'Busy days need a filterable list panel');
 expectIncludes(source, 'data-chat-list-filter="source"', 'Busy-day list must include source filtering');

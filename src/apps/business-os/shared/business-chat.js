@@ -579,10 +579,15 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const selectedDate = state.selectedDate || getLocalDateString(Date.now());
   const chatsOfSelectedDate = state.chats.filter((chat) => getLocalDateString(chat.createdAt) === selectedDate);
   const openChats = chatsOfSelectedDate.filter((chat) => chat.open !== false);
-  const hasMaximized = openChats.some(chat => chat.maximized && !chat.minimized);
+  const expandedChats = openChats.filter((chat) => !chat.minimized);
+  const hasMaximized = expandedChats.some((chat) => chat.maximized);
   const activeChat = activeChatFor(state, openChats);
   if (!activeChat && state.activeChatId) state.activeChatId = '';
   const visibleChats = selectVisibleChats(openChats, activeChat);
+  const activeExpandedChat = activeChat && !activeChat.minimized
+    ? activeChat
+    : expandedChats.find((chat) => chat.id === state.activeChatId) || expandedChats[0] || null;
+  const visibleWindowChats = selectVisibleChats(expandedChats, activeExpandedChat);
   const hiddenChatCount = Math.max(0, openChats.length - visibleChats.length);
   const hasVisibleChats = openChats.length > 0;
   const showChatStrip = !Boolean(state.dockCollapsed) && hasVisibleChats;
@@ -608,11 +613,11 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
   const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
-  const visibleChatIds = visibleChats.map(c => c.id);
-  const windowShapeUnchanged = existingWindows.length === visibleChats.length
-    && currentWindowIds.every((id, idx) => id === visibleChatIds[idx]);
+  const visibleWindowChatIds = visibleWindowChats.map(c => c.id);
+  const windowShapeUnchanged = existingWindows.length === visibleWindowChats.length
+    && currentWindowIds.every((id, idx) => id === visibleWindowChatIds[idx]);
   const attachmentsUnchanged = windowShapeUnchanged && existingWindows.every((win, idx) => (
-    win.dataset.chatAttachmentSignature === attachmentSignature(visibleChats[idx])
+    win.dataset.chatAttachmentSignature === attachmentSignature(visibleWindowChats[idx])
   ));
   const canUpdateInPlace = windowShapeUnchanged &&
                            attachmentsUnchanged &&
@@ -658,14 +663,14 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     });
 
     // 3. Update active states, 3D relation tags, maximized and minimized classes on windows
-    const activeIndex = visibleChats.findIndex((c) => c.id === activeChat?.id);
+    const activeIndex = visibleWindowChats.findIndex((c) => c.id === activeExpandedChat?.id);
     existingWindows.forEach((win, idx) => {
-      const chat = visibleChats[idx];
+      const chat = visibleWindowChats[idx];
       const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
       const taskState = getTaskState(chat);
 
-      const isActiveWindow = chat.id === activeChat?.id && !chat.minimized;
-      win.className = `ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${isActiveWindow ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} is-task-${taskState}`;
+      const isActiveWindow = chat.id === activeExpandedChat?.id;
+      win.className = `ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${isActiveWindow ? 'is-active' : ''} is-task-${taskState}`;
       win.dataset.chatRel = relation;
       setWindowInteractiveState(win, isActiveWindow);
 
@@ -752,10 +757,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     <div class="ctox-chat-stage" data-chat-stage>
       <div class="ctox-chat-stage-inner ${hasMaximized ? 'has-maximized' : ''}">
         ${dockCollapsed ? '' : (() => {
-          const activeIndex = visibleChats.findIndex((c) => c.id === activeChat?.id);
-          return visibleChats.map((chat, idx) => {
+          const activeIndex = visibleWindowChats.findIndex((c) => c.id === activeExpandedChat?.id);
+          return visibleWindowChats.map((chat, idx) => {
             const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
-            return chatWindow(chat, activeChat?.id, relation);
+            return chatWindow(chat, activeExpandedChat?.id, relation);
           }).join('');
         })()}
         <div class="ctox-chat-stage-spacer" style="position: relative; width: 1px; height: 1px; pointer-events: none; margin-top: -1px;"></div>
@@ -1981,8 +1986,9 @@ function chatDockItem(chat, activeId) {
 function activeChatFor(state, openChats = state.chats.filter((chat) => chat.open !== false)) {
   if (!openChats.length) return null;
   let active = openChats.find((chat) => chat.id === state.activeChatId);
-  if (!active) {
-    active = openChats.find((chat) => !chat.minimized) || openChats[openChats.length - 1];
+  const expanded = openChats.filter((chat) => !chat.minimized);
+  if (!active || (active.minimized && expanded.length)) {
+    active = expanded[0] || openChats[openChats.length - 1];
     state.activeChatId = active.id;
   }
   return active;
@@ -3978,6 +3984,10 @@ function installChatStyles() {
       opacity: 0 !important;
       pointer-events: none !important;
       transform: translateY(30px) scale(0.9) !important;
+    }
+    .ctox-chat-stage-inner.is-side-by-side .ctox-chat-window.is-minimized {
+      opacity: 0 !important;
+      pointer-events: none !important;
     }
     .ctox-chat-window.no-left-transition {
       transition: 
