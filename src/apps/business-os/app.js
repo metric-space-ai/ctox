@@ -44,7 +44,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260707-ninja-agent-e2e-active-catalog-v1';
+const APP_BUILD = '20260707-managed-catalog-bootstrap-v1';
 
 ensureShellStylesheets();
 
@@ -7259,6 +7259,8 @@ function filterModulesForAppVersionVisibility(modules, governance = state.govern
 function allowsPackagedModuleCatalogSeed() {
   const config = (typeof window !== 'undefined' && window.CTOX_BUSINESS_OS_CONFIG) || null;
   const hosting = String(config?.app_hosting || config?.appHosting || '').trim();
+  if (config?.ctox_instance_required === true || config?.ctoxInstanceRequired === true) return true;
+  if (String(config?.sync_mode || config?.syncMode || '').trim() === 'p2p-first') return true;
   // Public web deployments must render the server-projected RxDB catalog. The
   // packaged registry is code metadata only there; inserting it locally widens
   // tenant-scoped shells before the real projection arrives.
