@@ -6,6 +6,7 @@ import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
 
 const STYLE_BUILD = '20260706-kit-tokens1';
 const LAYOUT_DOC_ID = 'layout';
+const ICON_POSITION_CACHE_KEY = 'ctox.businessOs.desktopIconPositions';
 const DESKTOP_SYNC_COLLECTIONS = Object.freeze([
   'desktop_icons',
   'desktop_layout',
@@ -154,6 +155,7 @@ export async function mount(ctx) {
   const commandsCollection = ctx.db?.collection?.('business_commands');
 
   const layout = await ensureLayout(layoutCollection, launcher);
+  let iconPositionCache = readIconPositionCache();
   await ensureIcons(iconsCollection, launcher);
   await renderIcons();
 
@@ -360,14 +362,24 @@ export async function mount(ctx) {
   async function renderIcons() {
     if (disposed) return;
     let docs = [];
+    let usingFallbackDocs = false;
     try {
-      docs = iconsCollection ? await iconsCollection.find().exec() : fallbackIconDocs(launcher);
+      if (iconsCollection) {
+        docs = await iconsCollection.find().exec();
+      } else {
+        docs = fallbackIconDocs(launcher);
+        usingFallbackDocs = true;
+      }
     } catch (error) {
       if (!isDatabaseClosingError(error)) throw error;
       console.info('[desktop] icon read skipped during database restart; rendering default launcher icons');
       docs = fallbackIconDocs(launcher);
+      usingFallbackDocs = true;
     }
     if (disposed) return;
+    if (!usingFallbackDocs) {
+      syncIconPositionCacheFromDocs(docs);
+    }
     refs.icons.innerHTML = '';
     if (!docs.length) {
       const empty = document.createElement('div');
@@ -376,7 +388,9 @@ export async function mount(ctx) {
       refs.icons.appendChild(empty);
       return;
     }
-    const sorted = [...docs].sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
+    const sorted = docs
+      .map((doc) => applyCachedIconPosition(plainIconDoc(doc)))
+      .sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
     for (const doc of sorted) {
       if (doc.hidden) continue;
       if (!launcher.knows(doc.target_module)) continue;
@@ -430,14 +444,8 @@ export async function mount(ctx) {
         el.classList.add('selected');
       },
       onMoved: async (iconId, position) => {
-        const existing = await iconsCollection?.findOne(iconId).exec();
-        if (existing) {
-          await existing.incrementalPatch({
-            x: position.x,
-            y: position.y,
-            updated_at_ms: Date.now(),
-          });
-        }
+        const updatedAt = Date.now();
+        rememberIconPosition(iconId, position, updatedAt);
       },
       onDragToTopbar: (iconId) => {
         if (doc.target_module) {
@@ -611,9 +619,12 @@ export async function mount(ctx) {
 
   async function restoreDefaultIcons() {
     if (!iconsCollection) return;
+    iconPositionCache = new Map();
+    writeIconPositionCache();
     const all = await iconsCollection.find().exec();
     await Promise.all(all.map((doc) => doc.remove()));
     await ensureIcons(iconsCollection, launcher, { force: true });
+    await renderIcons();
   }
 
   async function addMissingDefaultIcons() {
@@ -653,15 +664,11 @@ export async function mount(ctx) {
       .filter((doc) => !doc.hidden)
       .sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
     const grid = currentGrid();
-    await Promise.all(docs.map((doc, index) => {
+    docs.forEach((doc, index) => {
       const position = gridPosition(index, grid);
-      return doc.incrementalPatch({
-        x: position.x,
-        y: position.y,
-        sort_index: index,
-        updated_at_ms: Date.now(),
-      });
-    }));
+      rememberIconPosition(doc.id, position, Date.now() + index);
+    });
+    await renderIcons();
   }
 
   function subscribeIcons() {
@@ -754,6 +761,114 @@ export async function mount(ctx) {
       offset: layout?.grid_offset || DEFAULT_GRID.offset,
       compact: false,
     };
+  }
+
+  function plainIconDoc(doc) {
+    if (!doc) return {};
+    try {
+      return typeof doc.toJSON === 'function' ? doc.toJSON() : doc;
+    } catch {
+      return doc;
+    }
+  }
+
+  function readIconPositionCache() {
+    const positions = new Map();
+    try {
+      const raw = window.localStorage.getItem(desktopIconPositionCacheStorageKey());
+      const parsed = JSON.parse(raw || 'null');
+      const entries = parsed?.positions && typeof parsed.positions === 'object' ? parsed.positions : {};
+      for (const [id, value] of Object.entries(entries)) {
+        const x = Number(value?.x);
+        const y = Number(value?.y);
+        if (!id || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+        positions.set(id, {
+          x,
+          y,
+          updated_at_ms: Number(value?.updated_at_ms) || 0,
+        });
+      }
+    } catch {}
+    return positions;
+  }
+
+  function writeIconPositionCache() {
+    const positions = {};
+    for (const [id, value] of iconPositionCache) {
+      if (!id || !Number.isFinite(value?.x) || !Number.isFinite(value?.y)) continue;
+      positions[id] = {
+        x: value.x,
+        y: value.y,
+        updated_at_ms: Number(value.updated_at_ms) || 0,
+      };
+    }
+    try {
+      window.localStorage.setItem(desktopIconPositionCacheStorageKey(), JSON.stringify({
+        version: 1,
+        positions,
+      }));
+    } catch {}
+  }
+
+  function rememberIconPosition(iconId, position, updatedAt = Date.now()) {
+    const x = Number(position?.x);
+    const y = Number(position?.y);
+    if (!iconId || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    iconPositionCache.set(iconId, { x, y, updated_at_ms: updatedAt });
+    writeIconPositionCache();
+  }
+
+  function syncIconPositionCacheFromDocs(docs) {
+    let changed = false;
+    for (const doc of docs || []) {
+      const plain = plainIconDoc(doc);
+      if (!plain?.id || !Number.isFinite(plain.x) || !Number.isFinite(plain.y)) continue;
+      const cached = iconPositionCache.get(plain.id);
+      const docUpdatedAt = Number(plain.updated_at_ms) || 0;
+      if (!cached) {
+        iconPositionCache.set(plain.id, {
+          x: plain.x,
+          y: plain.y,
+          updated_at_ms: docUpdatedAt,
+        });
+        changed = true;
+      }
+    }
+    if (changed) writeIconPositionCache();
+  }
+
+  function applyCachedIconPosition(doc) {
+    if (!doc?.id) return doc || {};
+    const cached = iconPositionCache.get(doc.id);
+    if (!cached) return doc;
+    const docUpdatedAt = Number(doc.updated_at_ms) || 0;
+    const cachedUpdatedAt = Number(cached.updated_at_ms) || 0;
+    if (cachedUpdatedAt < docUpdatedAt) return doc;
+    if (!Number.isFinite(cached.x) || !Number.isFinite(cached.y)) return doc;
+    return {
+      ...doc,
+      x: cached.x,
+      y: cached.y,
+      updated_at_ms: Math.max(docUpdatedAt, cachedUpdatedAt),
+    };
+  }
+
+  function desktopIconPositionCacheStorageKey() {
+    const user = ctx.session?.user || {};
+    const workspace = window.CTOX_BUSINESS_OS_CONFIG?.instance_id
+      || ctx.session?.workspace_id
+      || ctx.session?.workspaceId
+      || 'workspace';
+    const actor = user.id || user.user_id || user.email || user.login || (ctx.session?.authenticated ? 'authenticated' : 'browser');
+    return `${ICON_POSITION_CACHE_KEY}.${storageKeyPart(workspace)}.${storageKeyPart(actor)}`;
+  }
+
+  function storageKeyPart(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, '_')
+      .slice(0, 96) || 'default';
   }
 
   function gridPosition(index, grid = currentGrid()) {

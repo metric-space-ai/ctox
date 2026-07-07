@@ -135,10 +135,14 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '',
   ].join('\n'));
   writeFileSync(join(dir, 'index.html'), overrides.indexHtml || [
-    '<main class="validator-module">',
-    '  <section data-list></section>',
-    '  <button type="button" data-action="create-record">Create record</button>',
-    '  <button type="button" data-action="follow-up">Follow up</button>',
+    '<main class="validator-module ctox-pane">',
+    '  <header class="ctox-pane-header">',
+    '    <span class="ctox-pane-icon" aria-hidden="true"></span>',
+    '    <h2>Records</h2>',
+    '  </header>',
+    '  <section class="ctox-fields" data-list></section>',
+    '  <button class="ctox-button" type="button" data-action="create-record">Create record</button>',
+    '  <button class="ctox-button" type="button" data-action="follow-up">Follow up</button>',
     '</main>',
     '',
   ].join('\n'));
@@ -148,12 +152,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '  gap: 12px;',
     '  min-height: 100%;',
     '  background: var(--surface);',
-    '  color: var(--text);',
-    '}',
-    '.validator-module button {',
-    '  border: 1px solid var(--line);',
-    '  background: var(--surface-2);',
-    '  color: var(--text);',
+      '  color: var(--text);',
     '}',
     '',
   ].join('\n'));
@@ -287,9 +286,9 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const root = makeWorkspace();
   writeInstalledModule(root, 'namespacedaction', {
     indexHtml: [
-      '<main class="validator-module">',
-      '  <section data-list></section>',
-      '  <button type="button" data-demo-action="new">New record</button>',
+      '<main class="validator-module ctox-pane">',
+      '  <section class="ctox-fields" data-list></section>',
+      '  <button class="ctox-button" type="button" data-demo-action="new">New record</button>',
       '</main>',
       '',
     ].join('\n'),
@@ -307,14 +306,14 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const root = makeWorkspace();
   writeInstalledModule(root, 'submitsave', {
     indexHtml: [
-      '<main class="validator-module">',
-      '  <section data-list></section>',
-      '  <button type="button" data-action="create-record">Create record</button>',
+      '<main class="validator-module ctox-pane">',
+      '  <section class="ctox-fields" data-list></section>',
+      '  <button class="ctox-button" type="button" data-action="create-record">Create record</button>',
       '  <form data-editor>',
-      '    <input name="title" value="Demo">',
-      '    <button type="submit" data-action="save-item">Save record</button>',
+      '    <input class="ctox-input" name="title" value="Demo">',
+      '    <button class="ctox-button" type="submit" data-action="save-item">Save record</button>',
       '  </form>',
-      '  <button type="button" data-action="follow-up">Follow up</button>',
+      '  <button class="ctox-button" type="button" data-action="follow-up">Follow up</button>',
       '</main>',
       '',
     ].join('\n'),
@@ -767,9 +766,9 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const root = makeWorkspace();
   writeInstalledModule(root, 'hiddenmodalok', {
     indexHtml: [
-      '<main class="validator-module">',
-      '  <button type="button" data-action="create-record">Create record</button>',
-      '  <button type="button" data-action="follow-up">Follow up</button>',
+      '<main class="validator-module ctox-pane">',
+      '  <button class="ctox-button" type="button" data-action="create-record">Create record</button>',
+      '  <button class="ctox-button" type="button" data-action="follow-up">Follow up</button>',
       '  <div class="hiddenmodalok-modal" hidden>Modal</div>',
       '</main>',
       '',
@@ -855,7 +854,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'domainaction', {
-    indexHtml: '<main class="validator-module"><button type="button" data-action="create-record">Create record</button><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="restock">Restock</button></main>\n',
+    indexHtml: '<main class="validator-module ctox-pane"><button class="ctox-button" type="button" data-action="create-record">Create record</button><button class="ctox-button" type="button" data-action="follow-up">Follow up</button><button class="ctox-button" type="button" data-action="restock">Restock</button></main>\n',
     indexJs: installedIndexJs('domainaction', 'domainaction_records', [
       "  ctx.host.querySelector('[data-action=\"restock\"]')?.addEventListener('click', () => {",
       "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'sku-1', title: 'Safety gloves', updated_at_ms: 1 }));",

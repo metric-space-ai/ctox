@@ -41,9 +41,10 @@ const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
 const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
+const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260704-mcp-token-ui';
+const APP_BUILD = '20260707-window-geometry-v1';
 
 ensureShellStylesheets();
 
@@ -202,7 +203,7 @@ const state = {
   taskbar: null,
   windowSwitcher: null,
   windowGeometryCache: new Map(),
-  windowGeometrySaveTimers: new Map(),
+  windowGeometryWriteChains: new Map(),
   catalogSubscription: null,
   catalogRefreshTimer: null,
   catalogRefreshRunning: false,
@@ -1185,18 +1186,88 @@ async function registerCoreCollections() {
 
 async function primeWindowGeometryCache() {
   const coll = state.db?.collections?.desktop_windows;
+  state.windowGeometryCache.clear();
+  for (const [ownerId, payload] of readWindowGeometryLocalCache()) {
+    state.windowGeometryCache.set(ownerId, payload);
+  }
   if (!coll) return;
   try {
     const docs = await coll.find().exec();
-    state.windowGeometryCache.clear();
     for (const doc of docs) {
       const payload = doc.toJSON();
       if (!payload?.owner_id) continue;
-      state.windowGeometryCache.set(payload.owner_id, payload);
+      if (windowGeometryDocumentMatchesCurrentScope(payload)) {
+        mergeWindowGeometryCache(payload.owner_id, payload);
+      } else if (isLegacyWindowGeometryDocument(payload) && !state.windowGeometryCache.has(payload.owner_id)) {
+        mergeWindowGeometryCache(payload.owner_id, payload);
+      }
     }
+    persistWindowGeometryLocalCache();
   } catch (error) {
     console.error('[business-os] primeWindowGeometryCache failed:', error);
   }
+}
+
+function readWindowGeometryLocalCache() {
+  const entries = new Map();
+  try {
+    const parsed = JSON.parse(readScopedLocalStorage(WINDOW_GEOMETRY_KEY) || 'null');
+    const rawEntries = parsed?.entries && typeof parsed.entries === 'object' ? parsed.entries : {};
+    for (const [ownerId, payload] of Object.entries(rawEntries)) {
+      if (!ownerId || !payload || typeof payload !== 'object') continue;
+      entries.set(ownerId, { ...payload, id: payload.id || ownerId, owner_id: payload.owner_id || ownerId });
+    }
+  } catch {}
+  return entries;
+}
+
+function persistWindowGeometryLocalCache() {
+  const entries = {};
+  for (const [ownerId, payload] of state.windowGeometryCache) {
+    if (!ownerId || !payload) continue;
+    entries[ownerId] = payload;
+  }
+  writeScopedLocalStorage(WINDOW_GEOMETRY_KEY, JSON.stringify({
+    version: 1,
+    entries,
+  }));
+}
+
+function mergeWindowGeometryCache(ownerId, payload) {
+  if (!ownerId || !payload) return;
+  const current = state.windowGeometryCache.get(ownerId);
+  const currentUpdatedAt = Number(current?.updated_at_ms || 0);
+  const nextUpdatedAt = Number(payload.updated_at_ms || 0);
+  if (current && currentUpdatedAt > nextUpdatedAt) return;
+  state.windowGeometryCache.set(ownerId, payload);
+}
+
+function currentWindowGeometryScope() {
+  return {
+    workspace_scope: currentWorkspaceStorageScope(),
+    actor_scope: currentActorStorageScope(),
+  };
+}
+
+function windowGeometryRecordId(ownerId) {
+  const scope = currentWindowGeometryScope();
+  const owner = storageScopeSegment(ownerId, 'window').slice(0, 80);
+  const workspace = scope.workspace_scope.slice(0, 48);
+  const actor = scope.actor_scope.slice(0, 48);
+  return `shellwin_${workspace}_${actor}_${owner}_${stableShortHash(`${workspace}|${actor}|${ownerId}`)}`;
+}
+
+function windowGeometryDocumentMatchesCurrentScope(payload) {
+  const scope = currentWindowGeometryScope();
+  return payload?.workspace_scope === scope.workspace_scope
+    && payload?.actor_scope === scope.actor_scope;
+}
+
+function isLegacyWindowGeometryDocument(payload) {
+  return payload
+    && !payload.workspace_scope
+    && !payload.actor_scope
+    && payload.id === payload.owner_id;
 }
 
 function createWindowGeometryPersistence() {
@@ -1226,9 +1297,12 @@ function createWindowGeometryPersistence() {
     save(ownerId, snapshot) {
       if (!ownerId) return;
       const cached = state.windowGeometryCache.get(ownerId) || {};
+      const scope = currentWindowGeometryScope();
       const next = {
-        id: ownerId,
+        id: windowGeometryRecordId(ownerId),
         owner_id: ownerId,
+        workspace_scope: scope.workspace_scope,
+        actor_scope: scope.actor_scope,
         title: snapshot.title || cached.title || '',
         icon: snapshot.icon || cached.icon || '',
         x: numberOrNull(snapshot.x),
@@ -1245,36 +1319,56 @@ function createWindowGeometryPersistence() {
         updated_at_ms: Date.now(),
       };
       state.windowGeometryCache.set(ownerId, next);
-      scheduleGeometryPersist(ownerId, next);
+      persistWindowGeometryLocalCache();
+      queueGeometryPersist(ownerId, next);
     },
   };
 }
 
-function scheduleGeometryPersist(ownerId, payload) {
-  const existing = state.windowGeometrySaveTimers.get(ownerId);
-  if (existing) clearTimeout(existing);
-  const handle = window.setTimeout(() => {
-    state.windowGeometrySaveTimers.delete(ownerId);
-    flushGeometryPersist(ownerId, payload).catch((error) => {
+function queueGeometryPersist(ownerId, payload) {
+  const previous = state.windowGeometryWriteChains.get(ownerId) || Promise.resolve();
+  const write = previous
+    .catch(() => {})
+    .then(() => flushGeometryPersist(ownerId, state.windowGeometryCache.get(ownerId) || payload));
+  state.windowGeometryWriteChains.set(ownerId, write);
+  write
+    .catch((error) => {
       console.error('[business-os] geometry persist failed:', error);
+    })
+    .finally(() => {
+      if (state.windowGeometryWriteChains.get(ownerId) === write) {
+        state.windowGeometryWriteChains.delete(ownerId);
+      }
     });
-  }, 250);
-  state.windowGeometrySaveTimers.set(ownerId, handle);
 }
 
 async function flushGeometryPersist(ownerId, payload) {
   const coll = state.db?.collections?.desktop_windows;
   if (!coll) return;
-  const existing = await coll.findOne(ownerId).exec();
+  if (!payload) return;
+  const recordId = payload.id || windowGeometryRecordId(ownerId);
+  const existing = await coll.findOne(recordId).exec();
   if (existing) {
-    await existing.incrementalPatch({ ...payload, updated_at_ms: Date.now() });
+    await existing.incrementalPatch(payload);
   } else {
     try {
       await coll.insert(payload);
     } catch (error) {
-      if (!String(error?.message || '').toLowerCase().includes('already')) throw error;
+      if (!isRxConflictError(error)) throw error;
+      const conflicted = await coll.findOne(recordId).exec();
+      if (!conflicted) throw error;
+      await conflicted.incrementalPatch(payload);
     }
   }
+}
+
+function isRxConflictError(error) {
+  const status = error?.status || error?.parameters?.writeError?.status;
+  if (status === 409) return true;
+  const code = String(error?.code || error?.rxdb || '').toUpperCase();
+  if (code === 'CONFLICT') return true;
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('conflict') || message.includes('already');
 }
 
 function deriveOwnerLabel(ownerId) {
@@ -1438,6 +1532,16 @@ function parsePxOrNull(value) {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
+}
+
+function stableShortHash(value) {
+  let hash = 2166136261;
+  const text = String(value || '');
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function wireShellActions() {

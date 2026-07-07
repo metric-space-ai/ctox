@@ -59,6 +59,26 @@ assert.ok(
   'Runtime app allowlist bypass must use the shared Business OS app lifecycle helper'
 );
 assert.ok(
+  appSource.includes("const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';"),
+  'Shell window geometry must have a scoped local persistence cache'
+);
+assert.ok(
+  appSource.includes('persistWindowGeometryLocalCache();'),
+  'Shell window geometry saves must update the local cache synchronously'
+);
+assert.ok(
+  appSource.includes('windowGeometryWriteChains'),
+  'Shell window geometry RxDB writes must be serialized per window owner'
+);
+assert.ok(
+  appSource.includes('workspace_scope: scope.workspace_scope'),
+  'Shell window geometry RxDB records must be scoped to the workspace'
+);
+assert.ok(
+  appSource.includes('actor_scope: scope.actor_scope'),
+  'Shell window geometry RxDB records must be scoped to the actor'
+);
+assert.ok(
   desktopSource.includes('Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry()'),
   'Desktop launcher must use shell-filtered ctx.modules before falling back to registry.json'
 );
@@ -69,6 +89,22 @@ assert.ok(
 assert.ok(
   desktopSource.includes('ensureIcons(iconsCollection, launcher)'),
   'Desktop launcher must seed missing icons after module catalog changes'
+);
+assert.ok(
+  desktopSource.includes("const ICON_POSITION_CACHE_KEY = 'ctox.businessOs.desktopIconPositions';"),
+  'Desktop icons must keep a scoped local position cache'
+);
+assert.ok(
+  desktopSource.includes('rememberIconPosition(iconId, position, updatedAt);'),
+  'Desktop icon drag must write the local position cache before async RxDB persistence'
+);
+assert.ok(
+  desktopSource.includes('docs.forEach((doc, index) => {'),
+  'Desktop icon auto-arrange must update the per-user position cache'
+);
+assert.ok(
+  desktopSource.includes('if (!usingFallbackDocs)'),
+  'Desktop fallback icons must not overwrite cached persisted positions during transient IndexedDB restarts'
 );
 assert.ok(
   desktopSource.includes('!launcher.knows(doc.target_module)'),
