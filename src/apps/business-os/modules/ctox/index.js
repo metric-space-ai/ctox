@@ -18,6 +18,7 @@ const HARNESS_STALL_GRACE_MS = 90 * 1000;
 const HARNESS_WAITING_STATUSES = new Set(['queued', 'pending', 'accepted']);
 const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'drafting']);
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
+const QUEUE_OVERVIEW_RECENT_TERMINAL_MS = 24 * 60 * 60 * 1000;
 const CTOX_STYLE_BUILD = '20260706-kit-tokens1';
 
 const labels = {
@@ -2711,9 +2712,19 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
   })).filter((item) => item.id);
   return {
     ...bundle,
-    queue: mergeById([...runtimeQueue, ...commandQueue], bundle.queue),
+    queue: mergeById([...runtimeQueue, ...commandQueue], bundle.queue)
+      .filter(isQueueOverviewItemVisible),
     tickets: mergeById(tickets, bundle.tickets),
   };
+}
+
+function isQueueOverviewItemVisible(item) {
+  const status = normalizeCommandStatus(item?.status || item?.task_status || item?.routeStatus || item?.route_status);
+  if (['queued', 'pending', 'accepted', 'running', 'leased', 'review', 'drafting'].includes(status)) return true;
+  if (item?.priority === 'urgent') return true;
+  if (!['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked'].includes(status)) return true;
+  const timestamp = Date.parse(item?.updatedAt || item?.createdAt || '');
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= QUEUE_OVERVIEW_RECENT_TERMINAL_MS;
 }
 
 function browserExtractArtifactFromCommand(doc = {}) {
