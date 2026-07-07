@@ -44,7 +44,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260707-command-conflict-v1';
+const APP_BUILD = '20260707-workspace-status-v1';
 
 ensureShellStylesheets();
 
@@ -8356,7 +8356,12 @@ function workspaceStatusText() {
   const brandingName = state.workspaceBranding?.custom === true
     ? String(state.workspaceBranding?.name || '').trim()
     : '';
-  return brandingName || shellText('localWorkspace');
+  if (brandingName) return brandingName;
+  const instanceName = getInstanceName();
+  if (instanceName && instanceName !== 'A6000' && !isLocalBusinessOsSurface()) {
+    return instanceName;
+  }
+  return shellText('localWorkspace');
 }
 
 function setWorkspaceStatus() {
