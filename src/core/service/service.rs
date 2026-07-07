@@ -188,6 +188,7 @@ const CTO_DRIFT_KIND: &str = "cto-drift-correction";
 const BUSINESS_OS_WEB_AUTOSTART_KEY: &str = "CTOX_BUSINESS_OS_WEB_AUTOSTART";
 const BUSINESS_OS_WEB_ADDR_KEY: &str = "CTOX_BUSINESS_OS_WEB_ADDR";
 const BUSINESS_OS_WEB_DEFAULT_ADDR: &str = "127.0.0.1:8765";
+const BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY: &str = "CTOX_BUSINESS_OS_NATIVE_PEER_AUTOSTART";
 const BUSINESS_OS_MCP_AUTOSTART_KEY: &str = "CTOX_BUSINESS_OS_MCP_AUTOSTART";
 const BUSINESS_OS_MCP_ADDR_KEY: &str = "CTOX_BUSINESS_OS_MCP_ADDR";
 const BUSINESS_OS_MCP_DEFAULT_ADDR: &str = "127.0.0.1:8788";
@@ -1323,8 +1324,16 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     if runtime_env::config_flag(root, "CTOX_SERVICE_PREWARM_BACKENDS") {
         supervisor::start_backend_supervisor(root.to_path_buf());
     }
-    if let Err(err) = crate::business_os::ensure_native_peer(root) {
-        eprintln!("ctox service: Business OS native RxDB peer failed to start: {err:#}");
+    if runtime_config_bool(root, BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY, true) {
+        if let Err(err) = crate::business_os::ensure_native_peer(root) {
+            eprintln!("ctox service: Business OS native RxDB peer failed to start: {err:#}");
+        }
+    } else {
+        push_event(
+            &state,
+            "Business OS native RxDB peer autostart disabled".to_string(),
+        );
+        eprintln!("ctox service: Business OS native RxDB peer autostart disabled");
     }
     start_business_os_surfaces(root, state.clone());
     #[cfg(unix)]
@@ -23409,6 +23418,11 @@ mod tests {
             BUSINESS_OS_MCP_AUTOSTART_KEY,
             true
         ));
+        assert!(runtime_config_bool(
+            &root,
+            BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY,
+            true
+        ));
         assert_eq!(
             runtime_config_string(
                 &root,
@@ -23433,6 +23447,10 @@ mod tests {
         );
         settings.insert(BUSINESS_OS_MCP_AUTOSTART_KEY.to_string(), "off".to_string());
         settings.insert(
+            BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY.to_string(),
+            "0".to_string(),
+        );
+        settings.insert(
             BUSINESS_OS_WEB_ADDR_KEY.to_string(),
             "127.0.0.1:9876".to_string(),
         );
@@ -23450,6 +23468,11 @@ mod tests {
         assert!(!runtime_config_bool(
             &root,
             BUSINESS_OS_MCP_AUTOSTART_KEY,
+            true
+        ));
+        assert!(!runtime_config_bool(
+            &root,
+            BUSINESS_OS_NATIVE_PEER_AUTOSTART_KEY,
             true
         ));
         assert_eq!(
