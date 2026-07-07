@@ -16935,6 +16935,17 @@ fn process_business_chat_reply(
         chat_payload,
     )?;
 
+    let document_writeback = maybe_writeback_documents_chat_markdown_edit(
+        root,
+        conn,
+        Some(&mut rxdb_writers),
+        command_id,
+        command,
+        &user_text,
+        reply_text,
+        completed_at_ms,
+    )?;
+
     let command_payload = serde_json::json!({
         "id": command_id,
         "command_id": command_id,
@@ -16952,7 +16963,8 @@ fn process_business_chat_reply(
             "outbound_text": reply_text,
             "response": reply_text,
             "answer": reply_text,
-            "summary": reply_text
+            "summary": reply_text,
+            "document_writeback": document_writeback
         },
         "outbound_text": reply_text,
         "response": reply_text,
@@ -30943,6 +30955,315 @@ fn normalize_business_chat_tracking_status(status: &str) -> String {
 
 fn business_chat_tracking_status_is_active(status: &str) -> bool {
     matches!(status, "queued" | "running")
+}
+
+fn maybe_writeback_documents_chat_markdown_edit(
+    root: &Path,
+    conn: &Connection,
+    mut rxdb_writers: Option<&mut RxdbProjectionWriterCache>,
+    command_id: &str,
+    command: &BusinessCommand,
+    user_text: &str,
+    reply_text: &str,
+    now: i64,
+) -> anyhow::Result<Value> {
+    if command.module != "documents" || command.command_type != "business_os.chat.task" {
+        return Ok(Value::Null);
+    }
+    let mode = first_string_field(&command.payload, &["mode"])
+        .or_else(|| first_string_field(&command.client_context, &["mode"]))
+        .unwrap_or_default();
+    if matches!(mode.as_str(), "ask" | "app") {
+        return Ok(Value::Null);
+    }
+    let Some(document_id) = command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| first_string_field(&command.payload, &["document_id", "record_id"]))
+        .or_else(|| first_string_field(&command.client_context, &["document_id", "record_id"]))
+    else {
+        return Ok(Value::Null);
+    };
+
+    let mut document_payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'documents' AND record_id = ?1 AND deleted = 0",
+            params![document_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .with_context(|| format!("document `{document_id}` not found for chat writeback"))?;
+
+    let document_type = document_payload
+        .get("document_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mime_type = document_payload
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let filename = document_payload
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if document_type != "markdown_document"
+        && mime_type != "text/markdown"
+        && !filename.ends_with(".md")
+        && !filename.ends_with(".markdown")
+    {
+        return Ok(Value::Null);
+    }
+
+    let Some(markdown_to_append) = markdown_append_section_from_instruction(user_text)
+        .or_else(|| markdown_append_section_from_instruction(reply_text))
+    else {
+        return Ok(Value::Null);
+    };
+    let current_version_id = document_payload
+        .get("current_version_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut current_model = if current_version_id.is_empty() {
+        Value::Null
+    } else {
+        conn.query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'document_versions' AND record_id = ?1 AND deleted = 0",
+            params![current_version_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|payload| payload.get("model_json").cloned())
+        .unwrap_or(Value::Null)
+    };
+    ensure_markdown_model_document(&mut current_model);
+    let existing_text = markdown_model_text(&current_model);
+    if existing_text.contains(markdown_to_append.trim()) {
+        return Ok(serde_json::json!({
+            "status": "skipped",
+            "reason": "section_already_present",
+            "document_id": document_id,
+            "version_id": current_version_id
+        }));
+    }
+    append_markdown_section_to_model(&mut current_model, &markdown_to_append)?;
+    let index_text = markdown_model_text(&current_model);
+
+    let next_version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(CAST(json_extract(payload_json, '$.version') AS INTEGER)), 0) + 1
+             FROM business_records
+             WHERE collection = 'document_versions'
+               AND deleted = 0
+               AND json_extract(payload_json, '$.document_id') = ?1",
+            params![document_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(1);
+    let version_id = format!("{document_id}_v{next_version}");
+    let blob_id = format!("{version_id}_blob");
+    let version_payload = serde_json::json!({
+        "id": version_id,
+        "version_id": version_id,
+        "document_id": document_id,
+        "version": next_version,
+        "source_kind": "ctox_chat_markdown_edit",
+        "blob_id": blob_id,
+        "model_json": current_model,
+        "model": Value::Null,
+        "diagnostics": [{
+            "level": "info",
+            "message": "Markdown section appended from Documents context chat",
+            "command_id": command_id
+        }],
+        "business_command_id": command_id,
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    upsert_business_record(
+        conn,
+        "document_versions",
+        &version_id,
+        now,
+        version_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        rxdb_writers.as_deref_mut(),
+        "document_versions",
+        &version_id,
+        now,
+        version_payload,
+    )?;
+
+    if let Some(obj) = document_payload.as_object_mut() {
+        obj.insert(
+            "current_version_id".to_string(),
+            Value::String(version_id.clone()),
+        );
+        obj.insert("status".to_string(), Value::String("Updated".to_string()));
+        obj.insert("index_text".to_string(), Value::String(index_text));
+        obj.insert("updated_at_ms".to_string(), Value::from(now));
+    }
+    upsert_business_record(
+        conn,
+        "documents",
+        &document_id,
+        now,
+        document_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        rxdb_writers.as_deref_mut(),
+        "documents",
+        &document_id,
+        now,
+        document_payload,
+    )?;
+
+    Ok(serde_json::json!({
+        "status": "completed",
+        "document_id": document_id,
+        "version_id": version_id,
+        "version": next_version,
+        "source_kind": "ctox_chat_markdown_edit",
+        "appended_chars": markdown_to_append.chars().count()
+    }))
+}
+
+fn markdown_append_section_from_instruction(value: &str) -> Option<String> {
+    let mut section = Vec::new();
+    let mut in_section = false;
+    for line in value.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("## ") {
+            in_section = true;
+        }
+        if in_section {
+            if trimmed.starts_with("Business OS command:") {
+                break;
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("lasse alle bestehenden")
+                || lower.starts_with("leave all existing")
+            {
+                break;
+            }
+            section.push(trimmed.to_string());
+        }
+    }
+    let joined = section.join("\n").trim().to_string();
+    (!joined.is_empty()).then_some(joined)
+}
+
+fn ensure_markdown_model_document(model: &mut Value) {
+    if !model.is_object() {
+        *model = serde_json::json!({
+            "type": "document",
+            "body": { "type": "body", "blocks": [] }
+        });
+        return;
+    }
+    let Some(obj) = model.as_object_mut() else {
+        return;
+    };
+    obj.entry("type".to_string())
+        .or_insert_with(|| Value::String("document".to_string()));
+    let body = obj
+        .entry("body".to_string())
+        .or_insert_with(|| serde_json::json!({ "type": "body", "blocks": [] }));
+    if !body.is_object() {
+        *body = serde_json::json!({ "type": "body", "blocks": [] });
+    }
+    let Some(body_obj) = body.as_object_mut() else {
+        return;
+    };
+    body_obj
+        .entry("type".to_string())
+        .or_insert_with(|| Value::String("body".to_string()));
+    body_obj
+        .entry("blocks".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+}
+
+fn append_markdown_section_to_model(model: &mut Value, markdown: &str) -> anyhow::Result<()> {
+    ensure_markdown_model_document(model);
+    let blocks = model
+        .get_mut("body")
+        .and_then(|body| body.get_mut("blocks"))
+        .and_then(Value::as_array_mut)
+        .context("markdown document model has no body.blocks array")?;
+    blocks.push(markdown_paragraph_block(""));
+    for line in markdown.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            blocks.push(markdown_paragraph_block(""));
+        } else if trimmed.starts_with("## ") {
+            blocks.push(markdown_heading_block(
+                trimmed.trim_start_matches("## ").trim(),
+                "Heading2",
+            ));
+        } else if trimmed.starts_with("# ") {
+            blocks.push(markdown_heading_block(
+                trimmed.trim_start_matches("# ").trim(),
+                "Heading1",
+            ));
+        } else {
+            blocks.push(markdown_paragraph_block(trimmed));
+        }
+    }
+    Ok(())
+}
+
+fn markdown_heading_block(text: &str, style_id: &str) -> Value {
+    serde_json::json!({
+        "type": "paragraph",
+        "runs": [{ "type": "text", "text": text }],
+        "effectiveProperties": { "styleId": style_id }
+    })
+}
+
+fn markdown_paragraph_block(text: &str) -> Value {
+    serde_json::json!({
+        "type": "paragraph",
+        "runs": [{ "type": "text", "text": text }]
+    })
+}
+
+fn markdown_model_text(model: &Value) -> String {
+    model
+        .get("body")
+        .and_then(|body| body.get("blocks"))
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .map(markdown_block_text)
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn markdown_block_text(block: &Value) -> String {
+    block
+        .get("runs")
+        .and_then(Value::as_array)
+        .map(|runs| {
+            runs.iter()
+                .filter_map(|run| run.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }
 
 fn expected_docx_filename(command: &BusinessCommand) -> Option<String> {
