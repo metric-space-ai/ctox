@@ -450,24 +450,30 @@ function alignChatWindows(root) {
       preferredLeft = chipCenter - rootRect.left - winWidth / 2;
     }
 
-    preferredLeft = Math.max(8, Math.min(rootRect.width - 8 - winWidth, preferredLeft));
     positions.push({
       win,
       width: winWidth,
       left: preferredLeft,
+      preferredLeft,
     });
+  });
+
+  const widestWindow = positions.reduce((max, item) => Math.max(max, item.width), 0);
+  const layoutFrame = chatWindowStageFrame(root, stageInner, widestWindow);
+  positions.forEach((item) => {
+    item.left = clampChatWindowLeft(item.left, item.width, layoutFrame);
   });
 
   const totalWidthNeeded = positions.reduce((sum, item) => sum + item.width, 0)
     + Math.max(0, positions.length - 1) * gap;
-  const fitsSideBySide = totalWidthNeeded <= rootRect.width - 16;
+  const fitsSideBySide = totalWidthNeeded <= layoutFrame.width;
   stageInner.classList.toggle('is-side-by-side', fitsSideBySide);
 
   if (fitsSideBySide && positions.length > 0) {
     for (let iteration = 0; iteration < 10; iteration += 1) {
       for (let index = 0; index < positions.length; index += 1) {
         if (index === 0) {
-          positions[index].left = Math.max(8, positions[index].left);
+          positions[index].left = Math.max(layoutFrame.left, positions[index].left);
         } else {
           const previous = positions[index - 1];
           positions[index].left = Math.max(previous.left + previous.width + gap, positions[index].left);
@@ -475,7 +481,7 @@ function alignChatWindows(root) {
       }
       for (let index = positions.length - 1; index >= 0; index -= 1) {
         if (index === positions.length - 1) {
-          positions[index].left = Math.min(rootRect.width - 8 - positions[index].width, positions[index].left);
+          positions[index].left = Math.min(layoutFrame.right - positions[index].width, positions[index].left);
         } else {
           const next = positions[index + 1];
           positions[index].left = Math.min(next.left - gap - positions[index].width, positions[index].left);
@@ -483,8 +489,7 @@ function alignChatWindows(root) {
       }
     }
   } else if (positions.length > 0) {
-    const widestWindow = positions.reduce((max, item) => Math.max(max, item.width), 0);
-    const availableSpan = Math.max(0, rootRect.width - 16 - widestWindow);
+    const availableSpan = Math.max(0, layoutFrame.width - widestWindow);
     const naturalStep = positions.length > 1 ? availableSpan / (positions.length - 1) : 0;
     const carouselStep = positions.length > 1
       ? Math.max(56, Math.min(142, naturalStep))
@@ -494,31 +499,20 @@ function alignChatWindows(root) {
       ? activePositionIndex
       : Math.floor(positions.length / 2);
     const active = positions[activeIndex];
-    const activeLeft = Math.max(
-      8,
-      Math.min(rootRect.width - 8 - active.width, (rootRect.width - active.width) / 2),
-    );
+    const activeLeft = clampChatWindowLeft(active.preferredLeft, active.width, layoutFrame);
 
     positions.forEach((item, index) => {
       item.left = activeLeft + (index - activeIndex) * carouselStep;
     });
-
-    const leftMost = Math.min(...positions.map((item) => item.left));
-    const rightMost = Math.max(...positions.map((item) => item.left + item.width));
-    if (rightMost - leftMost <= rootRect.width - 16) {
-      let shift = leftMost < 8 ? 8 - leftMost : 0;
-      if (rightMost + shift > rootRect.width - 8) {
-        shift -= rightMost + shift - (rootRect.width - 8);
-      }
-      positions.forEach((item) => {
-        item.left += shift;
-      });
-    }
   }
 
   positions.forEach(({ win, left }) => {
     win.style.position = 'absolute';
-    win.style.left = `${left}px`;
+    const width = win.classList.contains('is-maximized') ? 440 : 320;
+    const nextLeft = fitsSideBySide || win.classList.contains('is-active')
+      ? clampChatWindowLeft(left, width, layoutFrame)
+      : left;
+    win.style.left = `${nextLeft}px`;
   });
 
   const spacer = stageInner.querySelector('.ctox-chat-stage-spacer');
@@ -526,6 +520,53 @@ function alignChatWindows(root) {
     spacer.style.position = 'absolute';
     spacer.style.width = '1px';
   }
+}
+
+function chatWindowStageFrame(root, stageInner, minContentWidth = 0) {
+  const stageRect = stageInner.getBoundingClientRect();
+  const baseLeft = 8;
+  const baseRight = Math.max(baseLeft, stageRect.width - 8);
+  const baseFrame = {
+    left: baseLeft,
+    right: baseRight,
+    width: Math.max(0, baseRight - baseLeft),
+  };
+  const dock = root.querySelector('[data-chat-dock]');
+  const dockRect = dock?.getBoundingClientRect?.();
+  if (!dockRect || dockRect.width <= 0 || stageRect.width <= 0) return baseFrame;
+
+  let left = Math.max(baseLeft, dockRect.left - stageRect.left + 6);
+  let right = Math.min(baseRight, dockRect.right - stageRect.left - 6);
+  const desiredWidth = Math.min(baseFrame.width, Math.max(0, minContentWidth));
+
+  if (right - left < desiredWidth) {
+    const center = left + (right - left) / 2;
+    left = center - desiredWidth / 2;
+    right = center + desiredWidth / 2;
+    if (left < baseLeft) {
+      right += baseLeft - left;
+      left = baseLeft;
+    }
+    if (right > baseRight) {
+      left -= right - baseRight;
+      right = baseRight;
+    }
+  }
+
+  left = Math.max(baseLeft, left);
+  right = Math.min(baseRight, right);
+  if (right <= left) return baseFrame;
+  return {
+    left,
+    right,
+    width: right - left,
+  };
+}
+
+function clampChatWindowLeft(left, width, frame) {
+  if (!frame || frame.width <= 0) return Math.max(8, left);
+  if (frame.width <= width) return frame.left;
+  return Math.max(frame.left, Math.min(frame.right - width, left));
 }
 
 function renderAndPersistChatState({ root, state, commandBus, db, getActiveModule }) {
@@ -3951,19 +3992,17 @@ function installChatStyles() {
     .ctox-chat-stage {
       pointer-events: none;
       grid-row: 1;
-      display: grid;
-      grid-template-columns: 88px var(--ctox-date-pill-width) 28px minmax(0, 1fr) 28px 34px;
-      align-items: end;
-      gap: 8px;
+      display: block;
+      width: 100%;
       box-sizing: border-box;
       min-width: 0;
       overflow: hidden;
       padding: 0 6px;
     }
     .ctox-chat-stage-inner {
-      grid-column: 4;
       position: relative;
       overflow: visible;
+      width: 100%;
       height: min(340px, calc(100vh - 132px));
       transition: height 0.3s var(--spring-bounce);
       min-width: 0;

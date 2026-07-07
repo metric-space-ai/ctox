@@ -127,6 +127,8 @@ try {
     expect(m.dateScopeText === 'Verlauf', `date control must explain chat history scope, got ${m.dateScopeText}`);
     expect(m.dateTriggerLabel.includes('Chat-Verlauf'), `date trigger needs an accessible history label, got ${m.dateTriggerLabel}`);
     expect(m.dockWidth < 520, `one-chat dock should stay compact, got ${m.dockWidth}`);
+    expect(m.activeChipCenterWithinWindow === true, 'one-chat active chip center must sit under the active window');
+    expect(m.activeWindowDockOverflow <= 1, `one-chat window must stay inside the dock frame, got overflow ${m.activeWindowDockOverflow}`);
   });
 
   await scenario(page, 'date-workload-popover-heatmap', { count: 100, activeIndex: 50 }, async () => {
@@ -147,6 +149,8 @@ try {
     expect(m.navCount === 2, 'six chats show strip nav');
     expect(m.dockWidth > 900, `six-chat dock should keep visible chips, got ${m.dockWidth}`);
     expect(m.dockWidth < m.viewportWidth * 0.75, `six-chat dock should not be full width, ratio ${m.dockRatio}`);
+    expect(m.activeChipCenterWithinWindow === true, 'six-chat active chip center must sit under the active window');
+    expect(m.activeWindowDockOverflow <= 1, `six-chat active window must stay inside the dock frame, got overflow ${m.activeWindowDockOverflow}`);
   });
 
   await scenario(page, 'eight-chats-scrolls-but-not-full-width', { count: 8, activeIndex: 4 }, (m) => {
@@ -155,6 +159,8 @@ try {
     expect(m.stripHasOverflow === true, 'eight-chat strip must be horizontally scrollable');
     expect(m.stripClasses.includes('is-scrollable'), `overflowing strip must expose scroll affordance class, got ${m.stripClasses}`);
     expect(m.dockWidth < m.viewportWidth * 0.75, `eight-chat dock should avoid premature full width, ratio ${m.dockRatio}`);
+    expect(m.activeChipCenterWithinWindow === true, 'eight-chat active chip center must sit under the active window');
+    expect(m.activeWindowDockOverflow <= 1, `eight-chat active window must stay inside the dock frame, got overflow ${m.activeWindowDockOverflow}`);
   });
 
   await scenario(page, 'twelve-chats-full-width-scroll', { count: 12, activeIndex: 5 }, async (m) => {
@@ -162,6 +168,8 @@ try {
     expect(m.navCount === 2, 'twelve chats show strip nav');
     expect(m.stripHasOverflow === true, 'twelve-chat strip must be horizontally scrollable');
     expect(m.dockWidth > m.viewportWidth * 0.85, `twelve-chat dock can span shell width, ratio ${m.dockRatio}`);
+    expect(m.activeChipCenterWithinWindow === true, 'twelve-chat active chip center must sit under the active window');
+    expect(m.activeWindowDockOverflow <= 1, `twelve-chat active window must stay inside the dock frame, got overflow ${m.activeWindowDockOverflow}`);
     await page.screenshot({ path: screenshotPath, fullPage: true });
   });
 
@@ -743,13 +751,32 @@ function harnessHtml() {
       const inactiveActions = Array.from(document.querySelectorAll('.ctox-chat-window:not(.is-active) .ctox-chat-header-actions'));
       const inactiveControls = Array.from(document.querySelectorAll('.ctox-chat-window:not(.is-active) button, .ctox-chat-window:not(.is-active) input, .ctox-chat-window:not(.is-active) textarea, .ctox-chat-window:not(.is-active) select, .ctox-chat-window:not(.is-active) a'));
       const dockRect = box(dock);
+      const activeChip = Array.from(document.querySelectorAll('[data-chat-focus]'))
+        .find((node) => node.dataset.chatFocus === activeWindow?.dataset.chatId);
+      const activeWindowRect = box(activeWindow);
+      const activeChipRect = box(activeChip);
+      const activeChipCenterX = activeChipRect.width ? activeChipRect.x + activeChipRect.width / 2 : 0;
+      const activeWindowCenterX = activeWindowRect.width ? activeWindowRect.x + activeWindowRect.width / 2 : 0;
       return {
         viewportWidth: window.innerWidth,
         rootWidth: box(root).width,
         dockWidth: dockRect.width,
+        dockLeft: dockRect.x,
+        dockRight: dockRect.x + dockRect.width,
         dockRatio: dockRect.width / window.innerWidth,
         dockClasses: dock?.className || '',
         stripClasses: strip?.className || '',
+        activeWindowLeft: activeWindowRect.x,
+        activeWindowRight: activeWindowRect.x + activeWindowRect.width,
+        activeChipLeft: activeChipRect.x,
+        activeChipRight: activeChipRect.x + activeChipRect.width,
+        activeChipWindowCenterDelta: activeChipCenterX && activeWindowCenterX ? Math.abs(activeChipCenterX - activeWindowCenterX) : 0,
+        activeChipCenterWithinWindow: activeChipCenterX && activeWindowRect.width
+          ? activeChipCenterX >= activeWindowRect.x && activeChipCenterX <= activeWindowRect.x + activeWindowRect.width
+          : false,
+        activeWindowDockOverflow: activeWindowRect.width && dockRect.width
+          ? Math.max(0, dockRect.x - activeWindowRect.x, activeWindowRect.x + activeWindowRect.width - (dockRect.x + dockRect.width))
+          : 0,
         dateScopeText: document.querySelector('.ctox-date-scope')?.textContent || '',
         dateTriggerLabel: document.querySelector('.ctox-date-picker-trigger')?.getAttribute('aria-label') || '',
         stripCount: document.querySelectorAll('[data-chat-strip]').length,

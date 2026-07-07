@@ -80,12 +80,29 @@ expectIncludes(
   "stageInner.classList.toggle('is-side-by-side', fitsSideBySide);",
   'Chat stage must mark the side-by-side state'
 );
+expectIncludes(
+  source,
+  'const layoutFrame = chatWindowStageFrame(root, stageInner, widestWindow);',
+  'Chat windows must be aligned against the visible dock frame'
+);
+expectIncludes(
+  source,
+  'function chatWindowStageFrame(root, stageInner, minContentWidth = 0)',
+  'Chat window layout needs a dock-relative frame helper'
+);
+expectIncludes(
+  source,
+  'function clampChatWindowLeft(left, width, frame)',
+  'Chat window layout needs a shared frame clamp'
+);
 expectIncludes(source, 'const carouselStep =', 'Chat windows need progressive carousel overlap');
 expectIncludes(
   source,
   '.ctox-chat-stage-inner.is-side-by-side .ctox-chat-window',
   'Side-by-side windows must neutralize carousel transforms'
 );
+expectIncludes(source, '.ctox-chat-stage {\n      pointer-events: none;\n      grid-row: 1;\n      display: block;', 'Chat stage must span the dock/root instead of a detached grid column');
+expectIncludes(source, '.ctox-chat-stage-inner {\n      position: relative;\n      overflow: visible;\n      width: 100%;', 'Chat stage inner must use the full stage for dock-relative alignment');
 rejectMatch(
   source,
   /animation:\s*ctoxChatSlideIn[^;]*\bboth\b/,
