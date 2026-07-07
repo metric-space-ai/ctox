@@ -5,6 +5,7 @@
   "entry": "modules/research/index.html",
   "collections": [
     "business_commands",
+    "business_chats",
     "ctox_queue_tasks",
     "research_tasks",
     "research_runs",

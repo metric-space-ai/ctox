@@ -344,7 +344,11 @@
         "ctox_queue_tasks",
         "research_tasks",
         "research_runs",
-        "research_notes"
+        "research_notes",
+        "knowledge_tables",
+        "documents",
+        "document_versions",
+        "document_blob_chunks"
       ],
       "source": "local",
       "core": false,

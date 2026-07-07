@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -118,4 +119,26 @@ test('empty dashboard keeps standard header and disabled workbench controls', ()
   assert.match(markup, /disabled/);
   assert.match(markup, /Quellensuche|Source search/);
   assert.doesNotMatch(markup, /Reload Diagnose|Collection|Sync-Diagnosen|rows/);
+});
+
+test('research module catalog grants knowledge and document collections', async () => {
+  const moduleJson = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
+  const registryJson = JSON.parse(await readFile(new URL('../registry.json', import.meta.url), 'utf8'));
+  const registryModule = registryJson.modules.find((item) => item.id === 'research');
+  const required = [
+    'business_commands',
+    'business_chats',
+    'ctox_queue_tasks',
+    'research_tasks',
+    'research_runs',
+    'research_notes',
+    'knowledge_tables',
+    'documents',
+    'document_versions',
+    'document_blob_chunks',
+  ];
+
+  assert.ok(registryModule, 'registry exposes the research module');
+  assert.deepEqual(moduleJson.collections, required);
+  assert.deepEqual(registryModule.collections, required);
 });
