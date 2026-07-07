@@ -335,9 +335,12 @@ pub(crate) struct RuntimeSettingsProjectionStamp {
     cache: RuntimeSettingsCacheStamp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceBrandingProjectionStamp {
     store: BusinessOsSqliteStoreStamp,
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4502,9 +4505,54 @@ pub fn workspace_branding_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub(crate) fn workspace_branding_projection_stamp(root: &Path) -> WorkspaceBrandingProjectionStamp {
+    let (row_count, latest_updated_at_ms, content_hash) = workspace_branding_content_stamp(root)
+        .unwrap_or_else(|_| (0, 0, String::new()));
     WorkspaceBrandingProjectionStamp {
         store: business_os_sqlite_store_stamp(&root.join("runtime").join(STORE_FILE)),
+        row_count,
+        latest_updated_at_ms,
+        content_hash,
     }
+}
+
+fn workspace_branding_content_stamp(root: &Path) -> anyhow::Result<(usize, i64, String)> {
+    let conn = open_store(root)?;
+    let mut statement = conn.prepare(
+        "SELECT name, light_json, dark_json, module_accents_json, updated_at_ms
+         FROM business_workspace_branding
+         ORDER BY id ASC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+        ))
+    })?;
+    let mut count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut hasher = Sha256::new();
+    for row in rows {
+        let (name, light, dark, module_accents, updated_at_ms) = row?;
+        count = count.saturating_add(1);
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(light.as_bytes());
+        hasher.update([0]);
+        hasher.update(dark.as_bytes());
+        hasher.update([0]);
+        hasher.update(module_accents.as_bytes());
+        hasher.update([0]);
+        hasher.update(updated_at_ms.to_le_bytes());
+    }
+    Ok((
+        count,
+        latest_updated_at_ms,
+        format!("{:x}", hasher.finalize()),
+    ))
 }
 
 pub fn save_workspace_branding_command(
