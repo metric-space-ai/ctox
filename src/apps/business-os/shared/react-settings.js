@@ -474,13 +474,6 @@ export async function openReactSettings({
           settingsState.runtimeSettings,
           runtimePayload,
         );
-        await saveRuntimeSettings(runtimePayload, {
-          commandBus,
-          db,
-          session,
-          sync,
-          waitForProjection: false,
-        });
         const payload = await startSubscriptionAuth({ commandBus, db, session, sync });
         if (!payload.auth_url && !payload.verification_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (payload.status === 'device_code' && payload.user_code) {
@@ -503,6 +496,19 @@ export async function openReactSettings({
         settingsState.commandStatus = payload.user_code
           ? `ChatGPT Geräte-Code: ${payload.user_code}. Danach Status neu laden.`
           : 'ChatGPT Login geöffnet. Danach Status neu laden.';
+        saveRuntimeSettings(runtimePayload, {
+          commandBus,
+          db,
+          session,
+          sync,
+          waitForProjection: false,
+        }).catch((error) => {
+          const message = `Runtime konnte nach Start des ChatGPT Logins nicht gespeichert werden: ${String(error?.message || error)}`;
+          settingsState.commandStatus = settingsState.subscriptionAuth?.userCode
+            ? `${settingsState.commandStatus} ${message}`
+            : message;
+          render();
+        });
         setTimeout(refreshRuntimeSettings, 3000);
         setTimeout(refreshRuntimeSettings, 9000);
         setTimeout(refreshRuntimeSettings, 30000);

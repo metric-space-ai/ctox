@@ -27,10 +27,17 @@ export async function getBusinessOsCapabilityToken() {
   if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityTokenCache.token;
   }
+  const injected = injectedBusinessOsCapabilityToken(now);
+  if (injected?.token) {
+    capabilityTokenCache = injected;
+    return capabilityTokenCache.token;
+  }
   try {
     const res = await fetch('/api/business-os/auth/capability', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -48,6 +55,25 @@ export async function getBusinessOsCapabilityToken() {
 }
 
 export const getCapabilityToken = getBusinessOsCapabilityToken;
+
+function injectedBusinessOsCapabilityToken(now = Date.now()) {
+  const candidates = [
+    globalThis.CTOX_BUSINESS_OS_SESSION,
+    globalThis.ctoxBusinessOsSession,
+    globalThis.ctoxBusinessOsLaunch?.session,
+    globalThis.CTOX_DESKTOP_SESSION,
+    globalThis.ctoxDesktop?.session,
+  ].filter((item) => item && typeof item === 'object');
+  for (const candidate of candidates) {
+    const token = String(candidate.capability_token || candidate.capabilityToken || '').trim();
+    if (!token) continue;
+    const expiresAtMs = Number(candidate.capability_expires_at_ms || candidate.capabilityExpiresAtMs || 0)
+      || now + 11 * 60 * 60 * 1000;
+    if (expiresAtMs <= now + 60_000) continue;
+    return { token, expiresAtMs };
+  }
+  return null;
+}
 
 async function dispatchRxdbCommand({ db, sync, session, command }) {
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
@@ -67,7 +93,12 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
     await flushSyncBridges(syncPlan.beforeCommand);
     await insertOrPatchCommandDocument(collection, commandId, doc);
     await flushSyncBridges(syncPlan.afterCommand);
-    return await waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
+    return await waitForAuthoritativeQueueProjection(
+      currentDb,
+      commandId,
+      commandWaitTimeoutMs(command),
+      syncPlan,
+    );
   } finally {
     await releaseSyncPlan(syncPlan);
   }
@@ -291,6 +322,7 @@ async function prepareCommandSync({ db, sync, command = null }) {
       beforeCommand: dependencyBridges,
       afterCommand,
       leases,
+      sync: currentSync,
     };
   } catch (error) {
     await releaseSyncLeases(leases);
@@ -398,11 +430,18 @@ function commandWaitTimeoutMs(command) {
   return Math.min(Math.max(parsed, 1000), 10 * 60 * 1000);
 }
 
-async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = COMMAND_ACCEPT_TIMEOUT_MS) {
+async function waitForAuthoritativeQueueProjection(
+  db,
+  commandId,
+  timeoutMs = COMMAND_ACCEPT_TIMEOUT_MS,
+  syncPlan = null,
+) {
   const commands = db?.raw?.business_commands;
   const queue = db?.raw?.ctox_queue_tasks;
   const deadline = Date.now() + timeoutMs;
   let lastCommand = null;
+  let nextRefreshAt = Date.now() + 1000;
+  let nextRestartAt = Date.now() + 5000;
   while (Date.now() < deadline) {
     lastCommand = await findDoc(commands, commandId);
     const taskId = String(lastCommand?.task_id || '').trim();
@@ -464,6 +503,16 @@ async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = CO
         transport: 'rxdb-command-bus',
       };
     }
+    if (Date.now() >= nextRefreshAt) {
+      nextRefreshAt = Date.now() + 1500;
+      await refreshProjectionBridges(syncPlan?.afterCommand);
+    }
+    if (Date.now() >= nextRestartAt) {
+      nextRestartAt = Date.now() + 10000;
+      const restarted = await restartProjectionCollections(syncPlan?.sync);
+      if (restarted.length && syncPlan) syncPlan.afterCommand = restarted;
+      await refreshProjectionBridges(syncPlan?.afterCommand);
+    }
     await delay(250);
   }
   throw commandError(
@@ -506,6 +555,52 @@ async function flushSyncBridge(bridge) {
       .catch(() => {}),
     delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
   ]);
+}
+
+async function refreshProjectionBridges(bridges) {
+  await Promise.all((bridges || []).map((bridge) => refreshProjectionBridge(bridge)));
+}
+
+async function refreshProjectionBridge(bridge) {
+  const state = syncBridgeFromHandle(bridge)?.state;
+  if (!state) return;
+  await Promise.race([
+    Promise.resolve()
+      .then(() => {
+        if (typeof state.pullFromRemotePeers === 'function') return state.pullFromRemotePeers();
+        return state.awaitInSync?.();
+      })
+      .catch(() => {}),
+    delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
+  ]);
+}
+
+async function restartProjectionCollections(sync) {
+  if (!sync) return [];
+  try {
+    if (typeof sync.restartCollections === 'function') {
+      const bridges = await sync.restartCollections(['business_commands', 'ctox_queue_tasks']);
+      return Array.isArray(bridges) ? bridges.filter(Boolean) : [];
+    }
+    const bridges = await Promise.all([
+      restartProjectionCollection(sync, 'business_commands'),
+      restartProjectionCollection(sync, 'ctox_queue_tasks'),
+    ]);
+    return bridges.filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function restartProjectionCollection(sync, collection) {
+  try {
+    if (typeof sync.restartCollection === 'function') {
+      return await sync.restartCollection(collection);
+    }
+    return await sync.startCollection?.(collection);
+  } catch {
+    return null;
+  }
 }
 
 function syncBridgeFromHandle(handle) {

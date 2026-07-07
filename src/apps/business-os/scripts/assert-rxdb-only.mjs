@@ -265,6 +265,8 @@ function assertBusinessOsServerHttpDataApisAreGated() {
 function assertSubscriptionAuthStartsThroughRxdbCommand() {
   const settingsPath = join(appRoot, 'shared/react-settings.js');
   const settings = readFileSync(settingsPath, 'utf8');
+  const commandBusPath = join(appRoot, 'shared/command-bus.js');
+  const commandBus = readFileSync(commandBusPath, 'utf8');
   if (!/commandType:\s*['"]ctox\.subscription_auth\.start['"]/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must start through business_commands');
   }
@@ -274,8 +276,19 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
   if (!/saveRuntimeSettings\(\s*runtimePayload,\s*\{[\s\S]*?waitForProjection:\s*false[\s\S]*?\}\s*\)/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must not wait for runtime projection before starting device auth');
   }
+  const startIndex = settings.indexOf('const payload = await startSubscriptionAuth({ commandBus, db, session, sync })');
+  const saveIndex = settings.indexOf('saveRuntimeSettings(runtimePayload, {', startIndex);
+  if (startIndex < 0 || saveIndex < 0 || saveIndex < startIndex) {
+    offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must request and render the device code before saving runtime settings');
+  }
   if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
+  }
+  if (!/credentials:\s*['"]same-origin['"]/.test(commandBus)) {
+    offenders.push('src/apps/business-os/shared/command-bus.js: capability-token fetch must include same-origin credentials for managed Business OS sessions');
+  }
+  if (!/injectedBusinessOsCapabilityToken/.test(commandBus)) {
+    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must accept a shell-injected capability token for non-HTTP data-plane launches');
   }
 }
 

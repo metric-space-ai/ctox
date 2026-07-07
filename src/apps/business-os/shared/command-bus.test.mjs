@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeCommandClientContext } from './command-bus.js';
+import { createCommandBus, normalizeCommandClientContext } from './command-bus.js';
 
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'command-bus.js'), 'utf8');
 
@@ -128,4 +128,71 @@ test('command bus reports missing queue projection as transient tracking state',
   assert.match(source, /status:\s*'projection_pending'/);
   assert.match(source, /transient:\s*true/);
   assert.match(source, /noch keinen echten Queue-Task/);
+});
+
+test('command bus actively pulls command projections while waiting', () => {
+  assert.match(source, /waitForAuthoritativeQueueProjection\(\s*currentDb,\s*commandId,[\s\S]*syncPlan/);
+  assert.match(source, /refreshProjectionBridges\(syncPlan\?\.afterCommand\)/);
+  assert.match(source, /pullFromRemotePeers/);
+  assert.match(source, /restartProjectionCollections\(syncPlan\?\.sync\)/);
+  assert.match(source, /restartCollections\(\['business_commands', 'ctox_queue_tasks'\]\)/);
+});
+
+test('command bus returns direct control-command result after projection pull', async () => {
+  let stored = null;
+  const collection = {
+    async insert(doc) {
+      stored = { ...doc };
+    },
+    findOne(id) {
+      return {
+        async exec() {
+          if (!stored || stored.id !== id) return null;
+          return { toJSON: () => ({ ...stored }) };
+        },
+      };
+    },
+  };
+  let pullCount = 0;
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection(collectionName) {
+        return {
+          bridge: {
+            state: {
+              async awaitInSync() {},
+              async pushToRemotePeers() {},
+              async pullFromRemotePeers() {
+                pullCount += 1;
+                if (collectionName === 'business_commands' && stored) {
+                  stored = {
+                    ...stored,
+                    status: 'completed',
+                    task_id: '',
+                    result: {
+                      status: 'device_code',
+                      user_code: 'T123-ABCDE',
+                      verification_url: 'https://auth.openai.com/codex/device',
+                    },
+                  };
+                }
+              },
+            },
+          },
+        };
+      },
+    },
+  });
+
+  const result = await bus.dispatch({
+    command_type: 'ctox.subscription_auth.start',
+    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
+    wait_timeout_ms: 2500,
+  });
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.task_id, '');
+  assert.equal(result.result.user_code, 'T123-ABCDE');
+  assert.ok(pullCount > 0);
 });

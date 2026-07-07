@@ -873,6 +873,26 @@ fn join_error(err: tokio::task::JoinError) -> RxError {
     )
 }
 
+fn is_business_command_server_owned_status(status: &str) -> bool {
+    let status = status.trim();
+    !status.is_empty() && status != "pending_sync"
+}
+
+fn is_stale_replicated_business_command_pending_write(
+    collection_name: &str,
+    context: &str,
+    write: &BulkWriteRow,
+    document_in_db: &Value,
+) -> bool {
+    collection_name == "business_commands"
+        && context == "replication-master-write"
+        && write.document.get("status").and_then(Value::as_str) == Some("pending_sync")
+        && document_in_db
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(is_business_command_server_owned_status)
+}
+
 struct TableNotifier {
     notify: Notify,
     generation: AtomicU64,
@@ -1665,6 +1685,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let json_schema = self.schema.clone();
         let primary_path = self.primary_path.clone();
         let table_name = self.table_name.clone();
+        let collection_name = self.collection_name.clone();
         let context = context.to_string();
 
         let (error, event_bulk, checkpoint): (
@@ -1744,6 +1765,40 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                         }
                     }
                 }
+                let mut server_owned_errors: Vec<crate::types::RxStorageWriteError> = Vec::new();
+                if collection_name == "business_commands" && context == "replication-master-write" {
+                    let mut kept = Vec::with_capacity(document_writes.len());
+                    for write in document_writes.drain(..) {
+                        let document_id = write
+                            .document
+                            .get(&primary_path)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        if let Some(in_db) = docs_in_db.get(&document_id) {
+                            if is_stale_replicated_business_command_pending_write(
+                                &collection_name,
+                                &context,
+                                &write,
+                                in_db,
+                            ) {
+                                server_owned_errors.push(crate::types::RxStorageWriteError {
+                                    status: 409,
+                                    is_error: true,
+                                    document_id,
+                                    write_row: write,
+                                    document_in_db: Some(in_db.clone()),
+                                    validation_errors: Vec::new(),
+                                    schema: None,
+                                    attachment_id: None,
+                                });
+                                continue;
+                            }
+                        }
+                        kept.push(write);
+                    }
+                    document_writes = kept;
+                }
                 let categorized = crate::rx_storage_helper::categorize_bulk_write_rows(
                     schema_has_attachments,
                     &primary_path,
@@ -1753,6 +1808,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 );
                 let mut error = categorized.errors;
                 error.extend(validation_errors);
+                error.extend(server_owned_errors);
 
                 for row in categorized.bulk_insert_docs.iter() {
                     insert_document(&tx, &table_name, &primary_path, &row.document)?;
@@ -2368,6 +2424,91 @@ mod tests {
             "_meta": { "lwt": lwt },
             "_attachments": {}
         })
+    }
+
+    fn business_command_params(schema: RxJsonSchema) -> RxStorageInstanceCreationParams {
+        let mut params = params(schema);
+        params.collection_name = "business_commands".to_string();
+        params
+    }
+
+    fn command_doc(id: &str, rev: &str, status: &str, lwt: f64, result: Option<Value>) -> Value {
+        let mut document = doc(id, rev, 1, false, lwt);
+        let object = document.as_object_mut().expect("command doc object");
+        object.insert("command_id".to_string(), Value::String(id.to_string()));
+        object.insert("status".to_string(), Value::String(status.to_string()));
+        if let Some(result) = result {
+            object.insert("result".to_string(), result);
+        }
+        document
+    }
+
+    #[tokio::test]
+    async fn replicated_business_command_pending_write_cannot_regress_server_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, business_command_params(test_schema()))
+            .await
+            .unwrap();
+        let completed = command_doc(
+            "cmd_device_code",
+            "2-completed",
+            "completed",
+            2.0,
+            Some(json!({ "user_code": "T26Z-KTVTF" })),
+        );
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: completed.clone(),
+                }],
+                "seed-completed-command",
+            )
+            .await
+            .unwrap();
+
+        let stale_pending = command_doc("cmd_device_code", "3-pending", "pending_sync", 3.0, None);
+        let response = instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: Some(completed.clone()),
+                    document: stale_pending,
+                }],
+                "replication-master-write",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.error.len(), 1);
+        assert_eq!(response.error[0].status, 409);
+        assert_eq!(
+            response.error[0]
+                .document_in_db
+                .as_ref()
+                .and_then(|doc| doc.get("status"))
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let stored = instance
+            .find_documents_by_id(&["cmd_device_code".to_string()], true)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(
+            stored[0].get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            stored[0]
+                .get("result")
+                .and_then(|result| result.get("user_code"))
+                .and_then(Value::as_str),
+            Some("T26Z-KTVTF")
+        );
     }
 
     #[tokio::test]
