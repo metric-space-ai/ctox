@@ -2559,7 +2559,7 @@ function trackingMessageAgeMs(message) {
 
 function isTransientCommandTrackingError(error) {
   const text = String(error?.message || error || '');
-  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|wartet noch auf die Rueckmeldung/i.test(text);
+  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
@@ -5771,5 +5771,6 @@ export const __businessChatTestInternals = Object.freeze({
   schedulerDelayMs,
   stageChatAttachments,
   syncTrackedMessages,
+  isTransientCommandTrackingError,
   withChatPersistenceTimeout,
 });

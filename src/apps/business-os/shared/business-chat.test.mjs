@@ -111,6 +111,15 @@ test('business chat persistence timeout is treated as volatile', async () => {
   assert.ok(Date.now() - startedAt < 1000);
 });
 
+test('business chat treats IDB closing during command tracking as transient', () => {
+  assert.equal(
+    __businessChatTestInternals.isTransientCommandTrackingError(
+      new Error("Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing."),
+    ),
+    true,
+  );
+});
+
 test('business chat keeps local state when remote chat persistence is volatile', async () => {
   const previousLocalStorage = globalThis.localStorage;
   const store = new Map();
