@@ -2518,7 +2518,7 @@ function trackingMessageAgeMs(message) {
 
 function isTransientCommandTrackingError(error) {
   const text = String(error?.message || error || '');
-  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|keinen echten Queue-Task/i.test(text);
+  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|wartet noch auf die Rueckmeldung/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {

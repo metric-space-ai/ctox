@@ -517,7 +517,7 @@ async function waitForAuthoritativeQueueProjection(
   }
   throw commandError(
     commandId,
-    'CTOX hat aus diesem RxDB Command noch keinen echten Queue-Task zurueckprojiziert.',
+    'CTOX wartet noch auf die Rueckmeldung. Bitte Status neu laden oder erneut versuchen.',
     { status: 'projection_pending', transient: true },
   );
 }

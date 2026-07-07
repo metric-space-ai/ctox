@@ -1548,7 +1548,7 @@ async function dispatchCvParserCommand(state, command) {
   } catch (error) {
     const message = String(error?.message || error || '');
     const commandId = error?.command_id || command.id || command.command_id || '';
-    if (commandId && message.includes('Queue-Task')) {
+    if (commandId && /wartet noch auf die Rueckmeldung/i.test(message)) {
       return {
         ok: true,
         command_id: commandId,

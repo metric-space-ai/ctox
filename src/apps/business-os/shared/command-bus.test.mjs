@@ -127,7 +127,8 @@ test('command bus scopes demand-only desktop chunk dependencies with leases', ()
 test('command bus reports missing queue projection as transient tracking state', () => {
   assert.match(source, /status:\s*'projection_pending'/);
   assert.match(source, /transient:\s*true/);
-  assert.match(source, /noch keinen echten Queue-Task/);
+  assert.match(source, /wartet noch auf die Rueckmeldung/);
+  assert.doesNotMatch(source, /noch keinen echten Queue-Task/);
 });
 
 test('command bus actively pulls command projections while waiting', () => {
