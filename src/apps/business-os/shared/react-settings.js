@@ -474,7 +474,13 @@ export async function openReactSettings({
           settingsState.runtimeSettings,
           runtimePayload,
         );
-        await saveRuntimeSettings(runtimePayload, { commandBus, db, session, sync });
+        await saveRuntimeSettings(runtimePayload, {
+          commandBus,
+          db,
+          session,
+          sync,
+          waitForProjection: false,
+        });
         const payload = await startSubscriptionAuth({ commandBus, db, session, sync });
         if (!payload.auth_url && !payload.verification_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (payload.status === 'device_code' && payload.user_code) {
@@ -2397,9 +2403,17 @@ async function loadRuntimeSettings({ db } = {}) {
   return data;
 }
 
-async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {
-  const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
-  await dispatchModuleCommand({
+async function saveRuntimeSettings(payload, {
+  commandBus,
+  db,
+  session,
+  sync,
+  waitForProjection = true,
+} = {}) {
+  const previousSettings = waitForProjection
+    ? await loadRuntimeSettings({ db }).catch(() => null)
+    : null;
+  const command = await dispatchModuleCommand({
     commandBus,
     db,
     session,
@@ -2410,6 +2424,7 @@ async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = 
     payload,
     source: 'business-os-settings',
   });
+  if (!waitForProjection) return command.result || command;
   return waitForRuntimeSettingsProjection(db, {
     payload,
     previousUpdatedAtMs: Number(previousSettings?.updated_at_ms || 0),

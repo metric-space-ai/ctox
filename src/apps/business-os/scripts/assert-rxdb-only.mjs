@@ -271,6 +271,9 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
   if (!/flow:\s*['"]device_code['"]/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: remote ChatGPT subscription auth must request device_code flow');
   }
+  if (!/saveRuntimeSettings\(\s*runtimePayload,\s*\{[\s\S]*?waitForProjection:\s*false[\s\S]*?\}\s*\)/.test(settings)) {
+    offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must not wait for runtime projection before starting device auth');
+  }
   if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
   }
