@@ -35,7 +35,8 @@ change is versioned and reversible.
 - **Peer-to-peer sync** — CTOX Sync Engine (`ctox-rxdb-js` in the browser,
   `rxdb-rs` in the daemon) replicates collections over WebRTC between browser
   IndexedDB and daemon SQLite. Signaling carries pairing only (SDP/ICE);
-  business data is never proxied over HTTP.
+  business data is never proxied over HTTP. It is a CTOX-owned fork reduced to
+  the WebRTC-peer scope: not upstream npm `rxdb`, and not a drop-in replacement.
 - **Runtime changes** — agents modify module code and SQLite schema in place
   through the daemon, without a build step or redeploy. Every patch is
   SHA-256-hashed and versioned, with one-click rollback.
