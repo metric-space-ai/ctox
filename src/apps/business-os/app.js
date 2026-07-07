@@ -44,7 +44,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260707-ninja-agent-e2e-v1';
+const APP_BUILD = '20260707-ninja-agent-e2e-active-catalog-v1';
 
 ensureShellStylesheets();
 
@@ -6639,6 +6639,7 @@ function moduleIconAssetPath(mod) {
 async function refreshModules() {
   const activeModuleId = state.activeModule?.id || '';
   const activeModuleRevisionBefore = activeModuleId ? moduleRevisionQuery(state.activeModule) : '';
+  const activeModuleSignatureBefore = activeModuleId ? moduleActivationSignature(state.activeModule) : '';
   const modules = await loadModules();
   const nextModules = modules.modules || [];
   const currentIds = state.modules.map(m => m.id).join(',');
@@ -6679,14 +6680,42 @@ async function refreshModules() {
   } else if (activeModuleId) {
     const refreshedActiveModule = state.modules.find((m) => m.id === activeModuleId);
     const activeModuleRevisionAfter = refreshedActiveModule ? moduleRevisionQuery(refreshedActiveModule) : '';
-    if (refreshedActiveModule && activeModuleRevisionAfter !== activeModuleRevisionBefore) {
-      console.info('[business-os] active module revision changed; remounting module', {
+    const activeModuleSignatureAfter = refreshedActiveModule ? moduleActivationSignature(refreshedActiveModule) : '';
+    if (
+      refreshedActiveModule
+      && (
+        activeModuleRevisionAfter !== activeModuleRevisionBefore
+        || activeModuleSignatureAfter !== activeModuleSignatureBefore
+      )
+    ) {
+      console.info('[business-os] active module catalog changed; remounting module', {
         module_id: activeModuleId,
-        before: activeModuleRevisionBefore,
-        after: activeModuleRevisionAfter,
+        revision_before: activeModuleRevisionBefore,
+        revision_after: activeModuleRevisionAfter,
       });
       await openModule(activeModuleId, { force: true });
     }
+  }
+}
+
+function moduleActivationSignature(mod) {
+  if (!mod || typeof mod !== 'object') return '';
+  try {
+    return JSON.stringify({
+      id: mod.id || '',
+      entry: mod.entry || '',
+      version: mod.version || '',
+      source: mod.source || '',
+      core: Boolean(mod.core),
+      install_scope: mod.install_scope || '',
+      launch_kind: mod.launch_kind || mod.layout?.launch_kind || '',
+      shell: mod.layout?.shell || '',
+      collections: Array.isArray(mod.collections)
+        ? mod.collections.map((name) => String(name || '').trim()).filter(Boolean).sort()
+        : [],
+    });
+  } catch {
+    return `${mod.id || ''}:${mod.entry || ''}:${mod.version || ''}`;
   }
 }
 
