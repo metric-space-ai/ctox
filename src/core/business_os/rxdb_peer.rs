@@ -24,6 +24,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
+use notify::event::{AccessKind, AccessMode, EventKind, MetadataKind, ModifyKind};
 use notify::Watcher;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
@@ -2954,6 +2955,30 @@ fn watch_event_from_drain(saw_event: bool) -> WatchEventWait {
     }
 }
 
+fn is_sync_relevant_watch_event(event: &notify::Event) -> bool {
+    match event.kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Data(_))
+        | EventKind::Modify(ModifyKind::Name(_))
+        | EventKind::Modify(ModifyKind::Any)
+        | EventKind::Modify(ModifyKind::Other) => true,
+        EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)) => false,
+        EventKind::Modify(ModifyKind::Metadata(_)) => true,
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        EventKind::Any | EventKind::Other => true,
+    }
+}
+
+fn forward_sync_relevant_watch_event(
+    tx: &mpsc::UnboundedSender<()>,
+    event: notify::Result<notify::Event>,
+) {
+    if event.as_ref().is_ok_and(is_sync_relevant_watch_event) {
+        let _ = tx.send(());
+    }
+}
+
 impl DesktopFileIndexWatch {
     fn new(scan_roots: &[DesktopFileScanRoot]) -> anyhow::Result<Option<Self>> {
         if scan_roots.is_empty() {
@@ -2964,8 +2989,8 @@ impl DesktopFileIndexWatch {
             .map(|root| root.path.clone())
             .collect::<Vec<_>>();
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut watcher = notify::recommended_watcher(move |_event| {
-            let _ = tx.send(());
+        let mut watcher = notify::recommended_watcher(move |event| {
+            forward_sync_relevant_watch_event(&tx, event);
         })
         .context("create desktop file index watcher")?;
         for root in &roots {
@@ -3023,8 +3048,8 @@ impl NotesSyncWatch {
         let notes_dir = business_os_dir.join("notes");
         let notes_dir_exists = notes_dir.is_dir();
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut watcher = notify::recommended_watcher(move |_event| {
-            let _ = tx.send(());
+        let mut watcher = notify::recommended_watcher(move |event| {
+            forward_sync_relevant_watch_event(&tx, event);
         })
         .context("create notes sync watcher")?;
         watcher
@@ -12475,6 +12500,40 @@ mod tests {
             notes_sync_sleep_interval(unchanged_ticks),
             Duration::from_secs(NOTES_SYNC_ACTIVE_INTERVAL_SECS)
         );
+    }
+
+    #[tokio::test]
+    async fn sync_watch_event_filter_drops_read_access_events() -> anyhow::Result<()> {
+        let read_event = notify::Event::new(EventKind::Access(AccessKind::Read));
+        let open_read_event =
+            notify::Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)));
+        let close_read_event =
+            notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)));
+        let close_write_event =
+            notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)));
+        let create_event = notify::Event::new(EventKind::Create(notify::event::CreateKind::File));
+
+        assert!(!is_sync_relevant_watch_event(&read_event));
+        assert!(!is_sync_relevant_watch_event(&open_read_event));
+        assert!(!is_sync_relevant_watch_event(&close_read_event));
+        assert!(is_sync_relevant_watch_event(&close_write_event));
+        assert!(is_sync_relevant_watch_event(&create_event));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        forward_sync_relevant_watch_event(&tx, Ok(read_event));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), rx.recv())
+                .await
+                .is_err(),
+            "read/access events must not wake the Business OS sync loop"
+        );
+
+        forward_sync_relevant_watch_event(&tx, Ok(close_write_event));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(25), rx.recv()).await?,
+            Some(())
+        );
+        Ok(())
     }
 
     #[tokio::test]
