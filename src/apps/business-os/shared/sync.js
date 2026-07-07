@@ -722,6 +722,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     push: isReadOnlyProjectionCollection(collection) ? null : { batchSize },
     retryTime: 5000,
     ctox: {
+      expectedNativePeerId: String(config?.native_peer_id || config?.nativePeerId || '').trim(),
       capabilityTokenProvider: getBusinessOsCapabilityToken,
       onPeerProtocol(info) {
         const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
