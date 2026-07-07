@@ -977,7 +977,7 @@ async function bootstrap() {
     });
   }
   wireShellWindowGestures();
-  setStatus(shellText('localWorkspace'));
+  setWorkspaceStatus();
 
   // Initialize the global ctox context menu
   initGlobalCtoxContextMenu();
@@ -986,7 +986,7 @@ async function bootstrap() {
   try {
     await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
     markBootTiming('shellVisibleMs');
-    setStatus(shellText('localWorkspace'));
+    setWorkspaceStatus();
     scheduleBusinessCompanions();
   } catch (error) {
     console.error('[business-os] module startup failed', error);
@@ -6768,7 +6768,12 @@ function startWorkspaceBrandingMonitor() {
   const coll = state.db?.collection?.(WORKSPACE_BRANDING_COLLECTION);
   if (!coll?.findOne) return;
   const applyBrandingDocument = (doc) => {
+    const previousStatus = els.status?.textContent?.trim() || '';
+    const previousWorkspaceName = workspaceStatusText();
     state.workspaceBranding = applyWorkspaceBranding(doc?.toJSON?.() || null);
+    if (isWorkspaceStatusText(previousStatus) || previousStatus === previousWorkspaceName) {
+      setWorkspaceStatus();
+    }
     postCurrentPreferencesToModule();
   };
   const loadCurrentBrandingDocument = () => coll
@@ -8345,6 +8350,25 @@ function isShellPackagedModule(mod) {
 
 function setStatus(text) {
   if (els.status) els.status.textContent = text;
+}
+
+function workspaceStatusText() {
+  const brandingName = state.workspaceBranding?.custom === true
+    ? String(state.workspaceBranding?.name || '').trim()
+    : '';
+  return brandingName || shellText('localWorkspace');
+}
+
+function setWorkspaceStatus() {
+  setStatus(workspaceStatusText());
+}
+
+function isWorkspaceStatusText(text) {
+  const value = String(text || '').trim();
+  if (!value) return true;
+  if (value === shellMessages.de.localWorkspace || value === shellMessages.en.localWorkspace) return true;
+  const brandingName = String(state.workspaceBranding?.name || '').trim();
+  return Boolean(brandingName && value === brandingName);
 }
 
 function setStartupProgress(percent, statusText) {
