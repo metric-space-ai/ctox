@@ -1253,6 +1253,7 @@ const CREDENTIAL_CATALOG: &[(&str, &str)] = &[
     ("CTOX_MISTRAL_API_KEY", "Mistral API key (CTOX-scoped)"),
     ("MINIMAX_API_KEY", "MiniMax API key"),
     ("CTOX_LLM_PROXY_API_KEY", "CTOX LLM proxy API key"),
+    ("CTOX_TURN_EDGE_KEY", "CTOX TURN edge key"),
     ("AZURE_FOUNDRY_API_KEY", "Azure AI Foundry API key"),
     ("DATABASE_URL", "Database connection URL"),
     ("SELLIFY_SQLSERVER_PASSWORD", "Sellify SQL Server password"),
@@ -1456,6 +1457,11 @@ mod tests {
     #[test]
     fn llm_proxy_api_key_is_treated_as_encrypted_credential() {
         assert!(is_secret_key("CTOX_LLM_PROXY_API_KEY"));
+    }
+
+    #[test]
+    fn turn_edge_key_is_treated_as_encrypted_credential() {
+        assert!(is_secret_key("CTOX_TURN_EDGE_KEY"));
     }
 
     #[test]

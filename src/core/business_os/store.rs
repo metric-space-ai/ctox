@@ -114,6 +114,11 @@ const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
 const BUSINESS_OS_TURN_SECRET_NAME: &str = "webrtc_turn_secret";
 const BUSINESS_OS_TURN_URL_KEY: &str = "CTOX_BUSINESS_OS_TURN_URL";
 const BUSINESS_OS_TURN_SECRET_NAME_KEY: &str = "CTOX_BUSINESS_OS_TURN_SECRET_NAME";
+const BUSINESS_OS_ICE_SERVERS_KEY: &str = "CTOX_BUSINESS_OS_ICE_SERVERS";
+const BUSINESS_OS_WEBRTC_ICE_SERVERS_KEY: &str = "CTOX_WEBRTC_ICE_SERVERS";
+const BUSINESS_OS_TURN_EDGE_URL_KEY: &str = "CTOX_TURN_EDGE_URL";
+const BUSINESS_OS_TURN_EDGE_KEY: &str = "CTOX_TURN_EDGE_KEY";
+const DEFAULT_TURN_EDGE_URL: &str = "https://ctox.dev/turn-ice";
 /// Lifetime of a minted ephemeral TURN credential (coturn use-auth-secret).
 const BUSINESS_OS_TURN_TTL_SECS: i64 = 3600;
 const BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME: &str = "backup_manifest_signing_key_v1";
@@ -1785,31 +1790,60 @@ pub fn rotate_sync_room_password(root: &Path) -> anyhow::Result<BusinessOsSyncCo
     sync_config(root)
 }
 
-fn ice_servers_config(_root: &Path) -> Vec<Value> {
-    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_ICE_SERVERS") {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed) {
-                let servers = items
-                    .into_iter()
-                    .filter_map(normalize_ice_server)
-                    .collect::<Vec<_>>();
-                if !servers.is_empty() {
-                    return servers;
-                }
-            }
-            let servers = trimmed
-                .split(',')
-                .map(str::trim)
-                .filter(|url| !url.is_empty())
-                .map(|url| serde_json::json!({ "urls": url }))
-                .collect::<Vec<_>>();
-            if !servers.is_empty() {
-                return servers;
-            }
+fn ice_servers_config(root: &Path) -> Vec<Value> {
+    for key in [
+        BUSINESS_OS_ICE_SERVERS_KEY,
+        BUSINESS_OS_WEBRTC_ICE_SERVERS_KEY,
+    ] {
+        if let Some(servers) = configured_ice_servers(root, key) {
+            return servers;
         }
     }
+    if let Some(servers) = managed_turn_edge_ice_servers(root) {
+        return servers;
+    }
     vec![serde_json::json!({ "urls": DEFAULT_STUN_URL })]
+}
+
+fn configured_ice_servers(root: &Path, key: &str) -> Option<Vec<Value>> {
+    if let Some(raw) = crate::inference::runtime_env::get_runtime_env_value(root, key) {
+        return parse_ice_servers(&raw);
+    }
+    let raw = std::env::var(key).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let _ = crate::inference::runtime_env::set_runtime_env_value(root, key, trimmed);
+    parse_ice_servers(trimmed)
+}
+
+fn parse_ice_servers(raw: &str) -> Option<Vec<Value>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed) {
+        let servers = items
+            .into_iter()
+            .filter_map(normalize_ice_server)
+            .collect::<Vec<_>>();
+        if !servers.is_empty() {
+            return Some(servers);
+        }
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(server) = normalize_ice_server(value) {
+            return Some(vec![server]);
+        }
+    }
+    let servers = trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|url| serde_json::json!({ "urls": url }))
+        .collect::<Vec<_>>();
+    (!servers.is_empty()).then_some(servers)
 }
 
 fn normalize_ice_server(value: Value) -> Option<Value> {
@@ -1858,6 +1892,72 @@ fn normalize_ice_server(value: Value) -> Option<Value> {
         );
     }
     Some(Value::Object(server))
+}
+
+fn managed_turn_edge_url(root: &Path) -> String {
+    if let Some(value) =
+        crate::inference::runtime_env::get_runtime_env_value(root, BUSINESS_OS_TURN_EDGE_URL_KEY)
+    {
+        return value;
+    }
+    if let Ok(value) = env::var(BUSINESS_OS_TURN_EDGE_URL_KEY) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            let _ = crate::inference::runtime_env::set_runtime_env_value(
+                root,
+                BUSINESS_OS_TURN_EDGE_URL_KEY,
+                trimmed,
+            );
+            return trimmed.to_owned();
+        }
+    }
+    DEFAULT_TURN_EDGE_URL.to_owned()
+}
+
+fn managed_turn_edge_key(root: &Path) -> Option<String> {
+    if let Ok(value) = env::var(BUSINESS_OS_TURN_EDGE_KEY) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            let _ = crate::secrets::set_credential(root, BUSINESS_OS_TURN_EDGE_KEY, trimmed);
+            return Some(trimmed.to_owned());
+        }
+    }
+    crate::secrets::get_credential(root, BUSINESS_OS_TURN_EDGE_KEY)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn managed_turn_edge_ice_servers(root: &Path) -> Option<Vec<Value>> {
+    let edge_key = managed_turn_edge_key(root)?;
+    let url = managed_turn_edge_url(root);
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .get(&url)
+        .set("X-Edge-Key", &edge_key)
+        .call()
+        .ok()?;
+    let payload = response.into_json::<Value>().ok()?;
+    let ice_servers = payload
+        .get("iceServers")
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("result")
+                .and_then(|value| value.get("iceServers"))
+                .cloned()
+        })
+        .unwrap_or(payload);
+    match ice_servers {
+        Value::Array(items) => {
+            let servers = items
+                .into_iter()
+                .filter_map(normalize_ice_server)
+                .collect::<Vec<_>>();
+            (!servers.is_empty()).then_some(servers)
+        }
+        value => normalize_ice_server(value).map(|server| vec![server]),
+    }
 }
 
 fn ice_diagnostics(ice_servers: &[Value]) -> Value {
@@ -2066,16 +2166,21 @@ pub fn turn_config_status(root: &Path) -> anyhow::Result<Value> {
     let url = business_os_turn_url(root);
     let secret_configured = business_os_turn_secret(root).is_some();
     let active = url.is_some() && secret_configured;
+    let managed_edge_key_configured = managed_turn_edge_key(root).is_some();
+    let ice_servers = ice_servers_config(root);
     Ok(serde_json::json!({
         "url": url,
         "secret_configured": secret_configured,
         "active": active,
+        "managed_edge_url": managed_turn_edge_url(root),
+        "managed_edge_key_configured": managed_edge_key_configured,
+        "ice_diagnostics": ice_diagnostics(&ice_servers),
         "credential_scheme": "coturn use-auth-secret (ephemeral, HMAC-SHA1 REST)",
         "credential_ttl_secs": BUSINESS_OS_TURN_TTL_SECS,
-        "note": if active {
+        "note": if active || managed_edge_key_configured {
             "TURN is served to peers via sync config ice_servers."
         } else {
-            "TURN inactive: peers fall back to STUN only. Set both --url and --secret."
+            "TURN inactive: peers fall back to STUN only. Set coturn --url/--secret or configure CTOX_TURN_EDGE_KEY."
         },
     }))
 }
@@ -4505,8 +4610,8 @@ pub fn workspace_branding_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub(crate) fn workspace_branding_projection_stamp(root: &Path) -> WorkspaceBrandingProjectionStamp {
-    let (row_count, latest_updated_at_ms, content_hash) = workspace_branding_content_stamp(root)
-        .unwrap_or_else(|_| (0, 0, String::new()));
+    let (row_count, latest_updated_at_ms, content_hash) =
+        workspace_branding_content_stamp(root).unwrap_or_else(|_| (0, 0, String::new()));
     WorkspaceBrandingProjectionStamp {
         store: business_os_sqlite_store_stamp(&root.join("runtime").join(STORE_FILE)),
         row_count,
@@ -35574,6 +35679,51 @@ mod tests {
         assert_eq!(
             config.ice_diagnostics.get("state").and_then(Value::as_str),
             Some("credentialed-turn")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ice_servers_config_reads_persisted_business_os_ice_json() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        crate::inference::runtime_env::set_runtime_env_value(
+            root,
+            BUSINESS_OS_ICE_SERVERS_KEY,
+            r#"[{"urls":["stun:stun.example.com:3478","turn:turn.example.com:3478"],"username":"u","credential":"p"}]"#,
+        )?;
+
+        let servers = ice_servers_config(root);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            servers[0]["urls"][1].as_str(),
+            Some("turn:turn.example.com:3478")
+        );
+        assert_eq!(servers[0]["username"].as_str(), Some("u"));
+        assert_eq!(
+            ice_diagnostics(&servers)
+                .get("state")
+                .and_then(Value::as_str),
+            Some("credentialed-turn")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ice_servers_config_reads_webrtc_csv_fallback_from_runtime_store() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        crate::inference::runtime_env::set_runtime_env_value(
+            root,
+            BUSINESS_OS_WEBRTC_ICE_SERVERS_KEY,
+            "stun:stun.example.com:3478,turn:turn.example.com:3478",
+        )?;
+
+        let servers = ice_servers_config(root);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(
+            servers[1]["urls"].as_str(),
+            Some("turn:turn.example.com:3478")
         );
         Ok(())
     }
