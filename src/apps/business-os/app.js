@@ -44,7 +44,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260707-managed-catalog-bootstrap-v1';
+const APP_BUILD = '20260707-update-check-gateway-guard-v1';
 
 ensureShellStylesheets();
 
@@ -6954,9 +6954,28 @@ function ctoxVersionTitle(platform, check) {
   return lines.join('\n');
 }
 
+function shouldPollCtoxUpdateCheck(platform) {
+  return sessionCanManageCtoxPlatform()
+    && Boolean(platform?.release_channel_configured)
+    && businessOsHttpControlPlaneAvailableForUpdates();
+}
+
+function businessOsHttpControlPlaneAvailableForUpdates() {
+  const host = String(window.location?.hostname || '').trim().toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') {
+    return true;
+  }
+  if (host.endsWith('.localhost')) return true;
+  // ctox.dev instance subdomains intentionally do not expose Business OS HTTP
+  // API paths. Browser data and operational state come through RxDB/WebRTC
+  // there, so polling the admin update endpoint only creates a visible 410.
+  if (host === 'ctox.dev' || host.endsWith('.ctox.dev')) return false;
+  return true;
+}
+
 function maybeRefreshCtoxUpdateCheck(platform) {
-  if (!sessionCanManageCtoxPlatform()) return;
-  if (!platform?.release_channel_configured) return;
+  if (!shouldPollCtoxUpdateCheck(platform)) return;
   if (state.ctoxUpdateCheckRunning || state.ctoxUpdateInstallRunning) return;
   const now = Date.now();
   if (now - state.ctoxUpdateCheckedAtMs < CTOX_UPDATE_CHECK_POLL_MS) return;
