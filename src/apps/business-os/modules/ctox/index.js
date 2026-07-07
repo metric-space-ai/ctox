@@ -18,6 +18,8 @@ const HARNESS_STALL_GRACE_MS = 90 * 1000;
 const HARNESS_WAITING_STATUSES = new Set(['queued', 'pending', 'accepted']);
 const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'drafting']);
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
+const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
+const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
 const CTOX_STYLE_BUILD = '20260706-kit-tokens1';
 
 const labels = {
@@ -1843,17 +1845,19 @@ function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de') {
 }
 
 function buildHarnessModel(data, flow) {
-  const tasks = applyHarnessFlowStatus(buildTaskList(data), flow);
+  const tasks = applyHarnessFlowStatus(buildTaskList(data), flow)
+    .filter(isTaskOverviewItemVisible);
   const activeTask = tasks.find((task) => normalizeCommandStatus(task.status) === 'running') || null;
   const activeRun = data.runs.find((run) => run.status === 'running') || null;
   const liveWork = Boolean(activeTask || activeRun);
-  const observedIds = observedPathFromFlow(flow);
+  const displayFlow = shouldDisplayHarnessFlow(flow, tasks) ? flow : emptyHarnessFlow('no_live_work');
+  const observedIds = observedPathFromFlow(displayFlow);
   const observedIdSet = new Set(observedIds);
   const tracePosition = new Map(observedIds.map((id, index) => [id, index]));
   const activeTraceIndex = Math.max(0, observedIds.length - 1);
   const activeNodeId = liveWork ? (observedIds.at(-1) || 'running') : (observedIds.at(-1) || 'queued');
   const activeIndex = Math.max(0, observedIds.lastIndexOf(activeNodeId));
-  const detailByNode = observedDetailsFromFlow(flow);
+  const detailByNode = observedDetailsFromFlow(displayFlow);
   const nodes = STATE_MACHINE_NODES.map((node) => {
     const observed = observedIdSet.has(node.id);
     const detail = observed ? detailByNode.get(node.id) : null;
@@ -1884,13 +1888,24 @@ function buildHarnessModel(data, flow) {
     activeNodeId,
     completedRuns: data.runs.filter((run) => run.status === 'completed'),
     tasks,
-    inboundChannels: buildInboundChannels(data),
+    inboundChannels: buildInboundChannels(tasks),
     recentTasks: buildRecentTasks(data),
     queueNow: data.queue.filter((item) => ['queued', 'running', 'leased', 'pending'].includes(item.status) || item.priority === 'urgent'),
     reviewItems: data.communications.filter((item) => item.status === 'review' || item.status === 'drafting'),
     blockedTickets: data.tickets.filter((ticket) => ticket.status === 'blocked' || ticket.status === 'review' || ticket.status === 'running'),
     openTickets: data.tickets.filter((ticket) => ticket.status !== 'done'),
   };
+}
+
+function shouldDisplayHarnessFlow(flowResult, tasks) {
+  if (!flowResult?.ok) return true;
+  const observedIds = observedPathFromFlow(flowResult);
+  const lastNode = observedIds.at(-1) || '';
+  if (!['passed', 'model-failed', 'infra-failed'].includes(lastNode)) return true;
+  const source = flowResult?.flow?.source || {};
+  const ids = new Set([source.message_key, source.work_id].filter(Boolean));
+  if (!ids.size) return false;
+  return tasks.some((task) => ids.has(task.id) || ids.has(task.taskId) || ids.has(task.commandId) || ids.has(task.runId));
 }
 
 function applyHarnessFlowStatus(tasks, flowResult) {
@@ -1976,11 +1991,9 @@ function buildTaskList(data) {
     .sort((left, right) => Date.parse(right.timestamp || right.createdAt || 0) - Date.parse(left.timestamp || left.createdAt || 0));
 }
 
-function buildInboundChannels(data) {
+function buildInboundChannels(tasks) {
   const channels = new Map();
-  for (const item of data.queue || []) addInboundChannel(channels, item);
-  for (const run of data.runs || []) addInboundChannel(channels, run);
-  for (const ticket of data.tickets || []) addInboundChannel(channels, ticket);
+  for (const item of tasks || []) addInboundChannel(channels, item);
   return Array.from(channels.values())
     .sort((left, right) => right.active - left.active || right.count - left.count || left.label.localeCompare(right.label));
 }
@@ -2718,11 +2731,27 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
 }
 
 function isQueueOverviewItemVisible(item) {
-  const status = normalizeCommandStatus(item?.status || item?.task_status || item?.routeStatus || item?.route_status);
-  if (['queued', 'pending', 'accepted', 'running', 'leased', 'review', 'drafting'].includes(status)) return true;
+  return isTaskOverviewItemVisible(item);
+}
+
+function isTaskOverviewItemVisible(item) {
+  const statuses = taskStatusCandidates(item);
+  if (statuses.some((status) => HARNESS_WAITING_STATUSES.has(status) || HARNESS_ACTIVE_STATUSES.has(status))) return true;
+  if (statuses.some((status) => HARNESS_PROBLEM_TERMINAL_STATUSES.has(status))) return false;
+  if (statuses.some((status) => HARNESS_SUCCESS_STATUSES.has(status))) return true;
   if (item?.priority === 'urgent') return true;
-  if (!['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked'].includes(status)) return true;
-  return false;
+  return !statuses.some((status) => HARNESS_TERMINAL_STATUSES.has(status));
+}
+
+function taskStatusCandidates(item = {}) {
+  return [
+    item.status,
+    item.task_status,
+    item.routeStatus,
+    item.route_status,
+    item.result?.status,
+    item.result?.task_status,
+  ].map(normalizeCommandStatus).filter(Boolean);
 }
 
 function browserExtractArtifactFromCommand(doc = {}) {
@@ -2851,7 +2880,7 @@ function normalizeCommandStatus(status) {
   if (value === 'handled') return 'handled';
   if (value === 'cancelled' || value === 'canceled') return 'cancelled';
   if (value === 'blocked' || value === 'stale_missing_native') return 'blocked';
-  if (value === 'failed') return 'failed';
+  if (['failed', 'fail', 'error', 'errored', 'model_failed', 'model-failed', 'infra_failed', 'infra-failed'].includes(value)) return 'failed';
   return value || 'queued';
 }
 
