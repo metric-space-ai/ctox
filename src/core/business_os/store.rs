@@ -11841,6 +11841,15 @@ pub fn record_command(
     }
     let conn = open_store(root)?;
     let observed_at_ms = now_ms() as i64;
+    if let Some(completed) = maybe_complete_documents_chat_markdown_edit_immediately(
+        root,
+        &conn,
+        &command_id,
+        &command,
+        observed_at_ms,
+    )? {
+        return Ok(completed);
+    }
     let queue_task = create_ctox_queue_task(root, &command_id, &command)?;
     let inbound_channel = command_inbound_channel(&command);
     let payload_json = serde_json::to_string(&command.payload)?;
@@ -11911,6 +11920,53 @@ pub fn record_command(
         task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
         task_status: queue_task.map(|task| normalize_queue_status(&task.route_status).to_string()),
     })
+}
+
+fn maybe_complete_documents_chat_markdown_edit_immediately(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    observed_at_ms: i64,
+) -> anyhow::Result<Option<CommandAccepted>> {
+    if command.module != "documents" || command.command_type != "business_os.chat.task" {
+        return Ok(None);
+    }
+    let mode = first_string_field(&command.payload, &["mode"])
+        .or_else(|| first_string_field(&command.client_context, &["mode"]))
+        .unwrap_or_default();
+    if matches!(mode.as_str(), "ask" | "app" | "question") {
+        return Ok(None);
+    }
+    let user_text = first_string_field(
+        &command.payload,
+        &["user_message", "instruction", "prompt", "message"],
+    )
+    .or_else(|| first_string_field(&command.client_context, &["user_message", "message"]))
+    .unwrap_or_default();
+    if markdown_append_section_from_instruction(&user_text).is_none() {
+        return Ok(None);
+    }
+
+    let payload_json = serde_json::to_string(&command.payload)?;
+    let context_json = serde_json::to_string(&command.client_context)?;
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, ?7)",
+        params![
+            command_id,
+            command.module.clone(),
+            command.command_type.clone(),
+            command.record_id.clone(),
+            payload_json,
+            context_json,
+            observed_at_ms
+        ],
+    )?;
+
+    let reply = "Die Markdown-Änderung wurde direkt als neue Dokumentversion persistiert.";
+    process_business_chat_reply(root, conn, command_id, command, None, reply).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
