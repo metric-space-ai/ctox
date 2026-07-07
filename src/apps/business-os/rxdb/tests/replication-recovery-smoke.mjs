@@ -162,6 +162,71 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
+// --- 2b. stale pending business commands absorb authoritative master ------
+{
+  const state = await makeState('business_commands');
+  const localPending = {
+    id: 'cmd-device-code',
+    command_id: 'cmd-device-code',
+    command_type: 'ctox.subscription_auth.start',
+    status: 'pending_sync',
+    updated_at_ms: 100,
+  };
+  const masterCompleted = {
+    ...localPending,
+    status: 'completed',
+    result: { status: 'device_code', user_code: 'T5IZ-W9AFF' },
+    updated_at_ms: 200,
+  };
+  let readCalls = 0;
+  let writeCalls = 0;
+  let absorbed = null;
+  state.collection.storageCollection.getChangedDocumentsSince = async () => {
+    readCalls += 1;
+    if (readCalls === 1) {
+      return {
+        documents: [localPending],
+        checkpoint: { lwt: 100, id: 'cmd-device-code' },
+        scanned: 1,
+        scanLimitReached: false,
+      };
+    }
+    return {
+      documents: [],
+      checkpoint: { lwt: 100, id: 'cmd-device-code' },
+      scanned: 0,
+      scanLimitReached: false,
+    };
+  };
+  state.collection.storageCollection.bulkWrite = async (docs, options = {}) => {
+    writeCalls += 1;
+    absorbed = { docs, options };
+    return { success: { 'cmd-device-code': docs[0] }, error: [] };
+  };
+  state.remoteProtocolForPeer = () => ({
+    peerSession: { sessionId: 'native-business-commands', role: 'ctox_instance' },
+  });
+  state.shared.peer = {
+    request: async (_peerId, method, params) => {
+      assert(method === 'masterWrite', `expected masterWrite, got ${method}`);
+      assert(params[0][0].newDocumentState.status === 'pending_sync', 'local pending command is pushed');
+      return [masterCompleted];
+    },
+  };
+  await state.pushToPeer('p1');
+  assert(writeCalls === 1, `authoritative command conflict should be absorbed once, got ${writeCalls}`);
+  assert(absorbed?.docs?.[0]?.status === 'completed', 'completed master command must be stored locally');
+  assert(
+    absorbed?.docs?.[0]?.result?.user_code === 'T5IZ-W9AFF',
+    'device code from master command must survive local absorption',
+  );
+  assert(
+    absorbed?.options?.replicationOrigin?.role,
+    'absorbed master command must be written as replication-origin state',
+  );
+  await state.cancel();
+}
+
 // --- 3. pull retry via retryTime ---------------------------------------------
 {
   const state = await makeState('pull-retry');

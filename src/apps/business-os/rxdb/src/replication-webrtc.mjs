@@ -1205,6 +1205,9 @@ class CtoxWebRtcReplicationState {
         rows = await this.absorbMasterStateIntoConflictRows(rows);
       }
       if (rows.length) {
+        rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+      }
+      if (rows.length) {
         throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
       }
       checkpoint = result?.checkpoint || checkpoint;
@@ -1267,6 +1270,25 @@ class CtoxWebRtcReplicationState {
       mergedRows.push({ newDocumentState: merged, assumedMasterState: row.assumedMasterState });
     }
     return mergedRows;
+  }
+
+  async absorbAuthoritativeCommandConflicts(rows, peerId) {
+    if (!rows.length || this.collection.name !== 'business_commands') return rows;
+    const masterDocs = [];
+    const unresolvedRows = [];
+    for (const row of rows) {
+      if (isStalePendingBusinessCommandConflict(row)) {
+        masterDocs.push(row.assumedMasterState);
+      } else {
+        unresolvedRows.push(row);
+      }
+    }
+    if (!masterDocs.length) return rows;
+    await this.collection.storageCollection.bulkWrite(masterDocs, {
+      replicationOrigin: this.replicationOriginForPeer(peerId),
+    });
+    await this.invalidateDemandCacheForRemoteWrite(masterDocs);
+    return unresolvedRows;
   }
 
   // ----- master handler (when CTOX picks the browser as fork's master) ----
@@ -1738,6 +1760,15 @@ function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
 function changeEventHasOnlyReplicationOriginWrites(event) {
   const docs = Object.values(event?.success || {});
   return docs.length > 0 && docs.every((doc) => Boolean(doc?._meta?.ctoxReplicationOrigin?.role));
+}
+
+function isStalePendingBusinessCommandConflict(row = {}) {
+  const local = row?.newDocumentState;
+  const master = row?.assumedMasterState;
+  if (!local || !master || typeof local !== 'object' || typeof master !== 'object') return false;
+  const localStatus = String(local.status || '').trim();
+  const masterStatus = String(master.status || '').trim();
+  return localStatus === 'pending_sync' && masterStatus && masterStatus !== 'pending_sync';
 }
 
 async function resolveCapabilityToken(ctox = {}) {
