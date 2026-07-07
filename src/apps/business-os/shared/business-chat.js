@@ -225,6 +225,7 @@ export function initBusinessChat({
     if (strip && stageInner && event.target.closest('[data-chat-strip]')) {
       root.classList.add('is-scrolling');
       alignChatWindows(root);
+      updateChatStripOverflowState(root);
       
       if (scrollTimeout) clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(() => {
@@ -249,6 +250,7 @@ export function initBusinessChat({
         root.classList.add('is-scrolling');
         targetStrip.scrollLeft += event.deltaY;
         alignChatWindows(root);
+        updateChatStripOverflowState(root);
 
         if (scrollTimeout) clearTimeout(scrollTimeout);
         scrollTimeout = setTimeout(() => {
@@ -289,6 +291,7 @@ export function initBusinessChat({
       root.classList.add('is-scrolling');
       dragStrip.scrollLeft = scrollLeft - walk;
       alignChatWindows(root);
+      updateChatStripOverflowState(root);
     }
   };
 
@@ -310,6 +313,7 @@ export function initBusinessChat({
 
   const handleResize = () => {
     alignChatWindows(root);
+    updateChatStripOverflowState(root);
   };
 
   root.addEventListener('click', handleRootClick, true);
@@ -649,10 +653,11 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       const chat = openChats.find(c => c.id === chatId);
       if (chat) {
         const taskState = getTaskState(chat);
-        const count = Array.isArray(chat.messages) ? chat.messages.length : 0;
-        const status = chat.lastTrackingId ? (taskState.toUpperCase()) : count ? `${count} Msg` : 'Leer';
+        const status = chatDockStatusText(chat, taskState);
 
-        chip.className = `ctox-chat-chip ${chat.id === activeChat?.id && !chat.minimized ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} ${!chat.minimized ? 'is-expanded' : ''}`;
+        chip.className = chatDockClassName(chat, activeChat?.id, taskState);
+        chip.setAttribute('aria-label', chatDockAriaLabel(chat, status));
+        chip.setAttribute('title', chatDockAriaLabel(chat, status));
         
         const smallEl = chip.querySelector('.ctox-chat-chip-copy small');
         if (smallEl) smallEl.textContent = status;
@@ -709,6 +714,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     // 4. Align position and scroll
     alignChatWindows(root);
     scrollActiveChatIntoView(root, state);
+    updateChatStripOverflowState(root);
     return; // Exit early without recreating DOM nodes!
   }
   // --- END OF IN-PLACE DOM UPDATE FAST-PATH ---
@@ -725,9 +731,14 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <button class="ctox-date-nav-btn" type="button" data-chat-date-prev aria-label="Vorheriger Tag">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
-        <div class="ctox-date-picker-trigger" role="button" tabindex="0" aria-label="Datum wählen">
-          <span class="ctox-date-label">${formatGermanDateLabel(selectedDate)}</span>
-          ${workload.total > 0 ? `<span class="ctox-date-workload-badge" title="${escapeAttr(workload.total)} Tasks">${formatCompactCount(workload.total)}</span>` : ''}
+        <div class="ctox-date-picker-trigger" role="button" tabindex="0" aria-label="${escapeAttr(chatDateAriaLabel(selectedDate, workload.total))}" title="${escapeAttr(chatDateAriaLabel(selectedDate, workload.total))}">
+          <span class="ctox-date-copy">
+            <span class="ctox-date-scope">Verlauf</span>
+            <span class="ctox-date-row">
+              <span class="ctox-date-label">${formatGermanDateLabel(selectedDate)}</span>
+              ${workload.total > 0 ? `<span class="ctox-date-workload-badge" title="${escapeAttr(workload.total)} Tasks">${formatCompactCount(workload.total)}</span>` : ''}
+            </span>
+          </span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
           <input type="date" class="ctox-date-native-picker" data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" tabindex="-1" aria-hidden="true" />
         </div>
@@ -1078,10 +1089,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 
   alignChatWindows(root);
   scrollActiveChatIntoView(root, state);
+  updateChatStripOverflowState(root);
   window.requestAnimationFrame(() => {
     root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
       win.classList.remove('no-left-transition');
     });
+    updateChatStripOverflowState(root);
   });
 }
 
@@ -1947,8 +1960,7 @@ function busyChatRow(chat, activeId) {
 
 function chatDockItem(chat, activeId) {
   const taskState = getTaskState(chat);
-  const count = Array.isArray(chat.messages) ? chat.messages.length : 0;
-  const status = chat.lastTrackingId ? (taskState.toUpperCase()) : count ? `${count} Msg` : 'Leer';
+  const status = chatDockStatusText(chat, taskState);
   const moduleName = chat.contextMeta?.module || 'ctox';
   
   let markHtml = '';
@@ -1968,12 +1980,18 @@ function chatDockItem(chat, activeId) {
         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
       </span>
     `;
+  } else if (taskState === 'scheduled') {
+    markHtml = `
+      <span class="ctox-chat-chip-mark is-scheduled" aria-hidden="true">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+      </span>
+    `;
   } else {
     markHtml = `<span class="ctox-chat-chip-mark" aria-hidden="true"></span>`;
   }
 
   return `
-    <button class="ctox-chat-chip ${chat.id === activeId && !chat.minimized ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} ${!chat.minimized ? 'is-expanded' : ''}" type="button" data-chat-focus="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}">
+    <button class="${chatDockClassName(chat, activeId, taskState)}" type="button" data-chat-focus="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" aria-label="${escapeAttr(chatDockAriaLabel(chat, status))}" title="${escapeAttr(chatDockAriaLabel(chat, status))}">
       ${markHtml}
       <span class="ctox-chat-chip-copy">
         <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
@@ -1981,6 +1999,35 @@ function chatDockItem(chat, activeId) {
       </span>
     </button>
   `;
+}
+
+function chatDockStatusText(chat, taskState = getTaskState(chat)) {
+  const labels = {
+    running: 'Aktiv',
+    queued: 'Queue',
+    success: 'Erledigt',
+    failed: 'Blocked',
+    scheduled: 'Geplant',
+  };
+  if (labels[taskState]) return labels[taskState];
+  const count = Array.isArray(chat.messages) ? chat.messages.length : 0;
+  return count ? `${count} Msg` : 'Leer';
+}
+
+function chatDockClassName(chat, activeId, taskState = getTaskState(chat)) {
+  return [
+    'ctox-chat-chip',
+    `is-task-${taskState}`,
+    chat.id === activeId && !chat.minimized ? 'is-active' : '',
+    chat.minimized ? 'is-minimized' : '',
+    !chat.minimized ? 'is-expanded' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function chatDockAriaLabel(chat, status) {
+  const title = String(chat?.title || 'CTOX').trim() || 'CTOX';
+  const visibility = chat?.minimized ? 'minimiert' : 'geöffnet';
+  return `${title}: ${status}, ${visibility}`;
 }
 
 function activeChatFor(state, openChats = state.chats.filter((chat) => chat.open !== false)) {
@@ -2034,6 +2081,7 @@ function scrollActiveChatIntoView(root, state) {
   const activeChip = Array.from(root.querySelectorAll('[data-chat-focus]'))
     .find((node) => node.dataset.chatFocus === state.activeChatId);
   activeChip?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  updateChatStripOverflowState(root);
   
   // Auto-scroll messages list to bottom for all open/expanded windows
   root.querySelectorAll('[data-chat-id]:not(.is-minimized)').forEach((node) => {
@@ -2042,6 +2090,16 @@ function scrollActiveChatIntoView(root, state) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
   });
+}
+
+function updateChatStripOverflowState(root) {
+  const strip = root?.querySelector?.('[data-chat-strip]');
+  if (!strip) return;
+  const maxScroll = Math.max(0, strip.scrollWidth - strip.clientWidth);
+  const scrollable = maxScroll > 1;
+  strip.classList.toggle('is-scrollable', scrollable);
+  strip.classList.toggle('is-at-start', !scrollable || strip.scrollLeft <= 1);
+  strip.classList.toggle('is-at-end', !scrollable || strip.scrollLeft >= maxScroll - 1);
 }
 
 function trackButtonLabel(message) {
@@ -2527,6 +2585,13 @@ function formatGermanDateLabel(dateStr) {
     'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'
   ];
   return `${d}. ${shortMonths[m - 1]} '${String(y).slice(-2)}`;
+}
+
+function chatDateAriaLabel(dateStr, total = 0) {
+  const label = formatGermanDateLabel(dateStr);
+  const count = Number(total) || 0;
+  const countLabel = count === 1 ? '1 Task' : `${formatCompactCount(count)} Tasks`;
+  return `Chat-Verlauf: ${label}, ${countLabel}`;
 }
 
 function shiftSelectedDate(state, days) {
@@ -3042,10 +3107,11 @@ function installChatStyles() {
       font: inherit;
     }
     .ctox-chat-dock {
+      --ctox-date-pill-width: 146px;
       pointer-events: auto;
       grid-row: 2;
       display: grid;
-      grid-template-columns: 88px 115px 34px;
+      grid-template-columns: 88px var(--ctox-date-pill-width) 34px;
       align-items: center;
       gap: 8px;
       min-width: 0;
@@ -3064,13 +3130,13 @@ function installChatStyles() {
       border-color: color-mix(in srgb, var(--line) 55%, transparent);
     }
     .ctox-chat-dock.has-visible-chats {
-      grid-template-columns: 88px 115px minmax(136px, auto) 34px;
+      grid-template-columns: 88px var(--ctox-date-pill-width) minmax(136px, auto) 34px;
     }
     .ctox-chat-dock.has-nav {
-      grid-template-columns: 88px 115px 28px minmax(0, auto) 28px 34px;
+      grid-template-columns: 88px var(--ctox-date-pill-width) 28px minmax(0, auto) 28px 34px;
     }
     .ctox-chat-dock.has-many-chats {
-      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      grid-template-columns: 88px var(--ctox-date-pill-width) 28px minmax(0, 1fr) 28px 34px;
       width: 100%;
     }
     .ctox-chat-dock.has-one-chat .ctox-chat-strip {
@@ -3078,7 +3144,7 @@ function installChatStyles() {
     }
     .ctox-chat-dock.has-few-chats .ctox-chat-strip {
       width: auto;
-      max-width: min(760px, calc(100vw - 420px));
+      max-width: min(760px, calc(100vw - 456px));
     }
     .ctox-chat-dock.has-many-chats .ctox-chat-strip {
       width: auto;
@@ -3087,11 +3153,11 @@ function installChatStyles() {
       display: inline-flex;
       align-items: center;
       justify-content: space-between;
-      height: 30px;
-      width: 115px;
-      min-width: 115px;
+      height: 34px;
+      width: var(--ctox-date-pill-width);
+      min-width: var(--ctox-date-pill-width);
       border: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
-      border-radius: 15px;
+      border-radius: 10px;
       background: color-mix(in srgb, var(--surface) 15%, transparent);
       padding: 0 2px;
       box-sizing: border-box;
@@ -3106,8 +3172,8 @@ function installChatStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       border: none;
       border-radius: 50%;
       background: transparent;
@@ -3128,11 +3194,11 @@ function installChatStyles() {
       position: relative;
       display: flex;
       align-items: center;
-      justify-content: center;
-      gap: 4px;
+      justify-content: space-between;
+      gap: 5px;
       flex: 1;
-      height: 22px;
-      border-radius: 11px;
+      height: 28px;
+      border-radius: 8px;
       color: var(--text);
       cursor: pointer;
       min-width: 0;
@@ -3142,9 +3208,29 @@ function installChatStyles() {
     .ctox-date-picker-trigger:hover {
       background: color-mix(in srgb, var(--surface-2) 40%, transparent);
     }
+    .ctox-date-copy {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+      line-height: 1;
+    }
+    .ctox-date-scope {
+      color: var(--muted);
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .ctox-date-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
     .ctox-date-label {
       font-size: 10px;
-      font-weight: 600;
+      font-weight: 760;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3176,7 +3262,7 @@ function installChatStyles() {
       bottom: 38px;
       left: 50%;
       transform: translateX(-50%);
-      width: 115px;
+      width: var(--ctox-date-pill-width);
       height: 1px;
       opacity: 0;
       pointer-events: none;
@@ -3190,7 +3276,7 @@ function installChatStyles() {
       max-width: none;
     }
     .ctox-chat-dock.is-collapsed {
-      grid-template-columns: 88px 115px;
+      grid-template-columns: 88px var(--ctox-date-pill-width);
       width: auto;
     }
     .ctox-chat-dock.is-collapsed .ctox-chat-nav,
@@ -3281,9 +3367,37 @@ function installChatStyles() {
       overscroll-behavior-x: contain;
       scrollbar-width: none;
       position: relative;
+      padding-bottom: 2px;
+      transition: box-shadow 0.2s ease;
     }
     .ctox-chat-strip::-webkit-scrollbar {
       display: none;
+    }
+    .ctox-chat-strip.is-scrollable {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--accent) 45%, transparent) transparent;
+    }
+    .ctox-chat-strip.is-scrollable:not(.is-at-start):not(.is-at-end) {
+      box-shadow:
+        12px 0 14px -16px color-mix(in srgb, var(--accent) 82%, transparent) inset,
+        -12px 0 14px -16px color-mix(in srgb, var(--accent) 82%, transparent) inset;
+    }
+    .ctox-chat-strip.is-scrollable:not(.is-at-start).is-at-end {
+      box-shadow: 12px 0 14px -16px color-mix(in srgb, var(--accent) 82%, transparent) inset;
+    }
+    .ctox-chat-strip.is-scrollable.is-at-start:not(.is-at-end) {
+      box-shadow: -12px 0 14px -16px color-mix(in srgb, var(--accent) 82%, transparent) inset;
+    }
+    .ctox-chat-strip.is-scrollable::-webkit-scrollbar {
+      display: block;
+      height: 4px;
+    }
+    .ctox-chat-strip.is-scrollable::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .ctox-chat-strip.is-scrollable::-webkit-scrollbar-thumb {
+      border-radius: 99px;
+      background: color-mix(in srgb, var(--accent) 38%, transparent);
     }
     .ctox-chat-overflow-chip {
       flex: 0 0 78px;
@@ -3666,6 +3780,26 @@ function installChatStyles() {
       --accent: #f43f5e !important;
       --accent-soft: rgba(244, 63, 94, 0.12) !important;
     }
+    .ctox-chat-chip.is-task-running {
+      --status-color: var(--accent);
+      --status-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+    }
+    .ctox-chat-chip.is-task-queued {
+      --status-color: #f59e0b;
+      --status-soft: rgba(245, 158, 11, 0.14);
+    }
+    .ctox-chat-chip.is-task-success {
+      --status-color: #10b981;
+      --status-soft: rgba(16, 185, 129, 0.13);
+    }
+    .ctox-chat-chip.is-task-failed {
+      --status-color: #ef4444;
+      --status-soft: rgba(239, 68, 68, 0.14);
+    }
+    .ctox-chat-chip.is-task-scheduled {
+      --status-color: #38bdf8;
+      --status-soft: rgba(56, 189, 248, 0.13);
+    }
     .ctox-chat-chip:hover {
       transform: translateY(-1.5px);
       background: color-mix(in srgb, var(--surface) 35%, transparent);
@@ -3679,12 +3813,22 @@ function installChatStyles() {
       opacity: 0.75 !important;
       transform: none !important;
     }
+    .ctox-chat-chip.is-minimized:not(.is-task-idle) {
+      border-color: color-mix(in srgb, var(--status-color) 46%, transparent) !important;
+      background: color-mix(in srgb, var(--status-color) 12%, var(--surface)) !important;
+      color: color-mix(in srgb, var(--text) 82%, var(--status-color)) !important;
+      opacity: 0.94 !important;
+    }
     .ctox-chat-chip.is-minimized:hover {
       border-color: color-mix(in srgb, var(--line) 45%, transparent) !important;
       background: color-mix(in srgb, var(--surface-2) 40%, transparent) !important;
       color: var(--text) !important;
       opacity: 0.98 !important;
       transform: translateY(-1px) !important;
+    }
+    .ctox-chat-chip.is-minimized:not(.is-task-idle):hover {
+      border-color: color-mix(in srgb, var(--status-color) 64%, transparent) !important;
+      background: color-mix(in srgb, var(--status-color) 18%, var(--surface-2)) !important;
     }
     .ctox-chat-chip.is-expanded:not(.is-active) {
       border-color: color-mix(in srgb, var(--accent) 60%, transparent);
@@ -3722,14 +3866,18 @@ function installChatStyles() {
     .ctox-chat-chip.is-active .ctox-chat-chip-mark {
       transform: scale(1.1);
     }
-    .ctox-chat-chip.is-minimized .ctox-chat-chip-mark {
+    .ctox-chat-chip.is-minimized.is-task-idle .ctox-chat-chip-mark {
       transform: scale(0.9) !important;
       background: color-mix(in srgb, var(--muted) 50%, transparent) !important;
       box-shadow: none !important;
       animation: none !important;
     }
-    .ctox-chat-chip.is-minimized .ctox-chip-spinner {
+    .ctox-chat-chip.is-minimized.is-task-idle .ctox-chip-spinner {
       display: none !important;
+    }
+    .ctox-chat-chip:not(.is-task-idle) .ctox-chat-chip-copy small {
+      color: var(--status-color);
+      font-weight: 820;
     }
 
     /* State-colored marks */
@@ -3768,6 +3916,11 @@ function installChatStyles() {
       box-shadow: 0 0 6px #ef4444;
       animation: ctoxPulseFailedDot 1.5s infinite ease-in-out;
     }
+    .ctox-chat-chip-mark.is-scheduled {
+      background: #38bdf8 !important;
+      box-shadow: 0 0 6px #38bdf8;
+      color: #061018;
+    }
     @keyframes ctoxPulseFailedDot {
       0% { transform: scale(1); }
       50% { transform: scale(1.2); }
@@ -3799,7 +3952,7 @@ function installChatStyles() {
       pointer-events: none;
       grid-row: 1;
       display: grid;
-      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      grid-template-columns: 88px var(--ctox-date-pill-width) 28px minmax(0, 1fr) 28px 34px;
       align-items: end;
       gap: 8px;
       box-sizing: border-box;

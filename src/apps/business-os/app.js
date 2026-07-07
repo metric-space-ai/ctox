@@ -59,6 +59,7 @@ const SLOW_MODULE_SYNC_RETRY_MS = 60000;
 const BUSINESS_DB_NAME = 'ctox_business_os_v11';
 const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
+const CTOX_UPDATE_CHECK_POLL_MS = 30 * 60 * 1000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
@@ -194,6 +195,11 @@ const state = {
   // `deferredSyncModules` / `criticalSyncWarmupPromise` /
   // `backgroundModuleWorkScheduled` are intentionally gone.
   ctoxHealth: null,
+  ctoxUpdateCheck: null,
+  ctoxUpdateCheckRunning: false,
+  ctoxUpdateCheckedAtMs: 0,
+  ctoxUpdateInstallRunning: false,
+  ctoxUpdateInstallStatus: '',
   fileIntegrityDiagnostics: [],
   ctoxHealthTimer: null,
   eventBus: null,
@@ -606,6 +612,12 @@ const shellMessages = {
     ctoxStopped: 'CTOX Service ist gerade nicht verfügbar.',
     ctoxStatusUnavailable: 'CTOX Status ist gerade nicht verfügbar.',
     ctoxLastError: 'Letzter Fehler',
+    ctoxUpdateAvailable: 'Update verfügbar',
+    ctoxUpdateInstall: 'Update installieren',
+    ctoxUpdateChecking: 'Update wird geprüft',
+    ctoxUpdateInstalling: 'Update läuft',
+    ctoxUpdateConfirm: 'CTOX Update jetzt installieren? Der lokale Dienst wird währenddessen neu gestartet.',
+    ctoxUpdateStarted: 'CTOX Update wurde gestartet.',
     desktop: 'Desktop',
     showDesktop: 'Desktop anzeigen',
     closeModule: 'Schließen',
@@ -716,6 +728,12 @@ const shellMessages = {
     ctoxStopped: 'CTOX service is unavailable right now.',
     ctoxStatusUnavailable: 'CTOX status is unavailable right now.',
     ctoxLastError: 'Last error',
+    ctoxUpdateAvailable: 'Update available',
+    ctoxUpdateInstall: 'Install update',
+    ctoxUpdateChecking: 'Checking update',
+    ctoxUpdateInstalling: 'Update running',
+    ctoxUpdateConfirm: 'Install the CTOX update now? The local service will restart during the update.',
+    ctoxUpdateStarted: 'CTOX update started.',
     desktop: 'Desktop',
     showDesktop: 'Show desktop',
     closeModule: 'Close',
@@ -811,6 +829,7 @@ const shellMessages = {
 const els = {
   status: document.querySelector('[data-status-text]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
+  ctoxVersion: document.querySelector('[data-ctox-version]'),
   tabs: document.querySelector('[data-module-tabs]'),
   host: document.querySelector('[data-module-host]'),
   leftContent: document.querySelector('[data-left-content]'),
@@ -1671,6 +1690,7 @@ function wireShellActions() {
     event.stopPropagation();
     openSettingsDrawer({ initialTab: 'runtime' });
   });
+  els.ctoxVersion?.querySelector('[data-ctox-update-button]')?.addEventListener('click', installCtoxUpdateFromShell);
   els.accountButton?.addEventListener('click', openAccountDrawer);
   document.addEventListener('change', (event) => {
     const control = event.target;
@@ -1679,6 +1699,7 @@ function wireShellActions() {
       applyShellLanguage(control.value);
       syncHeaderControls();
       renderShellCtoxWarning(state.ctoxHealth);
+      renderShellCtoxVersion(state.ctoxHealth);
       postCurrentPreferencesToModule();
     } else if (control.matches('[data-theme-select]')) {
       applyShellTheme(control.value);
@@ -3750,7 +3771,12 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
     state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
     return;
   }
-  const doc = await collection.findOne('layout').exec();
+  const doc = await withStartupTimeout(
+    collection.findOne('layout').exec(),
+    1500,
+    null,
+    'desktop_layout read',
+  );
   const layout = doc?.toJSON?.() || null;
   if (Array.isArray(layout?.taskbar_pins)) {
     state.taskbarPins = normalizeTaskbarPins(layout.taskbar_pins, state.modules, { compactLegacyAllPins: true });
@@ -3758,7 +3784,24 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
     state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
   }
   writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
-  await syncTaskbarPinsToDesktopLayout();
+  await withStartupTimeout(syncTaskbarPinsToDesktopLayout(), 1500, null, 'desktop_layout write');
+}
+
+async function withStartupTimeout(promise, timeoutMs, fallback, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = window.setTimeout(() => {
+          console.warn(`[business-os] Startup ${label} timed out after ${timeoutMs}ms; continuing with fallback.`);
+          resolve(fallback);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
 }
 
 async function syncTaskbarPinsToDesktopLayout() {
@@ -6752,6 +6795,7 @@ async function refreshShellCtoxHealth() {
     const status = await loadShellCtoxHealth();
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
+    renderShellCtoxVersion(status);
   } catch (error) {
     const status = {
       ok: false,
@@ -6760,6 +6804,7 @@ async function refreshShellCtoxHealth() {
     };
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
+    renderShellCtoxVersion(status);
   }
 }
 
@@ -6799,6 +6844,161 @@ function renderShellCtoxWarning(status) {
   els.ctoxWarning.textContent = shellText('ctoxNotWorking');
   els.ctoxWarning.title = problem;
   document.body.dataset.ctoxOperational = 'blocked';
+}
+
+function renderShellCtoxVersion(status = state.ctoxHealth) {
+  const container = els.ctoxVersion;
+  if (!container) return;
+  if (!sessionCanManageCtoxPlatform()) {
+    container.hidden = true;
+    container.removeAttribute('title');
+    return;
+  }
+  const platform = status?.runtime_settings?.platform || null;
+  const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  if (!version) {
+    container.hidden = true;
+    container.removeAttribute('title');
+    return;
+  }
+  maybeRefreshCtoxUpdateCheck(platform);
+  const check = currentCtoxUpdateCheck();
+  const updateAvailable = check?.update_available === true;
+  const latest = platformDisplayVersion(check?.latest_release || '');
+  const labelEl = container.querySelector('[data-ctox-version-label]');
+  const button = container.querySelector('[data-ctox-update-button]');
+  const parts = [`CTOX ${version}`];
+  if (state.ctoxUpdateInstallRunning) {
+    parts.push(shellText('ctoxUpdateInstalling'));
+  } else if (updateAvailable) {
+    parts.push(latest ? `${latest} ${shellText('ctoxUpdateAvailable')}` : shellText('ctoxUpdateAvailable'));
+  } else if (state.ctoxUpdateCheckRunning) {
+    parts.push(shellText('ctoxUpdateChecking'));
+  }
+  if (labelEl) labelEl.textContent = parts.join(' · ');
+  container.title = ctoxVersionTitle(platform, check);
+  container.hidden = false;
+  if (button) {
+    button.hidden = !updateAvailable;
+    button.disabled = state.ctoxUpdateInstallRunning;
+    button.textContent = state.ctoxUpdateInstallRunning
+      ? shellText('ctoxUpdateInstalling')
+      : shellText('ctoxUpdateInstall');
+    button.title = latest
+      ? `${shellText('ctoxUpdateInstall')}: ${latest}`
+      : shellText('ctoxUpdateInstall');
+  }
+}
+
+function sessionCanManageCtoxPlatform(session = state.session) {
+  const user = session?.user || {};
+  return Boolean(
+    session?.authenticated
+    && (user.is_admin || roleCanManage(user.role || '')),
+  );
+}
+
+function platformDisplayVersion(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.startsWith('v') ? raw : `v${raw}`;
+}
+
+function currentCtoxUpdateCheck() {
+  return state.ctoxUpdateCheck?.check || null;
+}
+
+function ctoxVersionTitle(platform, check) {
+  const lines = [];
+  const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  if (version) lines.push(`Version: ${version}`);
+  if (platform?.current_release) lines.push(`Release: ${platform.current_release}`);
+  if (platform?.install_mode) lines.push(`Install: ${platform.install_mode}`);
+  if (check?.latest_release) lines.push(`Latest: ${check.latest_release}`);
+  if (check?.published_at) lines.push(`Published: ${check.published_at}`);
+  if (state.ctoxUpdateInstallStatus) lines.push(state.ctoxUpdateInstallStatus);
+  return lines.join('\n');
+}
+
+function maybeRefreshCtoxUpdateCheck(platform) {
+  if (!sessionCanManageCtoxPlatform()) return;
+  if (!platform?.release_channel_configured) return;
+  if (state.ctoxUpdateCheckRunning || state.ctoxUpdateInstallRunning) return;
+  const now = Date.now();
+  if (now - state.ctoxUpdateCheckedAtMs < CTOX_UPDATE_CHECK_POLL_MS) return;
+  state.ctoxUpdateCheckRunning = true;
+  state.ctoxUpdateCheckedAtMs = now;
+  fetchBusinessOsControlJson('/api/business-os/ctox/update/check')
+    .then((payload) => {
+      state.ctoxUpdateCheck = payload;
+      state.ctoxUpdateCheckedAtMs = Date.now();
+    })
+    .catch((error) => {
+      state.ctoxUpdateCheck = {
+        ok: false,
+        error: error?.message || String(error),
+        check: null,
+      };
+    })
+    .finally(() => {
+      state.ctoxUpdateCheckRunning = false;
+      renderShellCtoxVersion(state.ctoxHealth);
+    });
+}
+
+async function installCtoxUpdateFromShell(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (!sessionCanManageCtoxPlatform() || state.ctoxUpdateInstallRunning) return;
+  if (!confirm(shellText('ctoxUpdateConfirm'))) return;
+  state.ctoxUpdateInstallRunning = true;
+  state.ctoxUpdateInstallStatus = shellText('ctoxUpdateInstalling');
+  renderShellCtoxVersion(state.ctoxHealth);
+  try {
+    const payload = await fetchBusinessOsControlJson('/api/business-os/ctox/update/apply', {
+      method: 'POST',
+      body: '{}',
+    });
+    state.ctoxUpdateInstallStatus = payload?.status === 'started'
+      ? shellText('ctoxUpdateStarted')
+      : (payload?.status || shellText('ctoxUpdateStarted'));
+    setStatus(state.ctoxUpdateInstallStatus);
+  } catch (error) {
+    state.ctoxUpdateInstallRunning = false;
+    state.ctoxUpdateInstallStatus = error?.message || String(error);
+    setStatus(state.ctoxUpdateInstallStatus, true);
+  } finally {
+    renderShellCtoxVersion(state.ctoxHealth);
+  }
+}
+
+async function fetchBusinessOsControlJson(url, options = {}) {
+  const headers = {
+    Accept: 'application/json',
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body,
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || text || `HTTP ${response.status}`);
+  }
+  if (payload && payload.ok === false) {
+    throw new Error(payload.error || payload.message || 'CTOX control-plane request failed.');
+  }
+  return payload || { ok: true };
 }
 
 function shellCtoxHealthProblem(status) {

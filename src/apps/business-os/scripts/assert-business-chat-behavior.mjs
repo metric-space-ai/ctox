@@ -124,6 +124,8 @@ try {
     expect(m.navCount === 0, 'one chat must not show prev/next controls');
     expect(m.stripCount === 1, 'one chat renders one strip');
     expect(m.headerNewCount === 0, 'window header must not contain new-chat plus button');
+    expect(m.dateScopeText === 'Verlauf', `date control must explain chat history scope, got ${m.dateScopeText}`);
+    expect(m.dateTriggerLabel.includes('Chat-Verlauf'), `date trigger needs an accessible history label, got ${m.dateTriggerLabel}`);
     expect(m.dockWidth < 520, `one-chat dock should stay compact, got ${m.dockWidth}`);
   });
 
@@ -151,6 +153,7 @@ try {
     expect(m.chipCount === 8, 'eight chats render eight chips');
     expect(m.navCount === 2, 'eight chats show strip nav');
     expect(m.stripHasOverflow === true, 'eight-chat strip must be horizontally scrollable');
+    expect(m.stripClasses.includes('is-scrollable'), `overflowing strip must expose scroll affordance class, got ${m.stripClasses}`);
     expect(m.dockWidth < m.viewportWidth * 0.75, `eight-chat dock should avoid premature full width, ratio ${m.dockRatio}`);
   });
 
@@ -240,6 +243,17 @@ try {
     expect(after.minimizedWindowCount === 0, `minimized chats must not stay rendered as gray windows, got ${after.minimizedWindowCount}`);
     expect(after.minimizedChipCount === 1, `minimized chat must remain available as a chip, got ${after.minimizedChipCount}`);
     expect(after.renderedWindowIds.join(',') === 'chat_1', `remaining rendered window should be chat_1, got ${after.renderedWindowIds.join(',')}`);
+  });
+
+  await scenario(page, 'minimized-running-chip-keeps-status', { count: 6, activeIndex: 0, groupedResearch: true }, async () => {
+    const after = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-minimize]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('[data-chat-focus="chat_0"]')?.classList.contains('is-minimized'));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'minimized-running-chip-after-click', metrics: after });
+    expect(after.minimizedRunningChipCount === 1, `minimized running chat must keep running status styling, got ${after.minimizedRunningChipCount}`);
+    expect(after.minimizedRunningStatusText === 'Aktiv', `running minimized chat should show Aktiv, got ${after.minimizedRunningStatusText}`);
   });
 
   await scenario(page, 'keyboard-focus-skips-hidden-and-inactive-controls', { count: 4, activeIndex: 1 }, async () => {
@@ -735,6 +749,9 @@ function harnessHtml() {
         dockWidth: dockRect.width,
         dockRatio: dockRect.width / window.innerWidth,
         dockClasses: dock?.className || '',
+        stripClasses: strip?.className || '',
+        dateScopeText: document.querySelector('.ctox-date-scope')?.textContent || '',
+        dateTriggerLabel: document.querySelector('.ctox-date-picker-trigger')?.getAttribute('aria-label') || '',
         stripCount: document.querySelectorAll('[data-chat-strip]').length,
         navCount: document.querySelectorAll('[data-chat-prev], [data-chat-next]').length,
         dockNewCount: document.querySelectorAll('[data-chat-dock] > [data-chat-new]').length,
@@ -761,6 +778,8 @@ function harnessHtml() {
         stripScrollWidth: strip?.scrollWidth || 0,
         stripHasOverflow: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
         minimizedChipCount: document.querySelectorAll('.ctox-chat-chip.is-minimized').length,
+        minimizedRunningChipCount: document.querySelectorAll('.ctox-chat-chip.is-minimized.is-task-running').length,
+        minimizedRunningStatusText: document.querySelector('.ctox-chat-chip.is-minimized.is-task-running .ctox-chat-chip-copy small')?.textContent || '',
         minimizedWindowCount: document.querySelectorAll('.ctox-chat-window.is-minimized').length,
         inactiveFocusable: inactiveControls.filter((node) => node.tabIndex >= 0 && isVisible(node)).length,
         inactiveVisibleActions: inactiveActions.filter(isVisible).length,

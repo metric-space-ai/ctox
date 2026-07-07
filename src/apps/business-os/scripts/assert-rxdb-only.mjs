@@ -198,6 +198,8 @@ function contentForForbiddenHttpScan(file, content) {
   if (rel === 'src/apps/business-os/app.js') {
     allow(
       /['"]\/api\/business-os\/sync\/config['"]/g,
+      /['"]\/api\/business-os\/ctox\/update\/check['"]/g,
+      /['"]\/api\/business-os\/ctox\/update\/apply['"]/g,
     );
   }
 
@@ -206,6 +208,8 @@ function contentForForbiddenHttpScan(file, content) {
       /"\/api\/business-os\/mcp\/connect-info"/g,
       /"\/api\/business-os\/ctox\/subscription-auth\/start"/g,
       /"\/api\/business-os\/ctox\/subscription-auth\/callback"/g,
+      /"\/api\/business-os\/ctox\/update\/check"/g,
+      /"\/api\/business-os\/ctox\/update\/apply"/g,
     );
   }
 

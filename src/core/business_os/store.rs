@@ -345,6 +345,7 @@ struct RuntimeSettingsCacheStamp {
     runtime_config: BusinessOsSqliteStoreStamp,
     secrets: BusinessOsSqliteStoreStamp,
     service: RuntimeSettingsServiceStamp,
+    update_state: BusinessOsFileChangeStamp,
 }
 type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
@@ -5228,6 +5229,13 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let queue_health = harness_queue_health(root);
     let communication_channels = communication_channel_health(root);
     let web_stack = web_stack_projection(root, &env_map);
+    let platform = crate::install::business_os_platform_status(root).unwrap_or_else(|error| {
+        serde_json::json!({
+            "ok": false,
+            "version": "",
+            "error": error.to_string(),
+        })
+    });
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
         "id": "runtime-settings",
@@ -5238,6 +5246,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "queue_health": queue_health,
         "communication_channels": communication_channels,
         "web_stack": web_stack,
+        "platform": platform,
         "runtime": {
             "source": source,
             "provider": provider,
@@ -5295,6 +5304,7 @@ fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
         runtime_config: business_os_sqlite_store_stamp(&runtime.join("ctox-runtime.sqlite3")),
         secrets: business_os_sqlite_store_stamp(&runtime.join("ctox-secrets.sqlite3")),
         service: runtime_settings_service_stamp(&runtime.join("ctox_service.pid")),
+        update_state: business_os_file_change_stamp(&runtime.join("update_state.json")),
     }
 }
 
@@ -37617,6 +37627,21 @@ mod tests {
             !serde_json::to_string(web_stack)?.contains("\"capture_script\":"),
             "browser capture script bodies must stay out of the RxDB projection"
         );
+        assert!(
+            runtime_settings
+                .pointer("/platform/version")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .len()
+                > 0,
+            "runtime settings project CTOX platform version for admin shell chrome"
+        );
+        assert_eq!(
+            runtime_settings
+                .pointer("/platform/managed_install")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
         Ok(())
     }
 
@@ -37675,6 +37700,29 @@ mod tests {
             first,
             runtime_settings_projection_stamp(temp.path()),
             "runtime config writes must change the runtime settings projection stamp"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_projection_stamp_tracks_update_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let first = runtime_settings_projection_stamp(temp.path());
+
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_dir)?;
+        fs::write(
+            runtime_dir.join("update_state.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "last_check_at": "2026-07-07T00:00:00Z",
+                "last_error": null
+            }))?,
+        )?;
+
+        assert_ne!(
+            first,
+            runtime_settings_projection_stamp(temp.path()),
+            "update state writes must invalidate the runtime settings projection stamp"
         );
         Ok(())
     }

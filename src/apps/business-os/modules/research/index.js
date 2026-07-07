@@ -1651,37 +1651,62 @@ function renderMeasurementsTable() {
   return `
     <table class="ctox-table" style="table-layout: fixed; width: 100%;">
       <colgroup>
-        <col style="width: 25%;" />
         <col style="width: 15%;" />
-        <col style="width: 15%;" />
-        <col style="width: 15%;" />
-        <col style="width: 15%;" />
-        <col style="width: 15%;" />
+        <col style="width: 11%;" />
+        <col style="width: 11%;" />
+        <col style="width: 10%;" />
+        <col style="width: 10%;" />
+        <col style="width: 11%;" />
+        <col style="width: 11%;" />
+        <col style="width: 11%;" />
+        <col style="width: 10%;" />
       </colgroup>
       <thead>
         <tr>
-          <th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th>
-          <th>Prop</th>
-          <th class="is-num">RPM</th>
-          <th class="is-num">Axial N</th>
-          <th class="is-num">Radial N</th>
-          <th>Method</th>
+          ${measurementHeader('Quelle', 'Quell-ID der Messreihe oder des extrahierten Datensatzes.')}
+          ${measurementHeader('Propeller', 'Originale Propellerangabe als Durchmesser x Steigung. 9x5 bedeutet 9 Zoll Durchmesser und 5 Zoll Steigung.')}
+          ${measurementHeader('Durchmesser (in)', 'Propeller-Durchmesser in Zoll, aus Angaben wie 9x5 separat extrahiert.', true)}
+          ${measurementHeader('Steigung (in)', 'Propeller-Steigung in Zoll, aus Angaben wie 9x5 separat extrahiert.', true)}
+          ${measurementHeader('RPM', 'Drehzahl in Umdrehungen pro Minute, ohne Tausendertrennzeichen formatiert.', true)}
+          ${measurementHeader('Axial (N)', 'Axiale Kraft in Newton. Bei Propellerdaten ist dies in der Regel der gemessene Schub.', true)}
+          ${measurementHeader('Radial (N)', 'Lagerrelevante radiale Ersatzkraft in Newton, sofern aus Drehmoment und Geometrie ableitbar.', true)}
+          ${measurementHeader('Torque (Nm)', 'Drehmoment beziehungsweise Moment in Newtonmeter aus dem Messdatensatz.', true)}
+          ${measurementHeader('Methode', 'Konfidenz oder Ableitungsverfahren der Messzeile.')}
         </tr>
       </thead>
       <tbody>
         ${state.measurementRows.slice(0, 120).map((row) => `
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
-            <td>${escapeHtml([row.prop_diameter_in, row.prop_pitch_in].filter(isPresent).join(' x '))}</td>
-            <td class="is-num">${formatNumber(row.rpm)}</td>
-            <td class="is-num">${formatNumber(row.axial_load_N ?? row.thrust_N)}</td>
-            <td class="is-num">${formatNumber(row.radial_load_N)}</td>
+            <td>${escapeHtml(propellerSize(row))}</td>
+            <td class="is-num">${formatMeasurementNumber(row.prop_diameter_in)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.prop_pitch_in)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.rpm, 0)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.axial_load_N ?? row.thrust_N)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.radial_load_N)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.torque_Nm)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
-        `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
+        `).join('') || `<tr><td colspan="9">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
       </tbody>
     </table>
   `;
+}
+
+function measurementHeader(label, help, numeric = false) {
+  return `
+    <th class="${numeric ? 'is-num' : ''}" title="${escapeHtml(help)}">
+      <span>${escapeHtml(label)}</span>
+    </th>
+  `;
+}
+
+function propellerSize(row) {
+  const explicit = firstString(row, ['propeller_size', 'prop_size', 'prop']);
+  if (explicit) return explicit.replace(/\s*[xX×]\s*/g, ' x ');
+  const diameter = formatMeasurementNumber(row.prop_diameter_in);
+  const pitch = formatMeasurementNumber(row.prop_pitch_in);
+  return [diameter, pitch].filter(isPresent).join(' x ');
 }
 
 function renderKnowledgeTables(task) {
@@ -3039,6 +3064,16 @@ function formatNumber(value) {
   const next = Number(value);
   if (!Number.isFinite(next)) return '0';
   return next.toLocaleString('de-DE', { maximumFractionDigits: Math.abs(next) >= 100 ? 0 : 2 });
+}
+
+function formatMeasurementNumber(value, maximumFractionDigits = 2) {
+  if (!isPresent(value)) return '';
+  const next = Number(value);
+  if (!Number.isFinite(next)) return '';
+  return next.toLocaleString('de-DE', {
+    useGrouping: false,
+    maximumFractionDigits,
+  });
 }
 
 function shortLabel(value) {

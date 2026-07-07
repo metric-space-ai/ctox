@@ -19,6 +19,7 @@ use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
@@ -306,6 +307,32 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/ctox/subscription-auth/callback") => {
             let url_raw = request.url().to_owned();
             handle_subscription_auth_callback(request, root, &url_raw)?;
+        }
+        (Method::Get, "/api/business-os/ctox/update/check") => {
+            let session = request_session(root, &request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                match crate::install::business_os_update_check(root) {
+                    Ok(payload) => respond_json_value_no_store(request, payload)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/ctox/update/apply") => {
+            let session = request_session(root, &request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                match start_business_os_update_apply(root) {
+                    Ok(payload) => respond_json_value_no_store(request, payload)?,
+                    Err(error) => respond_status(request, 500, &error.to_string())?,
+                }
+            }
         }
         (Method::Post, "/api/business-os/ctox/tasks/update") => {
             let session = request_session(root, &request);
@@ -708,6 +735,10 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
+            // Admin-triggered release control-plane: release metadata check
+            // and update subprocess launch. No Business OS records flow here.
+            | "/api/business-os/ctox/update/check"
+            | "/api/business-os/ctox/update/apply"
             // §9.1 auth/control-plane: issues a capability token bound to the
             // server-authenticated session. No Business OS records flow here.
             | "/api/business-os/auth/capability"
@@ -721,6 +752,47 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
             // CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS is set (smoke runs only).
             | "/api/business-os/sync/native-peer/restart"
     )
+}
+
+fn start_business_os_update_apply(root: &Path) -> anyhow::Result<Value> {
+    let runtime_dir = root.join("runtime");
+    fs::create_dir_all(&runtime_dir).with_context(|| {
+        format!(
+            "failed to create Business OS update log directory {}",
+            runtime_dir.display()
+        )
+    })?;
+    let log_path = runtime_dir.join(format!(
+        "business-os-update-{}.log",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+    ));
+    let stdout = fs::File::create(&log_path)
+        .with_context(|| format!("failed to create {}", log_path.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .with_context(|| format!("failed to clone {}", log_path.display()))?;
+    let exe = std::env::current_exe().context("failed to resolve current CTOX executable")?;
+    let mut child = std::process::Command::new(exe)
+        .args(["update", "apply", "--latest"])
+        .env("CTOX_ROOT", root.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .context("failed to start CTOX update subprocess")?;
+    let pid = child.id();
+    thread::spawn(move || {
+        if let Err(err) = child.wait() {
+            eprintln!("[business-os] CTOX update subprocess wait failed: {err}");
+        }
+    });
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "started",
+        "pid": pid,
+        "log_path": log_path,
+        "command": ["ctox", "update", "apply", "--latest"],
+    }))
 }
 
 fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {

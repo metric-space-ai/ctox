@@ -16,9 +16,10 @@ const dateNavigationBlock = source.match(/root\.querySelector\('\[data-chat-date
 expect(dockRule, 'Missing .ctox-chat-dock CSS rule');
 expectIncludes(
   dockRule,
-  'grid-template-columns: 88px 115px 34px;',
+  'grid-template-columns: 88px var(--ctox-date-pill-width) 34px;',
   'Default chat dock must stay compact for zero visible chats'
 );
+expectIncludes(dockRule, '--ctox-date-pill-width: 146px;', 'Date history control must have enough width for a visible label');
 expectIncludes(dockRule, 'width: max-content;', 'Default chat dock must shrink to its controls');
 rejectIncludes(dockRule, 'justify-self: start;', 'Chat dock must not shrink-wrap to its content');
 rejectIncludes(dockRule, 'minmax(0, max-content)', 'Chat tab strip must not use content-sized columns');
@@ -27,7 +28,7 @@ rejectMatch(dockRule, /(?:^|\n)\s*width:\s*100%;/, 'Default chat dock must not s
 expect(manyChatsDockRule, 'Missing .ctox-chat-dock.has-many-chats CSS rule');
 expectIncludes(
   manyChatsDockRule,
-  'grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;',
+  'grid-template-columns: 88px var(--ctox-date-pill-width) 28px minmax(0, 1fr) 28px 34px;',
   'Many-chat dock must reserve flexible full-width space for scrollable tabs'
 );
 expectIncludes(manyChatsDockRule, 'width: 100%;', 'Only many-chat dock should span the available shell width');
@@ -56,6 +57,15 @@ expectIncludes(
   'Side-by-side layout must not override minimized window hiding'
 );
 expectIncludes(source, 'chatOverflowItem(hiddenChatCount', 'Busy days need an overflow affordance');
+expectIncludes(source, 'function updateChatStripOverflowState(root)', 'Scrollable chat strips need explicit overflow state classes');
+expectIncludes(source, '.ctox-chat-strip.is-scrollable::-webkit-scrollbar', 'Scrollable chat strips need a visible scrollbar hint');
+expectIncludes(source, '.ctox-chat-strip.is-scrollable:not(.is-at-start):not(.is-at-end)', 'Scrollable chat strips need edge overflow shadows');
+expectIncludes(source, 'chatDockClassName(chat, activeChat?.id, taskState)', 'Chat chips must use shared state classes during in-place updates');
+expectIncludes(source, 'function chatDockStatusText(chat, taskState = getTaskState(chat))', 'Chat chips need user-facing status labels');
+expectIncludes(source, '`is-task-${taskState}`', 'Chat chips must include task-state classes');
+expectIncludes(source, '.ctox-chat-chip.is-minimized:not(.is-task-idle)', 'Minimized non-idle chats must keep visible status styling');
+expectIncludes(source, 'function chatDateAriaLabel(dateStr, total = 0)', 'Date history control needs a clear accessible label');
+expectIncludes(source, '<span class="ctox-date-scope">Verlauf</span>', 'Date control must visibly explain it is chat history');
 expectIncludes(source, 'chatBusyPanel({ chats: openChats, selectedDate, state })', 'Busy days need a filterable list panel');
 expectIncludes(source, 'data-chat-list-filter="source"', 'Busy-day list must include source filtering');
 expectIncludes(source, 'data-chat-list-filter="group"', 'Busy-day list must include grouping control');

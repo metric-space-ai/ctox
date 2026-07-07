@@ -435,6 +435,38 @@ pub fn version_info(root: &Path) -> Result<VersionInfo> {
     })
 }
 
+pub fn business_os_platform_status(root: &Path) -> Result<serde_json::Value> {
+    let layout = InstallLayout::resolve(root)?;
+    let manifest = load_install_manifest(&layout.install_manifest_path())?;
+    let update = load_update_state(&layout.update_state_path())?;
+    let release_channel = resolve_release_channel(&layout, manifest.as_ref());
+    Ok(json!({
+        "ok": true,
+        "version": build_version(),
+        "release_tag": build_release_tag(),
+        "install_mode": if layout.managed() { "managed" } else { "workspace" },
+        "managed_install": layout.managed(),
+        "active_root": layout.active_root,
+        "install_root": layout.install_root,
+        "state_root": layout.state_root,
+        "cache_root": layout.cache_root,
+        "current_release": manifest.as_ref().and_then(|entry| entry.current_release.clone()),
+        "previous_release": manifest.as_ref().and_then(|entry| entry.previous_release.clone()),
+        "release_channel_configured": release_channel.is_some(),
+        "release_channel": release_channel.map(|entry| entry.config),
+        "update": update,
+    }))
+}
+
+pub fn business_os_update_check(root: &Path) -> Result<serde_json::Value> {
+    let check = check_remote_update(root)?;
+    Ok(json!({
+        "ok": true,
+        "checked_at": now_rfc3339(),
+        "check": check,
+    }))
+}
+
 // `handle_engine_command` was retired alongside `tools/model-runtime/`.
 // The Candle-based ctox-engine binary no longer exists; CTOX now calls
 // directly into per-model crates under src/inference/models/<model>/.
