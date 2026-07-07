@@ -57,6 +57,8 @@ mod memories;
 mod test_support;
 mod threads;
 
+const HARNESS_STATE_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
 // "Partition" is the retention bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
@@ -133,7 +135,7 @@ async fn open_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(HARNESS_STATE_SQLITE_BUSY_TIMEOUT)
         .log_statements(LevelFilter::Off);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
