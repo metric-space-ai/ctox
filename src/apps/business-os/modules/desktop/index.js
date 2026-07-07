@@ -27,6 +27,9 @@ const FALLBACK_LABELS = {
     emptyDesktop: 'Keine Icons auf dem Desktop.',
     openInModule: 'Öffnen',
     chatWithCtox: 'Mit CTOX chatten',
+    askCtox: 'Frage stellen',
+    workWithData: 'Daten ändern',
+    modifyApp: 'App ändern',
     chatContextLabel: 'Desktop-Kontext',
     pinToTaskbar: 'An Bar anheften',
     unpinFromTaskbar: 'Von Bar lösen',
@@ -53,6 +56,9 @@ const FALLBACK_LABELS = {
     emptyDesktop: 'No icons on the desktop.',
     openInModule: 'Open',
     chatWithCtox: 'Chat with CTOX',
+    askCtox: 'Ask question',
+    workWithData: 'Change data',
+    modifyApp: 'Modify app',
     chatContextLabel: 'Desktop context',
     pinToTaskbar: 'Pin to bar',
     unpinFromTaskbar: 'Unpin from bar',
@@ -119,6 +125,7 @@ export async function mount(ctx) {
 
   const cleanups = [];
   let disposed = false;
+  const mountedAtMs = Date.now();
 
   // Wire up the live clock and date widget
   const timeEl = refs.root.querySelector('[data-widget-time]');
@@ -258,6 +265,19 @@ export async function mount(ctx) {
       };
     }
     if (ready >= total) {
+      return {
+        hidden: true,
+        state: 'idle',
+        ready,
+        total,
+        title: '',
+        detail: '',
+      };
+    }
+    const pendingStatuses = new Set(pending.map((item) => String(item.status || '').toLowerCase()));
+    const hasActiveSyncWork = ['connecting', 'reconnecting', 'running'].some((status) => pendingStatuses.has(status));
+    const withinStartupGrace = Date.now() - mountedAtMs < 8000;
+    if (!hasActiveSyncWork && !withinStartupGrace) {
       return {
         hidden: true,
         state: 'idle',
@@ -486,7 +506,9 @@ export async function mount(ctx) {
         icon: pinned ? '−' : '+',
         action: safeAction(() => togglePinnedTarget(doc.target_module, !pinned)),
       },
-      { label: t('chatWithCtox', 'Mit CTOX chatten'), icon: '◆', action: safeAction(() => chatWithCtoxAboutIcon(doc)) },
+      { label: t('askCtox', 'Frage stellen'), icon: '?', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'ask')) },
+      { label: t('workWithData', 'Daten ändern'), icon: '◇', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'data')) },
+      { label: t('modifyApp', 'App ändern'), icon: '✦', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'app')) },
       { label: t('renameIcon', 'Icon umbenennen'), icon: '✎', action: safeAction(() => renameIcon(doc)) },
       { type: 'separator' },
       { label: t('deleteIcon', 'Icon entfernen'), icon: '−', action: safeAction(() => deleteIcon(doc.id)) },
@@ -539,11 +561,12 @@ export async function mount(ctx) {
     else ctx.unpinFromTaskbar?.(targetId);
   }
 
-  function chatWithCtoxAboutIcon(doc) {
+  function chatWithCtoxAboutIcon(doc, mode = 'ask') {
     const label = doc.label || titleForModule(doc.target_module) || doc.id || 'Desktop object';
     const targetKind = doc.target_type || launcher.kindOf(doc.target_module) || 'module';
     const targetModule = doc.target_module || '';
     const recordId = doc.target_record_id || '';
+    const agentMode = desktopAgentModeConfig(mode, label);
     const iconContext = {
       id: doc.id || '',
       label,
@@ -557,30 +580,76 @@ export async function mount(ctx) {
       targetModule ? `Ziel: ${targetKind} "${targetModule}".` : '',
       recordId ? `Record: ${recordId}.` : '',
     ].filter(Boolean).join(' ');
-    const draft = `Bitte hilf mir mit "${label}". `;
     const detail = {
-      title: `CTOX · ${label}`,
-      draft,
+      title: agentMode.title,
+      draft: agentMode.draft,
       context_text: contextText,
       context_label: t('chatContextLabel', 'Desktop-Kontext'),
-      module: 'desktop',
+      module: targetModule || 'desktop',
       source_module: 'desktop',
       source_title: t('moduleTitle', 'Desktop'),
       record_id: doc.id || recordId || targetModule,
-      command_title: `Desktop: ${label}`,
+      command_title: agentMode.commandTitle,
+      command_type: agentMode.commandType,
+      mode: agentMode.mode,
+      target: agentMode.target,
+      thread_key: targetModule ? `business-os/${targetModule}` : `business-os/desktop/${doc.id || 'surface'}`,
       payload: {
+        mode: agentMode.mode,
+        target: agentMode.target,
+        title: agentMode.commandTitle,
+        thread_key: targetModule ? `business-os/${targetModule}` : `business-os/desktop/${doc.id || 'surface'}`,
         desktop_icon: iconContext,
         file_context: iconContext,
       },
       client_context: {
         source: 'desktop-icon-context-menu',
+        action: agentMode.action,
+        mode: agentMode.mode,
+        target: agentMode.target,
         desktop_icon_id: doc.id || '',
         target_type: targetKind,
         target_module: targetModule,
+        module_id: targetModule,
+        app_id: targetModule,
         target_record_id: recordId,
       },
     };
     openCtoxChat(detail);
+  }
+
+  function desktopAgentModeConfig(mode, label) {
+    if (mode === 'app') {
+      return {
+        mode: 'app',
+        target: 'app',
+        action: 'app.modify',
+        title: `${t('modifyApp', 'App ändern')} · ${label}`,
+        draft: `Ändere die App "${label}": `,
+        commandTitle: `${label} App ändern`,
+        commandType: 'ctox.business_os.app.modify',
+      };
+    }
+    if (mode === 'data') {
+      return {
+        mode: 'data',
+        target: 'data',
+        action: 'data.modify',
+        title: `${t('workWithData', 'Daten ändern')} · ${label}`,
+        draft: `Ändere Daten in "${label}": `,
+        commandTitle: `${label} Daten ändern`,
+        commandType: 'business_os.chat.task',
+      };
+    }
+    return {
+      mode: 'ask',
+      target: 'question',
+      action: 'question.ask',
+      title: `${t('askCtox', 'Frage stellen')} · ${label}`,
+      draft: `Frage zu "${label}": `,
+      commandTitle: `${label} Frage`,
+      commandType: 'business_os.chat.task',
+    };
   }
 
   function chatWithCtoxAboutDesktop() {

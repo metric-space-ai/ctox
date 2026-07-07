@@ -2736,8 +2736,11 @@ function isQueueOverviewItemVisible(item) {
 
 function isTaskOverviewItemVisible(item) {
   const statuses = taskStatusCandidates(item);
-  if (statuses.some((status) => HARNESS_WAITING_STATUSES.has(status) || HARNESS_ACTIVE_STATUSES.has(status))) return true;
+  // Queue documents can retain an old primary `queued` status while route/task
+  // evidence has already reached a terminal failure. Terminal evidence wins so
+  // stale red cards do not stay in the live pipeline forever.
   if (statuses.some((status) => HARNESS_PROBLEM_TERMINAL_STATUSES.has(status))) return false;
+  if (statuses.some((status) => HARNESS_WAITING_STATUSES.has(status) || HARNESS_ACTIVE_STATUSES.has(status))) return true;
   if (statuses.some((status) => HARNESS_SUCCESS_STATUSES.has(status))) return true;
   if (item?.priority === 'urgent') return true;
   return !statuses.some((status) => HARNESS_TERMINAL_STATUSES.has(status));

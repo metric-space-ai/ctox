@@ -459,7 +459,20 @@ pub fn business_os_platform_status(root: &Path) -> Result<serde_json::Value> {
 }
 
 pub fn business_os_update_check(root: &Path) -> Result<serde_json::Value> {
-    let check = check_remote_update(root)?;
+    let check = check_remote_update(root).unwrap_or_else(|error| RemoteUpdateCheck {
+        configured: false,
+        status: "remote_unavailable".to_string(),
+        reason: Some(error.to_string()),
+        current_release: None,
+        current_version: build_version().to_string(),
+        channel: None,
+        latest_release: None,
+        latest_name: None,
+        published_at: None,
+        release_url: None,
+        source_tarball_url: None,
+        update_available: false,
+    });
     Ok(json!({
         "ok": true,
         "checked_at": now_rfc3339(),
