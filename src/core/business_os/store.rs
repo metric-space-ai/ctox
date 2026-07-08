@@ -32745,143 +32745,22 @@ fn export_verified_desktop_file_chunks_to_path(
     content_hash: &str,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    let database_path = rxdb_store_path(root);
-    let conn = Connection::open(&database_path)
-        .with_context(|| format!("failed to open {}", database_path.display()))?;
-    conn.busy_timeout(std::time::Duration::from_secs(10))?;
-    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
-    let table = "ctox_business_os__desktop_file_chunks__v0";
-    let live_filter = if rxdb_table_has_column(&conn, table, "deleted")? {
-        " AND COALESCE(deleted, 0) = 0"
-    } else {
-        ""
-    };
-    let (chunk_id_lower, chunk_id_upper) =
-        desktop_file_generation_chunk_id_bounds(file_id, generation_id);
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT data FROM {table}
-             WHERE id >= ?1 AND id < ?2{live_filter}
-             ORDER BY json_extract(data, '$.idx') ASC",
-        ))
-        .context("desktop file chunk collection is not available")?;
+    let chunks = rxdb_desktop_file_chunks(root, file_id, generation_id)?;
+    let decoded = decode_verified_desktop_file_chunks(
+        file_id,
+        generation_id,
+        size_bytes,
+        content_hash,
+        chunks,
+    )?;
     let temp_path = export_temp_path(output_path);
     let export_result = (|| -> anyhow::Result<()> {
         let mut output = fs::File::create(&temp_path).with_context(|| {
             format!("failed to create export temp file {}", temp_path.display())
         })?;
-        let mut rows = stmt.query(params![chunk_id_lower, chunk_id_upper])?;
-        let mut expected_total: Option<u64> = None;
-        let mut expected_idx = 0_u64;
-        let mut decoded_size = 0_u64;
-        let mut hasher = Sha256::new();
-        while let Some(row) = rows.next()? {
-            let raw: String = row.get(0)?;
-            let chunk: Value =
-                serde_json::from_str(&raw).context("invalid desktop file chunk RxDB document")?;
-            anyhow::ensure!(
-                !is_rxdb_deleted_document(&chunk),
-                "desktop file `{file_id}` export contains a deleted chunk"
-            );
-            anyhow::ensure!(
-                chunk.get("file_id").and_then(Value::as_str) == Some(file_id),
-                "desktop file `{file_id}` export chunk file_id mismatch"
-            );
-            anyhow::ensure!(
-                chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id),
-                "desktop file `{file_id}` export chunk generation mismatch"
-            );
-            let total = chunk
-                .get("total")
-                .and_then(Value::as_u64)
-                .with_context(|| {
-                    format!("desktop file `{file_id}` export chunk total is missing")
-                })?;
-            let expected_chunk_total = expected_desktop_file_chunk_total(size_bytes);
-            anyhow::ensure!(
-                total == expected_chunk_total,
-                "desktop file `{file_id}` export chunk total mismatch"
-            );
-            if let Some(previous_total) = expected_total {
-                anyhow::ensure!(
-                    previous_total == total,
-                    "desktop file `{file_id}` export chunk total mismatch"
-                );
-            } else {
-                expected_total = Some(total);
-            }
-            let idx = chunk
-                .get("idx")
-                .and_then(Value::as_u64)
-                .with_context(|| format!("desktop file `{file_id}` export chunk idx is missing"))?;
-            anyhow::ensure!(
-                idx == expected_idx,
-                "desktop file `{file_id}` export is missing chunk {expected_idx}"
-            );
-            anyhow::ensure!(
-                chunk
-                    .get("encoding")
-                    .and_then(Value::as_str)
-                    .unwrap_or("base64")
-                    == "base64",
-                "desktop file `{file_id}` export chunk encoding is unsupported"
-            );
-            anyhow::ensure!(
-                chunk
-                    .get("content_hash")
-                    .and_then(Value::as_str)
-                    .map(|hash| hash == content_hash)
-                    .unwrap_or(true),
-                "desktop file `{file_id}` export chunk content hash mismatch"
-            );
-            let data = chunk.get("data").and_then(Value::as_str).with_context(|| {
-                format!("desktop file `{file_id}` export chunk data is missing")
-            })?;
-            if let Some(size) = chunk.get("size_bytes").and_then(Value::as_u64) {
-                anyhow::ensure!(
-                    size == data.len() as u64,
-                    "desktop file `{file_id}` export chunk size mismatch"
-                );
-            }
-            let chunk_hash_scheme = chunk
-                .get("chunk_hash_scheme")
-                .and_then(Value::as_str)
-                .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME);
-            anyhow::ensure!(
-                chunk_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME,
-                "desktop file `{file_id}` export uses unsupported chunk hash scheme `{chunk_hash_scheme}`"
-            );
-            if let Some(chunk_hash) = chunk.get("chunk_hash").and_then(Value::as_str) {
-                anyhow::ensure!(
-                    hex_sha256(data.as_bytes()) == chunk_hash,
-                    "desktop file `{file_id}` export chunk hash mismatch"
-                );
-            }
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(data.as_bytes())
-                .with_context(|| format!("desktop file `{file_id}` export base64 decode failed"))?;
-            output
-                .write_all(&decoded)
-                .with_context(|| format!("failed to write export {}", temp_path.display()))?;
-            hasher.update(&decoded);
-            decoded_size = decoded_size.saturating_add(decoded.len() as u64);
-            expected_idx = expected_idx.saturating_add(1);
-        }
-        let total = expected_total
-            .with_context(|| format!("desktop file `{file_id}` export has no chunks"))?;
-        anyhow::ensure!(
-            expected_idx == total,
-            "desktop file `{file_id}` export is missing chunks"
-        );
-        anyhow::ensure!(
-            decoded_size == size_bytes,
-            "desktop file `{file_id}` export decoded size mismatch"
-        );
-        let actual_hash = format!("{:x}", hasher.finalize());
-        anyhow::ensure!(
-            actual_hash == content_hash,
-            "desktop file `{file_id}` export content hash mismatch"
-        );
+        output
+            .write_all(&decoded)
+            .with_context(|| format!("failed to write export {}", temp_path.display()))?;
         output
             .sync_all()
             .with_context(|| format!("failed to sync export {}", temp_path.display()))?;
@@ -32924,15 +32803,6 @@ fn decode_verified_desktop_file_chunks(
         !chunks.is_empty(),
         "Business OS attachment `{file_id}` has no chunks for generation `{generation_id}`"
     );
-    let declared_total = chunks
-        .first()
-        .and_then(|chunk| chunk.get("total"))
-        .and_then(Value::as_u64)
-        .with_context(|| format!("Business OS attachment `{file_id}` chunk total is missing"))?;
-    anyhow::ensure!(
-        declared_total > 0,
-        "Business OS attachment `{file_id}` chunk total is zero"
-    );
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
     anyhow::ensure!(
         expected_total > 0,
@@ -32959,7 +32829,7 @@ fn decode_verified_desktop_file_chunks(
                 format!("Business OS attachment `{file_id}` chunk total is missing")
             })?;
         anyhow::ensure!(
-            chunk_total == declared_total,
+            chunk_total >= expected_total,
             "Business OS attachment `{file_id}` chunk total mismatch"
         );
         anyhow::ensure!(
@@ -32986,6 +32856,10 @@ fn decode_verified_desktop_file_chunks(
             .get("data")
             .and_then(Value::as_str)
             .with_context(|| format!("Business OS attachment `{file_id}` chunk data is missing"))?;
+        anyhow::ensure!(
+            idx < chunk_total,
+            "Business OS attachment `{file_id}` chunk idx is out of range"
+        );
         if idx >= expected_total {
             anyhow::ensure!(
                 data.is_empty(),
@@ -33013,10 +32887,14 @@ fn decode_verified_desktop_file_chunks(
                 "Business OS attachment `{file_id}` chunk hash mismatch"
             );
         }
-        anyhow::ensure!(
-            by_index.insert(idx, data.to_string()).is_none(),
-            "Business OS attachment `{file_id}` has duplicate chunk idx {idx}"
-        );
+        if let Some(previous) = by_index.get(&idx) {
+            anyhow::ensure!(
+                previous == data,
+                "Business OS attachment `{file_id}` has conflicting duplicate chunk idx {idx}"
+            );
+        } else {
+            by_index.insert(idx, data.to_string());
+        }
     }
     anyhow::ensure!(
         by_index.len() as u64 == expected_total,
@@ -45067,6 +44945,75 @@ mod tests {
     }
 
     #[test]
+    fn cv_print_queue_accepts_mixed_legacy_and_padded_desktop_chunks() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = simple_text_pdf_bytes(&[
+            "Matthias Behrendt",
+            "Projektleiter Energie und Gebaeudetechnik",
+            "Dortmund",
+        ]);
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_mixed_chunks",
+            "Lebenslauf_Matthias_Behrendt.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+        duplicate_rxdb_chunks_to_legacy_ids(root, "cv_pdf_mixed_chunks", &generation_id)?;
+        move_canonical_rxdb_chunks_to_fallback_padded_ids(
+            root,
+            "cv_pdf_mixed_chunks",
+            &generation_id,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_mixed_chunks",
+                "command_id": "cmd_cv_mixed_chunks",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_matthias",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Matthias_Behrendt.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": "cv_pdf_mixed_chunks",
+                    "generation_id": generation_id,
+                    "filename": "Lebenslauf_Matthias_Behrendt.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": bytes.len(),
+                    "sha256": content_hash,
+                    "document_id": "doc_cv_matthias",
+                    "version_id": "doc_cv_matthias_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_matthias",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Matthias Behrendt"));
+        assert!(task.prompt.contains("source_file_id: cv_pdf_mixed_chunks"));
+        Ok(())
+    }
+
+    #[test]
     fn business_chat_queue_rejects_corrupt_desktop_file_attachment_chunk() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -45285,6 +45232,101 @@ mod tests {
              WHERE json_extract(data, '$.file_id') = ?1
                AND json_extract(data, '$.generation_id') = ?2",
             params![file_id, generation_id],
+        )?;
+        Ok(())
+    }
+
+    fn duplicate_rxdb_chunks_to_legacy_ids(
+        root: &Path,
+        file_id: &str,
+        generation_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let mut stmt = conn.prepare(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND json_extract(data, '$.generation_id') = ?2
+             ORDER BY CAST(json_extract(data, '$.idx') AS INTEGER)",
+        )?;
+        let rows = stmt
+            .query_map(params![file_id, generation_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for raw in rows {
+            let mut chunk: Value = serde_json::from_str(&raw)?;
+            let idx = chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .context("seeded chunk idx")?;
+            let legacy_id = format!("{file_id}_{idx}");
+            chunk["id"] = Value::String(legacy_id.clone());
+            conn.execute(
+                "INSERT OR REPLACE INTO ctox_business_os__desktop_file_chunks__v0 (id, data)
+                 VALUES (?1, ?2)",
+                params![legacy_id, chunk.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn move_canonical_rxdb_chunks_to_fallback_padded_ids(
+        root: &Path,
+        file_id: &str,
+        generation_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (lower, upper) = desktop_file_generation_chunk_id_bounds(file_id, generation_id);
+        let mut stmt = conn.prepare(
+            "SELECT id, data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE id >= ?1 AND id < ?2
+             ORDER BY CAST(json_extract(data, '$.idx') AS INTEGER)",
+        )?;
+        let rows = stmt
+            .query_map(params![lower, upper], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        anyhow::ensure!(!rows.is_empty(), "expected canonical seeded chunks");
+        let first: Value = serde_json::from_str(&rows[0].1)?;
+        let previous_total = first
+            .get("total")
+            .and_then(Value::as_u64)
+            .context("seeded chunk total")?;
+        let padded_total = previous_total + 1;
+        let mut padding_template: Option<Value> = None;
+        for (old_id, raw) in rows {
+            let mut chunk: Value = serde_json::from_str(&raw)?;
+            let idx = chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .context("seeded chunk idx")?;
+            let fallback_id = format!("fallback_{file_id}_{generation_id}_{idx}");
+            chunk["id"] = Value::String(fallback_id.clone());
+            chunk["total"] = Value::from(padded_total);
+            if idx + 1 == previous_total {
+                padding_template = Some(chunk.clone());
+            }
+            conn.execute(
+                "UPDATE ctox_business_os__desktop_file_chunks__v0
+                 SET id = ?1, data = ?2
+                 WHERE id = ?3",
+                params![fallback_id, chunk.to_string(), old_id],
+            )?;
+        }
+        let mut padding = padding_template.context("expected last seeded chunk")?;
+        let padding_id = format!("fallback_{file_id}_{generation_id}_{previous_total}");
+        padding["id"] = Value::String(padding_id.clone());
+        padding["idx"] = Value::from(previous_total);
+        padding["total"] = Value::from(padded_total);
+        padding["data"] = Value::String(String::new());
+        padding["size_bytes"] = Value::from(0_u64);
+        padding["chunk_hash"] = Value::String(hex_sha256(b""));
+        conn.execute(
+            "INSERT INTO ctox_business_os__desktop_file_chunks__v0 (id, data) VALUES (?1, ?2)",
+            params![padding_id, padding.to_string()],
         )?;
         Ok(())
     }
