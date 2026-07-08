@@ -11966,7 +11966,12 @@ fn maybe_complete_documents_chat_markdown_edit_immediately(
     )?;
 
     let reply = "Die Markdown-Änderung wurde direkt als neue Dokumentversion persistiert.";
-    process_business_chat_reply(root, conn, command_id, command, None, reply).map(Some)
+    let mut completed = process_business_chat_reply(root, conn, command_id, command, None, reply)?;
+    if completed.task_id.is_none() {
+        completed.task_id = Some(command_id.to_string());
+        completed.task_status = Some("completed".to_string());
+    }
+    Ok(Some(completed))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
