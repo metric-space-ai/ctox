@@ -3,7 +3,7 @@ import {
   FILE_CONTENT_HASH_SCHEME,
   readStoredFileFromDemandChunks,
   sha256Hex,
-} from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
+} from '../../shared/file-integrity.js?v=20260708-canonical-rechunk1';
 
 export const manifest = {
   id: 'explorer',

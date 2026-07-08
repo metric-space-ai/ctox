@@ -1,7 +1,7 @@
 import {
   FILE_CHUNK_ERROR_CODES,
   readStoredFileFromDemandChunks,
-} from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
+} from '../../shared/file-integrity.js?v=20260708-canonical-rechunk1';
 
 const TEXT_PREVIEW_RANGE_BYTES = 256 * 1024;
 

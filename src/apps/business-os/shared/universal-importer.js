@@ -1,4 +1,4 @@
-import { readStoredFileFromDemandChunks } from './file-integrity.js?v=20260603-active-chunk-query2';
+import { readStoredFileFromDemandChunks } from './file-integrity.js?v=20260708-canonical-rechunk1';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 

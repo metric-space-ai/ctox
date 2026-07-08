@@ -1,6 +1,6 @@
-import { readStoredFileFromDemandChunks } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
+import { readStoredFileFromDemandChunks } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk1';
 
-const BUILD = '20260625-cv-print-parser-v18';
+const BUILD = '20260708-cv-print-parser-v19';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -1726,27 +1726,31 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
   const chunksCol = getCollection(ctx, 'desktop_file_chunks');
   const expectedTotal = expectedDesktopFileChunkTotal(sizeBytes);
   const existingCanonical = await findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedTotal);
-  if (existingCanonical.length >= expectedTotal) return;
+  const canonicalReady = existingCanonical.length >= expectedTotal
+    && existingCanonical.every((chunk, idx) => (
+      Number(chunk.idx) === idx
+      && Number(chunk.total) >= expectedTotal
+      && String(chunk.encoding || 'base64') === 'base64'
+      && (!contentHash || !chunk.content_hash || chunk.content_hash === contentHash)
+      && Number(chunk.size_bytes ?? String(chunk.data || '').length) === String(chunk.data || '').length
+    ));
+  if (canonicalReady) return;
 
   const demandChunks = await fetchDesktopFileDemandChunks(ctx, fileId);
-  await readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
+  const blob = await readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
     contentHash,
     contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
   });
-  const ordered = demandChunks
-    .filter((chunk) => chunk && typeof chunk === 'object' && chunk.cancelled !== true)
-    .sort((a, b) => Number(a.sequence) - Number(b.sequence));
-  if (!ordered.length) throw new Error(`PDF-Daten sind noch nicht lokal verfügbar: ${fileId}`);
-
-  const total = ordered.length;
-  const chunkRows = [];
-  for (const chunk of ordered) {
-    const idx = Number(chunk.sequence || 0);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (Number(sizeBytes || 0) > 0 && bytes.length !== Number(sizeBytes || 0)) {
+    throw new Error(`PDF-Daten sind unvollständig: ${fileId}`);
+  }
+  const base64 = uint8ToBase64(bytes);
+  const total = Math.max(expectedTotal, Math.ceil(base64.length / CHUNK_SIZE) || 1);
+  const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
     const canonicalId = canonicalDesktopFileChunkId(fileId, generationId, idx);
-    const existing = await chunksCol.findOne(canonicalId).exec().catch(() => null);
-    if (existing) continue;
-    const data = String(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '');
-    chunkRows.push({
+    const data = base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
+    return {
       id: canonicalId,
       file_id: fileId,
       generation_id: generationId,
@@ -1760,8 +1764,8 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
       chunk_hash_scheme: CHUNK_HASH_SCHEME,
       size_bytes: data.length,
       created_at_ms: Date.now(),
-    });
-  }
+    };
+  }));
   await writeChunkDocuments(chunksCol, chunkRows);
 }
 
@@ -1773,7 +1777,16 @@ async function writeChunkDocuments(collection, rows) {
     return;
   }
   for (const doc of docs) {
-    await collection.insert(doc);
+    if (typeof collection.upsert === 'function') {
+      await collection.upsert(doc);
+      continue;
+    }
+    const existing = await collection.findOne(doc.id).exec().catch(() => null);
+    if (existing?.incrementalPatch) {
+      await existing.incrementalPatch(doc);
+    } else {
+      await collection.insert(doc);
+    }
   }
 }
 

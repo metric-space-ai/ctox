@@ -21,17 +21,13 @@ export async function readStoredFileFromChunks(chunks, fileId, mimeType = 'appli
   const normalized = normalizeOptions(options);
   const allChunks = chunks.filter((chunk) => chunk.file_id === fileId && !isDeletedChunk(chunk));
   const generation = selectActiveChunkGeneration(allChunks, normalized.contentGenerationId);
-  const total = Number(generation[0]?.total || generation.length || 0);
+  const total = expectedGenerationChunkTotal(generation);
   if (!generation.length || total <= 0) {
     throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.', { fileId });
   }
 
-  const ordered = generation
-    .filter((chunk) => Number(chunk.idx) < total)
-    .sort((a, b) => Number(a.idx) - Number(b.idx));
-  if (ordered.length !== total || ordered.some((chunk, idx) => Number(chunk.idx) !== idx)) {
-    throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.', { fileId, total, available: ordered.length });
-  }
+  validateGenerationTotalMetadata(generation, fileId);
+  const ordered = orderDenseChunkGeneration(generation, total, fileId);
 
   validateChunkMetadata(ordered, total);
   validateGenerationContract(ordered, normalized.contentGenerationId, normalized.contentHash);
@@ -106,6 +102,60 @@ export function selectActiveChunkGeneration(chunks, contentGenerationId = '') {
     || [];
 }
 
+function expectedGenerationChunkTotal(chunks) {
+  const live = (Array.isArray(chunks) ? chunks : []).filter((chunk) => chunk && typeof chunk === 'object');
+  if (!live.length) return 0;
+  const maxIndexTotal = Math.max(0, ...live.map((chunk) => Number(chunk.idx || 0) + 1));
+  const advertisedTotal = Math.max(0, ...live.map((chunk) => Number(chunk.total || 0)));
+  return Math.max(1, maxIndexTotal, advertisedTotal);
+}
+
+function validateGenerationTotalMetadata(chunks, fileId) {
+  const totals = [...new Set((chunks || [])
+    .map((chunk) => Number(chunk?.total || 0))
+    .filter((total) => Number.isFinite(total) && total > 0))];
+  if (totals.length <= 1) return;
+  const maxIndexTotal = Math.max(0, ...(chunks || []).map((chunk) => Number(chunk?.idx || 0) + 1));
+  const advertisedTotal = Math.max(...totals);
+  if (advertisedTotal > maxIndexTotal) {
+    throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
+      fileId,
+      advertisedTotal,
+      available: maxIndexTotal,
+    });
+  }
+}
+
+function orderDenseChunkGeneration(chunks, total, fileId) {
+  const byIndex = new Map();
+  for (const chunk of chunks) {
+    const idx = Number(chunk.idx);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= total) continue;
+    const previous = byIndex.get(idx);
+    if (previous && String(previous.data || '') !== String(chunk.data || '')) {
+      throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
+        fileId,
+        idx,
+      });
+    }
+    if (!previous) byIndex.set(idx, chunk);
+  }
+  const ordered = [];
+  for (let idx = 0; idx < total; idx += 1) {
+    const chunk = byIndex.get(idx);
+    if (!chunk) {
+      throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.', {
+        fileId,
+        total,
+        available: byIndex.size,
+        missing: idx,
+      });
+    }
+    ordered.push(chunk);
+  }
+  return ordered;
+}
+
 export function base64ToBytes(base64) {
   const binary = atob(String(base64 || ''));
   const bytes = new Uint8Array(binary.length);
@@ -157,7 +207,7 @@ function validateGenerationContract(chunks, contentGenerationId, expectedContent
 function validateChunkMetadata(chunks, total) {
   for (const chunk of chunks) {
     const chunkTotal = Number(chunk.total);
-    if (Number.isFinite(chunkTotal) && chunkTotal !== total) {
+    if (Number.isFinite(chunkTotal) && chunkTotal > total) {
       throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
         chunkId: chunk.id || '',
         total,

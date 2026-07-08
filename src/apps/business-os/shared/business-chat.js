@@ -4,7 +4,7 @@ import {
   FILE_CONTENT_HASH_SCHEME,
   base64ToBytes,
   sha256Hex,
-} from './file-integrity.js?v=20260605-rxdb-cancel1';
+} from './file-integrity.js?v=20260708-canonical-rechunk1';
 import { renderGlobalCtoxAgentScopeHtml } from './shell-permissions-ui.js?v=20260623-role-session';
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';

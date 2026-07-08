@@ -613,7 +613,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/shared/file-integrity.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromDemandChunks', 'file-integrity.js?v=20260624-demand-file-fetch1']) {
+  for (const marker of ['readStoredFileFromDemandChunks', 'file-integrity.js?v=20260708-canonical-rechunk1']) {
     if (!fileViewer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }

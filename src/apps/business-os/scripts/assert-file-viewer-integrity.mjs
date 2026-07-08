@@ -24,10 +24,38 @@ const second = base64.slice(5);
 const contentHash = await sha256Hex(new Uint8Array(Buffer.from(payload, 'utf8')));
 const firstHash = await sha256Hex(first);
 const secondHash = await sha256Hex(second);
+const emptyHash = await sha256Hex('');
 const now = 42;
 
 await assertBlobText('valid chunks', validChunks(), payload);
 await assertBlobText('deleted stale generation ignored', [...deletedStaleChunks(), ...validChunks()], payload);
+await assertBlobText(
+  'legacy low total metadata tolerated when content is complete',
+  validChunks().map((chunk) => ({ ...chunk, total: 1 })),
+  payload
+);
+await assertBlobText(
+  'empty trailing padding chunk tolerated',
+  [
+    ...validChunks().map((chunk) => ({ ...chunk, total: 3 })),
+    {
+      id: `${fileId}_gen_current_2`,
+      file_id: fileId,
+      generation_id: 'gen_current',
+      content_hash: contentHash,
+      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+      idx: 2,
+      total: 3,
+      encoding: 'base64',
+      data: '',
+      chunk_hash: emptyHash,
+      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
+      size_bytes: 0,
+      created_at_ms: now,
+    },
+  ],
+  payload
+);
 await assertThrows('missing chunk', validChunks().slice(0, 1), 'Dateiinhalt fehlt.', defaultOptions(), FILE_CHUNK_ERROR_CODES.MISSING);
 await assertThrows(
   'active generation tombstoned',
