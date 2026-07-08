@@ -3325,6 +3325,32 @@ pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
     Ok(count)
 }
 
+pub(crate) fn pending_queue_task_count_uncached(root: &Path) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(0);
+    };
+    if !channel_projection_tables_exist(
+        &conn,
+        &["communication_messages", "communication_routing_state"],
+    )? {
+        return Ok(0);
+    }
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = ?1
+          AND m.direction = 'inbound'
+          AND lower(COALESCE(r.route_status, 'pending')) = 'pending'
+        "#,
+        params![QUEUE_CHANNEL_NAME],
+        |row| row.get(0),
+    )?;
+    Ok(non_negative_i64_to_usize(count))
+}
+
 pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTaskView>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;

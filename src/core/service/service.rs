@@ -14398,12 +14398,34 @@ fn durable_queue_dispatch_blocked_locked(
     }
 }
 
+fn reset_stale_app_recovery_guard_for_durable_dispatch_locked(shared: &mut SharedState) {
+    if !shared.app_recovery_active {
+        return;
+    }
+    let stale = shared
+        .app_recovery_started_epoch_secs
+        .map(|started| {
+            current_epoch_secs().saturating_sub(started) >= BUSINESS_OS_APP_RECOVERY_STALE_SECS
+        })
+        .unwrap_or(true);
+    if !stale {
+        return;
+    }
+    shared.app_recovery_active = false;
+    shared.app_recovery_started_epoch_secs = None;
+    push_event_locked(
+        shared,
+        "Reset stale Business OS app recovery guard before durable queue dispatch".to_string(),
+    );
+}
+
 fn begin_durable_queue_lease_attempt(
     state: &Arc<Mutex<SharedState>>,
     guard: DurableQueueDispatchGuard,
 ) -> Option<DurableQueueLeaseAttemptGuard> {
     {
         let mut shared = lock_shared_state(state);
+        reset_stale_app_recovery_guard_for_durable_dispatch_locked(&mut shared);
         if durable_queue_dispatch_blocked_locked(&shared, guard) {
             return None;
         }
@@ -14424,21 +14446,33 @@ fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
     let core_db_path = crate::paths::core_db(root);
     let queue_stamp = durable_communication_source_stamp(root, &core_db_path);
     let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
-    let gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(previous) = gate.as_ref() else {
-        return false;
+    let should_skip = {
+        let gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(previous) = gate.as_ref() else {
+            return false;
+        };
+        if previous.root != root_path || previous.queue_stamp != queue_stamp {
+            return false;
+        }
+        let timer_backoff = idle_durable_queue_empty_backoff(previous.consecutive_empty_probes);
+        let unchanged_source_backoff =
+            Duration::from_secs(IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS);
+        let backoff = if timer_backoff > unchanged_source_backoff {
+            timer_backoff
+        } else {
+            unchanged_source_backoff
+        };
+        previous.last_empty_probe.elapsed() < backoff
     };
-    if previous.root != root_path || previous.queue_stamp != queue_stamp {
+    if should_skip
+        && channels::pending_queue_task_count_uncached(root)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    {
+        clear_idle_durable_queue_empty_gate(root);
         return false;
     }
-    let timer_backoff = idle_durable_queue_empty_backoff(previous.consecutive_empty_probes);
-    let unchanged_source_backoff = Duration::from_secs(IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS);
-    let backoff = if timer_backoff > unchanged_source_backoff {
-        timer_backoff
-    } else {
-        unchanged_source_backoff
-    };
-    previous.last_empty_probe.elapsed() < backoff
+    should_skip
 }
 
 fn mark_idle_durable_queue_empty_probe(root: &Path) {
@@ -29334,6 +29368,27 @@ Business OS command:
     }
 
     #[test]
+    fn durable_queue_dispatch_resets_stale_app_recovery_guard() {
+        let started = current_epoch_secs().saturating_sub(BUSINESS_OS_APP_RECOVERY_STALE_SECS + 1);
+        let mut shared = SharedState::default();
+        shared.app_recovery_active = true;
+        shared.app_recovery_started_epoch_secs = Some(started);
+
+        reset_stale_app_recovery_guard_for_durable_dispatch_locked(&mut shared);
+
+        assert!(!shared.app_recovery_active);
+        assert_eq!(shared.app_recovery_started_epoch_secs, None);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Reset stale Business OS app recovery guard")),
+            "stale guard reset should be visible: {:?}",
+            shared.recent_events
+        );
+    }
+
+    #[test]
     fn status_snapshot_recovery_marks_red_business_os_app_queue_lease_for_rework_without_prefetch()
     {
         let root = temp_root("status-snapshot-red-app-recovery");
@@ -33730,6 +33785,44 @@ Use shell tools to create or update these files."
         let next = maybe_next_idle_dispatch_prompt(&root, &state)
             .expect("idle dispatch should not fail after queue source changed")
             .expect("expected durable queue prompt after queue source changed");
+        match next {
+            IdleDispatchPrompt::Durable(prompt) => {
+                assert_eq!(prompt.leased_message_keys, vec![queue_task.message_key]);
+            }
+            IdleDispatchPrompt::InMemory(_) => panic!("expected durable queue prompt"),
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn idle_empty_gate_never_masks_pending_durable_queue_task() {
+        let root = temp_root("ctox-idle-empty-gate-pending-queue");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Visible pending work".to_string(),
+                prompt: "Process the queued work.".to_string(),
+                thread_key: "durable-empty-gate-pending".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        mark_idle_durable_queue_empty_probe(&root);
+        assert!(
+            !should_skip_idle_durable_queue_empty_probe(&root),
+            "empty-probe backoff must not hide a pending durable queue task"
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let next = maybe_next_idle_dispatch_prompt(&root, &state)
+            .expect("idle dispatch should not fail")
+            .expect("expected durable queue prompt");
         match next {
             IdleDispatchPrompt::Durable(prompt) => {
                 assert_eq!(prompt.leased_message_keys, vec![queue_task.message_key]);
