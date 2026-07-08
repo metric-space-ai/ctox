@@ -14643,6 +14643,9 @@ fn maybe_lease_next_durable_queue_prompt(
     }
     let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
     for task in tasks {
+        if channels::queue_task_deferred_until(root, &task.message_key)?.is_some() {
+            continue;
+        }
         if block_repeated_unstarted_business_os_app_queue_task_before_dispatch(root, &task)? {
             push_event(
                 state,
@@ -33177,6 +33180,70 @@ Use shell tools to create or update these files."
             .contains("Create and verify the smoke artifact."));
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
+    }
+
+    #[test]
+    fn runtime_retry_backoff_prevents_immediate_durable_release() {
+        let root = temp_root("leased-queue-runtime-retry-backoff");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Browser command smoke".to_string(),
+                prompt: "Answer this Business OS command from the browser.".to_string(),
+                thread_key: "business-os/chat/browser-command".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create queue task");
+        let leased =
+            channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect("lease queue task");
+        let job = queued_prompt_from_queue_task(leased);
+
+        let updated =
+            apply_runtime_retry_feedback_to_leased_queue(&root, &job, "database is locked")
+                .expect("runtime retry feedback should persist");
+        assert_eq!(updated, 1);
+        let not_before = runtime_retry_not_before_iso("database is locked");
+        channels::defer_messages_until(
+            &root,
+            &job.leased_message_keys,
+            &not_before,
+            "retryable runtime/API failure",
+        )
+        .expect("defer queue task");
+        channels::ack_leased_messages(&root, &job.leased_message_keys, "pending")
+            .expect("return queue task to pending");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        assert_eq!(
+            channels::queue_task_deferred_until(&root, &task.message_key)
+                .expect("read queue defer")
+                .as_deref(),
+            Some(not_before.as_str())
+        );
+
+        let direct_err =
+            channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect_err("deferred queue task must not lease directly")
+                .to_string();
+        assert!(
+            direct_err.contains("deferred until"),
+            "unexpected direct lease error: {direct_err}"
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let next = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail on deferred work");
+        assert!(
+            next.is_none(),
+            "idle dispatch must wait until the queue task not_before expires"
+        );
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
     }
 
     #[test]

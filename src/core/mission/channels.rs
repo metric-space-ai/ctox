@@ -3344,11 +3344,45 @@ pub(crate) fn pending_queue_task_count_uncached(root: &Path) -> Result<usize> {
         WHERE m.channel = ?1
           AND m.direction = 'inbound'
           AND lower(COALESCE(r.route_status, 'pending')) = 'pending'
+          AND (
+                json_extract(m.metadata_json, '$.not_before') IS NULL
+             OR json_extract(m.metadata_json, '$.not_before') = ''
+             OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          )
         "#,
         params![QUEUE_CHANNEL_NAME],
         |row| row.get(0),
     )?;
     Ok(non_negative_i64_to_usize(count))
+}
+
+pub(crate) fn queue_task_deferred_until(root: &Path, message_key: &str) -> Result<Option<String>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    queue_task_deferred_until_from_conn(&conn, message_key)
+}
+
+fn queue_task_deferred_until_from_conn(
+    conn: &Connection,
+    message_key: &str,
+) -> Result<Option<String>> {
+    conn.query_row(
+        r#"
+        SELECT json_extract(metadata_json, '$.not_before')
+        FROM communication_messages
+        WHERE message_key = ?1
+          AND channel = ?2
+          AND direction = 'inbound'
+          AND json_extract(metadata_json, '$.not_before') IS NOT NULL
+          AND json_extract(metadata_json, '$.not_before') <> ''
+          AND json_extract(metadata_json, '$.not_before') > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        LIMIT 1
+        "#,
+        params![message_key, QUEUE_CHANNEL_NAME],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
 }
 
 pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTaskView>> {
@@ -3574,6 +3608,9 @@ pub fn lease_queue_task(
     {
         let tx =
             rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(not_before) = queue_task_deferred_until_from_conn(&tx, message_key)? {
+            anyhow::bail!("queue task {message_key} is deferred until {not_before}");
+        }
         let previous_route_status = current_queue_route_status(&tx, message_key)?;
         // Check-and-set: only lease a row that is free, ours already, or
         // pending. A losing racer flips 0 rows and must NOT load a task it
