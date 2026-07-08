@@ -2245,7 +2245,7 @@ function inferColumnSemantics(column = {}) {
       unit: explicitUnit || 'in',
       metricUnit: 'mm',
       valueKind: 'propeller_size',
-      description: 'Propeller size such as 9x5 means 9 inch diameter and 5 inch pitch. Knowledge normalizes this as diameter x pitch in millimetres for metric comparison and CSV export.',
+      description: 'Propellergröße wie 9x5 bedeutet 9 Zoll Durchmesser und 5 Zoll Steigung. Knowledge normalisiert dies als Durchmesser x Steigung in Millimetern für metrischen Vergleich und CSV-Export.',
     };
   }
   if (/load_case|case$|measurement_kind|derivation_method/.test(key)) {
@@ -2257,9 +2257,9 @@ function inferColumnSemantics(column = {}) {
     };
   }
   const unitByToken = [
-    [/thrust|force|load|bearing_load|weight_force/, 'N', 'Force or load in newtons.'],
-    [/torque|moment/, 'N m', 'Torque in newton metres.'],
-    [/diameter|width|height|length|span|pitch|distance/, 'mm', 'Length in millimetres.'],
+    [/thrust|force|load|bearing_load|weight_force/, 'N', 'Kraft oder Last in Newton.'],
+    [/torque|moment/, 'N m', 'Moment beziehungsweise Drehmoment in Newtonmetern.'],
+    [/diameter|width|height|length|span|pitch|distance/, 'mm', 'Länge in Millimetern.'],
     [/mass/, 'kg', 'Mass in kilograms.'],
     [/weight/, 'kg', 'Weight/mass value normalized to kilograms when source data carries mass units.'],
     [/voltage|volt/, 'V', 'Voltage in volts.'],
@@ -2396,11 +2396,22 @@ function normalizeUnit(unit) {
 function columnHeaderLabel(column) {
   const base = String(column.label || column.name || column.key || 'Column').trim();
   const metricUnit = metricUnitForColumn(column);
-  if (!metricUnit) return base;
-  let label = stripUnitSuffix(base, metricUnit);
+  if (!metricUnit) return localizedColumnBaseLabel(base, column);
+  let label = localizedColumnBaseLabel(stripUnitSuffix(base, metricUnit), column);
   if (column.unit && column.unit !== metricUnit) label = stripUnitSuffix(label, column.unit);
-  if (column.valueKind === 'propeller_size') return `${label} (diameter x pitch, ${metricUnit})`;
+  if (column.valueKind === 'propeller_size') return `${label} (Durchmesser x Steigung, ${metricUnit})`;
   return `${label} (${metricUnit})`;
+}
+
+function localizedColumnBaseLabel(label, column = {}) {
+  const key = String(column.key || column.name || column.field || column.id || '').toLowerCase();
+  if (column.valueKind === 'propeller_size' || /propeller.*(size|dimension)|prop.*size/.test(key)) return 'Propellergröße';
+  if (/prop.*diameter|diameter/.test(key)) return 'Durchmesser';
+  if (/prop.*pitch|pitch/.test(key)) return 'Steigung';
+  if (/torque|moment/.test(key)) return 'Moment/Torque';
+  if (/rpm|rev/.test(key)) return 'Drehzahl';
+  if (/thrust|force/.test(key)) return 'Kraft';
+  return label;
 }
 
 function labelEndsWithUnitInParens(label, unit) {
