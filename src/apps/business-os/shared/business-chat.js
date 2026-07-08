@@ -119,7 +119,7 @@ export function initBusinessChat({
     } finally {
       trackingSyncRunning = false;
       trackingWatch?.refresh?.();
-      if (trackingSyncRerun && hasActiveTrackedMessages(state)) {
+      if (trackingSyncRerun && hasTrackedMessagesNeedingSync(state)) {
         trackingSyncRerun = false;
         scheduleTrackedMessageSync(75);
       } else {
@@ -392,7 +392,7 @@ function createTrackedMessageWatch({
   let queueTasksSub = null;
   let timer = null;
   const notify = () => {
-    if (hasActiveTrackedMessages(state)) {
+    if (hasTrackedMessagesNeedingSync(state)) {
       scheduleSync?.();
     } else {
       stopActiveWatch();
@@ -417,7 +417,7 @@ function createTrackedMessageWatch({
     timer = null;
   };
   const refresh = ({ schedule = false } = {}) => {
-    if (!hasActiveTrackedMessages(state)) {
+    if (!hasTrackedMessagesNeedingSync(state)) {
       stopActiveWatch();
       return false;
     }
@@ -2220,13 +2220,13 @@ function touchChats(state, chats) {
 }
 
 function shouldDeferRemoteChatHydration(root, state) {
-  const activeTracking = hasActiveTrackedMessages(state);
+  const needsTrackingSync = hasTrackedMessagesNeedingSync(state);
   const active = typeof document !== 'undefined' ? document.activeElement : null;
   const hasFocusedChatControl = Boolean(active?.closest?.('[data-chat-id]'))
     && /^(TEXTAREA|INPUT|SELECT|BUTTON)$/.test(active?.tagName || '');
-  if (hasFocusedChatControl && !activeTracking) return true;
+  if (hasFocusedChatControl && !needsTrackingSync) return true;
   const lastMutation = Number(state?.lastUiMutationMs || 0);
-  return !activeTracking && lastMutation > 0 && Date.now() - lastMutation < 2500;
+  return !needsTrackingSync && lastMutation > 0 && Date.now() - lastMutation < 2500;
 }
 
 function scrollActiveChatIntoView(root, state) {
@@ -2557,10 +2557,42 @@ function hasActiveTrackedMessages(state) {
   return collectTrackedMessages(state).some(({ message }) => isActiveTrackingStatus(message.status || 'queued'));
 }
 
+function hasTrackedMessagesNeedingSync(state) {
+  return collectTrackedMessages(state).some(({ chat, message }) => trackedMessageNeedsSync(chat, message));
+}
+
+function trackedMessageNeedsSync(chat, message) {
+  const status = message?.status || 'queued';
+  if (isActiveTrackingStatus(status)) return true;
+  if (!isTerminalTrackingStatus(status)) return false;
+  return !hasTerminalReplyForTracking(chat, message);
+}
+
+function hasTerminalReplyForTracking(chat, trackedMessage) {
+  const refs = [
+    trackingIdFromMessage(trackedMessage, 'task'),
+    trackingIdFromMessage(trackedMessage, 'command'),
+  ].filter(Boolean);
+  if (!refs.length) return false;
+  return (Array.isArray(chat?.messages) ? chat.messages : []).some((message) => {
+    if (!message || message === trackedMessage) return false;
+    if (String(message.role || '').toLowerCase() !== 'ctox') return false;
+    if (!String(message.text || '').trim()) return false;
+    if (!isTerminalTrackingStatus(message.status || 'completed')) return false;
+    const messageRefs = [
+      message.replyFor,
+      trackingIdFromMessage(message, 'task'),
+      trackingIdFromMessage(message, 'command'),
+    ].map((value) => String(value || '').trim()).filter(Boolean);
+    return messageRefs.some((ref) => refs.includes(ref));
+  });
+}
+
 function collectTrackedMessages(state) {
   const tracked = [];
   for (const chat of Array.isArray(state?.chats) ? state.chats : []) {
     for (const message of Array.isArray(chat?.messages) ? chat.messages : []) {
+      if (message?.replyFor || message?.failureFor) continue;
       if (trackingIdFromMessage(message, 'command') || trackingIdFromMessage(message, 'task')) {
         tracked.push({ chat, message });
       }
@@ -5972,6 +6004,7 @@ export const __businessChatTestInternals = Object.freeze({
   focusChatForUser,
   getLocalDateString,
   hasActiveTrackedMessages,
+  hasTrackedMessagesNeedingSync,
   hydrateChatsFromRxDb,
   initSchedulerLoop,
   isChatEmptyForDeletion,

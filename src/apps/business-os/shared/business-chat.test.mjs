@@ -235,6 +235,45 @@ test('business chat does not defer remote hydration while a tracked command is a
       }),
       true,
     );
+    assert.equal(
+      __businessChatTestInternals.shouldDeferRemoteChatHydration(null, {
+        chats: [{
+          id: 'chat-terminal-awaiting-reply',
+          messages: [{
+            id: 'status-cmd-terminal',
+            commandId: 'cmd-terminal',
+            taskId: 'task-terminal',
+            status: 'completed',
+          }],
+        }],
+      }),
+      false,
+    );
+    assert.equal(
+      __businessChatTestInternals.shouldDeferRemoteChatHydration(null, {
+        chats: [{
+          id: 'chat-terminal-with-reply',
+          messages: [
+            {
+              id: 'status-cmd-terminal',
+              commandId: 'cmd-terminal',
+              taskId: 'task-terminal',
+              status: 'completed',
+            },
+            {
+              id: 'reply-cmd-terminal',
+              role: 'ctox',
+              text: 'Fertige Antwort.',
+              replyFor: 'task-terminal',
+              commandId: 'cmd-terminal',
+              taskId: 'task-terminal',
+              status: 'completed',
+            },
+          ],
+        }],
+      }),
+      true,
+    );
   } finally {
     if (previousDocument === undefined) {
       delete globalThis.document;
@@ -569,7 +608,7 @@ test('business chat treats only disposable empty chats as deletion-empty', () =>
   }), false);
 });
 
-test('business chat tracking watch only pins command and queue collections while active tracking exists', () => {
+test('business chat tracking watch pins command and queue collections until terminal replies exist', () => {
   const timers = [];
   const commands = makeSubscriptionCollection();
   const queue = makeSubscriptionCollection();
@@ -579,6 +618,15 @@ test('business chat tracking watch only pins command and queue collections while
       messages: [{
         id: 'message-terminal',
         commandId: 'cmd-terminal',
+        taskId: 'task-terminal',
+        status: 'completed',
+      }, {
+        id: 'reply-terminal',
+        role: 'ctox',
+        text: 'Erledigt.',
+        replyFor: 'task-terminal',
+        commandId: 'cmd-terminal',
+        taskId: 'task-terminal',
         status: 'completed',
       }],
     }],
@@ -599,6 +647,7 @@ test('business chat tracking watch only pins command and queue collections while
   assert.equal(syncCalls, 0);
 
   state.chats[0].messages[0].status = 'queued';
+  state.chats[0].messages.pop();
   assert.equal(watch.refresh({ schedule: true }), true);
   assert.equal(watch.isWatching(), true);
   assert.equal(commands.stats.subscribeCalls, 1);
@@ -610,6 +659,17 @@ test('business chat tracking watch only pins command and queue collections while
   assert.equal(syncCalls, 2);
 
   state.chats[0].messages[0].status = 'completed';
+  assert.equal(watch.refresh(), true);
+  assert.equal(watch.isWatching(), true);
+  state.chats[0].messages.push({
+    id: 'reply-terminal-next',
+    role: 'ctox',
+    text: 'Erledigt.',
+    replyFor: 'task-terminal',
+    commandId: 'cmd-terminal',
+    taskId: 'task-terminal',
+    status: 'completed',
+  });
   assert.equal(watch.refresh(), false);
   assert.equal(watch.isWatching(), false);
   assert.equal(commands.stats.unsubscribeCalls, 1);
