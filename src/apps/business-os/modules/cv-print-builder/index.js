@@ -1,6 +1,9 @@
-import { readStoredFileFromDemandChunks } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk1';
+import {
+  readStoredFileFromChunks,
+  readStoredFileFromDemandChunks,
+} from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260708-cv-print-parser-v19';
+const BUILD = '20260708-cv-print-parser-v20';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -1736,11 +1739,7 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
     ));
   if (canonicalReady) return;
 
-  const demandChunks = await fetchDesktopFileDemandChunks(ctx, fileId);
-  const blob = await readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
-    contentHash,
-    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
-  });
+  const blob = await readDesktopFileForCanonicalRepair(ctx, fileId, generationId, contentHash);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (Number(sizeBytes || 0) > 0 && bytes.length !== Number(sizeBytes || 0)) {
     throw new Error(`PDF-Daten sind unvollständig: ${fileId}`);
@@ -1767,6 +1766,23 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
     };
   }));
   await writeChunkDocuments(chunksCol, chunkRows);
+}
+
+async function readDesktopFileForCanonicalRepair(ctx, fileId, generationId, contentHash) {
+  const chunkOptions = {
+    contentGenerationId: generationId,
+    contentHash,
+    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
+  };
+  const directChunks = await fetchDesktopFileChunks(ctx, fileId, generationId).catch(() => []);
+  if (directChunks.length) {
+    return readStoredFileFromChunks(directChunks, fileId, 'application/pdf', chunkOptions);
+  }
+  const demandChunks = await fetchDesktopFileDemandChunks(ctx, fileId);
+  return readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
+    contentHash,
+    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
+  });
 }
 
 async function writeChunkDocuments(collection, rows) {
@@ -1803,6 +1819,17 @@ async function findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedT
     docs.push(chunk);
   }
   return docs;
+}
+
+async function fetchDesktopFileChunks(ctx, fileId, generationId) {
+  const collection = getCollection(ctx, 'desktop_file_chunks');
+  if (!collection?.find) return [];
+  const docs = await collection
+    .find({ selector: { file_id: fileId, generation_id: generationId } })
+    .exec();
+  return docs
+    .map((doc) => (doc?.toJSON ? doc.toJSON() : doc))
+    .filter((chunk) => chunk && !chunk._deleted && !chunk.deleted && !chunk.is_deleted);
 }
 
 function canonicalDesktopFileChunkId(fileId, generationId, idx) {
