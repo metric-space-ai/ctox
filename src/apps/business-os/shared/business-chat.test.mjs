@@ -206,6 +206,148 @@ test('business chat focuses the visible chat when CTOX writes a reply', async ()
   assert.equal(replyChat.messages.at(-1).text, 'CTOX ist verbunden und die Antwort ist sichtbar.');
 });
 
+test('business chat does not defer remote hydration while a tracked command is active', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    activeElement: {
+      tagName: 'TEXTAREA',
+      closest(selector) {
+        return selector === '[data-chat-id]' ? {} : null;
+      },
+    },
+  };
+  try {
+    assert.equal(
+      __businessChatTestInternals.shouldDeferRemoteChatHydration(null, {
+        chats: [{
+          id: 'chat-active',
+          messages: [{ id: 'status-cmd', commandId: 'cmd-active', status: 'queued' }],
+        }],
+      }),
+      false,
+    );
+    assert.equal(
+      __businessChatTestInternals.shouldDeferRemoteChatHydration(null, {
+        chats: [{
+          id: 'chat-idle',
+          messages: [],
+        }],
+      }),
+      true,
+    );
+  } finally {
+    if (previousDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+  }
+});
+
+test('business chat hydration focuses a newly replicated CTOX reply', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  const createdAt = Date.now();
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: '2026-06-23',
+    activeChatId: 'chat-empty-old',
+    dockCollapsed: true,
+    deletedChatIds: {},
+    chats: [
+      {
+        id: 'chat-empty-old',
+        owner_user_id: 'user-1',
+        createdAt: new Date('2026-06-23T08:00:00Z').getTime(),
+        messages: [],
+        open: true,
+      },
+      {
+        id: 'chat-replicated',
+        owner_user_id: 'user-1',
+        createdAt,
+        updated_at_ms: createdAt,
+        open: true,
+        minimized: true,
+        messages: [{
+          id: 'status-cmd-replicated',
+          role: 'ctox',
+          text: 'Task angelegt und in der CTOX Queue.',
+          commandId: 'cmd-replicated',
+          taskId: 'queue-replicated',
+          status: 'queued',
+          createdAt,
+        }],
+      },
+    ],
+  };
+  const remoteChat = {
+    id: 'chat-replicated',
+    owner_user_id: 'user-1',
+    title: 'Matching Frage',
+    createdAt,
+    updated_at_ms: createdAt + 1000,
+    open: true,
+    minimized: false,
+    messages: [
+      {
+        id: 'chatmsg-user',
+        role: 'user',
+        text: 'Bitte antworten.',
+        createdAt,
+      },
+      {
+        id: 'reply-cmd-replicated',
+        role: 'ctox',
+        text: 'CTOX ist verbunden und antwortet sichtbar im Chat.',
+        replyFor: 'queue-replicated',
+        commandId: 'cmd-replicated',
+        taskId: 'queue-replicated',
+        status: 'completed',
+        createdAt: createdAt + 1000,
+      },
+    ],
+  };
+
+  try {
+    const changed = await __businessChatTestInternals.hydrateChatsFromRxDb({
+      state,
+      session: { user: { id: 'user-1' } },
+      db: {
+        raw: {
+          business_chats: makeFindCollection([remoteChat]),
+        },
+      },
+    });
+
+    const chat = state.chats.find((item) => item.id === 'chat-replicated');
+    assert.equal(changed, true);
+    assert.equal(state.activeChatId, 'chat-replicated');
+    assert.equal(state.dockCollapsed, false);
+    assert.equal(state.selectedDate, __businessChatTestInternals.getLocalDateString(createdAt));
+    assert.equal(chat.minimized, false);
+    assert.equal(chat.messages.at(-1).role, 'ctox');
+    assert.equal(chat.messages.at(-1).text, 'CTOX ist verbunden und antwortet sichtbar im Chat.');
+  } finally {
+    if (previousLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
+});
+
 test('business chat dock opens the latest substantive chat instead of an old empty day', () => {
   const oldEmpty = {
     id: 'chat-empty-old',
@@ -603,6 +745,18 @@ function makeBatchCollection(rows) {
         async exec() {
           const doc = byId.get(String(id));
           return doc ? { toJSON: () => ({ ...doc }) } : null;
+        },
+      };
+    },
+  };
+}
+
+function makeFindCollection(rows) {
+  return {
+    find() {
+      return {
+        async exec() {
+          return rows.map((row) => ({ toJSON: () => ({ ...row }) }));
         },
       };
     },

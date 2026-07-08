@@ -139,8 +139,20 @@ export function initBusinessChat({
     if (trackingWatch?.refresh?.()) scheduleTrackedMessageSync(0);
   };
 
+  let chatHydrationRetryTimer = null;
+  const scheduleChatHydrationRetry = (delayMs = 750) => {
+    if (chatHydrationRetryTimer) return;
+    chatHydrationRetryTimer = window.setTimeout(() => {
+      chatHydrationRetryTimer = null;
+      syncChats();
+    }, Math.max(0, delayMs));
+  };
+
   const syncChats = () => {
-    if (shouldDeferRemoteChatHydration(root, state)) return;
+    if (shouldDeferRemoteChatHydration(root, state)) {
+      scheduleChatHydrationRetry();
+      return;
+    }
     captureDrafts(root, state);
     hydrateChatsFromRxDb({ state, db, session }).then((changed) => {
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
@@ -350,6 +362,7 @@ export function initBusinessChat({
     trackingWatch?.stop?.();
     root.__ctoxChatOnTrackingStateChanged = null;
     if (trackingSyncTimer) window.clearTimeout(trackingSyncTimer);
+    if (chatHydrationRetryTimer) window.clearTimeout(chatHydrationRetryTimer);
     clearSchedulerLoop(root);
   };
 }
@@ -2192,12 +2205,13 @@ function touchChats(state, chats) {
 }
 
 function shouldDeferRemoteChatHydration(root, state) {
-  const active = document.activeElement;
+  const activeTracking = hasActiveTrackedMessages(state);
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
   const hasFocusedChatControl = Boolean(active?.closest?.('[data-chat-id]'))
     && /^(TEXTAREA|INPUT|SELECT|BUTTON)$/.test(active?.tagName || '');
-  if (hasFocusedChatControl) return true;
+  if (hasFocusedChatControl && !activeTracking) return true;
   const lastMutation = Number(state?.lastUiMutationMs || 0);
-  return lastMutation > 0 && Date.now() - lastMutation < 2500;
+  return !activeTracking && lastMutation > 0 && Date.now() - lastMutation < 2500;
 }
 
 function scrollActiveChatIntoView(root, state) {
@@ -3034,11 +3048,16 @@ async function hydrateChatsFromRxDb({ state, db, session }) {
     if (state.chats.length) await persistChatState({ state, db });
     return false;
   }
+  const focusChatId = remoteReplyChatToFocus(state.chats, remoteChats);
   const merged = mergeChats(state.chats, remoteChats, owner);
   const changed = JSON.stringify(stripDraftsForCompare(state.chats)) !== JSON.stringify(stripDraftsForCompare(merged));
   state.chats = merged;
+  if (focusChatId) {
+    const focusChat = state.chats.find((chat) => chat.id === focusChatId);
+    if (focusChat) focusChatForUser(state, focusChat);
+  }
   writeChatState(state);
-  return changed;
+  return changed || Boolean(focusChatId);
 }
 
 async function deleteChat({ state, chat, db }) {
@@ -3119,6 +3138,37 @@ function mergeChatMessages(localMessages = [], remoteMessages = []) {
   return Array.from(byKey.values())
     .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0))
     .slice(-40);
+}
+
+function remoteReplyChatToFocus(localChats = [], remoteChats = []) {
+  const localById = new Map((Array.isArray(localChats) ? localChats : [])
+    .map((chat) => [String(chat?.id || ''), chat])
+    .filter(([id]) => Boolean(id)));
+  return (Array.isArray(remoteChats) ? remoteChats : [])
+    .filter((chat) => hasTerminalCtoxReply(chat)
+      && !chatHasSameTerminalCtoxReply(localById.get(String(chat.id || '')), chat))
+    .sort((a, b) => chatActivityMs(b) - chatActivityMs(a))[0]?.id || '';
+}
+
+function hasTerminalCtoxReply(chat) {
+  return (Array.isArray(chat?.messages) ? chat.messages : []).some((message) => isTerminalCtoxReply(message));
+}
+
+function chatHasSameTerminalCtoxReply(localChat, remoteChat) {
+  if (!localChat || !remoteChat) return false;
+  const localKeys = new Set((Array.isArray(localChat.messages) ? localChat.messages : [])
+    .filter(isTerminalCtoxReply)
+    .map(messageIdentity));
+  return (Array.isArray(remoteChat.messages) ? remoteChat.messages : [])
+    .filter(isTerminalCtoxReply)
+    .some((message) => localKeys.has(messageIdentity(message)));
+}
+
+function isTerminalCtoxReply(message = {}) {
+  if (String(message.role || '').toLowerCase() !== 'ctox') return false;
+  if (!String(message.text || '').trim()) return false;
+  const hasTrackingRef = Boolean(message.replyFor || message.commandId || message.command_id || message.taskId || message.task_id);
+  return hasTrackingRef && isTerminalTrackingStatus(message.status || 'completed');
 }
 
 function messageIdentity(message = {}) {
@@ -5879,11 +5929,13 @@ export const __businessChatTestInternals = Object.freeze({
   focusChatForUser,
   getLocalDateString,
   hasActiveTrackedMessages,
+  hydrateChatsFromRxDb,
   initSchedulerLoop,
   isChatEmptyForDeletion,
   preferredChatForDockOpen,
   persistChatState,
   schedulerDelayMs,
+  shouldDeferRemoteChatHydration,
   stageChatAttachments,
   syncTrackedMessages,
   isTransientCommandTrackingError,
