@@ -2266,7 +2266,7 @@ function inferColumnSemantics(column = {}) {
     if (pattern.test(key)) return { unit: explicitUnit || unit, metricUnit: normalizeUnit(unit), valueKind: 'numeric', description };
   }
   if (/score|ratio|percent|share|count|qty|quantity|number|index|value/.test(key)) {
-    return { unit: explicitUnit, metricUnit: explicitUnit, valueKind: 'numeric', description: 'Numeric value; exported without thousands separators and with a dot as decimal separator.' };
+    return { unit: explicitUnit, metricUnit: explicitUnit, valueKind: 'numeric', description: 'Numeric value; exported without thousands separators and with a comma as decimal separator.' };
   }
   return { unit: explicitUnit, metricUnit: explicitUnit, valueKind: '' };
 }
@@ -2613,13 +2613,16 @@ function parseNumericString(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function formatPlainNumber(value) {
+function formatPlainNumber(value, decimalSeparator = ',') {
   if (!Number.isFinite(value)) return '';
   const clean = Object.is(value, -0) ? 0 : value;
   if (Number.isInteger(clean)) return String(clean);
   let text = clean.toString();
   if (text.includes('e')) text = clean.toFixed(12);
-  return text.replace(/(\.\d*?[1-9])0+$/g, '$1').replace(/\.0+$/g, '');
+  return text
+    .replace(/(\.\d*?[1-9])0+$/g, '$1')
+    .replace(/\.0+$/g, '')
+    .replace('.', decimalSeparator);
 }
 
 function exportActiveTableCsv() {
@@ -2640,16 +2643,17 @@ function exportActiveTableCsv() {
 
 function dataframeToCsv(columns, rows) {
   const normalColumns = normalizeColumns(columns);
-  const header = normalColumns.map((column) => csvEscape(columnHeaderLabel(column))).join(',');
+  const delimiter = ';';
+  const header = normalColumns.map((column) => csvEscape(columnHeaderLabel(column))).join(delimiter);
   const body = rows.map((row) => normalColumns.map((column) => (
     csvEscape(canonicalCellValue(valueForColumn(row, column), column))
-  )).join(','));
+  )).join(delimiter));
   return [header, ...body].join('\n');
 }
 
 function csvEscape(value) {
   const text = String(value ?? '');
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  return /[";\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') {

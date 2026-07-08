@@ -133,9 +133,9 @@ test('formats factual numeric values without locale separators', () => {
     { name: 'arm_length', unit: 'in', type: 'number' },
   ]);
 
-  assert.equal(formatCell(1234.5, thrust), '1234.5');
-  assert.equal(formatCell('1.234,50', thrust), '1234.5');
-  assert.equal(formatCell(9, length), '228.6');
+  assert.equal(formatCell(1234.5, thrust), '1234,5');
+  assert.equal(formatCell('1.234,50', thrust), '1234,5');
+  assert.equal(formatCell(9, length), '228,6');
 });
 
 test('infers inch source units from dataframe column names and exports metric values', () => {
@@ -148,16 +148,16 @@ test('infers inch source units from dataframe column names and exports metric va
   assert.equal(columnHeaderLabel(pitch), 'Prop Pitch (mm)');
   assert.match(columnHeaderHelp(diameter), /Source unit: in/);
   assert.match(columnHeaderHelp(diameter), /Shown\/exported metric unit: mm/);
-  assert.equal(formatCell(9, diameter), '228.6');
+  assert.equal(formatCell(9, diameter), '228,6');
   assert.equal(formatCell(5, pitch), '127');
-  assert.equal(dataframeToCsv([diameter, pitch], [{ prop_diameter_in: 9, prop_pitch_in: 5 }]), 'Prop Diameter (mm),Prop Pitch (mm)\n228.6,127');
+  assert.equal(dataframeToCsv([diameter, pitch], [{ prop_diameter_in: 9, prop_pitch_in: 5 }]), 'Prop Diameter (mm);Prop Pitch (mm)\n228,6;127');
 });
 
 test('normalizes propeller sizes from inch shorthand to metric dimensions', () => {
   const [propeller] = normalizeColumns([{ name: 'propeller_size', label: 'Propeller size' }]);
 
-  assert.equal(canonicalCellValue('9x5', propeller), '228.6 x 127');
-  assert.equal(canonicalCellValue('10.5x4.5', propeller), '266.7 x 114.3');
+  assert.equal(canonicalCellValue('9x5', propeller), '228,6 x 127');
+  assert.equal(canonicalCellValue('10.5x4.5', propeller), '266,7 x 114,3');
 });
 
 test('exports dataframe CSV with metric headers and Excel-friendly numeric cells', () => {
@@ -169,7 +169,7 @@ test('exports dataframe CSV with metric headers and Excel-friendly numeric cells
     { propeller_size: '9x5', thrust_N: '1.234,50' },
   ]);
 
-  assert.equal(csv, '"Propeller size (diameter x pitch, mm)",Thrust (N)\n228.6 x 127,1234.5');
+  assert.equal(csv, 'Propeller size (diameter x pitch, mm);Thrust (N)\n228,6 x 127;1234,5');
 });
 
 test('source filters classify user and system knowledge', () => {

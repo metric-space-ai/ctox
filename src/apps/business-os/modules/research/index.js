@@ -850,13 +850,13 @@ function aggregateMeasurements(rows) {
     const current = bySource.get(id) || {
       count: 0,
       maxAxial: 0,
-      maxRadial: 0,
+      maxTangentialEquivalent: 0,
       maxRpm: 0,
       files: new Set(),
     };
     current.count += 1;
-    current.maxAxial = Math.max(current.maxAxial, numberValue(row.axial_load_N ?? row.thrust_N));
-    current.maxRadial = Math.max(current.maxRadial, numberValue(row.radial_load_N));
+    current.maxAxial = Math.max(current.maxAxial, numberValue(row.force_N ?? row.axial_load_N ?? row.thrust_N));
+    current.maxTangentialEquivalent = Math.max(current.maxTangentialEquivalent, numberValue(tangentialEquivalentForce(row)));
     current.maxRpm = Math.max(current.maxRpm, numberValue(row.rpm));
     if (row.source_file) current.files.add(String(row.source_file));
     bySource.set(id, current);
@@ -1665,12 +1665,12 @@ function renderMeasurementsTable() {
         <tr>
           ${measurementHeader('Quelle', 'Quell-ID der Messreihe oder des extrahierten Datensatzes.')}
           ${measurementHeader('Propeller', 'Originale Propellerangabe als Durchmesser x Steigung. 9x5 bedeutet 9 Zoll Durchmesser und 5 Zoll Steigung.')}
-          ${measurementHeader('Durchmesser (in)', 'Propeller-Durchmesser in Zoll, aus Angaben wie 9x5 separat extrahiert.', true)}
-          ${measurementHeader('Steigung (in)', 'Propeller-Steigung in Zoll, aus Angaben wie 9x5 separat extrahiert.', true)}
+          ${measurementHeader('Durchmesser (mm)', 'Propeller-Durchmesser metrisch in Millimetern, aus Angaben wie 9x5 separat extrahiert.', true)}
+          ${measurementHeader('Steigung (mm)', 'Propeller-Steigung metrisch in Millimetern, aus Angaben wie 9x5 separat extrahiert.', true)}
           ${measurementHeader('RPM', 'Drehzahl in Umdrehungen pro Minute, ohne Tausendertrennzeichen formatiert.', true)}
-          ${measurementHeader('Axial (N)', 'Axiale Kraft in Newton. Bei Propellerdaten ist dies in der Regel der gemessene Schub.', true)}
-          ${measurementHeader('Radial (N)', 'Lagerrelevante radiale Ersatzkraft in Newton, sofern aus Drehmoment und Geometrie ableitbar.', true)}
-          ${measurementHeader('Torque (Nm)', 'Drehmoment beziehungsweise Moment in Newtonmeter aus dem Messdatensatz.', true)}
+          ${measurementHeader('Force (N)', 'Axiale Kraft in Newton. Bei Propellerdaten ist dies in der Regel der gemessene Schub.', true)}
+          ${measurementHeader('Tangentiale Ersatzkraft (N)', 'Aus Drehmoment und Radius abgeleitete tangentiale Ersatzkraft. Das ist keine gemessene Lager-Radiallast.', true)}
+          ${measurementHeader('Moment/Torque (N m)', 'Drehmoment beziehungsweise Moment in Newtonmeter aus dem Messdatensatz.', true)}
           ${measurementHeader('Methode', 'Konfidenz oder Ableitungsverfahren der Messzeile.')}
         </tr>
       </thead>
@@ -1679,11 +1679,11 @@ function renderMeasurementsTable() {
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
             <td>${escapeHtml(propellerSize(row))}</td>
-            <td class="is-num">${formatMeasurementNumber(row.prop_diameter_in)}</td>
-            <td class="is-num">${formatMeasurementNumber(row.prop_pitch_in)}</td>
+            <td class="is-num">${formatMeasurementNumber(metricPropellerLength(row, 'prop_diameter'))}</td>
+            <td class="is-num">${formatMeasurementNumber(metricPropellerLength(row, 'prop_pitch'))}</td>
             <td class="is-num">${formatMeasurementNumber(row.rpm, 0)}</td>
-            <td class="is-num">${formatMeasurementNumber(row.axial_load_N ?? row.thrust_N)}</td>
-            <td class="is-num">${formatMeasurementNumber(row.radial_load_N)}</td>
+            <td class="is-num">${formatMeasurementNumber(row.force_N ?? row.axial_load_N ?? row.thrust_N)}</td>
+            <td class="is-num">${formatMeasurementNumber(tangentialEquivalentForce(row))}</td>
             <td class="is-num">${formatMeasurementNumber(row.torque_Nm)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
@@ -1707,6 +1707,20 @@ function propellerSize(row) {
   const diameter = formatMeasurementNumber(row.prop_diameter_in);
   const pitch = formatMeasurementNumber(row.prop_pitch_in);
   return [diameter, pitch].filter(isPresent).join(' x ');
+}
+
+function metricPropellerLength(row, stem) {
+  const metric = numberValue(row[`${stem}_mm`]);
+  if (metric) return metric;
+  const inches = numberValue(row[`${stem}_in`]);
+  return inches ? inches * 25.4 : '';
+}
+
+function tangentialEquivalentForce(row) {
+  const explicit = numberValue(row.tangential_equivalent_force_N);
+  if (explicit) return explicit;
+  const legacy = numberValue(row.radial_load_N);
+  return legacy ? Math.abs(legacy) : '';
 }
 
 function renderKnowledgeTables(task) {

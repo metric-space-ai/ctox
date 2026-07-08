@@ -827,7 +827,9 @@ const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
 ///   2. Read the parquet rows via the shared Polars helpers
 ///      (`scan_table` + `df_to_rows`), capped at
 ///      [`KNOWLEDGE_TABLE_RXDB_ROW_CAP`].
-///   3. Emit a doc whose `id` is `table:<table_id>` (matching the
+///   3. Add table-specific schema metadata for the browser, including
+///      standardized metric columns and hover-help descriptions.
+///   4. Emit a doc whose `id` is `table:<table_id>` (matching the
 ///      browser/HTTP id scheme), with the rows mirrored at both
 ///      `payload.rows` and top-level `rows` (the browser reads either), the
 ///      true `row_count`, and the resolved `parquet_path`.
@@ -896,12 +898,17 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             (Vec::new(), row_count)
         };
 
+        let (rows, quality_notes) = enrich_knowledge_table_rows(&table_key, rows);
+        let columns = knowledge_table_columns(&table_key, &rows);
+        let schema_value = json!({ "columns": columns.clone() });
+        let quality_notes_value =
+            Value::Array(quality_notes.into_iter().map(Value::String).collect());
         let id = format!("table:{table_id}");
         let updated_at_ms =
             rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
         let rows_value = Value::Array(rows);
 
-        // (3) Mirror rows at payload.rows and top-level rows; refresh
+        // (4) Mirror rows at payload.rows and top-level rows; refresh
         //     parquet_path + row_count to the resolved values.
         let payload = json!({
             "id": id,
@@ -917,6 +924,9 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             "bytes": bytes,
             "updated_at": updated_at,
             "has_table": true,
+            "columns": columns.clone(),
+            "schema": schema_value.clone(),
+            "quality_notes": quality_notes_value.clone(),
             "rows": rows_value.clone(),
         });
 
@@ -932,6 +942,9 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             "row_count": resolved_row_count,
             "updated_at": updated_at,
             "updated_at_ms": updated_at_ms,
+            "columns": columns,
+            "schema": schema_value,
+            "quality_notes": quality_notes_value,
             "rows": rows_value,
             "payload": payload,
         }));
@@ -949,6 +962,321 @@ fn rfc3339_to_millis(value: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.timestamp_millis())
+}
+
+fn enrich_knowledge_table_rows(table_key: &str, rows: Vec<Value>) -> (Vec<Value>, Vec<String>) {
+    if table_key != "measured_load_points" {
+        return (rows, Vec::new());
+    }
+    let rows = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| enrich_measured_load_point_row(index, row))
+        .collect();
+    (
+        rows,
+        vec![
+            "propeller_size is split into metric prop_diameter_mm and prop_pitch_mm for Excel-ready analysis.".to_string(),
+            "legacy radial_load_N is preserved in raw rows, but exposed as tangential_equivalent_force_N because it was derived from torque/radius rather than measured bearing radial load.".to_string(),
+            "load_case separates steady propeller tests, vibration, shock/blast, and mixed derived rows; aggregate these cases separately.".to_string(),
+        ],
+    )
+}
+
+fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
+    let Some(map) = row.as_object_mut() else {
+        return row;
+    };
+
+    normalize_number_field(map, "motor_kv");
+    normalize_number_field(map, "vibration_g_rms");
+    normalize_number_field(map, "prop_diameter_in");
+    normalize_number_field(map, "prop_pitch_in");
+    normalize_number_field(map, "rpm");
+    normalize_number_field(map, "thrust_N");
+    normalize_number_field(map, "axial_load_N");
+    normalize_number_field(map, "torque_Nm");
+    normalize_number_field(map, "radial_load_N");
+
+    if !map.contains_key("row_id") {
+        map.insert(
+            "row_id".to_string(),
+            Value::String(format!("MLP-{:04}", index + 1)),
+        );
+    }
+
+    if let Some(size) = string_from_map(map, "propeller_size") {
+        map.entry("original_propeller_size".to_string())
+            .or_insert(Value::String(size));
+    }
+
+    if let Some(diameter_in) = number_from_map(map, "prop_diameter_in") {
+        insert_number(map, "prop_diameter_mm", diameter_in * 25.4);
+    }
+    if let Some(pitch_in) = number_from_map(map, "prop_pitch_in") {
+        insert_number(map, "prop_pitch_mm", pitch_in * 25.4);
+    }
+
+    if !map.contains_key("propeller_size") {
+        if let (Some(diameter), Some(pitch)) = (
+            number_from_map(map, "prop_diameter_in"),
+            number_from_map(map, "prop_pitch_in"),
+        ) {
+            map.insert(
+                "propeller_size".to_string(),
+                Value::String(format!(
+                    "{}x{}",
+                    compact_decimal(diameter),
+                    compact_decimal(pitch)
+                )),
+            );
+        }
+    }
+
+    if let Some(force) =
+        number_from_map(map, "thrust_N").or_else(|| number_from_map(map, "axial_load_N"))
+    {
+        insert_number(map, "force_N", force);
+    }
+    if let Some(torque) = number_from_map(map, "torque_Nm") {
+        insert_number(map, "moment_Nm", torque);
+        insert_number(map, "torque_signed_Nm", torque);
+    }
+    if let Some(legacy_radial) = number_from_map(map, "radial_load_N") {
+        insert_number(map, "tangential_equivalent_force_N", legacy_radial.abs());
+        insert_number(map, "tangential_equivalent_force_signed_N", legacy_radial);
+    }
+    map.entry("bearing_radial_load_N".to_string())
+        .or_insert(Value::Null);
+
+    let load_case = infer_load_case(map);
+    map.entry("load_case".to_string())
+        .or_insert(Value::String(load_case.to_string()));
+    let (measurement_kind, is_derived) = infer_measurement_kind(map);
+    map.entry("measurement_kind".to_string())
+        .or_insert(Value::String(measurement_kind.to_string()));
+    map.entry("is_derived".to_string())
+        .or_insert(Value::Bool(is_derived));
+    map.entry("original_unit_system".to_string())
+        .or_insert(Value::String("mixed_source_metric_projection".to_string()));
+
+    if !map.contains_key("source_row_ref") {
+        let source_id =
+            string_from_map(map, "source_id").unwrap_or_else(|| "unknown-source".to_string());
+        let source_file =
+            string_from_map(map, "source_file").unwrap_or_else(|| "unknown-file".to_string());
+        map.insert(
+            "source_row_ref".to_string(),
+            Value::String(format!("{source_id}:{source_file}:{}", index + 1)),
+        );
+    }
+
+    row
+}
+
+fn knowledge_table_columns(table_key: &str, rows: &[Value]) -> Vec<Value> {
+    match table_key {
+        "measured_load_points" => vec![
+            column_def("row_id", "Row ID", "", "string", "Stable row identifier for audit, export, and report references.", ""),
+            column_def("source_id", "Source ID", "", "string", "Source catalog identifier used to trace this measurement back to the evidence source.", ""),
+            column_def("source_row_ref", "Source row reference", "", "string", "Stable reference combining source, source file, and projected row number.", ""),
+            column_def("propeller_size", "Propeller size", "in", "string", "Propeller shorthand such as 9x5 means 9 inch diameter and 5 inch pitch. It is shown and exported as metric diameter x pitch in millimetres.", "propeller_size"),
+            column_def("prop_diameter_mm", "Diameter", "mm", "number", "Propeller diameter split from propeller_size or prop_diameter_in and normalized to millimetres.", "numeric"),
+            column_def("prop_pitch_mm", "Pitch", "mm", "number", "Propeller pitch split from propeller_size or prop_pitch_in and normalized to millimetres.", "numeric"),
+            column_def("rpm", "RPM", "rpm", "number", "Rotational speed in revolutions per minute; exported without thousands separators.", "numeric"),
+            column_def("force_N", "Force", "N", "number", "Primary axial force value in newtons. For propeller datasets this is usually thrust.", "numeric"),
+            column_def("axial_load_N", "Axial load", "N", "number", "Axial load in newtons, retained for bearing-load calculations and traceability.", "numeric"),
+            column_def("torque_Nm", "Torque", "N m", "number", "Measured or derived shaft torque in newton metres.", "numeric"),
+            column_def("moment_Nm", "Moment", "N m", "number", "Moment alias for torque_Nm so exports can be consumed by tools that expect Moment/Torque terminology.", "numeric"),
+            column_def("tangential_equivalent_force_N", "Tangential equivalent force", "N", "number", "Torque/radius equivalent force in newtons. This is not a measured bearing radial load; use bearing_radial_load_N only when a source provides or models true radial bearing load.", "numeric"),
+            column_def("bearing_radial_load_N", "Bearing radial load", "N", "number", "True radial bearing load in newtons when directly measured or explicitly modelled. Blank means not established by the source row.", "numeric"),
+            column_def("vibration_g_rms", "Vibration", "g RMS", "number", "Vibration acceleration level in g RMS when provided by the source or scenario.", "numeric"),
+            column_def("load_case", "Load case", "", "string", "Scenario bucket used to avoid mixing steady propulsion, vibration, shock/blast, and derived rows in one statistic.", ""),
+            column_def("measurement_kind", "Measurement kind", "", "string", "Measured rows come directly from source data; derived rows were computed or inferred from source fields.", ""),
+            column_def("is_derived", "Derived", "", "boolean", "True when the value was computed or inferred instead of directly copied from the source row.", ""),
+            column_def("confidence", "Confidence", "", "string", "Extraction or derivation confidence supplied by the data-building workflow.", ""),
+            column_def("derivation_method", "Derivation method", "", "string", "Short description of how the measurement row was obtained or calculated.", ""),
+            column_def("source_file", "Source file", "", "string", "Original or staged file name used for the measurement row.", ""),
+        ],
+        "source_catalog" => vec![
+            column_def("source_id", "Source ID", "", "string", "Canonical source identifier used by reports, runbooks, and measurement rows.", ""),
+            column_def("title", "Title", "", "string", "Human-readable source title.", ""),
+            column_def("source_url", "Source URL", "", "string", "URL or DOI landing page for source verification.", ""),
+            column_def("source_class", "Source class", "", "string", "Source type such as dataset, scholarly, manufacturer, standard, or web.", ""),
+            column_def("bucket", "Bucket", "", "string", "Research bucket used for portfolio mapping.", ""),
+            column_def("review_status", "Review status", "", "string", "Review state assigned during source curation.", ""),
+            column_def("candidate_stage", "Candidate stage", "", "string", "Pipeline stage for the source candidate.", ""),
+            column_def("year", "Year", "", "number", "Publication or source year when available.", "numeric"),
+            column_def("doi", "DOI", "", "string", "Digital object identifier when available.", ""),
+            column_def("contribution_note", "Contribution note", "", "string", "Why this source matters for the SKF drone-bearing use case.", ""),
+            column_def("relevance_to_bearing_design", "Bearing-design relevance", "", "string", "Evidence value for bearing sizing, loads, materials, lubrication, sealing, or reliability.", ""),
+            column_def("evidence_note", "Evidence note", "", "string", "Reviewer note about data quality and limitations.", ""),
+        ],
+        "load_data_library" => vec![
+            column_def("library_id", "Library ID", "", "string", "Canonical load-data library row identifier.", ""),
+            column_def("source_id", "Source ID", "", "string", "Source catalog identifier for traceability.", ""),
+            column_def("source_url", "Source URL", "", "string", "URL or DOI landing page for source verification.", ""),
+            column_def("record_type", "Record type", "", "string", "Type of data extracted from the source.", ""),
+            column_def("load_channels_available", "Load channels available", "", "string", "Which load channels are available, for example force, torque, rpm, vibration, or shock.", ""),
+            column_def("bearing_design_use", "Bearing-design use", "", "string", "How the extracted record informs bearing sizing or selection.", ""),
+            column_def("limitations", "Limitations", "", "string", "Known limitations or caveats for reuse in calculations and reports.", ""),
+            column_def("review_status", "Review status", "", "string", "Curation state for this load-data record.", ""),
+        ],
+        _ => infer_columns_from_rows(rows),
+    }
+}
+
+fn column_def(
+    key: &str,
+    label: &str,
+    unit: &str,
+    dtype: &str,
+    description: &str,
+    value_kind: &str,
+) -> Value {
+    json!({
+        "key": key,
+        "name": key,
+        "label": label,
+        "unit": unit,
+        "type": dtype,
+        "description": description,
+        "valueKind": value_kind,
+    })
+}
+
+fn infer_columns_from_rows(rows: &[Value]) -> Vec<Value> {
+    let Some(object) = rows.iter().find_map(Value::as_object) else {
+        return Vec::new();
+    };
+    object
+        .iter()
+        .map(|(key, value)| {
+            let dtype = if value.is_number() {
+                "number"
+            } else if value.is_boolean() {
+                "boolean"
+            } else {
+                "string"
+            };
+            column_def(key, key, "", dtype, "Projected knowledge-table column.", "")
+        })
+        .collect()
+}
+
+fn normalize_number_field(map: &mut Map<String, Value>, key: &str) {
+    if let Some(number) = map.get(key).and_then(json_number) {
+        insert_number(map, key, number);
+    }
+}
+
+fn number_from_map(map: &Map<String, Value>, key: &str) -> Option<f64> {
+    map.get(key).and_then(json_number)
+}
+
+fn string_from_map(map: &Map<String, Value>, key: &str) -> Option<String> {
+    let value = map.get(key)?;
+    if let Some(text) = value.as_str() {
+        let text = text.trim();
+        if !text.is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    if value.is_number() || value.is_boolean() {
+        return Some(value.to_string());
+    }
+    None
+}
+
+fn json_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => parse_decimal_number(text),
+        _ => None,
+    }
+}
+
+fn parse_decimal_number(value: &str) -> Option<f64> {
+    let mut normalized = value.trim().replace(' ', "");
+    if normalized.is_empty() {
+        return None;
+    }
+    let comma = normalized.rfind(',');
+    let dot = normalized.rfind('.');
+    if let (Some(comma), Some(dot)) = (comma, dot) {
+        if comma > dot {
+            normalized = normalized.replace('.', "").replace(',', ".");
+        } else {
+            normalized = normalized.replace(',', "");
+        }
+    } else if comma.is_some() {
+        normalized = normalized.replace(',', ".");
+    }
+    normalized
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn insert_number(map: &mut Map<String, Value>, key: &str, value: f64) {
+    if let Some(number) = serde_json::Number::from_f64(value) {
+        map.insert(key.to_string(), Value::Number(number));
+    }
+}
+
+fn infer_load_case(map: &Map<String, Value>) -> &'static str {
+    let text = row_text(map);
+    if text.contains("shock") || text.contains("blast") || text.contains("overpressure") {
+        "shock_overpressure"
+    } else if text.contains("vibration") || map.contains_key("vibration_g_rms") {
+        "vibration_test"
+    } else if text.contains("csv") || text.contains("prop") || map.contains_key("propeller_size") {
+        "steady_propeller_test"
+    } else {
+        "derived_or_mixed"
+    }
+}
+
+fn infer_measurement_kind(map: &Map<String, Value>) -> (&'static str, bool) {
+    let text = row_text(map);
+    if text.contains("direct experimental") || text.contains("measured") || text.contains(".csv") {
+        ("measured", false)
+    } else {
+        ("derived", true)
+    }
+}
+
+fn row_text(map: &Map<String, Value>) -> String {
+    [
+        "source_id",
+        "source_file",
+        "record_type",
+        "confidence",
+        "derivation_method",
+        "load_case",
+    ]
+    .iter()
+    .filter_map(|key| string_from_map(map, key))
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase()
+}
+
+fn compact_decimal(value: f64) -> String {
+    if !value.is_finite() {
+        return String::new();
+    }
+    if value.fract().abs() < f64::EPSILON {
+        return format!("{value:.0}");
+    }
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
 }
 
 pub(super) fn validate_identifier(label: &str, value: &str) -> Result<()> {
@@ -1109,6 +1437,43 @@ mod tests {
             .collect();
         assert!(titles.contains(&"Bearing handbook"));
         Ok(())
+    }
+
+    #[test]
+    fn measured_load_point_projection_adds_metric_semantics() {
+        let rows = vec![json!({
+            "source_id": "SRC-1",
+            "source_file": "prop-tests.csv",
+            "propeller_size": "9x5",
+            "prop_diameter_in": 9,
+            "prop_pitch_in": 5,
+            "thrust_N": 12.5,
+            "torque_Nm": -0.2,
+            "radial_load_N": "-1.75",
+            "vibration_g_rms": "1.500000",
+            "derivation_method": "direct experimental CSV"
+        })];
+
+        let (rows, notes) = enrich_knowledge_table_rows("measured_load_points", rows);
+        assert_eq!(notes.len(), 3);
+        let row = rows[0].as_object().expect("projected object row");
+        assert_eq!(row["row_id"].as_str(), Some("MLP-0001"));
+        assert_eq!(row["prop_diameter_mm"].as_f64(), Some(228.6));
+        assert_eq!(row["prop_pitch_mm"].as_f64(), Some(127.0));
+        assert_eq!(row["force_N"].as_f64(), Some(12.5));
+        assert_eq!(row["moment_Nm"].as_f64(), Some(-0.2));
+        assert_eq!(row["tangential_equivalent_force_N"].as_f64(), Some(1.75));
+        assert_eq!(row["measurement_kind"].as_str(), Some("measured"));
+        assert_eq!(row["load_case"].as_str(), Some("vibration_test"));
+
+        let labels: Vec<String> = knowledge_table_columns("measured_load_points", &rows)
+            .iter()
+            .filter_map(|column| column["label"].as_str().map(str::to_string))
+            .collect();
+        assert!(labels.contains(&"Diameter".to_string()));
+        assert!(labels.contains(&"Pitch".to_string()));
+        assert!(labels.contains(&"Torque".to_string()));
+        assert!(labels.contains(&"Tangential equivalent force".to_string()));
     }
 
     /// An archived catalog row must not be projected.
