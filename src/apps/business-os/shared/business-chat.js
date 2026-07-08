@@ -2447,6 +2447,7 @@ async function syncTrackedMessages({ state, db }) {
     if (taskId) taskIds.add(taskId);
   }
   const taskDocs = await findDocsByIds(queue, taskIds);
+  const taskDocsByCommand = await findQueueDocsByCommandIds(queue, commandIds);
 
   for (const chat of state.chats) {
     let chatChanged = false;
@@ -2456,8 +2457,11 @@ async function syncTrackedMessages({ state, db }) {
       const commandId = trackingIdFromMessage(message, 'command');
       const taskId = trackingIdFromMessage(message, 'task');
       const commandDoc = commandId ? commandDocs.get(commandId) || null : null;
-      const resolvedTaskId = taskId || String(commandDoc?.task_id || commandDoc?.taskId || '').trim();
-      const taskDoc = resolvedTaskId ? taskDocs.get(resolvedTaskId) || null : null;
+      const taskDocByCommand = commandId ? taskDocsByCommand.get(commandId) || null : null;
+      const resolvedTaskId = taskId
+        || String(commandDoc?.task_id || commandDoc?.taskId || '').trim()
+        || String(taskDocByCommand?.id || '').trim();
+      const taskDoc = (resolvedTaskId ? taskDocs.get(resolvedTaskId) || null : null) || taskDocByCommand;
       const nextTaskId = taskId || resolvedTaskId || taskDoc?.id || '';
       const orphanedTracking = !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
       const nextStatus = orphanedTracking ? 'failed' : preferredTrackingStatus(commandDoc, taskDoc, message.status);
@@ -2570,6 +2574,25 @@ async function findDocsByIds(collection, ids) {
     if (doc?.id) byId.set(String(doc.id), doc);
   }));
   return byId;
+}
+
+async function findQueueDocsByCommandIds(collection, commandIds) {
+  const unique = Array.from(new Set(Array.from(commandIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)));
+  const byCommandId = new Map();
+  if (!collection || !unique.length || typeof collection.find !== 'function') return byCommandId;
+  try {
+    const docs = await collection
+      .find({ selector: { command_id: { $in: unique } }, limit: unique.length })
+      .exec();
+    for (const doc of Array.isArray(docs) ? docs : []) {
+      const json = doc?.toJSON?.() || doc;
+      const commandId = String(json?.command_id || json?.commandId || '').trim();
+      if (commandId && !byCommandId.has(commandId)) byCommandId.set(commandId, json);
+    }
+  } catch {}
+  return byCommandId;
 }
 
 async function findDoc(collection, id) {

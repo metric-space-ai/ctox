@@ -93,13 +93,63 @@ test('business chat tracking sync batches command and queue lookups', async () =
 
   assert.equal(changed, true);
   assert.equal(commands.stats.findCalls, 1);
-  assert.equal(queue.stats.findCalls, 1);
+  assert.equal(queue.stats.findCalls, 2);
   assert.equal(commands.stats.findOneCalls, 0);
   assert.equal(queue.stats.findOneCalls, 0);
   assert.deepEqual(commands.stats.requestedIds[0].sort(), Array.from({ length: 40 }, (_, index) => `cmd-${index}`).sort());
   assert.deepEqual(queue.stats.requestedIds[0].sort(), Array.from({ length: 40 }, (_, index) => `task-${index}`).sort());
   assert.equal(state.chats.every((chat, index) => chat.messages[0].taskId === `task-${index}`), true);
   assert.equal(state.chats.every((chat) => chat.messages[0].status === 'completed'), true);
+});
+
+test('business chat resolves failed queue task by command id when command has no task id', async () => {
+  const createdAt = Date.now();
+  const commands = makeBatchCollection([{
+    id: 'cmd-usage-limit',
+    command_id: 'cmd-usage-limit',
+    status: 'accepted',
+  }]);
+  const queue = makeBatchCollection([{
+    id: 'queue:system::usage-limit',
+    command_id: 'cmd-usage-limit',
+    status: 'failed',
+    status_note: 'Usage limit exceeded.',
+  }]);
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: '2026-06-23',
+    dockCollapsed: true,
+    activeChatId: 'chat-old',
+    chats: [{
+      id: 'chat-visible-error',
+      createdAt,
+      open: true,
+      minimized: true,
+      messages: [{
+        id: 'message-pending',
+        commandId: 'cmd-usage-limit',
+        status: 'queued',
+        createdAt,
+      }],
+    }],
+  };
+
+  const changed = await __businessChatTestInternals.syncTrackedMessages({
+    state,
+    db: { raw: { business_commands: commands, ctox_queue_tasks: queue } },
+  });
+
+  const chat = state.chats[0];
+  assert.equal(changed, true);
+  assert.equal(chat.messages[0].taskId, 'queue:system::usage-limit');
+  assert.equal(chat.messages[0].status, 'failed');
+  assert.equal(chat.messages.at(-1).role, 'ctox');
+  assert.match(chat.messages.at(-1).text, /Usage limit exceeded/);
+  assert.equal(state.activeChatId, 'chat-visible-error');
+  assert.equal(state.dockCollapsed, false);
+  assert.equal(commands.stats.findCalls, 1);
+  assert.equal(queue.stats.findCalls, 1);
+  assert.deepEqual(queue.stats.requestedCommandIds[0], ['cmd-usage-limit']);
 });
 
 test('business chat focuses the visible chat when CTOX writes a reply', async () => {
@@ -520,6 +570,7 @@ function makeBatchCollection(rows) {
     findCalls: 0,
     findOneCalls: 0,
     requestedIds: [],
+    requestedCommandIds: [],
   };
   return {
     stats,
@@ -528,12 +579,20 @@ function makeBatchCollection(rows) {
       const ids = Array.isArray(query?.selector?.id?.$in)
         ? query.selector.id.$in.map(String)
         : [];
+      const commandIds = Array.isArray(query?.selector?.command_id?.$in)
+        ? query.selector.command_id.$in.map(String)
+        : [];
       stats.requestedIds.push(ids);
+      if (commandIds.length) stats.requestedCommandIds.push(commandIds);
       return {
         async exec() {
-          return ids
+          const docsById = ids
             .map((id) => byId.get(id))
-            .filter(Boolean)
+            .filter(Boolean);
+          const docsByCommandId = commandIds.length
+            ? rows.filter((row) => commandIds.includes(String(row.command_id || row.commandId || '')))
+            : [];
+          return [...docsById, ...docsByCommandId]
             .map((doc) => ({ toJSON: () => ({ ...doc }) }));
         },
       };
