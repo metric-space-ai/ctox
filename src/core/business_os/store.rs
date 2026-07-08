@@ -32924,19 +32924,19 @@ fn decode_verified_desktop_file_chunks(
         !chunks.is_empty(),
         "Business OS attachment `{file_id}` has no chunks for generation `{generation_id}`"
     );
-    let total = chunks
+    let declared_total = chunks
         .first()
         .and_then(|chunk| chunk.get("total"))
         .and_then(Value::as_u64)
         .with_context(|| format!("Business OS attachment `{file_id}` chunk total is missing"))?;
     anyhow::ensure!(
-        total > 0,
+        declared_total > 0,
         "Business OS attachment `{file_id}` chunk total is zero"
     );
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
     anyhow::ensure!(
-        total == expected_total,
-        "Business OS attachment `{file_id}` chunk total mismatch"
+        expected_total > 0,
+        "Business OS attachment `{file_id}` expected chunk total is zero"
     );
     let mut by_index = BTreeMap::new();
     for chunk in chunks {
@@ -32952,8 +32952,14 @@ fn decode_verified_desktop_file_chunks(
             chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id),
             "Business OS attachment `{file_id}` chunk generation mismatch"
         );
+        let chunk_total = chunk
+            .get("total")
+            .and_then(Value::as_u64)
+            .with_context(|| {
+                format!("Business OS attachment `{file_id}` chunk total is missing")
+            })?;
         anyhow::ensure!(
-            chunk.get("total").and_then(Value::as_u64) == Some(total),
+            chunk_total == declared_total,
             "Business OS attachment `{file_id}` chunk total mismatch"
         );
         anyhow::ensure!(
@@ -32976,14 +32982,17 @@ fn decode_verified_desktop_file_chunks(
             .get("idx")
             .and_then(Value::as_u64)
             .with_context(|| format!("Business OS attachment `{file_id}` chunk idx is missing"))?;
-        anyhow::ensure!(
-            idx < total,
-            "Business OS attachment `{file_id}` chunk idx is out of range"
-        );
         let data = chunk
             .get("data")
             .and_then(Value::as_str)
             .with_context(|| format!("Business OS attachment `{file_id}` chunk data is missing"))?;
+        if idx >= expected_total {
+            anyhow::ensure!(
+                data.is_empty(),
+                "Business OS attachment `{file_id}` chunk idx is out of range"
+            );
+            continue;
+        }
         if let Some(size) = chunk.get("size_bytes").and_then(Value::as_u64) {
             anyhow::ensure!(
                 size == data.len() as u64,
@@ -33010,11 +33019,11 @@ fn decode_verified_desktop_file_chunks(
         );
     }
     anyhow::ensure!(
-        by_index.len() as u64 == total,
+        by_index.len() as u64 == expected_total,
         "Business OS attachment `{file_id}` is missing chunks"
     );
     let mut encoded = String::new();
-    for idx in 0..total {
+    for idx in 0..expected_total {
         let chunk = by_index.get(&idx).with_context(|| {
             format!("Business OS attachment `{file_id}` is missing chunk {idx}")
         })?;
@@ -44994,6 +45003,70 @@ mod tests {
     }
 
     #[test]
+    fn cv_print_queue_accepts_empty_trailing_desktop_chunk_padding() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = simple_text_pdf_bytes(&[
+            "Matthias Behrendt",
+            "Projektleiter Energie und Gebaeudetechnik",
+            "Dortmund",
+        ]);
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_padded_chunks",
+            "Lebenslauf_Matthias_Behrendt.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+        add_empty_trailing_rxdb_chunk_padding(root, "cv_pdf_padded_chunks", &generation_id)?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_padded_chunks",
+                "command_id": "cmd_cv_padded_chunks",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_matthias",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Matthias_Behrendt.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": "cv_pdf_padded_chunks",
+                    "generation_id": generation_id,
+                    "filename": "Lebenslauf_Matthias_Behrendt.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": bytes.len(),
+                    "sha256": content_hash,
+                    "document_id": "doc_cv_matthias",
+                    "version_id": "doc_cv_matthias_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_matthias",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Matthias Behrendt"));
+        assert!(task.prompt.contains("source_file_id: cv_pdf_padded_chunks"));
+        Ok(())
+    }
+
+    #[test]
     fn business_chat_queue_rejects_corrupt_desktop_file_attachment_chunk() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -45212,6 +45285,52 @@ mod tests {
              WHERE json_extract(data, '$.file_id') = ?1
                AND json_extract(data, '$.generation_id') = ?2",
             params![file_id, generation_id],
+        )?;
+        Ok(())
+    }
+
+    fn add_empty_trailing_rxdb_chunk_padding(
+        root: &Path,
+        file_id: &str,
+        generation_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let data: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+                 WHERE json_extract(data, '$.file_id') = ?1
+                   AND json_extract(data, '$.generation_id') = ?2
+                 ORDER BY CAST(json_extract(data, '$.idx') AS INTEGER) DESC
+                 LIMIT 1",
+                params![file_id, generation_id],
+                |row| row.get(0),
+            )
+            .context("expected seeded chunk")?;
+        let mut last: Value = serde_json::from_str(&data)?;
+        let previous_total = last
+            .get("total")
+            .and_then(Value::as_u64)
+            .context("seeded chunk total")?;
+        let padded_total = previous_total + 1;
+        conn.execute(
+            "UPDATE ctox_business_os__desktop_file_chunks__v0
+             SET data = json_set(data, '$.total', ?3)
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND json_extract(data, '$.generation_id') = ?2",
+            params![file_id, generation_id, padded_total],
+        )?;
+        last["id"] = Value::String(format!("{file_id}_{generation_id}_{previous_total}"));
+        last["idx"] = Value::from(previous_total);
+        last["total"] = Value::from(padded_total);
+        last["data"] = Value::String(String::new());
+        last["size_bytes"] = Value::from(0_u64);
+        last["chunk_hash"] = Value::String(hex_sha256(b""));
+        conn.execute(
+            "INSERT INTO ctox_business_os__desktop_file_chunks__v0 (id, data) VALUES (?1, ?2)",
+            params![
+                format!("{file_id}_{generation_id}_{previous_total}"),
+                last.to_string()
+            ],
         )?;
         Ok(())
     }
