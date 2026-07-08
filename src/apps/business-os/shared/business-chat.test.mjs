@@ -445,6 +445,116 @@ test('business chat keeps local state when remote chat persistence is volatile',
   }
 });
 
+test('business chat starts live sync for chat and tracking collections only', async () => {
+  const calls = [];
+  const sync = {
+    async startCollection(name) {
+      calls.push(name);
+      return {
+        state: {
+          async awaitInSync() {},
+          async awaitInitialReplication() {},
+        },
+      };
+    },
+  };
+
+  const results = await __businessChatTestInternals.startChatLiveCollections({
+    sync,
+    db: {
+      raw: {
+        business_chats: {},
+        business_commands: {},
+        ctox_queue_tasks: {},
+        desktop_file_chunks: {},
+      },
+    },
+  });
+
+  assert.deepEqual(calls.sort(), ['business_chats', 'business_commands', 'ctox_queue_tasks'].sort());
+  assert.equal(results.every((result) => result.ok), true);
+});
+
+test('business chat remote persistence merges terminal native replies', async () => {
+  const createdAt = Date.now();
+  const remote = {
+    id: 'chat-merge',
+    owner_user_id: 'user-1',
+    title: 'Matching Frage',
+    createdAt,
+    updated_at_ms: createdAt + 10,
+    open: true,
+    minimized: false,
+    messages: [
+      {
+        id: 'status-cmd-merge',
+        role: 'ctox',
+        text: 'Task angelegt und in der CTOX Queue.',
+        commandId: 'cmd-merge',
+        taskId: 'queue-merge',
+        status: 'queued',
+        createdAt,
+      },
+      {
+        id: 'reply-cmd-merge',
+        role: 'ctox',
+        text: 'Fertige native Antwort.',
+        replyFor: 'queue-merge',
+        commandId: 'cmd-merge',
+        taskId: 'queue-merge',
+        status: 'completed',
+        createdAt: createdAt + 10,
+      },
+    ],
+  };
+  const local = {
+    id: 'chat-merge',
+    owner_user_id: 'user-1',
+    title: 'Matching Frage',
+    createdAt,
+    updated_at_ms: createdAt + 20,
+    open: true,
+    minimized: true,
+    messages: [
+      {
+        id: 'status-cmd-merge',
+        role: 'ctox',
+        text: 'Task angelegt und in der CTOX Queue.',
+        commandId: 'cmd-merge',
+        taskId: 'queue-merge',
+        status: 'queued',
+        createdAt,
+      },
+    ],
+  };
+  const patches = [];
+  const collection = {
+    findOne(id) {
+      assert.equal(id, 'chat-merge');
+      return {
+        async exec() {
+          return {
+            toJSON: () => ({ ...remote, messages: remote.messages.map((message) => ({ ...message })) }),
+            async incrementalPatch(patch) {
+              patches.push(patch);
+            },
+          };
+        },
+      };
+    },
+    async insert() {
+      throw new Error('existing chat should be patched, not inserted');
+    },
+  };
+
+  await __businessChatTestInternals.persistChatDocsRemote(collection, [local]);
+
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].messages.some((message) => message.id === 'reply-cmd-merge'), true);
+  assert.equal(patches[0].messages.find((message) => message.id === 'reply-cmd-merge')?.status, 'completed');
+  assert.equal(patches[0].messages.find((message) => message.id === 'status-cmd-merge')?.taskId, 'queue-merge');
+});
+
 test('business chat treats only disposable empty chats as deletion-empty', () => {
   const { isChatEmptyForDeletion } = __businessChatTestInternals;
 

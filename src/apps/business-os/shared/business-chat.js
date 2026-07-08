@@ -24,6 +24,11 @@ const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
 const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
 const CHAT_REMOTE_PERSIST_DEFER_MS = 0;
+const CHAT_LIVE_SYNC_COLLECTIONS = Object.freeze([
+  CHAT_COLLECTION,
+  'business_commands',
+  'ctox_queue_tasks',
+]);
 
 export function initBusinessChat({
   session,
@@ -158,6 +163,16 @@ export function initBusinessChat({
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
+
+  startChatLiveCollections({
+    sync: syncFacade,
+    db,
+    onReady: () => {
+      syncChats();
+      scheduleTrackedMessageSync(0);
+      trackingWatch?.refresh?.({ schedule: true });
+    },
+  });
 
   const handleExternalSubmit = async (event) => {
     const detail = event.detail || {};
@@ -2996,13 +3011,41 @@ async function persistChatDocsRemote(collection, docs) {
   for (const doc of docs) {
     try {
       const existing = await withChatPersistenceTimeout(collection.findOne(doc.id).exec());
-      if (existing) await withChatPersistenceTimeout(existing.incrementalPatch(doc));
-      else await withChatPersistenceTimeout(collection.insert(doc));
+      if (existing) {
+        const existingJson = existing.toJSON?.() || {};
+        const owner = doc.owner_user_id || existingJson.owner_user_id || '';
+        const merged = mergeChatPair(doc, existingJson, owner);
+        await withChatPersistenceTimeout(existing.incrementalPatch(merged));
+      } else {
+        await withChatPersistenceTimeout(collection.insert(doc));
+      }
     } catch (error) {
       if (isVolatileChatPersistenceError(error)) return;
       throw error;
     }
   }
+}
+
+function startChatLiveCollections({ sync, db, onReady } = {}) {
+  if (!sync?.startCollection) return Promise.resolve([]);
+  const starts = CHAT_LIVE_SYNC_COLLECTIONS
+    .filter((collection) => db?.raw?.[collection])
+    .map(async (collection) => {
+      try {
+        const bridge = await sync.startCollection(collection);
+        await bridge?.state?.awaitInSync?.().catch?.(() => {});
+        await bridge?.state?.awaitInitialReplication?.().catch?.(() => {});
+        return { collection, ok: true };
+      } catch (error) {
+        console.warn?.(`[business-chat] live sync start failed for ${collection}`, error);
+        return { collection, ok: false, error };
+      }
+    });
+  if (!starts.length) return Promise.resolve([]);
+  return Promise.all(starts).then((results) => {
+    onReady?.(results);
+    return results;
+  });
 }
 
 async function withChatPersistenceTimeout(operation, timeoutMs = CHAT_REMOTE_PERSIST_TIMEOUT_MS) {
@@ -5933,9 +5976,11 @@ export const __businessChatTestInternals = Object.freeze({
   initSchedulerLoop,
   isChatEmptyForDeletion,
   preferredChatForDockOpen,
+  persistChatDocsRemote,
   persistChatState,
   schedulerDelayMs,
   shouldDeferRemoteChatHydration,
+  startChatLiveCollections,
   stageChatAttachments,
   syncTrackedMessages,
   isTransientCommandTrackingError,
