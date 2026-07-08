@@ -2248,6 +2248,14 @@ function inferColumnSemantics(column = {}) {
       description: 'Propeller size such as 9x5 means 9 inch diameter and 5 inch pitch. Knowledge normalizes this as diameter x pitch in millimetres for metric comparison and CSV export.',
     };
   }
+  if (/load_case|case$|measurement_kind|derivation_method/.test(key)) {
+    return {
+      unit: explicitUnit,
+      metricUnit: explicitUnit,
+      valueKind: '',
+      description: 'Categorical provenance field; use it for grouping and filtering, not as a numeric measurement.',
+    };
+  }
   const unitByToken = [
     [/thrust|force|load|bearing_load|weight_force/, 'N', 'Force or load in newtons.'],
     [/torque|moment/, 'N m', 'Torque in newton metres.'],

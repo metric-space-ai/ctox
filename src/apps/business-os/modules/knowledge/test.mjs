@@ -116,15 +116,18 @@ test('merges item metadata with table payload data for dataframe rendering', () 
 });
 
 test('standardizes dataframe headers with units and hover help', () => {
-  const [propeller, thrust] = normalizeColumns([
+  const [propeller, thrust, loadCase] = normalizeColumns([
     { name: 'propeller_size', label: 'Propeller size' },
     { name: 'thrust_N', type: 'number' },
+    { name: 'load_case', type: 'string' },
   ]);
 
   assert.equal(columnHeaderLabel(propeller), 'Propeller size (diameter x pitch, mm)');
   assert.match(columnHeaderHelp(propeller), /9x5 means 9 inch diameter and 5 inch pitch/);
   assert.equal(columnHeaderLabel(thrust), 'Thrust (N)');
   assert.match(columnHeaderHelp(thrust), /newtons/i);
+  assert.equal(columnHeaderLabel(loadCase), 'Load Case');
+  assert.doesNotMatch(columnHeaderHelp(loadCase), /Source unit: N/);
 });
 
 test('formats factual numeric values without locale separators', () => {
