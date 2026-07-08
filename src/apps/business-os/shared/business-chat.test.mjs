@@ -102,6 +102,86 @@ test('business chat tracking sync batches command and queue lookups', async () =
   assert.equal(state.chats.every((chat) => chat.messages[0].status === 'completed'), true);
 });
 
+test('business chat focuses the visible chat when CTOX writes a reply', async () => {
+  const createdAt = Date.now();
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: '2026-06-23',
+    dockCollapsed: true,
+    activeChatId: 'chat-empty-old',
+    chats: [
+      {
+        id: 'chat-empty-old',
+        createdAt: new Date('2026-06-23T08:00:00Z').getTime(),
+        messages: [],
+        open: true,
+      },
+      {
+        id: 'chat-reply',
+        createdAt,
+        messages: [{
+          id: 'message-pending',
+          commandId: 'cmd-visible',
+          status: 'queued',
+          createdAt,
+        }],
+        open: true,
+        minimized: true,
+      },
+    ],
+  };
+  const commands = makeBatchCollection([{
+    id: 'cmd-visible',
+    task_id: 'task-visible',
+    status: 'accepted',
+  }]);
+  const queue = makeBatchCollection([{
+    id: 'task-visible',
+    status: 'completed',
+    result: { outbound_text: 'CTOX ist verbunden und die Antwort ist sichtbar.' },
+  }]);
+
+  const changed = await __businessChatTestInternals.syncTrackedMessages({
+    state,
+    db: { raw: { business_commands: commands, ctox_queue_tasks: queue } },
+  });
+
+  const replyChat = state.chats.find((chat) => chat.id === 'chat-reply');
+  assert.equal(changed, true);
+  assert.equal(state.activeChatId, 'chat-reply');
+  assert.equal(state.dockCollapsed, false);
+  assert.equal(state.selectedDate, __businessChatTestInternals.getLocalDateString(createdAt));
+  assert.equal(replyChat.minimized, false);
+  assert.equal(replyChat.messages.at(-1).role, 'ctox');
+  assert.equal(replyChat.messages.at(-1).text, 'CTOX ist verbunden und die Antwort ist sichtbar.');
+});
+
+test('business chat dock opens the latest substantive chat instead of an old empty day', () => {
+  const oldEmpty = {
+    id: 'chat-empty-old',
+    createdAt: new Date('2026-06-23T08:00:00Z').getTime(),
+    messages: [],
+    open: true,
+  };
+  const visible = {
+    id: 'chat-visible',
+    createdAt: Date.now(),
+    updated_at_ms: Date.now() + 10,
+    messages: [{ id: 'message-1', role: 'ctox', text: 'Antwort vorhanden.' }],
+    open: true,
+    minimized: true,
+  };
+  const state = { selectedDate: '2026-06-23', activeChatId: oldEmpty.id, chats: [oldEmpty, visible] };
+
+  assert.equal(__businessChatTestInternals.preferredChatForDockOpen(state), visible);
+  __businessChatTestInternals.focusChatForUser(state, visible);
+
+  assert.equal(state.activeChatId, visible.id);
+  assert.equal(state.selectedDate, __businessChatTestInternals.getLocalDateString(visible.createdAt));
+  assert.equal(visible.minimized, false);
+  assert.equal(state.dockCollapsed, false);
+});
+
 test('business chat persistence timeout is treated as volatile', async () => {
   const startedAt = Date.now();
   await assert.rejects(
@@ -171,6 +251,20 @@ test('business chat keeps local state when remote chat persistence is volatile',
       globalThis.localStorage = previousLocalStorage;
     }
   }
+});
+
+test('business chat treats only disposable empty chats as deletion-empty', () => {
+  const { isChatEmptyForDeletion } = __businessChatTestInternals;
+
+  assert.equal(isChatEmptyForDeletion({ messages: [] }), true);
+  assert.equal(isChatEmptyForDeletion({ messages: [{ id: 'msg-1', text: 'hi' }] }), false);
+  assert.equal(isChatEmptyForDeletion({ messages: [], draft: ' noch nicht senden ' }), false);
+  assert.equal(isChatEmptyForDeletion({ messages: [], lastTrackingId: 'task-1' }), false);
+  assert.equal(isChatEmptyForDeletion({ messages: [], attachments: [{ fileId: 'file-1' }] }), false);
+  assert.equal(isChatEmptyForDeletion({
+    messages: [],
+    scheduledAttachmentsByCommand: { 'cmd-1': [{ fileId: 'scheduled-file-1' }] },
+  }), false);
 });
 
 test('business chat tracking watch only pins command and queue collections while active tracking exists', () => {

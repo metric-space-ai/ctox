@@ -924,11 +924,12 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
   const runtime = runtimeSettings?.runtime || {};
   const auth = runtimeSettings?.auth || {};
   const diagnostics = runtimeSettings?.diagnostics || {};
-  const provider = runtime.provider || 'local';
+  const provider = String(runtime.provider || '').trim().toLowerCase();
+  const providerLoaded = Boolean(provider);
   const authMode = normalizedRuntimeAuthMode(provider, auth.mode);
   const isLocalProvider = provider === 'local';
   const usesSubscription = provider === 'openai' && isSubscriptionMode(authMode);
-  const usesApiKey = !isLocalProvider && !usesSubscription;
+  const usesApiKey = providerLoaded && !isLocalProvider && !usesSubscription;
   const serviceNeedsAttention = Boolean(diagnostics.service_needs_attention);
   const authNeedsAttention = Boolean(diagnostics.auth_needs_attention);
   const canManage = Boolean(isAdmin && runtimeSettings?.can_manage !== false);
@@ -939,13 +940,14 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
         <span>${escapeHtml(runtimeLoading ? 'Status wird gelesen.' : runtimeAuthSummary(provider, authMode, auth))}</span>
       </header>
       <div class="runtime-status-strip">
-        ${runtimePill('Modelle', `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}`, false)}
+        ${runtimePill('Modelle', providerLoaded ? `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}` : 'nicht geladen', false)}
         ${runtimePill('Autorisierung', runtimeAuthSummary(provider, authMode, auth), authNeedsAttention)}
         ${runtimePill('CTOX Service', diagnostics.service_message || 'Status unbekannt', serviceNeedsAttention)}
         ${runtimePill('Route', runtimeRouteSummary(runtime, provider, auth), false)}
       </div>
       <div class="settings-grid">
         <label><span>Provider</span><select data-runtime-provider ${canManage ? '' : 'disabled'}>
+          ${providerLoaded ? '' : option('', 'Nicht geladen', provider)}
           ${option('local', 'Local CTOX', provider)}
           ${option('openai', 'OpenAI', provider)}
           ${option('openrouter', 'OpenRouter', provider)}
@@ -1901,6 +1903,7 @@ function option(value, label, selected) {
 }
 
 function normalizedRuntimeAuthMode(provider, mode) {
+  if (!String(provider || '').trim()) return '';
   if (String(provider || '').toLowerCase() === 'local') return 'local';
   const value = String(mode || '').toLowerCase();
   if (String(provider || '').toLowerCase() !== 'openai') return 'api_key';
@@ -1920,10 +1923,11 @@ function runtimeProviderLabel(provider) {
     openrouter: 'OpenRouter',
     anthropic: 'Anthropic',
     minimax: 'MiniMax',
-  }[String(provider || '').toLowerCase()] || provider || '-';
+  }[String(provider || '').toLowerCase()] || provider || 'nicht geladen';
 }
 
 function runtimeAuthSummary(provider, authMode, auth) {
+  if (!String(provider || '').trim()) return 'nicht geladen';
   if (String(provider || '').toLowerCase() === 'local') return 'nicht erforderlich';
   if (isSubscriptionMode(authMode)) {
     if (auth.subscription_session_configured) {
@@ -1941,6 +1945,7 @@ function runtimeRouteSummary(runtime, provider, auth = {}) {
   const source = String(runtime?.source || '').toLowerCase();
   const upstream = String(runtime?.upstream_base_url || '').trim();
   const keyName = String(auth?.api_key_name || '').trim();
+  if (!normalizedProvider && !source && !upstream) return 'nicht geladen';
   if (normalizedProvider === 'local' || source === 'local') return 'Lokal';
   if (isCtoxProxyUpstream(upstream) || keyName === 'CTOX_LLM_PROXY_API_KEY') {
     return 'ctox.dev Proxy';
@@ -1964,6 +1969,9 @@ function hostLabel(value) {
 
 function runtimeModelControl(provider, model, canManage) {
   const value = String(model || '');
+  if (!String(provider || '').trim()) {
+    return `<label><span>Chat Modell</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="Runtime nicht geladen" ${canManage ? '' : 'disabled'} /></label>`;
+  }
   if (String(provider || '').toLowerCase() === 'local') {
     return `<label><span>Lokales Modell</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="kein Modell aus Runtime gemeldet" ${canManage ? '' : 'disabled'} /></label>`;
   }
@@ -2062,7 +2070,10 @@ function kv(key, value) {
 }
 
 function runtimePayloadFromForm(root) {
-  const provider = root.querySelector('[data-runtime-provider]')?.value || 'local';
+  const provider = root.querySelector('[data-runtime-provider]')?.value || '';
+  if (!provider) {
+    throw new Error('Runtime-Provider ist noch nicht geladen.');
+  }
   const authMode = normalizedRuntimeAuthMode(
     provider,
     root.querySelector('[data-runtime-auth-mode]')?.value || 'api_key',
@@ -2079,7 +2090,7 @@ function runtimePayloadFromForm(root) {
 }
 
 function runtimeSettingsWithDraft(current, draft) {
-  const provider = draft.provider || 'local';
+  const provider = draft.provider || current?.runtime?.provider || '';
   const authMode = normalizedRuntimeAuthMode(provider, draft.auth_mode);
   return {
     ...(current || {}),
@@ -2562,7 +2573,8 @@ function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 
   if (!payload) return true;
   const runtime = settings?.runtime || {};
   const auth = settings?.auth || {};
-  const provider = String(payload.provider || 'local').toLowerCase();
+  const provider = String(payload.provider || '').toLowerCase();
+  if (!provider) return false;
   const authMode = normalizedRuntimeAuthMode(provider, payload.auth_mode);
   const updatedAtMs = Number(settings?.updated_at_ms || 0);
   if (previousUpdatedAtMs > 0 && updatedAtMs <= previousUpdatedAtMs) return false;

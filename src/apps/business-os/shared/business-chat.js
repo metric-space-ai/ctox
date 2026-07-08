@@ -151,13 +151,13 @@ export function initBusinessChat({
     const detail = event.detail || {};
     const text = String(detail.text || detail.message || '').trim();
     if (!text) return;
+    state.selectedDate = getLocalDateString(Date.now());
     const createNewChat = shouldCreateChatForExternalSubmit(detail);
     const chat = createNewChat ? createChat(state.ownerUserId, state.selectedDate) : ensureChat(state, session);
     if (createNewChat) state.chats.push(chat);
     if (detail.title) chat.title = String(detail.title).trim() || chat.title;
     chat.contextMeta = chatContextMetaFromDetail(detail);
-    expandChatOnly(state, chat);
-    state.dockCollapsed = false;
+    focusChatForUser(state, chat);
     chat.draft = '';
     await submitChatMessage({
       state,
@@ -180,12 +180,13 @@ export function initBusinessChat({
 
   const handleExternalOpen = async (event) => {
     const detail = event.detail || {};
+    state.selectedDate = getLocalDateString(Date.now());
     const chat = detail.reuseActive === true
       ? ensureChat(state, session)
       : createChat(state.ownerUserId, state.selectedDate);
     if (detail.reuseActive !== true) state.chats.push(chat);
     chat.title = String(detail.title || chat.title || 'CTOX').trim() || 'CTOX';
-    expandChatOnly(state, chat);
+    focusChatForUser(state, chat);
     chat.maximized = Boolean(detail.maximized);
     chat.draft = String(detail.draft || detail.message || '');
     chat.contextMeta = chatContextMetaFromDetail(detail);
@@ -200,8 +201,6 @@ export function initBusinessChat({
         createdAt: Date.now(),
       });
     }
-    state.activeChatId = chat.id;
-    state.dockCollapsed = false;
     state.preCollapseExpandedChatIds = [];
     touchChats(state, [chat]);
     await persistChatState({ state, db });
@@ -580,15 +579,31 @@ async function deleteChatFromTarget({ root, state, commandBus, db, getActiveModu
   const node = target.closest('[data-chat-id]');
   const chat = state.chats.find((item) => item.id === node?.dataset.chatId);
   if (!chat) return;
-  const confirmed = await showBusinessConfirm('Diesen Chat wirklich löschen?', {
-    title: 'Chat löschen',
-    confirmLabel: 'Löschen',
-  });
-  if (!confirmed) return;
   captureDrafts(root, state);
+  if (!isChatEmptyForDeletion(chat)) {
+    const confirmed = await showBusinessConfirm('Diesen Chat wirklich löschen?', {
+      title: 'Chat löschen',
+      confirmLabel: 'Löschen',
+    });
+    if (!confirmed) return;
+  }
   const deletion = deleteChat({ state, chat, db });
   renderChatRoot({ root, state, commandBus, db, getActiveModule });
   await deletion;
+}
+
+function isChatEmptyForDeletion(chat) {
+  if (!chat) return true;
+  if (Array.isArray(chat.messages) && chat.messages.length > 0) return false;
+  if (String(chat.draft || '').trim()) return false;
+  if (String(chat.lastTrackingId || '').trim()) return false;
+  if (Array.isArray(chat.attachments) && chat.attachments.length > 0) return false;
+  return !hasScheduledChatAttachments(chat.scheduledAttachmentsByCommand);
+}
+
+function hasScheduledChatAttachments(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).some((attachments) => Array.isArray(attachments) && attachments.length > 0);
 }
 
 function setWindowInteractiveState(win, isActive) {
@@ -1146,6 +1161,8 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
   const text = String(input?.value || chat.draft || '').trim();
   if (!text) return;
   const attachments = Array.isArray(chat.attachments) ? chat.attachments.slice() : [];
+  moveEmptyHistoricalChatToToday(state, chat);
+  focusChatForUser(state, chat);
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
@@ -1235,7 +1252,19 @@ function captureDrafts(root, state) {
 
 async function toggleChatDock({ root, state, commandBus, db, getActiveModule }) {
   captureDrafts(root, state);
-  const selectedDate = state.selectedDate || getLocalDateString(Date.now());
+  let selectedDate = state.selectedDate || getLocalDateString(Date.now());
+  if (state.dockCollapsed && !selectedDateHasSubstantiveOpenChat(state, selectedDate)) {
+    const preferred = preferredChatForDockOpen(state);
+    if (preferred) {
+      selectedDate = getLocalDateString(preferred.createdAt);
+      state.selectedDate = selectedDate;
+      preferred.open = true;
+      preferred.minimized = false;
+      state.activeChatId = preferred.id;
+    } else {
+      selectedDate = getLocalDateString(Date.now());
+    }
+  }
   state.selectedDate = selectedDate;
   const openChats = state.chats.filter((chat) => (
     chat.open !== false && getLocalDateString(chat.createdAt) === selectedDate
@@ -1356,6 +1385,59 @@ function expandChatOnly(state, activeChat) {
   state.activeChatId = activeChat.id;
   activeChat.open = true;
   activeChat.minimized = false;
+}
+
+function focusChatForUser(state, chat, { openDock = true } = {}) {
+  if (!state || !chat) return null;
+  state.selectedDate = getLocalDateString(chat.createdAt || Date.now());
+  expandChatOnly(state, chat);
+  if (openDock) state.dockCollapsed = false;
+  return chat;
+}
+
+function chatActivityMs(chat) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  const latestMessage = messages.reduce((latest, message) => {
+    const createdAt = Number(message?.createdAt || message?.created_at_ms || 0);
+    return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
+  }, 0);
+  return Math.max(
+    Number(chat?.updated_at_ms || 0) || 0,
+    Number(chat?.createdAt || 0) || 0,
+    latestMessage,
+  );
+}
+
+function isSubstantiveChat(chat) {
+  return !isChatEmptyForDeletion(chat);
+}
+
+function selectedDateHasSubstantiveOpenChat(state, dateStr) {
+  return (Array.isArray(state?.chats) ? state.chats : []).some((chat) => (
+    chat.open !== false
+    && getLocalDateString(chat.createdAt) === dateStr
+    && isSubstantiveChat(chat)
+  ));
+}
+
+function preferredChatForDockOpen(state) {
+  const chats = (Array.isArray(state?.chats) ? state.chats : [])
+    .filter((chat) => chat.open !== false && isSubstantiveChat(chat))
+    .sort((a, b) => chatActivityMs(b) - chatActivityMs(a));
+  if (!chats.length) return null;
+  const today = getLocalDateString(Date.now());
+  return chats.find((chat) => getLocalDateString(chat.createdAt) === today) || chats[0];
+}
+
+function moveEmptyHistoricalChatToToday(state, chat) {
+  if (!state || !chat || !isChatEmptyForDeletion(chat)) return false;
+  const today = getLocalDateString(Date.now());
+  if (getLocalDateString(chat.createdAt) === today) return false;
+  const now = Date.now();
+  chat.createdAt = now;
+  chat.updated_at_ms = now;
+  state.selectedDate = today;
+  return true;
 }
 
 function attachmentSignature(chat) {
@@ -2368,6 +2450,7 @@ async function syncTrackedMessages({ state, db }) {
 
   for (const chat of state.chats) {
     let chatChanged = false;
+    let shouldFocusChat = false;
     for (const message of chat.messages) {
       if (!message.commandId && !message.taskId) continue;
       const commandId = trackingIdFromMessage(message, 'command');
@@ -2411,6 +2494,7 @@ async function syncTrackedMessages({ state, db }) {
         });
         changed = true;
         chatChanged = true;
+        shouldFocusChat = true;
       }
       if (isFailureStatus(nextStatus) && !chat.messages.some((item) => item.failureFor === (message.taskId || message.commandId))) {
         chat.messages.push({
@@ -2425,9 +2509,13 @@ async function syncTrackedMessages({ state, db }) {
         });
         changed = true;
         chatChanged = true;
+        shouldFocusChat = true;
       }
     }
-    if (chatChanged) applyChatTrackingSummary(chat);
+    if (chatChanged) {
+      applyChatTrackingSummary(chat);
+      if (shouldFocusChat) focusChatForUser(state, chat);
+    }
   }
   return changed;
 }
@@ -5765,8 +5853,12 @@ export const __businessChatTestInternals = Object.freeze({
   collectTrackedMessages,
   createTrackedMessageWatch,
   findDocsByIds,
+  focusChatForUser,
+  getLocalDateString,
   hasActiveTrackedMessages,
   initSchedulerLoop,
+  isChatEmptyForDeletion,
+  preferredChatForDockOpen,
   persistChatState,
   schedulerDelayMs,
   stageChatAttachments,

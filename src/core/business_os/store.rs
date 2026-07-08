@@ -5274,14 +5274,22 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
         .ok()
         .flatten();
-    let provider = runtime_state
+    let configured_auth_mode = env_map
+        .get("CTOX_OPENAI_AUTH_MODE")
+        .or_else(|| env_map.get("OPENAI_AUTH_MODE"))
+        .cloned()
+        .unwrap_or_else(|| "api_key".to_owned());
+    let mut provider = runtime_state
         .as_ref()
         .map(crate::inference::runtime_state::api_provider_for_runtime_state)
         .map(str::to_owned)
         .unwrap_or_else(|| {
             crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map)
         });
-    let source = runtime_state
+    let runtime_source_explicit =
+        runtime_state.is_some() || env_map.contains_key("CTOX_CHAT_SOURCE");
+    let provider_explicit = env_map.contains_key("CTOX_API_PROVIDER");
+    let mut source = runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_owned())
         .unwrap_or_else(|| {
@@ -5290,6 +5298,18 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 .cloned()
                 .unwrap_or_else(|| "local".to_owned())
         });
+    let mut subscription_auth_probe = ChatgptSubscriptionAuthStatus::default();
+    if provider.eq_ignore_ascii_case("local")
+        && runtime_settings_auth_mode_is_subscription(&configured_auth_mode)
+        && !runtime_source_explicit
+        && !provider_explicit
+    {
+        subscription_auth_probe = chatgpt_subscription_auth_status(root);
+        if subscription_auth_probe.configured {
+            provider = "openai".to_owned();
+            source = "api".to_owned();
+        }
+    }
     let preset = runtime_settings_preset(runtime_state.as_ref(), &env_map);
     let context =
         runtime_settings_context(env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT").cloned().or_else(
@@ -5315,11 +5335,6 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         &provider, &env_map,
     );
     let key_configured = crate::secrets::get_credential(root, key_name).is_some();
-    let configured_auth_mode = env_map
-        .get("CTOX_OPENAI_AUTH_MODE")
-        .or_else(|| env_map.get("OPENAI_AUTH_MODE"))
-        .cloned()
-        .unwrap_or_else(|| "api_key".to_owned());
     let auth_mode = if provider.eq_ignore_ascii_case("local") {
         "local".to_owned()
     } else {
@@ -5336,12 +5351,13 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         .map(str::to_owned)
         .unwrap_or_default();
     let subscription_selected = provider.eq_ignore_ascii_case("openai")
-        && matches!(
-            auth_mode.trim().to_ascii_lowercase().as_str(),
-            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
-        );
+        && runtime_settings_auth_mode_is_subscription(&auth_mode);
     let subscription_auth = if subscription_selected {
-        chatgpt_subscription_auth_status(root)
+        if subscription_auth_probe.configured {
+            subscription_auth_probe
+        } else {
+            chatgpt_subscription_auth_status(root)
+        }
     } else {
         ChatgptSubscriptionAuthStatus::default()
     };
@@ -7474,6 +7490,13 @@ fn runtime_settings_context(value: Option<String>) -> String {
         "131072" | "128000" | "128k" | "262144" | "256000" | "256k" | "" => "256k".to_owned(),
         _ => "256k".to_owned(),
     }
+}
+
+fn runtime_settings_auth_mode_is_subscription(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+    )
 }
 
 fn chatgpt_subscription_auth_status(root: &Path) -> ChatgptSubscriptionAuthStatus {
