@@ -1070,8 +1070,22 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
             Value::String(format!("{source_id}:{source_file}:{}", index + 1)),
         );
     }
+    normalize_derivation_method(map);
 
     row
+}
+
+fn normalize_derivation_method(map: &mut serde_json::Map<String, Value>) {
+    let Some(Value::String(method)) = map.get_mut("derivation_method") else {
+        return;
+    };
+    if !method.contains("radial_load_N=TORQUE_Nm/(prop_diameter_m/2)") {
+        return;
+    }
+    *method = method.replace(
+        "radial_load_N=TORQUE_Nm/(prop_diameter_m/2) when torque present",
+        "tangential_equivalent_force_N=abs(TORQUE_Nm/(prop_diameter_m/2)) when torque present; bearing_radial_load_N remains blank unless a source or model gives true bearing radial load",
+    );
 }
 
 fn knowledge_table_columns(table_key: &str, rows: &[Value]) -> Vec<Value> {
@@ -1451,7 +1465,7 @@ mod tests {
             "torque_Nm": -0.2,
             "radial_load_N": "-1.75",
             "vibration_g_rms": "1.500000",
-            "derivation_method": "direct experimental CSV"
+            "derivation_method": "direct experimental CSV row; radial_load_N=TORQUE_Nm/(prop_diameter_m/2) when torque present"
         })];
 
         let (rows, notes) = enrich_knowledge_table_rows("measured_load_points", rows);
@@ -1465,6 +1479,11 @@ mod tests {
         assert_eq!(row["tangential_equivalent_force_N"].as_f64(), Some(1.75));
         assert_eq!(row["measurement_kind"].as_str(), Some("measured"));
         assert_eq!(row["load_case"].as_str(), Some("vibration_test"));
+        let method = row["derivation_method"]
+            .as_str()
+            .expect("normalized derivation method");
+        assert!(method.contains("tangential_equivalent_force_N=abs"));
+        assert!(!method.contains("radial_load_N=TORQUE_Nm"));
 
         let labels: Vec<String> = knowledge_table_columns("measured_load_points", &rows)
             .iter()
