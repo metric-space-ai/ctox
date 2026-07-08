@@ -23,8 +23,8 @@ const fakePeer = {
   connections: new Map([
     ['peer-1', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
   ]),
-  async request(peerId, method, params) {
-    sent.push({ peerId, method, params });
+  async request(peerId, method, params, timeoutMs) {
+    sent.push({ peerId, method, params, timeoutMs });
     return { ack: true };
   },
 };
@@ -45,6 +45,7 @@ const promise = transport.requestQueryFetch(envelope);
 await new Promise((r) => setImmediate(r));
 assert(sent.length === 1, `peer.request must be called for query.fetch (got ${sent.length})`);
 assert(sent[0].method === 'rxdb.query.fetch', `expected rxdb.query.fetch (got ${sent[0].method})`);
+assert(sent[0].timeoutMs >= 30000, `query.fetch must use a demand-fetch timeout, got ${sent[0].timeoutMs}`);
 let diagnostics = transport.diagnostics();
 assert(diagnostics.pendingQueryCollectors === 1, 'diagnostics show pending query collector');
 assert(diagnostics.maxPendingQueryCollectors >= 1, 'diagnostics record query collector peak');
@@ -97,6 +98,44 @@ await transport.requestHandlers['rxdb.query.error']({
 let caught = null;
 try { await errPromise; } catch (e) { caught = e; }
 assert(caught && caught.code === 'PEER_UNAVAILABLE', 'PEER_UNAVAILABLE propagated');
+
+// Timeout retry path: the native peer can be busy while materialising a large
+// query window. A request-level timeout must retry with a new request id
+// instead of surfacing an empty Business OS screen.
+const retryTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-retry' });
+const retrySent = [];
+let retryAttempts = 0;
+const retryPeer = {
+  connections: new Map([
+    ['peer-retry', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(peerId, method, params, timeoutMs) {
+    retrySent.push({ peerId, method, params, timeoutMs });
+    retryAttempts += 1;
+    if (retryAttempts === 1) {
+      throw new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
+    }
+    const retryRequestId = params?.[0]?.requestId;
+    queueMicrotask(() => {
+      retryTransport.requestHandlers['rxdb.query.chunk']({
+        params: [{
+          requestId: retryRequestId,
+          sequence: 0,
+          documents: [{ id: 'retried', status: 'open' }],
+          complete: true,
+          authoritativeRevision: 'rev-retry',
+        }],
+      });
+    });
+    return { ack: true };
+  },
+};
+retryTransport.attach(retryPeer);
+const retryResult = await retryTransport.requestQueryFetch({ ...envelope, requestId: 'q-timeout' });
+assert(retrySent.length === 2, `timed out query.fetch must retry once (got ${retrySent.length})`);
+assert(retrySent[0].timeoutMs >= 30000, `retry test query.fetch must use a demand-fetch timeout, got ${retrySent[0].timeoutMs}`);
+assert(retrySent[1].params?.[0]?.requestId === 'q-timeout|retry-1', 'retry uses a fresh request id');
+assert(retryResult.documents[0]?.id === 'retried', 'retry result materialised');
 
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel

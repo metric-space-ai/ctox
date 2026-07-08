@@ -19,6 +19,7 @@ const QUERY_PEER_RETRY_MS = 250;
 const QUERY_PEER_RETRIES = 24;
 const QUERY_PEER_WAIT_TIMEOUT_MS = 8000;
 const QUERY_PEER_WAIT_POLL_MS = 100;
+const QUERY_FETCH_REQUEST_TIMEOUT_MS = 45000;
 const GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for('ctox.rxdb.query-stream-state.v1');
 const CANCELLED_QUERY_REQUEST_LIMIT = 256;
 
@@ -175,7 +176,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
       updatePeaks();
     });
     try {
-      await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope]);
+      await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
       queryCollectors.delete(requestId);
       throw err;
@@ -205,7 +206,8 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || '');
     return message === 'PEER_UNAVAILABLE'
-      || /WebRTC peer .* is not open/.test(message);
+      || /WebRTC peer .* is not open/.test(message)
+      || message.includes('Timed out waiting for WebRTC response rxdb.query.fetch');
   }
 
   function delay(ms) {
