@@ -9315,6 +9315,35 @@ fn rxdb_desktop_file_chunks(
             chunks.push(value);
         }
     }
+    if !chunks.is_empty() {
+        return Ok(chunks);
+    }
+    // Older Business OS uploads used row ids like `{file_id}_{idx}` while the
+    // chunk JSON already carried the correct generation. The canonical range
+    // query above intentionally stays fast for new data; this fallback keeps
+    // legacy PDFs reparsable without rewriting user data in place.
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND json_extract(data, '$.generation_id') = ?2{live_filter}
+             ORDER BY CAST(json_extract(data, '$.idx') AS INTEGER), id",
+        ))
+        .context("desktop file chunk collection is not available")?;
+    let rows = stmt.query_map(params![file_id, generation_id], |row| {
+        row.get::<_, String>(0)
+    })?;
+    for row in rows {
+        let raw = row?;
+        let value: Value =
+            serde_json::from_str(&raw).context("invalid desktop file chunk RxDB document")?;
+        if value.get("file_id").and_then(Value::as_str) == Some(file_id)
+            && value.get("generation_id").and_then(Value::as_str) == Some(generation_id)
+            && !is_rxdb_deleted_document(&value)
+        {
+            chunks.push(value);
+        }
+    }
     Ok(chunks)
 }
 
@@ -44901,6 +44930,70 @@ mod tests {
     }
 
     #[test]
+    fn cv_print_queue_accepts_legacy_desktop_chunk_row_ids() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = simple_text_pdf_bytes(&[
+            "Matthias Behrendt",
+            "Projektleiter Energie und Gebaeudetechnik",
+            "Dortmund",
+        ]);
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_legacy_chunks",
+            "Lebenslauf_Matthias_Behrendt.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+        rewrite_rxdb_chunk_row_ids_to_legacy(root, "cv_pdf_legacy_chunks", &generation_id)?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_legacy_chunks",
+                "command_id": "cmd_cv_legacy_chunks",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_matthias",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Matthias_Behrendt.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": "cv_pdf_legacy_chunks",
+                    "generation_id": generation_id,
+                    "filename": "Lebenslauf_Matthias_Behrendt.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": bytes.len(),
+                    "sha256": content_hash,
+                    "document_id": "doc_cv_matthias",
+                    "version_id": "doc_cv_matthias_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_matthias",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Matthias Behrendt"));
+        assert!(task.prompt.contains("source_file_id: cv_pdf_legacy_chunks"));
+        Ok(())
+    }
+
+    #[test]
     fn business_chat_queue_rejects_corrupt_desktop_file_attachment_chunk() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -45105,6 +45198,22 @@ mod tests {
             )?;
         }
         Ok((content_hash, generation_id))
+    }
+
+    fn rewrite_rxdb_chunk_row_ids_to_legacy(
+        root: &Path,
+        file_id: &str,
+        generation_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            "UPDATE ctox_business_os__desktop_file_chunks__v0
+             SET id = ?1 || '_' || json_extract(data, '$.idx')
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND json_extract(data, '$.generation_id') = ?2",
+            params![file_id, generation_id],
+        )?;
+        Ok(())
     }
 
     #[test]
