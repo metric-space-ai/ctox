@@ -1433,7 +1433,7 @@ async function startParsing(state, item) {
   if (parsingPatchApplied) await refresh(state);
 
   try {
-    await ensureParseSourceReady(state, item);
+    const sourcePrepare = await ensureParseSourceReady(state, item);
     await upsertBusinessChat(state.ctx, {
       id: chatId,
       title: `CV Parsing · ${displayCandidateName(item.model)}`,
@@ -1474,6 +1474,7 @@ async function startParsing(state, item) {
         sha256: item.model.source?.sha256 || '',
         document_id: item.record.id,
         version_id: item.version.id,
+        source_prepare: sourcePrepare,
         record_snapshot: parserRecordSnapshot(item),
         writeback_contract: {
           command_type: 'ctox.cv_print.apply_parse',
@@ -1490,6 +1491,8 @@ async function startParsing(state, item) {
         version_id: item.version.id,
         desktop_file_id: item.model.source?.desktop_file_id,
         chat_id: chatId,
+        source_prepare_ready: sourcePrepare.ready,
+        source_prepare_warning: sourcePrepare.warning || '',
       },
     });
     const taskId = String(dispatchResult?.task_id || dispatchResult?.taskId || '').trim();
@@ -1569,13 +1572,33 @@ async function ensureParseSourceReady(state, item) {
   if (!fileId || !generationId) {
     throw new Error('CV-Quelle ist unvollständig: PDF-Datei oder Generation fehlt.');
   }
-  await ensureCanonicalDesktopFileChunks(state.ctx, {
-    fileId,
-    generationId,
-    sizeBytes: Number(source.size_bytes || 0),
-    contentHash: source.sha256 || '',
-  });
-  await flushFileCollectionsForDispatch(state.ctx, 45000);
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => ensureCanonicalDesktopFileChunks(state.ctx, {
+          fileId,
+          generationId,
+          sizeBytes: Number(source.size_bytes || 0),
+          contentHash: source.sha256 || '',
+        }))
+        .then(() => flushFileCollectionsForDispatch(state.ctx, 45000)),
+      timeoutAfter(12000, 'PDF-Sync-Vorbereitung dauert zu lange. Parser-Task wird trotzdem gestartet.'),
+    ]);
+    return { ready: true, file_id: fileId, generation_id: generationId };
+  } catch (error) {
+    const warning = String(error?.message || error || 'PDF-Sync-Vorbereitung ist fehlgeschlagen.');
+    console.warn('[cv-print-builder] parse source preparation did not complete before dispatch', {
+      fileId,
+      generationId,
+      warning,
+    });
+    return {
+      ready: false,
+      file_id: fileId,
+      generation_id: generationId,
+      warning,
+    };
+  }
 }
 
 function parserRecordSnapshot(item) {
@@ -1780,6 +1803,10 @@ function expectedDesktopFileChunkTotal(sizeBytes) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function timeoutAfter(ms, message) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms));
 }
 
 function buildParserPrompt(item) {
