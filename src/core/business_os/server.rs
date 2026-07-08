@@ -864,23 +864,24 @@ fn session_from_capability_bearer(
 }
 
 fn request_allows_local_dev_session(request: &Request) -> bool {
-    // SECURITY: the implicit local-dev (admin) session may only be granted when
-    // the ACTUAL TCP peer is loopback. The `Host` header is client-controlled —
-    // a remote attacker can send `Host: localhost` over a public 0.0.0.0 bind, so
-    // it must never be the trust signal. On a non-loopback bind a remote peer's
-    // source IP is non-loopback and is therefore correctly refused. (Behind a
-    // same-host reverse proxy the peer is the proxy; such deployments must
-    // configure real auth — CTOX_AUTH_USERS / CTOX_BUSINESS_PASSWORD — so the
-    // implicit grant never fires.)
-    request
+    // SECURITY: the implicit local-dev (admin) session requires both a loopback
+    // TCP peer and, when present, a loopback Host header. The Host header is
+    // client-controlled, so it is never sufficient by itself; it is only used as
+    // an additional deny signal for managed/public domains that proxy to a
+    // same-host loopback service.
+    let peer_is_loopback = request
         .remote_addr()
         .map(|addr| addr.ip().is_loopback())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !peer_is_loopback {
+        return false;
+    }
+    header_value(request, "Host")
+        .as_deref()
+        .map(host_header_allows_local_dev_session)
+        .unwrap_or(true)
 }
 
-// Retained for the host-parsing unit test below; no longer part of the
-// local-dev session trust decision (see `request_allows_local_dev_session`).
-#[allow(dead_code)]
 fn host_header_allows_local_dev_session(host: &str) -> bool {
     let Some(hostname) = host_header_hostname(host) else {
         return false;
