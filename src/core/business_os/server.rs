@@ -742,6 +742,10 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
             // §9.1 auth/control-plane: issues a capability token bound to the
             // server-authenticated session. No Business OS records flow here.
             | "/api/business-os/auth/capability"
+            // Browser launch/ICE refresh control-plane. This returns signaling,
+            // TURN, and native-peer metadata only; Business OS records still
+            // move exclusively through RxDB/WebRTC.
+            | "/api/business-os/sync/config"
             // Admin-only MCP setup metadata. It may reveal the inbound MCP
             // bearer token, so it is a no-store control-plane route and never
             // crosses the RxDB/WebRTC business-data plane.
