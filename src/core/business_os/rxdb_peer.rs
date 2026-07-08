@@ -4344,6 +4344,54 @@ async fn accept_pending_business_command(
         .map(str::to_string)
         .context("accepted command is missing command_id")?;
 
+    if accepted
+        .get("already_accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        upsert_business_record_projection(
+            root.to_path_buf(),
+            database,
+            "business_commands",
+            command_id.clone(),
+        )
+        .await?;
+        if let Some(task_id) = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            upsert_business_record_projection(
+                root.to_path_buf(),
+                database,
+                "ctox_queue_tasks",
+                task_id.to_string(),
+            )
+            .await?;
+        }
+        if let Some(chat_id) = accepted
+            .get("chat_id")
+            .or_else(|| {
+                accepted
+                    .get("result")
+                    .and_then(|result| result.get("chat_id"))
+            })
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            upsert_business_record_projection(
+                root.to_path_buf(),
+                database,
+                "business_chats",
+                chat_id.to_string(),
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
     let commands = database
         .collection("business_commands")
         .context("business_commands collection is not registered")?;
@@ -4387,6 +4435,11 @@ async fn accept_pending_business_command(
         );
         if let Some(result) = accepted.get("result") {
             obj.insert("result".to_string(), result.clone());
+        }
+        for key in ["outbound_text", "response", "answer", "summary"] {
+            if let Some(value) = accepted.get(key) {
+                obj.insert(key.to_string(), value.clone());
+            }
         }
         for key in ["report_id", "report_status"] {
             if let Some(value) = accepted.get(key) {
@@ -11781,8 +11834,9 @@ fn rx_schema_from_runtime_module_schema(
         "collection `{name}` schema must define properties"
     );
     normalize_schema_indexes(&mut schema);
-    serde_json::from_value(schema)
-        .with_context(|| format!("collection `{name}` schema must match CTOX Sync Engine schema type"))
+    serde_json::from_value(schema).with_context(|| {
+        format!("collection `{name}` schema must match CTOX Sync Engine schema type")
+    })
 }
 
 fn is_runtime_module_collection_name(name: &str) -> bool {
@@ -19007,6 +19061,185 @@ mod tests {
             assert_eq!(
                 replayed.get("task_id").and_then(Value::as_str),
                 Some(task_id)
+            );
+        });
+    }
+
+    #[test]
+    fn native_peer_replay_preserves_completed_chat_reply_fields() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let (capability_token, _) = store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "tester",
+                "Tester",
+                "owner",
+                now_ms() as i64,
+            )
+            .expect("issue test capability token");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            let pending_command = json!({
+                "id": "cmd_native_chat_reply_replay",
+                "command_id": "cmd_native_chat_reply_replay",
+                "module": "ctox",
+                "command_type": "business_os.chat.task",
+                "record_id": "ctox",
+                "status": "pending_sync",
+                "inbound_channel": "business_os_chat",
+                "payload": {
+                    "title": "CTOX",
+                    "chat_id": "chat_native_reply_replay",
+                    "message_id": "chatmsg_native_reply_replay",
+                    "instruction": "zeige eine sichtbare Antwort",
+                    "prompt": "zeige eine sichtbare Antwort"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "ctox",
+                    "owner_user_id": "tester",
+                    "actor": { "id": "tester", "display_name": "Tester" },
+                    "capability_token": capability_token,
+                },
+                "updated_at_ms": now_ms() as u64
+            });
+            commands
+                .insert(pending_command.clone())
+                .await
+                .expect("insert pending chat command");
+
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                .await
+                .expect("consume pending chat command");
+            let accepted = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_native_chat_reply_replay" } })),
+                    ..Default::default()
+                }))
+                .expect("accepted query")
+                .exec(false)
+                .await
+                .expect("accepted document");
+            let task_id = accepted
+                .get("task_id")
+                .and_then(Value::as_str)
+                .expect("task_id")
+                .to_string();
+            assert!(!task_id.is_empty());
+
+            channels::lease_queue_task(root.path(), &task_id, "ctox-service")
+                .expect("lease chat command queue task");
+            let reply_text = "Sichtbare CTOX Antwort bleibt erhalten.";
+            let completed = store::complete_business_command_from_queue_reply(
+                root.path(),
+                &task_id,
+                reply_text,
+            )
+            .expect("complete business chat command")
+            .expect("business chat command completion result");
+            assert_eq!(
+                completed.get("response").and_then(Value::as_str),
+                Some(reply_text)
+            );
+            assert_eq!(
+                completed
+                    .pointer("/result/outbound_text")
+                    .and_then(Value::as_str),
+                Some(reply_text)
+            );
+
+            let mut replayed_pending = pending_command.clone();
+            if let Some(obj) = replayed_pending.as_object_mut() {
+                obj.insert(
+                    "status".to_string(),
+                    Value::String("pending_sync".to_string()),
+                );
+                obj.remove("task_id");
+                obj.remove("task_status");
+                obj.remove("result");
+                obj.remove("outbound_text");
+                obj.remove("response");
+                obj.remove("answer");
+                obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+            }
+            commands
+                .incremental_upsert(replayed_pending.clone())
+                .await
+                .expect("replay stale pending chat command");
+
+            accept_pending_business_command(root.path(), &database, replayed_pending)
+                .await
+                .expect("accept replayed pending chat command");
+            let replayed = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_native_chat_reply_replay" } })),
+                    ..Default::default()
+                }))
+                .expect("replayed query")
+                .exec(false)
+                .await
+                .expect("replayed document");
+            assert_eq!(
+                replayed.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                replayed.get("task_status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                replayed.get("outbound_text").and_then(Value::as_str),
+                Some(reply_text)
+            );
+            assert_eq!(
+                replayed.get("response").and_then(Value::as_str),
+                Some(reply_text)
+            );
+            assert_eq!(
+                replayed.get("answer").and_then(Value::as_str),
+                Some(reply_text)
+            );
+            assert_eq!(
+                replayed
+                    .pointer("/result/outbound_text")
+                    .and_then(Value::as_str),
+                Some(reply_text)
+            );
+
+            let chats = database
+                .collection("business_chats")
+                .expect("business_chats collection");
+            let chat = chats
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "chat_native_reply_replay" } })),
+                    ..Default::default()
+                }))
+                .expect("chat query")
+                .exec(false)
+                .await
+                .expect("chat document");
+            let messages = chat
+                .get("messages")
+                .and_then(Value::as_array)
+                .expect("chat messages");
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.get("text").and_then(Value::as_str) == Some(reply_text)),
+                "missing visible chat reply in {messages:?}"
             );
         });
     }

@@ -898,6 +898,30 @@ pub struct CommandAccepted {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbound_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
+impl Default for CommandAccepted {
+    fn default() -> Self {
+        Self {
+            ok: false,
+            command_id: String::new(),
+            status: "accepted",
+            task_id: None,
+            task_status: None,
+            result: None,
+            outbound_text: None,
+            response: None,
+            answer: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11860,6 +11884,7 @@ pub fn record_command(
             status: "failed",
             task_id: None,
             task_status: Some("failed".to_owned()),
+            ..CommandAccepted::default()
         });
     }
     let conn = open_store(root)?;
@@ -11942,6 +11967,7 @@ pub fn record_command(
         status: "accepted",
         task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
         task_status: queue_task.map(|task| normalize_queue_status(&task.route_status).to_string()),
+        ..CommandAccepted::default()
     })
 }
 
@@ -12066,6 +12092,7 @@ fn maybe_materialize_and_complete_runtime_app_starter(
             .and_then(Value::as_str)
             .map(str::to_owned)
             .or_else(|| Some("completed".to_string())),
+        ..CommandAccepted::default()
     }))
 }
 
@@ -16513,6 +16540,7 @@ pub fn process_source_parse_command(
                 status: "completed",
                 task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
                 task_status: Some("completed".to_string()),
+                ..CommandAccepted::default()
             })
         }
         Err(err) => {
@@ -16580,6 +16608,7 @@ pub fn process_source_parse_command(
                 status: "failed",
                 task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
                 task_status: Some("failed".to_string()),
+                ..CommandAccepted::default()
             })
         }
     }
@@ -17030,6 +17059,14 @@ fn process_business_chat_reply(
         completed_at_ms,
     )?;
 
+    let result_payload = serde_json::json!({
+        "chat_id": chat_id,
+        "outbound_text": reply_text,
+        "response": reply_text,
+        "answer": reply_text,
+        "summary": reply_text,
+        "document_writeback": document_writeback
+    });
     let command_payload = serde_json::json!({
         "id": command_id,
         "command_id": command_id,
@@ -17042,14 +17079,7 @@ fn process_business_chat_reply(
         "task_status": "completed",
         "payload": command.payload.clone(),
         "client_context": command.client_context.clone(),
-        "result": {
-            "chat_id": chat_id,
-            "outbound_text": reply_text,
-            "response": reply_text,
-            "answer": reply_text,
-            "summary": reply_text,
-            "document_writeback": document_writeback
-        },
+        "result": result_payload.clone(),
         "outbound_text": reply_text,
         "response": reply_text,
         "answer": reply_text,
@@ -17086,6 +17116,10 @@ fn process_business_chat_reply(
         status: "completed",
         task_id: terminal_queue_task.map(|task| task.message_key.clone()),
         task_status: Some("completed".to_string()),
+        result: Some(result_payload),
+        outbound_text: Some(reply_text.to_string()),
+        response: Some(reply_text.to_string()),
+        answer: Some(reply_text.to_string()),
     })
 }
 
@@ -28021,6 +28055,7 @@ fn process_documents_report_command(
                 status: "completed",
                 task_id: queue_task.map(|task| task.message_key.clone()),
                 task_status: Some("completed".to_string()),
+                ..CommandAccepted::default()
             })
         }
         Err(err) => {
@@ -28282,6 +28317,7 @@ fn process_systematic_research_command(
         status: "completed",
         task_id: task_queue_id,
         task_status: Some("completed".to_string()),
+        ..CommandAccepted::default()
     })
 }
 
@@ -29327,6 +29363,7 @@ fn process_cv_print_parse_command(
                 status: "completed",
                 task_id: queue_task.map(|task| task.message_key.clone()),
                 task_status: Some("completed".to_string()),
+                ..CommandAccepted::default()
             })
         }
         Err(err) => {
@@ -31326,15 +31363,7 @@ fn markdown_append_note_from_natural_instruction(value: &str) -> Option<String> 
     .iter()
     .any(|needle| lower.contains(needle));
     let requested_add = [
-        "ergänz",
-        "ergaenz",
-        "füge",
-        "fuege",
-        "hinzu",
-        "anhäng",
-        "anhaeng",
-        "append",
-        "add ",
+        "ergänz", "ergaenz", "füge", "fuege", "hinzu", "anhäng", "anhaeng", "append", "add ",
     ]
     .iter()
     .any(|needle| lower.contains(needle));
@@ -45408,6 +45437,20 @@ mod tests {
         assert_eq!(
             projected.get("status").and_then(Value::as_str),
             Some("completed")
+        );
+        assert_eq!(
+            projected.get("outbound_text").and_then(Value::as_str),
+            Some("Chat-Antwort wurde gespeichert.")
+        );
+        assert_eq!(
+            projected.get("response").and_then(Value::as_str),
+            Some("Chat-Antwort wurde gespeichert.")
+        );
+        assert_eq!(
+            projected
+                .pointer("/result/outbound_text")
+                .and_then(Value::as_str),
+            Some("Chat-Antwort wurde gespeichert.")
         );
 
         let rxdb_command =

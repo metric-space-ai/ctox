@@ -2186,6 +2186,7 @@ fn enqueue_approved_ctox_command(
         },
         task_id,
         task_status,
+        ..store::CommandAccepted::default()
     })
 }
 
