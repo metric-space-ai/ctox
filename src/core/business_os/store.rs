@@ -31302,7 +31302,99 @@ fn markdown_append_section_from_instruction(value: &str) -> Option<String> {
         }
     }
     let joined = section.join("\n").trim().to_string();
-    (!joined.is_empty()).then_some(joined)
+    if !joined.is_empty() {
+        return Some(joined);
+    }
+    markdown_append_note_from_natural_instruction(value)
+}
+
+fn markdown_append_note_from_natural_instruction(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    let appendish = [
+        "am ende",
+        "ans ende",
+        "zum ende",
+        "ganz unten",
+        "append",
+        "at the end",
+        "to the end",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    let requested_add = [
+        "ergänz",
+        "ergaenz",
+        "füge",
+        "fuege",
+        "hinzu",
+        "anhäng",
+        "anhaeng",
+        "append",
+        "add ",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !appendish || !requested_add {
+        return None;
+    }
+    let colon = trimmed.find(':')?;
+    let instruction_prefix = trimmed[..colon].to_lowercase();
+    let body_seed = trimmed[colon + 1..]
+        .trim()
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '`' | ' '));
+    let body_text = body_seed
+        .lines()
+        .take_while(|line| {
+            let lower = line.trim().to_lowercase();
+            !lower.starts_with("business os command:")
+                && !lower.starts_with("lasse alle bestehenden")
+                && !lower.starts_with("leave all existing")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '`' | ' '))
+        .to_string();
+    let mut body = body_text.trim();
+    if body.is_empty() {
+        return None;
+    }
+    if body.starts_with("## ") || body.starts_with("# ") {
+        return Some(body.to_string());
+    }
+    let body_lower = body.to_lowercase();
+    let heading = if instruction_prefix.contains("prüfnotiz")
+        || instruction_prefix.contains("pruefnotiz")
+        || body_lower.starts_with("prüfnotiz:")
+        || body_lower.starts_with("pruefnotiz:")
+    {
+        body = body
+            .trim_start_matches("Prüfnotiz:")
+            .trim_start_matches("Pruefnotiz:")
+            .trim_start_matches("prüfnotiz:")
+            .trim_start_matches("pruefnotiz:")
+            .trim();
+        "Prüfnotiz"
+    } else if instruction_prefix.contains("validation note")
+        || body_lower.starts_with("validation note:")
+    {
+        body = body
+            .trim_start_matches("Validation Note:")
+            .trim_start_matches("Validation note:")
+            .trim_start_matches("validation note:")
+            .trim();
+        "Validation Note"
+    } else {
+        "Ergänzung"
+    };
+    if body.is_empty() {
+        return None;
+    }
+    Some(format!("## {heading}\n{body}"))
 }
 
 fn ensure_markdown_model_document(model: &mut Value) {
@@ -45354,6 +45446,145 @@ mod tests {
             rxdb_queue.get("task_status").and_then(Value::as_str),
             Some("completed")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn documents_context_chat_appends_pruefnotiz_without_queue() -> anyhow::Result<()> {
+        assert!(markdown_append_section_from_instruction(
+            "bitte ergänze noch mehr statische Zahlen"
+        )
+        .is_none());
+
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        let document_id = "doc_test_markdown";
+        let version_id = "doc_test_markdown_v1";
+        let current_model = serde_json::json!({
+            "type": "document",
+            "body": {
+                "type": "body",
+                "blocks": [
+                    markdown_heading_block("Ausgangsdokument", "Heading1"),
+                    markdown_paragraph_block("Bestehender Text.")
+                ]
+            }
+        });
+        upsert_business_record(
+            &conn,
+            "documents",
+            document_id,
+            now,
+            serde_json::json!({
+                "id": document_id,
+                "document_id": document_id,
+                "title": "Test Markdown",
+                "filename": "test-markdown.md",
+                "mime_type": "text/markdown",
+                "document_type": "markdown_document",
+                "status": "Ready",
+                "current_version_id": version_id,
+                "index_text": "Bestehender Text.",
+                "created_at_ms": now,
+                "updated_at_ms": now
+            }),
+        )?;
+        upsert_business_record(
+            &conn,
+            "document_versions",
+            version_id,
+            now,
+            serde_json::json!({
+                "id": version_id,
+                "version_id": version_id,
+                "document_id": document_id,
+                "version": 1,
+                "source_kind": "seed",
+                "blob_id": "doc_test_markdown_v1_blob",
+                "model_json": current_model,
+                "created_at_ms": now,
+                "updated_at_ms": now
+            }),
+        )?;
+        drop(conn);
+
+        let instruction = "Bitte ergänze ganz am Ende eine kurze Prüfnotiz: Diese Fassung wurde gegen die wiederhergestellte SKF Knowledge Base validiert (322 Quellen, 816 Messpunkte, 192 Knowledge Records); numerische Lastdaten sind metrisch mit Dezimalkomma zu interpretieren.";
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_documents_pruefnotiz",
+                "command_id": "cmd_documents_pruefnotiz",
+                "module": "documents",
+                "command_type": "business_os.chat.task",
+                "record_id": document_id,
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Documents bearbeiten · Test Markdown",
+                    "instruction": instruction,
+                    "prompt": instruction,
+                    "user_message": instruction,
+                    "message_id": "chatmsg_documents_pruefnotiz",
+                    "mode": "data"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "documents",
+                    "mode": "data",
+                    "document_id": document_id,
+                    "owner_user_id": "tester"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            accepted.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            find_queue_task_for_command(root, "cmd_documents_pruefnotiz").is_none(),
+            "deterministic document append must not wait for the harness queue"
+        );
+
+        let conn = open_store(root)?;
+        let command_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = 'cmd_documents_pruefnotiz'",
+            [],
+            |row| row.get(0),
+        )?;
+        let command_projection: Value = serde_json::from_str(&command_payload)?;
+        assert_eq!(
+            command_projection
+                .pointer("/result/document_writeback/status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        let updated_document: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'documents' AND record_id = ?1",
+            params![document_id],
+            |row| row.get(0),
+        )?;
+        let updated_document: Value = serde_json::from_str(&updated_document)?;
+        let next_version = updated_document
+            .get("current_version_id")
+            .and_then(Value::as_str)
+            .context("document current version")?;
+        assert_ne!(next_version, version_id);
+        let updated_version: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'document_versions' AND record_id = ?1",
+            params![next_version],
+            |row| row.get(0),
+        )?;
+        let updated_version: Value = serde_json::from_str(&updated_version)?;
+        let text = markdown_model_text(
+            updated_version
+                .get("model_json")
+                .context("updated markdown model")?,
+        );
+        assert!(text.contains("Prüfnotiz"));
+        assert!(text.contains("322 Quellen, 816 Messpunkte, 192 Knowledge Records"));
+        assert!(text.contains("Dezimalkomma"));
         Ok(())
     }
 
