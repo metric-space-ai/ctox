@@ -31044,15 +31044,7 @@ fn maybe_writeback_documents_chat_markdown_edit(
         return Ok(Value::Null);
     };
 
-    let mut document_payload = conn
-        .query_row(
-            "SELECT payload_json FROM business_records
-             WHERE collection = 'documents' AND record_id = ?1 AND deleted = 0",
-            params![document_id.as_str()],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    let mut document_payload = load_document_writeback_payload(root, conn, &document_id)?
         .with_context(|| format!("document `{document_id}` not found for chat writeback"))?;
 
     let document_type = document_payload
@@ -31088,16 +31080,9 @@ fn maybe_writeback_documents_chat_markdown_edit(
     let mut current_model = if current_version_id.is_empty() {
         Value::Null
     } else {
-        conn.query_row(
-            "SELECT payload_json FROM business_records
-             WHERE collection = 'document_versions' AND record_id = ?1 AND deleted = 0",
-            params![current_version_id.as_str()],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|payload| payload.get("model_json").cloned())
-        .unwrap_or(Value::Null)
+        load_document_version_writeback_payload(root, conn, &current_version_id)?
+            .and_then(|payload| payload.get("model_json").cloned())
+            .unwrap_or(Value::Null)
     };
     ensure_markdown_model_document(&mut current_model);
     let existing_text = markdown_model_text(&current_model);
@@ -31112,18 +31097,7 @@ fn maybe_writeback_documents_chat_markdown_edit(
     append_markdown_section_to_model(&mut current_model, &markdown_to_append)?;
     let index_text = markdown_model_text(&current_model);
 
-    let next_version: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(CAST(json_extract(payload_json, '$.version') AS INTEGER)), 0) + 1
-             FROM business_records
-             WHERE collection = 'document_versions'
-               AND deleted = 0
-               AND json_extract(payload_json, '$.document_id') = ?1",
-            params![document_id.as_str()],
-            |row| row.get(0),
-        )
-        .optional()?
-        .unwrap_or(1);
+    let next_version = next_document_writeback_version(root, conn, &document_id)?;
     let version_id = format!("{document_id}_v{next_version}");
     let blob_id = format!("{version_id}_blob");
     let version_payload = serde_json::json!({
@@ -31193,6 +31167,89 @@ fn maybe_writeback_documents_chat_markdown_edit(
         "source_kind": "ctox_chat_markdown_edit",
         "appended_chars": markdown_to_append.chars().count()
     }))
+}
+
+fn load_document_writeback_payload(
+    root: &Path,
+    conn: &Connection,
+    document_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    match load_business_record_payload(conn, "documents", document_id)? {
+        Some(payload) => Ok(Some(payload)),
+        None => load_rxdb_collection_record(root, "documents", document_id),
+    }
+}
+
+fn load_document_version_writeback_payload(
+    root: &Path,
+    conn: &Connection,
+    version_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    match load_business_record_payload(conn, "document_versions", version_id)? {
+        Some(payload) => Ok(Some(payload)),
+        None => load_rxdb_collection_record(root, "document_versions", version_id),
+    }
+}
+
+fn load_business_record_payload(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    conn.query_row(
+        "SELECT payload_json FROM business_records
+         WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+        params![collection, record_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .map(|raw| serde_json::from_str::<Value>(&raw).context("decode business record payload"))
+    .transpose()
+}
+
+fn next_document_writeback_version(
+    root: &Path,
+    conn: &Connection,
+    document_id: &str,
+) -> anyhow::Result<i64> {
+    let core_max = conn
+        .query_row(
+            "SELECT COALESCE(MAX(CAST(json_extract(payload_json, '$.version') AS INTEGER)), 0)
+             FROM business_records
+             WHERE collection = 'document_versions'
+               AND deleted = 0
+               AND json_extract(payload_json, '$.document_id') = ?1",
+            params![document_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let rxdb_max = max_rxdb_document_version(root, document_id)?;
+    Ok(core_max.max(rxdb_max) + 1)
+}
+
+fn max_rxdb_document_version(root: &Path, document_id: &str) -> anyhow::Result<i64> {
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, "document_versions") else {
+        return Ok(0);
+    };
+    conn.query_row(
+        &format!(
+            "SELECT COALESCE(MAX(CAST(json_extract(data, '$.version') AS INTEGER)), 0)
+             FROM {table}
+             WHERE json_extract(data, '$.document_id') = ?1
+               AND COALESCE(CAST(json_extract(data, '$.deleted') AS INTEGER), 0) = 0"
+        ),
+        params![document_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(0))
+    .map_err(Into::into)
 }
 
 fn markdown_append_section_from_instruction(value: &str) -> Option<String> {
