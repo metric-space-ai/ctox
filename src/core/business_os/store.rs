@@ -9421,6 +9421,125 @@ fn rxdb_desktop_file_chunks(
     Ok(chunks)
 }
 
+fn decode_verified_desktop_file_or_equivalent(
+    root: &Path,
+    file_id: &str,
+    generation_id: &str,
+    size_bytes: u64,
+    content_hash: &str,
+    chunks: Vec<Value>,
+) -> anyhow::Result<Vec<u8>> {
+    match decode_verified_desktop_file_chunks(
+        file_id,
+        generation_id,
+        size_bytes,
+        content_hash,
+        chunks,
+    ) {
+        Ok(decoded) => Ok(decoded),
+        Err(primary_error) => {
+            let primary_message = format!("{primary_error:#}");
+            if let Some(decoded) =
+                decode_equivalent_desktop_file_chunks(root, file_id, size_bytes, content_hash)?
+            {
+                return Ok(decoded);
+            }
+            Err(primary_error).with_context(|| {
+                format!(
+                    "no complete equivalent desktop file chunks found for `{file_id}`; primary decode failed: {primary_message}"
+                )
+            })
+        }
+    }
+}
+
+fn decode_equivalent_desktop_file_chunks(
+    root: &Path,
+    file_id: &str,
+    size_bytes: u64,
+    content_hash: &str,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    if content_hash.trim().is_empty() {
+        return Ok(None);
+    }
+    let database_path = rxdb_store_path(root);
+    let conn = Connection::open(&database_path)
+        .with_context(|| format!("failed to open {}", database_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, data FROM ctox_business_os__desktop_files__v0
+             WHERE id != ?1",
+        )
+        .context("desktop file equivalent lookup is not available")?;
+    let rows = stmt.query_map(params![file_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (candidate_id, raw) = row?;
+        let file_doc: Value =
+            serde_json::from_str(&raw).context("invalid equivalent desktop file RxDB document")?;
+        if is_rxdb_deleted_document(&file_doc) {
+            continue;
+        }
+        if file_doc
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("file")
+            != "file"
+        {
+            continue;
+        }
+        if file_doc.get("content_state").and_then(Value::as_str) != Some("available") {
+            continue;
+        }
+        if file_doc
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            != Some(content_hash)
+        {
+            continue;
+        }
+        if file_doc
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            != size_bytes
+        {
+            continue;
+        }
+        let candidate_generation_id = file_doc
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if candidate_generation_id.is_empty() {
+            continue;
+        }
+        candidates.push((candidate_id, candidate_generation_id));
+    }
+    drop(stmt);
+    drop(conn);
+
+    for (candidate_id, candidate_generation_id) in candidates {
+        let chunks = rxdb_desktop_file_chunks(root, &candidate_id, &candidate_generation_id)?;
+        if let Ok(decoded) = decode_verified_desktop_file_chunks(
+            &candidate_id,
+            &candidate_generation_id,
+            size_bytes,
+            content_hash,
+            chunks,
+        ) {
+            return Ok(Some(decoded));
+        }
+    }
+    Ok(None)
+}
+
 fn desktop_file_generation_chunk_id_bounds(file_id: &str, generation_id: &str) -> (String, String) {
     let prefix = format!("{file_id}_{generation_id}_");
     (prefix.clone(), format!("{prefix}`"))
@@ -9447,7 +9566,14 @@ fn load_desktop_file_bytes(root: &Path, file_id: &str) -> anyhow::Result<Vec<u8>
         .to_owned();
     let size_bytes = doc.get("size_bytes").and_then(Value::as_u64).unwrap_or(0);
     let chunks = rxdb_desktop_file_chunks(root, file_id, &generation_id)?;
-    decode_verified_desktop_file_chunks(file_id, &generation_id, size_bytes, &content_hash, chunks)
+    decode_verified_desktop_file_or_equivalent(
+        root,
+        file_id,
+        &generation_id,
+        size_bytes,
+        &content_hash,
+        chunks,
+    )
 }
 
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
@@ -32728,7 +32854,8 @@ fn materialize_business_chat_attachment(
         );
     }
     let chunks = rxdb_desktop_file_chunks(root, file_id, &generation_id)?;
-    let decoded = decode_verified_desktop_file_chunks(
+    let decoded = decode_verified_desktop_file_or_equivalent(
+        root,
         file_id,
         &generation_id,
         size_bytes,
@@ -32823,7 +32950,8 @@ fn export_verified_desktop_file_chunks_to_path(
     output_path: &Path,
 ) -> anyhow::Result<()> {
     let chunks = rxdb_desktop_file_chunks(root, file_id, generation_id)?;
-    let decoded = decode_verified_desktop_file_chunks(
+    let decoded = decode_verified_desktop_file_or_equivalent(
+        root,
         file_id,
         generation_id,
         size_bytes,
@@ -45087,6 +45215,119 @@ mod tests {
         assert!(task.prompt.contains("CV PDF extracted text"));
         assert!(task.prompt.contains("Matthias Behrendt"));
         assert!(task.prompt.contains("source_file_id: cv_pdf_mixed_chunks"));
+        Ok(())
+    }
+
+    #[test]
+    fn cv_print_queue_uses_equivalent_hash_source_for_incomplete_chunks() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes =
+            simple_text_pdf_bytes(&["Julia Schikore", "Senior HR Operations Manager", "Koeln"]);
+        let (content_hash, complete_generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_complete_source",
+            "Lebenslauf_Julia_Schikore.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+        let target_file_id = "cv_pdf_incomplete_target";
+        let target_generation_id = "target_generation_1";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let first_chunk: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND json_extract(data, '$.generation_id') = ?2
+               AND CAST(json_extract(data, '$.idx') AS INTEGER) = 0",
+            params!["cv_pdf_complete_source", complete_generation_id],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__desktop_files__v0 (id, data) VALUES (?1, ?2)",
+            params![
+                target_file_id,
+                serde_json::json!({
+                    "id": target_file_id,
+                    "parent_id": "fs_business_os_chat_attachments",
+                    "path": "/Business OS Chat/test/Lebenslauf_Julia_Schikore.pdf",
+                    "virtual_path": "/Business OS Chat/test/Lebenslauf_Julia_Schikore.pdf",
+                    "name": "Lebenslauf_Julia_Schikore.pdf",
+                    "kind": "file",
+                    "mime_type": "application/pdf",
+                    "extension": "pdf",
+                    "size_bytes": bytes.len(),
+                    "source": "business-os-chat",
+                    "content_ref": target_file_id,
+                    "content_state": "available",
+                    "content_hash": content_hash.clone(),
+                    "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                    "content_generation_id": target_generation_id,
+                    "content_synced_at_ms": now_ms(),
+                    "is_deleted": false,
+                    "created_at_ms": now_ms(),
+                    "updated_at_ms": now_ms()
+                })
+                .to_string()
+            ],
+        )?;
+        let mut target_chunk: Value = serde_json::from_str(&first_chunk)?;
+        target_chunk["id"] = Value::String(format!("{target_file_id}_{target_generation_id}_0"));
+        target_chunk["file_id"] = Value::String(target_file_id.to_string());
+        target_chunk["generation_id"] = Value::String(target_generation_id.to_string());
+        conn.execute(
+            "INSERT INTO ctox_business_os__desktop_file_chunks__v0 (id, data) VALUES (?1, ?2)",
+            params![
+                format!("{target_file_id}_{target_generation_id}_0"),
+                target_chunk.to_string()
+            ],
+        )?;
+        drop(conn);
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_equivalent_chunks",
+                "command_id": "cmd_cv_equivalent_chunks",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_julia_equivalent",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Julia_Schikore.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": target_file_id,
+                    "generation_id": target_generation_id,
+                    "filename": "Lebenslauf_Julia_Schikore.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": bytes.len(),
+                    "sha256": content_hash,
+                    "document_id": "doc_cv_julia_equivalent",
+                    "version_id": "doc_cv_julia_equivalent_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_julia_equivalent",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Julia Schikore"));
+        assert!(task
+            .prompt
+            .contains("source_file_id: cv_pdf_incomplete_target"));
         Ok(())
     }
 

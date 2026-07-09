@@ -1,9 +1,8 @@
 import {
-  readStoredFileFromChunks,
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v25';
+const BUILD = '20260709-cv-print-parser-v26';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -1669,10 +1668,9 @@ async function ensureParseSourceReady(state, item) {
   try {
     await Promise.race([
       Promise.resolve()
-        .then(() => ensureCanonicalDesktopFileChunks(state.ctx, {
+        .then(() => verifyDesktopFileSourceAvailable(state.ctx, {
           fileId,
           generationId,
-          sizeBytes: Number(source.size_bytes || 0),
           contentHash: source.sha256 || '',
         }))
         .then(() => flushFileCollectionsForDispatch(state.ctx, 60000)),
@@ -1816,61 +1814,9 @@ function syncBridgeFromHandle(handle) {
   return handle?.bridge || handle;
 }
 
-async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, sizeBytes = 0, contentHash = '' }) {
-  const chunksCol = getCollection(ctx, 'desktop_file_chunks');
-  const expectedTotal = expectedDesktopFileChunkTotal(sizeBytes);
-  const existingCanonical = await findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedTotal);
-  const canonicalReady = existingCanonical.length >= expectedTotal
-    && existingCanonical.every((chunk, idx) => (
-      Number(chunk.idx) === idx
-      && Number(chunk.total) >= expectedTotal
-      && String(chunk.encoding || 'base64') === 'base64'
-      && (!contentHash || !chunk.content_hash || chunk.content_hash === contentHash)
-      && Number(chunk.size_bytes ?? String(chunk.data || '').length) === String(chunk.data || '').length
-    ));
-  if (canonicalReady) return;
-
-  const blob = await readDesktopFileForCanonicalRepair(ctx, fileId, generationId, contentHash);
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  if (Number(sizeBytes || 0) > 0 && bytes.length !== Number(sizeBytes || 0)) {
-    throw new Error(`PDF-Daten sind unvollständig: ${fileId}`);
-  }
-  const base64 = uint8ToBase64(bytes);
-  const total = Math.max(expectedTotal, Math.ceil(base64.length / CHUNK_SIZE) || 1);
-  const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
-    const canonicalId = canonicalDesktopFileChunkId(fileId, generationId, idx);
-    const data = base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
-    return {
-      id: canonicalId,
-      file_id: fileId,
-      generation_id: generationId,
-      idx,
-      total,
-      encoding: 'base64',
-      data,
-      content_hash: contentHash,
-      content_hash_scheme: contentHash ? CONTENT_HASH_SCHEME : '',
-      chunk_hash: await sha256Hex(new TextEncoder().encode(data)),
-      chunk_hash_scheme: CHUNK_HASH_SCHEME,
-      size_bytes: data.length,
-      created_at_ms: Date.now(),
-    };
-  }));
-  await writeChunkDocuments(chunksCol, chunkRows);
-}
-
-async function readDesktopFileForCanonicalRepair(ctx, fileId, generationId, contentHash) {
-  const chunkOptions = {
+async function verifyDesktopFileSourceAvailable(ctx, { fileId, generationId, contentHash = '' }) {
+  await readDesktopFileFromDemand(ctx, fileId, 'application/pdf', {
     contentGenerationId: generationId,
-    contentHash,
-    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
-  };
-  const directChunks = await fetchDesktopFileChunks(ctx, fileId, generationId).catch(() => []);
-  if (directChunks.length) {
-    return readStoredFileFromChunks(directChunks, fileId, 'application/pdf', chunkOptions);
-  }
-  const demandChunks = await fetchDesktopFileDemandChunks(ctx, fileId);
-  return readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
     contentHash,
     contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
   });
@@ -1897,39 +1843,8 @@ async function writeChunkDocuments(collection, rows) {
   }
 }
 
-async function findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedTotal) {
-  const docs = [];
-  for (let idx = 0; idx < expectedTotal; idx += 1) {
-    const doc = await chunksCol
-      .findOne(canonicalDesktopFileChunkId(fileId, generationId, idx))
-      .exec()
-      .catch(() => null);
-    if (!doc) break;
-    const chunk = doc.toJSON ? doc.toJSON() : doc;
-    if (chunk?._deleted) break;
-    docs.push(chunk);
-  }
-  return docs;
-}
-
-async function fetchDesktopFileChunks(ctx, fileId, generationId) {
-  const collection = getCollection(ctx, 'desktop_file_chunks');
-  if (!collection?.find) return [];
-  const docs = await collection
-    .find({ selector: { file_id: fileId, generation_id: generationId } })
-    .exec();
-  return docs
-    .map((doc) => (doc?.toJSON ? doc.toJSON() : doc))
-    .filter((chunk) => chunk && !chunk._deleted && !chunk.deleted && !chunk.is_deleted);
-}
-
 function canonicalDesktopFileChunkId(fileId, generationId, idx) {
   return `${fileId}_${generationId}_${idx}`;
-}
-
-function expectedDesktopFileChunkTotal(sizeBytes) {
-  const base64Length = Math.ceil(Math.max(0, Number(sizeBytes || 0)) / 3) * 4;
-  return Math.max(1, Math.ceil(base64Length / CHUNK_SIZE));
 }
 
 function delay(ms) {

@@ -9410,6 +9410,7 @@ fn desktop_file_chunk_index_window(size_bytes: u64, range: Option<&FileRange>) -
 struct DesktopFileDemandMetadata {
     generation_id: String,
     size_bytes: u64,
+    content_hash: String,
 }
 
 fn demand_file_source_error(message: impl Into<String>) -> rxdb::rx_error::RxError {
@@ -9459,7 +9460,15 @@ fn active_desktop_file_chunk_rows_from_sqlite(
         index_window,
         stats,
     )?;
+    let expected_total = expected_desktop_file_chunk_total(metadata.size_bytes);
     let expected_range_total = index_window.1.saturating_sub(index_window.0);
+    let canonical = dedupe_desktop_file_chunks_by_idx(
+        canonical,
+        expected_total,
+        index_window,
+        metadata.size_bytes,
+        &metadata.content_hash,
+    );
     if u64::try_from(canonical.len()).unwrap_or_default() >= expected_range_total {
         return Ok((canonical, loaded_base_offset));
     }
@@ -9482,24 +9491,206 @@ fn active_desktop_file_chunk_rows_from_sqlite(
                 .is_some_and(|idx| idx >= index_window.0 && idx < index_window.1)
     })
     .collect::<Vec<_>>();
-    if fallback.len() > canonical.len() {
-        return Ok((
-            dedupe_desktop_file_chunks_by_idx(fallback),
-            loaded_base_offset,
-        ));
+    let fallback = dedupe_desktop_file_chunks_by_idx(
+        fallback,
+        expected_total,
+        index_window,
+        metadata.size_bytes,
+        &metadata.content_hash,
+    );
+    if u64::try_from(fallback.len()).unwrap_or_default() >= expected_range_total {
+        return Ok((fallback, loaded_base_offset));
+    }
+
+    if !metadata.content_hash.is_empty() {
+        let equivalent = equivalent_desktop_file_chunk_rows_from_sqlite(
+            &conn,
+            file_id,
+            &metadata,
+            index_window,
+            stats,
+        )?;
+        if u64::try_from(equivalent.len()).unwrap_or_default() >= expected_range_total {
+            return Ok((equivalent, loaded_base_offset));
+        }
     }
     Ok((canonical, loaded_base_offset))
 }
 
-fn dedupe_desktop_file_chunks_by_idx(chunks: Vec<Value>) -> Vec<Value> {
+fn dedupe_desktop_file_chunks_by_idx(
+    chunks: Vec<Value>,
+    expected_total: u64,
+    index_window: (u64, u64),
+    size_bytes: u64,
+    content_hash: &str,
+) -> Vec<Value> {
     let mut by_idx: BTreeMap<u64, Value> = BTreeMap::new();
     for chunk in chunks {
         let Some(idx) = chunk.get("idx").and_then(Value::as_u64) else {
             continue;
         };
-        by_idx.entry(idx).or_insert(chunk);
+        if idx < index_window.0 || idx >= index_window.1 || idx >= expected_total {
+            continue;
+        }
+        if desktop_file_chunk_stream_score(&chunk, expected_total, size_bytes, content_hash)
+            .is_none()
+        {
+            continue;
+        }
+        match by_idx.get(&idx) {
+            Some(previous)
+                if desktop_file_chunk_stream_score(
+                    &chunk,
+                    expected_total,
+                    size_bytes,
+                    content_hash,
+                ) >= desktop_file_chunk_stream_score(
+                    previous,
+                    expected_total,
+                    size_bytes,
+                    content_hash,
+                ) => {}
+            _ => {
+                by_idx.insert(idx, chunk);
+            }
+        }
     }
     by_idx.into_values().collect()
+}
+
+fn desktop_file_chunk_stream_score(
+    chunk: &Value,
+    expected_total: u64,
+    size_bytes: u64,
+    content_hash: &str,
+) -> Option<u8> {
+    if chunk
+        .get("encoding")
+        .and_then(Value::as_str)
+        .unwrap_or("base64")
+        != "base64"
+    {
+        return None;
+    }
+    if !content_hash.is_empty()
+        && chunk
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| hash != content_hash)
+    {
+        return None;
+    }
+    let data = chunk.get("data").and_then(Value::as_str).unwrap_or("");
+    if size_bytes > 0 && data.is_empty() {
+        return None;
+    }
+    if let Some(size) = chunk.get("size_bytes").and_then(Value::as_u64) {
+        if size != data.len() as u64 {
+            return None;
+        }
+    }
+    if let Some(chunk_hash) = chunk.get("chunk_hash").and_then(Value::as_str) {
+        if hex_sha256(data.as_bytes()) != chunk_hash {
+            return None;
+        }
+    }
+    let mut score = 0_u8;
+    let chunk_total = chunk
+        .get("total")
+        .and_then(Value::as_u64)
+        .unwrap_or(expected_total);
+    if chunk_total != expected_total {
+        score = score.saturating_add(if chunk_total > expected_total { 1 } else { 8 });
+    }
+    Some(score)
+}
+
+fn equivalent_desktop_file_chunk_rows_from_sqlite(
+    conn: &Connection,
+    file_id: &str,
+    metadata: &DesktopFileDemandMetadata,
+    index_window: (u64, u64),
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<Vec<Value>> {
+    let expected_total = expected_desktop_file_chunk_total(metadata.size_bytes);
+    let expected_range_total = index_window.1.saturating_sub(index_window.0);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, data FROM ctox_business_os__desktop_files__v0 \
+             WHERE id != ?1 AND COALESCE(deleted, 0) = 0",
+        )
+        .map_err(|err| {
+            demand_file_source_error(format!("prepare equivalent file lookup: {err}"))
+        })?;
+    let rows = stmt
+        .query_map([file_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| demand_file_source_error(format!("query equivalent files: {err}")))?;
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (candidate_id, raw) =
+            row.map_err(|err| demand_file_source_error(format!("load equivalent file: {err}")))?;
+        let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
+            demand_file_source_error(format!("decode equivalent file {candidate_id}: {err}"))
+        })?;
+        if value.get("content_state").and_then(Value::as_str) != Some("available") {
+            continue;
+        }
+        if value.get("kind").and_then(Value::as_str).unwrap_or("file") != "file" {
+            continue;
+        }
+        if value
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            != Some(metadata.content_hash.as_str())
+        {
+            continue;
+        }
+        if value
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            != metadata.size_bytes
+        {
+            continue;
+        }
+        let generation_id = value
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if generation_id.is_empty() {
+            continue;
+        }
+        candidates.push((candidate_id, generation_id));
+    }
+
+    for (candidate_id, generation_id) in candidates {
+        let chunks = desktop_file_chunk_rows_by_id_from_sqlite(
+            conn,
+            &candidate_id,
+            &generation_id,
+            metadata.size_bytes,
+            index_window,
+            stats,
+        )?;
+        let chunks = dedupe_desktop_file_chunks_by_idx(
+            chunks,
+            expected_total,
+            index_window,
+            metadata.size_bytes,
+            &metadata.content_hash,
+        );
+        if u64::try_from(chunks.len()).unwrap_or_default() >= expected_range_total {
+            return Ok(chunks);
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 fn active_desktop_file_metadata_from_sqlite(
@@ -9538,6 +9729,12 @@ fn active_desktop_file_metadata_from_sqlite(
             .get("size_bytes")
             .and_then(Value::as_u64)
             .unwrap_or_default(),
+        content_hash: file_row
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     }))
 }
 
@@ -14771,6 +14968,106 @@ mod tests {
         )
         .expect("fallback chunks reconstruct");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn active_desktop_file_demand_fetch_dedupes_mixed_chunk_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("mixed.pdf");
+        let payload = vec![b'm'; DESKTOP_FILE_CHUNK_DECODED_SIZE as usize + 513];
+        fs::write(&file_path, &payload).expect("write mixed artifact");
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
+
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        let generation_id = file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .expect("active generation id");
+        let chunks = read_desktop_file_chunks(&conn, &file_id, false);
+        assert!(chunks.len() > 1, "test file should have multiple chunks");
+        let padded_total = chunks
+            .iter()
+            .filter_map(|chunk| chunk.get("total").and_then(Value::as_u64))
+            .max()
+            .expect("chunk total")
+            + 1;
+        for chunk in &chunks {
+            let idx = chunk.get("idx").and_then(Value::as_u64).expect("idx");
+            let mut duplicate = chunk.clone();
+            let duplicate_id = format!("{file_id}_{generation_id}_padded_{idx}");
+            duplicate["id"] = Value::String(duplicate_id.clone());
+            duplicate["total"] = Value::from(padded_total);
+            conn.execute(
+                "INSERT INTO ctox_business_os__desktop_file_chunks__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    duplicate_id,
+                    format!("test-rev-{idx}"),
+                    1_f64,
+                    duplicate.to_string()
+                ],
+            )
+            .expect("insert padded duplicate");
+        }
+        drop(conn);
+
+        let mut collected = Vec::new();
+        stream_demand_file_chunks(
+            root.path(),
+            "desktop_file_chunks",
+            "file_id",
+            &file_id,
+            None,
+            &mut |bytes| {
+                collected.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream deduped chunks");
+        assert_eq!(collected, payload);
+    }
+
+    #[test]
+    fn active_desktop_file_demand_fetch_uses_equivalent_hash_source() {
+        let root = tempfile::tempdir().expect("temp root");
+        let source_path = root.path().join("complete.pdf");
+        let target_path = root.path().join("incomplete.pdf");
+        let payload = vec![b'h'; DESKTOP_FILE_CHUNK_DECODED_SIZE as usize + 891];
+        fs::write(&source_path, &payload).expect("write complete artifact");
+        fs::write(&target_path, &payload).expect("write incomplete artifact");
+
+        sync_desktop_file_from_path(root.path(), &source_path).expect("sync source file");
+        sync_desktop_file_from_path(root.path(), &target_path).expect("sync target file");
+
+        let target_id = desktop_file_id(&target_path.canonicalize().expect("canonical target"));
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        conn.execute(
+            "DELETE FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE json_extract(data, '$.file_id') = ?1
+               AND CAST(json_extract(data, '$.idx') AS INTEGER) > 0",
+            params![target_id],
+        )
+        .expect("truncate target chunks");
+        drop(conn);
+
+        let mut collected = Vec::new();
+        stream_demand_file_chunks(
+            root.path(),
+            "desktop_file_chunks",
+            "file_id",
+            &target_id,
+            None,
+            &mut |bytes| {
+                collected.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream equivalent chunks");
+        assert_eq!(collected, payload);
     }
 
     #[test]
