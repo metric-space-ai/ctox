@@ -981,6 +981,8 @@ struct ModuleManifest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     manifest_sha256: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    asset_revision: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     local_manifest_path: String,
     /// Template id this runtime module was installed from (stamped at install).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -5912,6 +5914,78 @@ fn module_catalog_file_tree_stamp(root: &Path) -> anyhow::Result<ModuleCatalogFi
     })
 }
 
+fn module_asset_revision(module_dir: &Path) -> anyhow::Result<String> {
+    if !module_dir.is_dir() {
+        return Ok(String::new());
+    }
+    let mut hasher = Sha256::new();
+    let mut file_count = 0usize;
+    let mut truncated = false;
+    collect_module_asset_revision(
+        module_dir,
+        module_dir,
+        &mut hasher,
+        &mut file_count,
+        &mut truncated,
+    )?;
+    if truncated {
+        update_module_catalog_stamp_hash(&mut hasher, "__ctox_module_asset_revision_truncated__");
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_module_asset_revision(
+    root: &Path,
+    current: &Path,
+    hasher: &mut Sha256,
+    file_count: &mut usize,
+    truncated: &mut bool,
+) -> anyhow::Result<()> {
+    if *truncated {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(current)
+        .with_context(|| format!("read module asset revision dir {}", current.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("list module asset revision dir {}", current.display()))?;
+    entries.sort_by(|left, right| left.path().cmp(&right.path()));
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || matches!(name.as_ref(), "node_modules" | "target") {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_module_asset_revision(root, &path, hasher, file_count, truncated)?;
+            if *truncated {
+                return Ok(());
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if *file_count >= MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT {
+            *truncated = true;
+            return Ok(());
+        }
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read module asset for revision {}", path.display()))?;
+        *file_count += 1;
+        update_module_catalog_stamp_hash(hasher, &rel);
+        hasher.update(bytes.len().to_le_bytes());
+        hasher.update(bytes);
+    }
+    Ok(())
+}
+
 fn collect_module_catalog_file_tree_stamp(
     root: &Path,
     current: &Path,
@@ -9440,6 +9514,7 @@ fn load_module_manifests(
             let mut manifest: ModuleManifest = serde_json::from_str(&text)
                 .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
             manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+            manifest.asset_revision = module_asset_revision(&entry.path())?;
             manifest.local_manifest_path = path.display().to_string();
             backfill_local_module_icon(&mut manifest, &entry.path());
             augment_module_manifest_file_plane(&mut manifest, &entry.path());
@@ -9508,6 +9583,7 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
         manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.asset_revision = module_asset_revision(&entry.path())?;
         manifest.local_manifest_path = path.display().to_string();
         augment_module_manifest_file_plane(&mut manifest, &entry.path());
         backfill_local_module_icon(&mut manifest, &entry.path());
@@ -9557,6 +9633,7 @@ fn load_local_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleMani
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
         manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.asset_revision = module_asset_revision(&entry.path())?;
         manifest.local_manifest_path = path.display().to_string();
         augment_module_manifest_file_plane(&mut manifest, &entry.path());
         backfill_local_module_icon(&mut manifest, &entry.path());
@@ -52509,6 +52586,66 @@ mod tests {
         assert_eq!(
             research.get("entry").and_then(Value::as_str),
             Some("modules/research/index.html")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_asset_revision_tracks_module_asset_bytes() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        let module_dir = app_root.join("modules/research");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            module_dir.join("module.json"),
+            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"store"}"#,
+        )?;
+        fs::write(module_dir.join("index.js"), "export const marker = 'one';")?;
+
+        let first_catalog = module_catalog_for_rxdb(root)?;
+        let first_module = first_catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+            })
+            .context("first research module projection")?;
+        let first_revision = first_module
+            .get("asset_revision")
+            .and_then(Value::as_str)
+            .context("first asset revision")?
+            .to_owned();
+        let manifest_sha = first_module
+            .get("manifest_sha256")
+            .and_then(Value::as_str)
+            .context("manifest sha")?
+            .to_owned();
+
+        fs::write(module_dir.join("index.js"), "export const marker = 'two';")?;
+
+        let second_catalog = module_catalog_for_rxdb(root)?;
+        let second_module = second_catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+            })
+            .context("second research module projection")?;
+        let second_revision = second_module
+            .get("asset_revision")
+            .and_then(Value::as_str)
+            .context("second asset revision")?;
+
+        assert_ne!(first_revision, second_revision);
+        assert_eq!(
+            second_module.get("manifest_sha256").and_then(Value::as_str),
+            Some(manifest_sha.as_str())
         );
         Ok(())
     }
