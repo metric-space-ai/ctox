@@ -117,6 +117,8 @@ assert.match(source, /bulkUpsert\(docs\)/);
 assert.match(source, /function reparseCandidates\(state\)/);
 assert.match(source, /source\.desktop_file_id\)/);
 assert.doesNotMatch(source, /source\.desktop_file_id && source\.generation_id/);
+assert.match(source, /state\.importing \|\| state\.bulkParsing/);
+assert.doesNotMatch(source, /Boolean\(busy\) \|\| !state\.ready \|\| !reparseCandidates/);
 assert.match(source, /async function reparseAllPdfs\(state,\s*candidates = reparseCandidates\(state\)\)/);
 assert.match(source, /Alle CV-PDFs wurden erneut an CTOX uebergeben/);
 assert.match(source, /originalErrors:\s*new Map\(\)/);

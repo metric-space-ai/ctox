@@ -3,7 +3,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v23';
+const BUILD = '20260709-cv-print-parser-v24';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -154,11 +154,11 @@ function bindStaticEvents(state) {
     renderSidebar(state);
   });
   state.host.querySelector('[data-cv-reparse-all]')?.addEventListener('click', async () => {
-    if (!state.ready) {
+    const candidates = reparseCandidates(state);
+    if (!state.ready && !candidates.length) {
       notify(state, 'info', 'Synchronisierung läuft', 'Parsing kann starten, sobald die Arbeitsdaten geladen sind.');
       return;
     }
-    const candidates = reparseCandidates(state);
     if (!candidates.length) {
       notify(state, 'info', 'Keine PDFs zum Parsen', 'Es wurden keine CVs mit lokaler PDF-Quelle gefunden.');
       return;
@@ -224,7 +224,7 @@ function setModuleBusy(state, busy) {
   }
   const reparseButton = state.host.querySelector('[data-cv-reparse-all]');
   if (reparseButton) {
-    const disabled = Boolean(busy) || !state.ready || !reparseCandidates(state).length;
+    const disabled = Boolean(state.importing || state.bulkParsing) || !reparseCandidates(state).length;
     reparseButton.disabled = disabled;
     reparseButton.toggleAttribute('disabled', disabled);
   }
