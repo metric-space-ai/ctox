@@ -124,6 +124,8 @@ assert.match(source, /originalErrors:\s*new Map\(\)/);
 assert.match(source, /Original-PDF konnte nicht geladen werden/);
 assert.match(source, /\.catch\(\(error\) =>/);
 assert.match(source, /PDF-Daten konnten nicht lokal vorbereitet werden/);
+assert.match(source, /!sourcePrepare\.generation_id/);
+assert.match(source, /dispatching parser task with native source fallback/);
 assert.match(source, /timeoutAfter\(60000/);
 assert.doesNotMatch(source, /Parser-Task wird trotzdem gestartet/);
 assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);

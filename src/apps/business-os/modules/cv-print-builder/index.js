@@ -1475,8 +1475,15 @@ async function startParsing(state, item) {
 
   try {
     const sourcePrepare = await ensureParseSourceReady(state, item);
-    if (!sourcePrepare.ready) {
+    if (!sourcePrepare.generation_id) {
       throw new Error(sourcePrepare.warning || 'PDF-Daten konnten nicht lokal vorbereitet werden.');
+    }
+    if (!sourcePrepare.ready) {
+      console.warn('[cv-print-builder] dispatching parser task with native source fallback', {
+        fileId: sourcePrepare.file_id,
+        generationId: sourcePrepare.generation_id,
+        warning: sourcePrepare.warning || '',
+      });
     }
     await upsertBusinessChat(state.ctx, {
       id: chatId,
