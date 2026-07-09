@@ -40,6 +40,7 @@ const liveCollections = sourceArray('LIVE_COLLECTIONS');
 assert.match(markup, /multiple\s+data-cv-upload/);
 assert.match(markup, /data-cv-search/);
 assert.match(markup, /data-cv-sort/);
+assert.match(markup, /data-cv-reparse-all/);
 assert.match(source, /label:\s*'Minimal'/);
 assert.match(source, /label:\s*'Klassisch'/);
 assert.match(source, /label:\s*'Modern'/);
@@ -113,6 +114,9 @@ assert.match(source, /DEMAND_ONLY_SYNC_COLLECTIONS/);
 assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
 assert.match(source, /releaseSyncLeases/);
 assert.match(source, /bulkUpsert\(docs\)/);
+assert.match(source, /function reparseCandidates\(state\)/);
+assert.match(source, /async function reparseAllPdfs\(state,\s*candidates = reparseCandidates\(state\)\)/);
+assert.match(source, /Alle CV-PDFs wurden erneut an CTOX uebergeben/);
 assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);
 
 console.log('cv-print-builder module contract OK');

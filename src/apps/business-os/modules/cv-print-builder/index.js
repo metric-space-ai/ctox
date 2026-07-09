@@ -3,7 +3,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260708-cv-print-parser-v20';
+const BUILD = '20260709-cv-print-parser-v21';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -103,6 +103,7 @@ export async function mount(ctx) {
     renderSerial: 0,
     ready: false,
     importing: false,
+    bulkParsing: false,
   };
 
   bindStaticEvents(state);
@@ -150,6 +151,20 @@ function bindStaticEvents(state) {
   state.host.querySelector('[data-cv-sort]')?.addEventListener('change', (event) => {
     state.sortMode = event.target.value || 'updated_desc';
     renderSidebar(state);
+  });
+  state.host.querySelector('[data-cv-reparse-all]')?.addEventListener('click', async () => {
+    if (!state.ready) {
+      notify(state, 'info', 'Synchronisierung läuft', 'Parsing kann starten, sobald die Arbeitsdaten geladen sind.');
+      return;
+    }
+    const candidates = reparseCandidates(state);
+    if (!candidates.length) {
+      notify(state, 'info', 'Keine PDFs zum Parsen', 'Es wurden keine CVs mit lokaler PDF-Quelle gefunden.');
+      return;
+    }
+    const confirmed = window.confirm(`${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`);
+    if (!confirmed) return;
+    await reparseAllPdfs(state, candidates);
   });
   state.host.addEventListener('change', async (event) => {
     if (!event.target?.matches?.('[data-cv-upload]')) return;
@@ -205,6 +220,12 @@ function setModuleBusy(state, busy) {
   if (newButton) {
     newButton.disabled = Boolean(busy);
     newButton.toggleAttribute('disabled', Boolean(busy));
+  }
+  const reparseButton = state.host.querySelector('[data-cv-reparse-all]');
+  if (reparseButton) {
+    const disabled = Boolean(busy) || !state.ready || !reparseCandidates(state).length;
+    reparseButton.disabled = disabled;
+    reparseButton.toggleAttribute('disabled', disabled);
   }
 }
 
@@ -351,7 +372,7 @@ async function refresh(state) {
 function render(state) {
   renderSidebar(state);
   renderStage(state);
-  setModuleBusy(state, !state.ready || state.importing);
+  setModuleBusy(state, !state.ready || state.importing || state.bulkParsing);
 }
 
 function renderSidebar(state) {
@@ -1543,6 +1564,47 @@ async function startParsing(state, item) {
     state.viewMode = 'original';
     await refresh(state);
   }
+}
+
+function reparseCandidates(state) {
+  return state.items.filter((item) => {
+    const source = item.model?.source || {};
+    return Boolean(item.record?.id && item.version?.id && source.desktop_file_id && source.generation_id);
+  });
+}
+
+async function reparseAllPdfs(state, candidates = reparseCandidates(state)) {
+  const originalSelection = state.selectedId;
+  const originalViewMode = state.viewMode;
+  const failures = [];
+  let started = 0;
+  state.bulkParsing = true;
+  setModuleBusy(state, true);
+  try {
+    for (const candidate of candidates) {
+      const item = state.items.find((entry) => entry.record.id === candidate.record.id) || candidate;
+      try {
+        state.selectedId = item.record.id;
+        await startParsing(state, item);
+        started += 1;
+      } catch (error) {
+        failures.push(`${displayCandidateName(item.model)}: ${error?.message || error}`);
+      }
+    }
+  } finally {
+    state.bulkParsing = false;
+    state.selectedId = state.items.some((item) => item.record.id === originalSelection)
+      ? originalSelection
+      : state.items[0]?.record.id || '';
+    state.viewMode = originalViewMode || 'original';
+    await refresh(state);
+    setModuleBusy(state, !state.ready);
+  }
+  if (failures.length) {
+    notify(state, 'error', `${started}/${candidates.length} Parser-Tasks gestartet`, failures.slice(0, 3).join('\n'));
+    return;
+  }
+  notify(state, 'success', `${started} Parser-Tasks gestartet`, 'Alle CV-PDFs wurden erneut an CTOX uebergeben.');
 }
 
 async function dispatchCvParserCommand(state, command) {

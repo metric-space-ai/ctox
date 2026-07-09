@@ -27,6 +27,38 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+.cv-print-builder .ctox-pane-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.62fr);
+  gap: 6px;
+}
+
+.cv-bulk-parse {
+  grid-column: 1 / -1;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid color-mix(in oklab, var(--cv-accent) 50%, var(--cv-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cv-accent) 12%, transparent);
+  color: var(--cv-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 860;
+  letter-spacing: 0;
+}
+
+.cv-bulk-parse:hover,
+.cv-bulk-parse:focus-visible {
+  background: color-mix(in srgb, var(--cv-accent) 18%, transparent);
+  outline: none;
+}
+
+.cv-bulk-parse:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
 .cv-candidate-list {
   min-height: 0;
   overflow: auto;
