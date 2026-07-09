@@ -163,6 +163,7 @@ const state = {
   modules: [],
   activeModule: null,
   moduleRevisions: {},
+  packagedModuleAssetRevisions: new Map(),
   navHistory: [],
   navIndex: -1,
   navTransitioning: false,
@@ -7897,7 +7898,7 @@ async function loadPackagedModuleCatalog() {
           id: 'module-catalog',
           updated_at_ms: Date.now(),
           ok: catalog.ok !== false,
-          modules: catalog.modules,
+          modules: await withPackagedModuleAssetRevisions(catalog.modules),
           templates: Array.isArray(catalog.templates) ? catalog.templates : [],
           governance: catalog.governance || null,
           source: 'business-os-shell',
@@ -7907,7 +7908,53 @@ async function loadPackagedModuleCatalog() {
   } catch (error) {
     console.warn('[business-os] packaged module catalog seed unavailable; using embedded shell catalog', error);
   }
-  return getOfflineFallbackCatalog();
+  const fallback = getOfflineFallbackCatalog();
+  return {
+    ...fallback,
+    modules: await withPackagedModuleAssetRevisions(fallback.modules),
+  };
+}
+
+async function withPackagedModuleAssetRevisions(modules) {
+  if (!Array.isArray(modules) || !modules.length) return modules;
+  return Promise.all(modules.map(async (mod) => {
+    const existing = String(mod?.asset_revision || mod?.assetRevision || '').trim();
+    if (existing) return mod;
+    const revision = await packagedModuleAssetRevision(mod);
+    return revision ? { ...mod, asset_revision: revision } : mod;
+  }));
+}
+
+async function packagedModuleAssetRevision(mod) {
+  const base = moduleBasePath(mod);
+  if (!base || !base.startsWith('modules/')) return '';
+  const cacheKey = `${base}:${APP_BUILD}`;
+  if (state.packagedModuleAssetRevisions.has(cacheKey)) {
+    return state.packagedModuleAssetRevisions.get(cacheKey);
+  }
+  const assets = ['module.json', 'index.js', 'schema.js', 'index.css', 'icon.svg'];
+  const parts = [];
+  for (const asset of assets) {
+    try {
+      const response = await fetch(`./${base}/${asset}?v=${APP_BUILD}`, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const content = await response.text();
+      parts.push(`${asset}\0${content.length}\0${content}`);
+    } catch {
+      // Optional module assets are expected to be absent for many apps.
+    }
+  }
+  if (!parts.length || !crypto?.subtle) {
+    state.packagedModuleAssetRevisions.set(cacheKey, '');
+    return '';
+  }
+  const bytes = new TextEncoder().encode(parts.join('\n'));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const revision = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  state.packagedModuleAssetRevisions.set(cacheKey, revision);
+  return revision;
 }
 
 async function installTemplate({ templateId, title }) {
