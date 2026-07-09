@@ -9392,10 +9392,36 @@ fn rxdb_desktop_file_chunks(
     if !chunks.is_empty() {
         return Ok(chunks);
     }
-    // Older Business OS uploads used row ids like `{file_id}_{idx}` while the
-    // chunk JSON already carried the correct generation. The canonical range
-    // query above intentionally stays fast for new data; this fallback keeps
-    // legacy PDFs reparsable without rewriting user data in place.
+    // Some historical browser uploads used `{file_id}_{idx}` row ids. Keep a
+    // row-id-only fallback before the JSON SQL fallback so reconstruction does
+    // not depend on SQLite JSON expression behavior for legacy chunks.
+    let legacy_id_lower = format!("{file_id}_");
+    let legacy_id_upper = format!("{file_id}_\u{10ffff}");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE id >= ?1 AND id < ?2{live_filter}
+             ORDER BY id",
+        ))
+        .context("desktop file chunk collection is not available")?;
+    let rows = stmt.query_map(params![legacy_id_lower, legacy_id_upper], |row| {
+        row.get::<_, String>(0)
+    })?;
+    for row in rows {
+        let raw = row?;
+        let value: Value =
+            serde_json::from_str(&raw).context("invalid desktop file chunk RxDB document")?;
+        if value.get("file_id").and_then(Value::as_str) == Some(file_id)
+            && value.get("generation_id").and_then(Value::as_str) == Some(generation_id)
+            && !is_rxdb_deleted_document(&value)
+        {
+            chunks.push(value);
+        }
+    }
+    if !chunks.is_empty() {
+        return Ok(chunks);
+    }
+    // Final compatibility fallback for migrated rows with arbitrary ids.
     let mut stmt = conn
         .prepare(&format!(
             "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
