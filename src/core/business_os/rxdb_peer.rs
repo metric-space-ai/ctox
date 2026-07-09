@@ -9747,6 +9747,18 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
     stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    let mut rows = desktop_file_chunk_rows_by_row_id_from_sqlite(
+        conn,
+        file_id,
+        generation_id,
+        expected_total,
+        index_window,
+        stats,
+    )?;
+    let expected_range_total = index_window.1.saturating_sub(index_window.0);
+    if u64::try_from(rows.len()).unwrap_or_default() >= expected_range_total {
+        return Ok(rows);
+    }
     let start_idx = i64::try_from(index_window.0).map_err(|err| {
         demand_file_source_error(format!(
             "desktop file chunk start overflow for {file_id}: {err}"
@@ -9760,7 +9772,7 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
     let mut stmt = conn
         .prepare(
             "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 \
-             WHERE deleted = 0 \
+             WHERE COALESCE(deleted, 0) = 0 \
                AND json_extract(data, '$.file_id') = ?1 \
                AND json_extract(data, '$.generation_id') = ?2 \
                AND json_extract(data, '$.idx') >= ?3 \
@@ -9773,9 +9785,7 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
             row.get::<_, String>(0)
         })
         .map_err(|err| demand_file_source_error(format!("query desktop file chunks: {err}")))?;
-    let mut rows = Vec::with_capacity(
-        usize::try_from(index_window.1.saturating_sub(index_window.0)).unwrap_or(0),
-    );
+    rows.reserve(usize::try_from(index_window.1.saturating_sub(index_window.0)).unwrap_or(0));
     for row in query_rows {
         let raw =
             row.map_err(|err| demand_file_source_error(format!("load desktop file chunk: {err}")))?;
@@ -9792,6 +9802,62 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
                 .get("idx")
                 .and_then(Value::as_u64)
                 .is_some_and(|idx| idx < expected_total)
+    });
+    Ok(rows)
+}
+
+fn desktop_file_chunk_rows_by_row_id_from_sqlite(
+    conn: &Connection,
+    file_id: &str,
+    generation_id: &str,
+    expected_total: u64,
+    index_window: (u64, u64),
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<Vec<Value>> {
+    let mut rows = Vec::with_capacity(
+        usize::try_from(index_window.1.saturating_sub(index_window.0)).unwrap_or(0),
+    );
+    let canonical_prefix = format!("{file_id}_{generation_id}_");
+    let canonical_upper = format!("{canonical_prefix}`");
+    let legacy_prefix = format!("{file_id}_");
+    let legacy_upper = format!("{legacy_prefix}\u{10ffff}");
+    for (lower, upper) in [
+        (canonical_prefix.as_str(), canonical_upper.as_str()),
+        (legacy_prefix.as_str(), legacy_upper.as_str()),
+    ] {
+        let mut stmt = conn
+            .prepare(
+                "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 \
+                 WHERE id >= ?1 AND id < ?2 AND COALESCE(deleted, 0) = 0 \
+                 ORDER BY id ASC",
+            )
+            .map_err(|err| {
+                demand_file_source_error(format!("prepare chunk row-id lookup: {err}"))
+            })?;
+        let query_rows = stmt
+            .query_map(params![lower, upper], |row| row.get::<_, String>(0))
+            .map_err(|err| {
+                demand_file_source_error(format!("query desktop file chunks by row id: {err}"))
+            })?;
+        for row in query_rows {
+            let raw = row.map_err(|err| {
+                demand_file_source_error(format!("load desktop file chunk by row id: {err}"))
+            })?;
+            stats.rows_loaded = stats.rows_loaded.saturating_add(1);
+            let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
+                demand_file_source_error(format!(
+                    "decode desktop file chunk by row id for {file_id}: {err}"
+                ))
+            })?;
+            rows.push(value);
+        }
+    }
+    rows.retain(|chunk| {
+        chunk.get("file_id").and_then(Value::as_str) == Some(file_id)
+            && chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id)
+            && chunk.get("idx").and_then(Value::as_u64).is_some_and(|idx| {
+                idx < expected_total && idx >= index_window.0 && idx < index_window.1
+            })
     });
     Ok(rows)
 }
