@@ -3,7 +3,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v22';
+const BUILD = '20260709-cv-print-parser-v23';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -1587,7 +1587,7 @@ async function startParsing(state, item) {
 function reparseCandidates(state) {
   return state.items.filter((item) => {
     const source = item.model?.source || {};
-    return Boolean(item.record?.id && item.version?.id && source.desktop_file_id && source.generation_id);
+    return Boolean(item.record?.id && item.version?.id && source.desktop_file_id);
   });
 }
 
@@ -1652,8 +1652,16 @@ async function ensureParseSourceReady(state, item) {
   const source = item.model?.source || {};
   const fileId = source.desktop_file_id || '';
   const generationId = source.generation_id || '';
-  if (!fileId || !generationId) {
-    throw new Error('CV-Quelle ist unvollständig: PDF-Datei oder Generation fehlt.');
+  if (!fileId) {
+    throw new Error('CV-Quelle ist unvollständig: PDF-Datei fehlt.');
+  }
+  if (!generationId) {
+    return {
+      ready: false,
+      file_id: fileId,
+      generation_id: '',
+      warning: 'CV-Quelle hat keine Generation-ID. Parser-Task wird trotzdem gestartet.',
+    };
   }
   try {
     await Promise.race([
