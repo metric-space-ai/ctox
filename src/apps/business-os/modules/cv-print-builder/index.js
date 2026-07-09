@@ -3,7 +3,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v24';
+const BUILD = '20260709-cv-print-parser-v25';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -1476,6 +1476,9 @@ async function startParsing(state, item) {
 
   try {
     const sourcePrepare = await ensureParseSourceReady(state, item);
+    if (!sourcePrepare.ready) {
+      throw new Error(sourcePrepare.warning || 'PDF-Daten konnten nicht lokal vorbereitet werden.');
+    }
     await upsertBusinessChat(state.ctx, {
       id: chatId,
       title: `CV Parsing · ${displayCandidateName(item.model)}`,
@@ -1660,7 +1663,7 @@ async function ensureParseSourceReady(state, item) {
       ready: false,
       file_id: fileId,
       generation_id: '',
-      warning: 'CV-Quelle hat keine Generation-ID. Parser-Task wird trotzdem gestartet.',
+      warning: 'CV-Quelle hat keine Generation-ID.',
     };
   }
   try {
@@ -1672,12 +1675,12 @@ async function ensureParseSourceReady(state, item) {
           sizeBytes: Number(source.size_bytes || 0),
           contentHash: source.sha256 || '',
         }))
-        .then(() => flushFileCollectionsForDispatch(state.ctx, 45000)),
-      timeoutAfter(12000, 'PDF-Sync-Vorbereitung dauert zu lange. Parser-Task wird trotzdem gestartet.'),
+        .then(() => flushFileCollectionsForDispatch(state.ctx, 60000)),
+      timeoutAfter(60000, 'PDF-Sync-Vorbereitung konnte nicht innerhalb von 60s abgeschlossen werden.'),
     ]);
     return { ready: true, file_id: fileId, generation_id: generationId };
   } catch (error) {
-    const warning = String(error?.message || error || 'PDF-Sync-Vorbereitung ist fehlgeschlagen.');
+    const warning = `PDF-Daten konnten nicht lokal vorbereitet werden: ${String(error?.message || error || 'PDF-Sync-Vorbereitung ist fehlgeschlagen.')}`;
     console.warn('[cv-print-builder] parse source preparation did not complete before dispatch', {
       fileId,
       generationId,
