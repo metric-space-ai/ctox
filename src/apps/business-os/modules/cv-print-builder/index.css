@@ -393,6 +393,14 @@
   padding: 22px;
 }
 
+.cv-original-placeholder span {
+  display: block;
+  max-width: 42ch;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .cv-print-wrap {
   min-height: 100%;
   padding: 14px;

@@ -117,6 +117,9 @@ assert.match(source, /bulkUpsert\(docs\)/);
 assert.match(source, /function reparseCandidates\(state\)/);
 assert.match(source, /async function reparseAllPdfs\(state,\s*candidates = reparseCandidates\(state\)\)/);
 assert.match(source, /Alle CV-PDFs wurden erneut an CTOX uebergeben/);
+assert.match(source, /originalErrors:\s*new Map\(\)/);
+assert.match(source, /Original-PDF konnte nicht geladen werden/);
+assert.match(source, /\.catch\(\(error\) =>/);
 assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);
 
 console.log('cv-print-builder module contract OK');

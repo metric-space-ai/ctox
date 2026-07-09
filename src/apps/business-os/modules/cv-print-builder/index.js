@@ -3,7 +3,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v21';
+const BUILD = '20260709-cv-print-parser-v22';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -104,6 +104,7 @@ export async function mount(ctx) {
     ready: false,
     importing: false,
     bulkParsing: false,
+    originalErrors: new Map(),
   };
 
   bindStaticEvents(state);
@@ -681,9 +682,15 @@ function renderStage(state) {
   stage.innerHTML = `<div class="cv-view-grid${mode === 'split' ? ' is-split' : ''}">${views.join('')}</div>`;
   bindEditablePrintFields(state);
   bindFieldEditor(state);
-  ensureOriginalUrl(state, item).then(() => {
-    if (serial === state.renderSerial) renderOriginalFrame(state, item);
-  });
+  ensureOriginalUrl(state, item)
+    .then(() => {
+      if (serial === state.renderSerial) renderOriginalFrame(state, item);
+    })
+    .catch((error) => {
+      const fileId = item.model.source?.desktop_file_id || '';
+      if (fileId) state.originalErrors.set(fileId, error?.message || String(error || 'Original-PDF konnte nicht geladen werden.'));
+      if (serial === state.renderSerial) renderOriginalFrame(state, item);
+    });
 }
 
 function renderOriginalPane(state, item) {
@@ -703,7 +710,18 @@ function renderOriginalPane(state, item) {
 function renderOriginalFrame(state, item) {
   const body = state.host.querySelector('[data-cv-original-body]');
   if (!body) return;
-  const url = state.originalUrls.get(item.model.source?.desktop_file_id);
+  const fileId = item.model.source?.desktop_file_id || '';
+  const error = state.originalErrors.get(fileId);
+  if (error) {
+    body.innerHTML = `
+      <div class="cv-original-placeholder">
+        <strong>Original-PDF konnte nicht geladen werden.</strong>
+        <span>${escapeHtml(error)}</span>
+      </div>
+    `;
+    return;
+  }
+  const url = state.originalUrls.get(fileId);
   if (!url) {
     body.innerHTML = '<div class="cv-original-placeholder">Original-PDF ist noch nicht lokal materialisiert.</div>';
     return;
@@ -2042,6 +2060,7 @@ async function ensureOriginalUrl(state, item) {
     contentHash: source.sha256 || '',
     contentHashScheme: source.sha256 ? CONTENT_HASH_SCHEME : '',
   });
+  state.originalErrors.delete(fileId);
   state.originalUrls.set(fileId, URL.createObjectURL(blob));
 }
 
