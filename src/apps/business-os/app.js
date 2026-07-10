@@ -226,12 +226,17 @@ const state = {
 };
 
 function resetDataPlaneReady(reason = 'startup') {
+  if (state.dataPlaneReadyStatus === 'pending' && state.dataPlaneReady) {
+    state.dataPlaneReadyReason = reason;
+    return state.dataPlaneReady;
+  }
   state.dataPlaneReadyStatus = 'pending';
   state.dataPlaneReadyReason = reason;
   state.dataPlaneReady = new Promise((resolve, reject) => {
     state.dataPlaneReadyResolve = resolve;
     state.dataPlaneReadyReject = reject;
   });
+  return state.dataPlaneReady;
 }
 
 function resolveDataPlaneReady() {
