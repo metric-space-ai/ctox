@@ -111,7 +111,8 @@ operation is available at
   command surface
 - [Project page](https://metric-space-ai.github.io/ctox/) — overview,
   connectivity, downloads
-- [HARNESS.md](HARNESS.md) — review, task-spawn, subagent, and liveness-proof
+- [HARNESS.md](HARNESS.md) — worker lifecycle, persistent session, context,
+  review, recovery, subagents, and liveness proof
   model
 
 ## Development

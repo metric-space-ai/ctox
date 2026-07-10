@@ -150,7 +150,7 @@ Direct-session model events write token and timing forensics to
 
 ## Context Protection
 
-There are two context-protection mechanisms in the current code:
+There are three context-protection mechanisms in the current code:
 
 - Live turns materialize only the current bounded LCM working set (referenced
   context items, active summaries, and fresh tail). Full message/commit history
@@ -175,7 +175,8 @@ thread it also projects from the last model-reported input usage and compacts
 before the safe boundary is crossed.
 
 The build order, contribution contract, omission rules, and audit checks for
-every context component are documented in `docs/context-build.md`.
+every context component are documented in the
+[Context Build Contract](docs/context-build.md).
 
 The default context window is 262144 tokens (256k) when no runtime/model value
 overrides it. 256k is the only supported chat-context choice; the retired 128k

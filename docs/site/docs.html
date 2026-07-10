@@ -1515,8 +1515,8 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
    select executable work from SQLite and mark it leased/running
 
 3. Context build
-   mission contract + active work + Focus + Anchors + Narrative + workflow state
-   + knowledge + claims + governance + context health + recent conversation
+   stable system contract + freshly rebuilt marked runtime context
+   + exactly one current user request
 
 4. Worker turn
    agent uses shell/browser/files and, when needed, calls ctox CLI commands itself
@@ -1530,8 +1530,10 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
           <p>
             The loop survives a finished chat turn because the queue, tickets,
             schedules, continuity, claims, and process events live outside the
-            model context. If work is incomplete, CTOX records why and keeps a
-            continuation path.
+            model context. Normal worker slices also reuse one named durable
+            harness thread, whose rollout is resumed after a service restart.
+            SQLite remains authoritative: session history preserves execution
+            detail, but never decides whether work is complete.
           </p>
           <div class="harness" id="harness-diagram" aria-label="CTOX harness diagram">
             <div class="harness-row">
@@ -1553,13 +1555,13 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
               <div class="harness-arrow">-&gt;</div>
               <div class="harness-box">
                 <strong>Context builder</strong>
-                <span>Builds the worker prompt from mission contract, active work, Focus, Anchors, Narrative, workflow state, knowledge, claims, governance, context health, and recent conversation.</span>
+                <span>Builds the smallest useful runtime context from authoritative state. Focus and the execution contract are mandatory; optional blocks appear only when they carry a current signal.</span>
               </div>
             </div>
             <div class="harness-row">
               <div class="harness-box">
                 <strong>ctox-core worker loop</strong>
-                <span>The worker alternates model reasoning, tool calls, tool results, and CTOX CLI calls. It can inspect and update the runtime through the same command surface a human operator sees.</span>
+                <span>The named worker thread resumes its durable rollout and alternates model reasoning, tool calls, tool results, and typed CTOX operations. Workspace cwd is applied per turn.</span>
               </div>
               <div class="harness-arrow">-&gt;</div>
               <div class="harness-box">
@@ -1596,10 +1598,11 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
             </div>
             <div class="harness-loop">
               <strong>Persistent loop:</strong>
-              the next run is created from database state and continuity, not
-              from an ever-growing chat transcript. That is the difference
-              between chaining sessions and running a daemon with durable
-              process state.
+              the logical worker session survives task boundaries and service
+              restarts, while each turn receives a newly selected working set.
+              Old runtime frames do not accumulate in the model-visible
+              request; durable state, rollout history, compaction, and
+              retrieval each retain their separate responsibilities.
             </div>
           </div>
         </section>
@@ -1610,9 +1613,28 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
           <p>
             CTOX does not preserve continuity by appending every previous token
             to the next prompt. It builds a new working context from durable
-            sources, then lets the bounded worker turn operate inside that
-            context window.
+            sources, projects it into a persistent harness session, and lets
+            the bounded worker turn operate inside the model context window.
           </p>
+          <h3>Physical model-input lanes</h3>
+          <div class="grid">
+            <div class="cell">
+              <b>Stable system contract</b>
+              <p>Identity, operating rules, tools, and capability boundaries are installed for the thread. A model or base-instruction contract change rebuilds the process-local session before reuse.</p>
+            </div>
+            <div class="cell">
+              <b>Current runtime context</b>
+              <p>One marked developer section is rebuilt on every turn. Before a model request, older marked CTOX sections are removed from the request projection.</p>
+            </div>
+            <div class="cell">
+              <b>Current user request</b>
+              <p>The exact current task is sent once as the user message, without a generated “current request” wrapper or duplicate copy inside runtime context.</p>
+            </div>
+            <div class="cell">
+              <b>Durable thread history</b>
+              <p>Real user, assistant, reasoning, and tool-call history remains resumable rollout history. Compaction bounds model-visible detail without making the rollout the completion authority.</p>
+            </div>
+          </div>
           <div class="grid">
             <div class="cell">
               <b>Mission contract</b>
@@ -1644,13 +1666,13 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
               <h3>Example: assembled multi-turn worker prompt</h3>
               <p>
                 A CTOX worker run is not started from a single chat message.
-                CTOX assembles a bounded prompt by concatenating the static
-                mission contract with selected runtime blocks from SQLite:
-                current work, Focus, Anchors, Narrative, workflow state, recent
-                multi-turn conversation, and process evidence. The example
-                below is synthetic. It is modeled after CTOX runtime structure,
-                but it is not copied from a real project, host, ticket, or
-                database.
+                CTOX combines stable thread instructions, one dynamically
+                selected runtime-context section, one current user message, and
+                retained thread history. Runtime blocks are selected from
+                SQLite; they are not all appended by default. The example below
+                is a readable combined view of those physical lanes. It is
+                synthetic and is not copied from a real project, host, ticket,
+                or database.
               </p>
               <div class="data-strip">
                 <div>
@@ -1670,16 +1692,15 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
                   <span>Rollout verified and closed with evidence</span>
                 </div>
               </div>
-              <pre><code>worker_prompt =
-  system_contract
-  + latest_task
-  + focus
-  + anchors
-  + narrative
-  + workflow_state
-  + recent_multi_turn_conversation
-  + process_evidence
-  + worker_instruction</code></pre>
+              <pre><code>model_input =
+  stable_system_contract
+  + latest_marked_runtime_context(
+      mandatory: focus + execution_contract,
+      conditional: evidence, strategy, anchors, workflow, narrative,
+                   governance, autonomy, health, conversation_evidence
+    )
+  + current_user_request_once
+  + compacted_real_thread_history</code></pre>
             </div>
             <div class="context-pickers" aria-label="Context prompt examples">
               <button class="is-active" type="button" data-context-example="assembled">Assembled prompt</button>
@@ -1693,9 +1714,9 @@ ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</c
               <div class="prompt-meta">
                 <b id="context-example-title">Assembled prompt</b>
                 <p id="context-example-note">
-                  This is the important part: the worker sees a single prompt
-                  made from multiple persisted blocks, not just the latest chat
-                  turn.
+                  This combined diagnostic view is shown for readability. On
+                  the wire, system instructions, runtime developer context, and
+                  the current user request remain separate lanes.
                 </p>
               </div>
               <div class="prompt-output">
@@ -1800,11 +1821,19 @@ done gates pass.</code></pre>
             The point is that important state is promoted into the right
             durable structure before temporary prompt material can be compressed.
           </p>
+          <p>
+            Context selection is contribution-based. Verified evidence,
+            strategy, anchors, workflow state, narrative, governance, autonomy,
+            health, and conversation evidence are omitted when they carry no
+            applicable signal. Focus and the execution contract remain present.
+            Conversation evidence is ranked by overlap with the current request
+            before recency and remains bounded by item and character limits.
+          </p>
           <pre><code>ctox lcm-compact &lt;db-path&gt; &lt;conversation-id&gt; [token-budget] [--force]
 ctox lcm-grep &lt;db-path&gt; &lt;conversation-id&gt; &lt;query&gt;
 ctox lcm-expand &lt;db-path&gt; &lt;summary-id&gt; [depth] [--messages] [token-cap]
 ctox continuity-show &lt;db-path&gt; &lt;conversation-id&gt; [narrative|anchors|focus]
-ctox continuity-update --kind focus --mode full</code></pre>
+ctox continuity-update --conversation-id &lt;conversation-id&gt; --kind focus --mode full</code></pre>
           <p class="note">
             In this example, compaction is not the interesting part. The
             important behavior is that CTOX can drop temporary prompt material

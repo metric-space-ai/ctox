@@ -4,6 +4,11 @@ This document describes how the CTOX harness is expected to behave when work
 flows through review, rework, task spawning, subagents, and process-mining
 checks.
 
+This page defines the orchestration and liveness contract. For the end-to-end
+runtime path, persistent worker-session behavior, recovery, and outcome gates,
+see [`HARNESS.md`](../HARNESS.md). For the exact model-input construction and
+long-session hygiene rules, see [Context Build Contract](context-build.md).
+
 The short version:
 
 - the state machine owns orchestration
