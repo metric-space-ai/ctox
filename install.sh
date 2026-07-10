@@ -21,9 +21,9 @@ DEPENDENCIES_ROOT_EXPLICIT=0
 [[ -n "${CTOX_TOOLS_ROOT:-}" ]] && TOOLS_ROOT_EXPLICIT=1
 [[ -n "${CTOX_DEPENDENCIES_ROOT:-}" ]] && DEPENDENCIES_ROOT_EXPLICIT=1
 
-GREPPLUS_REPO="https://github.com/metric-space-ai/grepplus-rs.git"
-GREPPLUS_REV="95d824feee3b4e29d8c8cbfbac32b421385059af"
-GREPPLUS_RUST_TOOLCHAIN="1.95.0"
+GREPPY_REPO="https://github.com/metric-space-ai/greppy.git"
+GREPPY_REV="f98c40d723a5c82dc217d6f5333317793c32ec0f"
+GREPPY_RUST_TOOLCHAIN="1.95.0"
 
 # CLI flags
 BACKEND_FLAG="${CTOX_BACKEND:-}"
@@ -1474,58 +1474,58 @@ resolve_rustup() {
   command -v rustup
 }
 
-write_grepplus_shim() {
+write_greppy_shim() {
   local destination="$1"
   local target="$2"
   local allow_existing="$3"
   mkdir -p "$(dirname "$destination")"
   if [[ -e "$destination" || -L "$destination" ]]; then
-    if [[ "$allow_existing" != "1" ]] && ! grep -q 'CTOX managed Grep+ shim' "$destination" 2>/dev/null; then
-      printf '  %b%bKeeping existing %s; Grep+ remains available as grepplus.%b\n' \
+    if [[ "$allow_existing" != "1" ]] && ! grep -q 'CTOX managed greppy shim' "$destination" 2>/dev/null; then
+      printf '  %b%bKeeping existing %s; greppy remains available via its own shim.%b\n' \
         "$C_BOLD" "$C_GREY" "$destination" "$C_RESET" >&2
       return 0
     fi
   fi
   cat > "$destination" <<SHIMEOF
 #!/usr/bin/env bash
-# CTOX managed Grep+ shim.
+# CTOX managed greppy shim.
 set -euo pipefail
 exec "$target" "\$@"
 SHIMEOF
   chmod +x "$destination"
 }
 
-ensure_grepplus_tool() {
+ensure_greppy_tool() {
   local started; started="$(date +%s)"
-  tui_module_start "Installing Grep+ code navigation"
+  tui_module_start "Installing greppy code navigation"
   local cargo; cargo="$(resolve_cargo 2>/dev/null || true)"
   if [[ -z "$cargo" || ! -x "$cargo" ]]; then
-    printf '  %b%bGrep+ skipped: cargo is not available%b\n' "$C_BOLD" "$C_YELLOW" "$C_RESET" >&2
+    printf '  %b%bgreppy skipped: cargo is not available%b\n' "$C_BOLD" "$C_YELLOW" "$C_RESET" >&2
     return 1
   fi
 
-  local root="$TOOLS_ROOT/grepplus"
-  local source_dir="$root/src/grepplus-rs"
+  local root="$TOOLS_ROOT/greppy"
+  local source_dir="$root/src/greppy"
   local install_root="$root/install"
   local cargo_home="$root/cargo-home"
   local cargo_target="$root/cargo-target"
   mkdir -p "$root/src" "$install_root" "$cargo_home" "$cargo_target" "$BIN_DIR" || return 1
 
   if [[ -d "$source_dir/.git" ]]; then
-    git -C "$source_dir" fetch --depth 1 origin "$GREPPLUS_REV" >/dev/null 2>&1 || return 1
+    git -C "$source_dir" fetch --depth 1 origin "$GREPPY_REV" >/dev/null 2>&1 || return 1
   else
     rm -rf "$source_dir"
-    git clone --depth 1 "$GREPPLUS_REPO" "$source_dir" >/dev/null 2>&1 || return 1
-    git -C "$source_dir" fetch --depth 1 origin "$GREPPLUS_REV" >/dev/null 2>&1 || return 1
+    git clone --depth 1 "$GREPPY_REPO" "$source_dir" >/dev/null 2>&1 || return 1
+    git -C "$source_dir" fetch --depth 1 origin "$GREPPY_REV" >/dev/null 2>&1 || return 1
   fi
-  git -C "$source_dir" checkout -f "$GREPPLUS_REV" >/dev/null 2>&1 || return 1
+  git -C "$source_dir" checkout -f "$GREPPY_REV" >/dev/null 2>&1 || return 1
 
   local -a cargo_cmd=("$cargo")
   local rustup; rustup="$(resolve_rustup 2>/dev/null || true)"
   if [[ -n "$rustup" && -x "$rustup" ]]; then
-    "$rustup" toolchain install "$GREPPLUS_RUST_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
-    if "$rustup" run "$GREPPLUS_RUST_TOOLCHAIN" cargo --version >/dev/null 2>&1; then
-      cargo_cmd=("$rustup" run "$GREPPLUS_RUST_TOOLCHAIN" cargo)
+    "$rustup" toolchain install "$GREPPY_RUST_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
+    if "$rustup" run "$GREPPY_RUST_TOOLCHAIN" cargo --version >/dev/null 2>&1; then
+      cargo_cmd=("$rustup" run "$GREPPY_RUST_TOOLCHAIN" cargo)
     fi
   fi
 
@@ -1535,29 +1535,29 @@ ensure_grepplus_tool() {
     "CARGO_NET_GIT_FETCH_WITH_CLI=true" \
     "${cargo_cmd[@]}" install --force --locked --path "$source_dir/crates/cli" --root "$install_root" >/dev/null || return 1
 
-  local grepplus_bin="$install_root/bin/grepplus"
-  [[ -x "$grepplus_bin" ]] || return 1
-  write_grepplus_shim "$BIN_DIR/grepplus" "$grepplus_bin" 1 || return 1
-  write_grepplus_shim "$BIN_DIR/grep" "$grepplus_bin" 0 || return 1
+  local greppy_bin="$install_root/bin/greppy"
+  [[ -x "$greppy_bin" ]] || return 1
+  write_greppy_shim "$BIN_DIR/greppy" "$greppy_bin" 1 || return 1
+  write_greppy_shim "$BIN_DIR/grep" "$greppy_bin" 0 || return 1
   local grep_shim_status="managed"
-  if ! grep -q 'CTOX managed Grep+ shim' "$BIN_DIR/grep" 2>/dev/null; then
+  if ! grep -q 'CTOX managed greppy shim' "$BIN_DIR/grep" 2>/dev/null; then
     grep_shim_status="preserved-existing"
   fi
 
   cat > "$root/provenance.json" <<PROVEOF
 {
-  "tool": "grepplus",
-  "source": "$GREPPLUS_REPO",
-  "revision": "$GREPPLUS_REV",
-  "rust_toolchain": "$GREPPLUS_RUST_TOOLCHAIN",
+  "tool": "greppy",
+  "source": "$GREPPY_REPO",
+  "revision": "$GREPPY_REV",
+  "rust_toolchain": "$GREPPY_RUST_TOOLCHAIN",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "binary": "$grepplus_bin",
-  "shims": ["$BIN_DIR/grepplus", "$BIN_DIR/grep"],
-  "grepplus_shim_status": "managed",
+  "binary": "$greppy_bin",
+  "shims": ["$BIN_DIR/greppy", "$BIN_DIR/grep"],
+  "greppy_shim_status": "managed",
   "grep_shim_status": "$grep_shim_status"
 }
 PROVEOF
-  tui_module_done "Grep+ code navigation" "$started"
+  tui_module_done "greppy code navigation" "$started"
 }
 
 # ── CUDA build prerequisites ─────────────────────────────────────────────────
@@ -1997,7 +1997,17 @@ setup_managed_install() {
   [[ -d "$release_dir" ]] && rm -rf "$release_dir"
   mkdir -p "$release_dir"
 
-  rsync -a --exclude='target' --exclude='runtime' --exclude='.git' "$source_root/" "$release_dir/"
+  rsync -a \
+    --exclude='target' \
+    --exclude='runtime' \
+    --exclude='.git' \
+    --exclude='.claude' \
+    --exclude='.codex' \
+    --exclude='archive' \
+    --exclude='output' \
+    --exclude='src/core/communication/whatsapp_rust/Cargo.lock' \
+    --exclude='src/tools/pdf-parse/tests/fixtures/samples/public' \
+    "$source_root/" "$release_dir/"
 
   # Business OS shell assets are CTOX release payload and must be refreshed on
   # every managed upgrade. Runtime-installed apps and local bench/evidence
@@ -2808,10 +2818,10 @@ main() {
   "$BIN_DIR/ctox" update channel set-github --repo metric-space-ai/ctox 2>/dev/null || true
   ensure_command_shim
   local final_detail="PATH + command shim + Update-Channel"
-  if ensure_grepplus_tool; then
-    final_detail="$final_detail + Grep+"
+  if ensure_greppy_tool; then
+    final_detail="$final_detail + greppy"
   else
-    printf '  %b%bGrep+ installation failed; CTOX remains installed, but semantic grep bootstrap must be retried.%b\n' \
+    printf '  %b%bgreppy installation failed; CTOX remains installed, but semantic grep bootstrap must be retried.%b\n' \
       "$C_BOLD" "$C_YELLOW" "$C_RESET" >&2
   fi
 
