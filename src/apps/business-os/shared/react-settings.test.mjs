@@ -73,6 +73,12 @@ test('settings user tab renders business-facing role labels', () => {
   assert.doesNotMatch(html, /Founder Review/);
 });
 
+test('settings users stay subscribed while WebRTC replication fills the collection', () => {
+  assert.match(reactSettingsSource, /db\.collection\('business_users'\)\.\$\.subscribe/);
+  assert.match(reactSettingsSource, /refreshUsers\(\)\.catch/);
+  assert.match(reactSettingsSource, /usersSub\?\.unsubscribe/);
+});
+
 test('settings appearance tab renders admin branding controls', () => {
   const html = baseTemplate({ tab: 'appearance' });
   assert.match(html, /data-settings-tab="appearance"/);

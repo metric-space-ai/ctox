@@ -95,6 +95,7 @@ export async function openReactSettings({
   };
 
   let channelsAccountsSub = null;
+  let usersSub = null;
   const ensureChannelCollections = async () => {
     await Promise.allSettled([
       sync?.startCollection?.('communication_accounts'),
@@ -133,6 +134,17 @@ export async function openReactSettings({
       settingsState.canManageUsers = false;
     }
     render();
+  };
+  const startUsersSub = () => {
+    if (usersSub || !db?.collection?.('business_users')?.$) return;
+    usersSub = db.collection('business_users').$.subscribe(() => {
+      if (!body.isConnected) {
+        try { usersSub?.unsubscribe?.(); } catch {}
+        usersSub = null;
+        return;
+      }
+      refreshUsers().catch(() => {});
+    });
   };
   const refreshChannelAccounts = async () => {
     try {
@@ -344,6 +356,8 @@ export async function openReactSettings({
     body.querySelector('[data-close-settings]')?.addEventListener('click', () => {
       try { channelsAccountsSub?.unsubscribe?.(); } catch {}
       channelsAccountsSub = null;
+      try { usersSub?.unsubscribe?.(); } catch {}
+      usersSub = null;
       if (settingsState.channels?.qrPoll) {
         clearInterval(settingsState.channels.qrPoll);
         settingsState.channels.qrPoll = null;
@@ -757,6 +771,7 @@ export async function openReactSettings({
     refreshBranding();
   }
   refreshUsers();
+  startUsersSub();
   if (settingsState.tab === 'admin' && canOpenModuleAdmin({
     modules: settingsState.modules.length ? settingsState.modules : modules,
     session,
