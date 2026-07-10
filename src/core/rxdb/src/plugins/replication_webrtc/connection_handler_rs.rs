@@ -12,6 +12,7 @@
 mod frame_contract_generated;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -61,6 +62,17 @@ const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
                                                          // watermark before giving up (matches the ack timeout so a wedged peer fails
                                                          // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_PEER_SEND_QUEUE_FRAMES: usize = 1024;
+const MAX_PEER_SEND_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const FAIR_SEND_SCHEDULE: [SendPriority; 7] = [
+    SendPriority::High,
+    SendPriority::High,
+    SendPriority::High,
+    SendPriority::High,
+    SendPriority::Normal,
+    SendPriority::Normal,
+    SendPriority::Low,
+];
 // Phase 1 hard size invariant: the SCTP message ceiling for an RTCDataChannel is
 // 16 KiB. A single `send_text` larger than this is dropped by / kills the channel
 // in browsers (the exact failure the transport plan flags as the channel-killer).
@@ -214,6 +226,7 @@ struct QueuedSend {
     /// Phase 2: whether the frame is an oversized `masterWrite` that should
     /// stay Low (a large background transfer) even if its collection is active.
     oversized_write: bool,
+    queued_at_ms: u64,
     result: tokio::sync::oneshot::Sender<Result<(), RxError>>,
 }
 
@@ -243,10 +256,13 @@ struct PeerSendQueue {
     normal: VecDeque<QueuedSend>,
     low: VecDeque<QueuedSend>,
     draining: bool,
+    queued_bytes: usize,
+    schedule_cursor: usize,
 }
 
 impl PeerSendQueue {
     fn push(&mut self, item: QueuedSend) {
+        self.queued_bytes = self.queued_bytes.saturating_add(item.text.len());
         match item.priority {
             SendPriority::High => self.high.push_back(item),
             SendPriority::Normal => self.normal.push_back(item),
@@ -255,10 +271,20 @@ impl PeerSendQueue {
     }
 
     fn pop_next(&mut self) -> Option<QueuedSend> {
-        self.high
-            .pop_front()
-            .or_else(|| self.normal.pop_front())
-            .or_else(|| self.low.pop_front())
+        for _ in 0..FAIR_SEND_SCHEDULE.len() {
+            let priority = FAIR_SEND_SCHEDULE[self.schedule_cursor % FAIR_SEND_SCHEDULE.len()];
+            self.schedule_cursor = (self.schedule_cursor + 1) % FAIR_SEND_SCHEDULE.len();
+            let item = match priority {
+                SendPriority::High => self.high.pop_front(),
+                SendPriority::Normal => self.normal.pop_front(),
+                SendPriority::Low => self.low.pop_front(),
+            };
+            if let Some(item) = item {
+                self.queued_bytes = self.queued_bytes.saturating_sub(item.text.len());
+                return Some(item);
+            }
+        }
+        None
     }
 
     /// Phase 2: re-bucket every still-queued frame against a new
@@ -273,6 +299,7 @@ impl PeerSendQueue {
         items.extend(self.high.drain(..));
         items.extend(self.normal.drain(..));
         items.extend(self.low.drain(..));
+        self.queued_bytes = 0;
         for mut item in items.into_iter() {
             item.priority = item.classify_against(active);
             self.push(item);
@@ -325,6 +352,15 @@ pub struct WebRtcFrameTransportStatus {
     pub high_priority_queue_depth: usize,
     pub normal_priority_queue_depth: usize,
     pub low_priority_queue_depth: usize,
+    pub queued_bytes: usize,
+    pub rejected_frames: u64,
+    pub oldest_queued_age_ms: u64,
+    pub peer_count: usize,
+    pub open_data_channels: usize,
+    pub signaling_socket_connected: bool,
+    pub signaling_join_accepted: bool,
+    pub turn_configured: bool,
+    pub credentialed_turn_ready: bool,
     pub last_send_priority: &'static str,
     pub last_ack_lag_ms: u64,
     pub last_buffered_amount: u64,
@@ -357,6 +393,15 @@ impl Default for WebRtcFrameTransportStatus {
             high_priority_queue_depth: 0,
             normal_priority_queue_depth: 0,
             low_priority_queue_depth: 0,
+            queued_bytes: 0,
+            rejected_frames: 0,
+            oldest_queued_age_ms: 0,
+            peer_count: 0,
+            open_data_channels: 0,
+            signaling_socket_connected: false,
+            signaling_join_accepted: false,
+            turn_configured: false,
+            credentialed_turn_ready: false,
             last_send_priority: "normal",
             last_ack_lag_ms: 0,
             last_buffered_amount: 0,
@@ -584,21 +629,64 @@ impl WebRTCRsConnectionHandler {
 
     pub fn frame_transport_status(&self) -> WebRtcFrameTransportStatus {
         let mut status = self.transport_status.lock().clone();
+        let peers = self.peers.lock();
+        status.peer_count = peers.len();
+        status.open_data_channels = peers
+            .values()
+            .filter(|entry| entry.data_channel_open)
+            .count();
+        drop(peers);
+        status.signaling_socket_connected = self
+            .signaling
+            .as_ref()
+            .is_some_and(|signaling| signaling.socket_connected());
+        status.signaling_join_accepted = self
+            .signaling
+            .as_ref()
+            .is_some_and(|signaling| signaling.join_accepted());
+        status.turn_configured = self.ice_servers.iter().any(|server| {
+            server
+                .urls
+                .iter()
+                .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
+        });
+        status.credentialed_turn_ready = self.ice_servers.iter().any(|server| {
+            server
+                .urls
+                .iter()
+                .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
+                && !server.username.trim().is_empty()
+                && !server.credential.trim().is_empty()
+        });
         status.pending_acks = self.pending_frame_acks.lock().len();
         status.incoming_transfers = self.incoming_frames.lock().len();
         status.completed_ack_cache_size = self.completed_frame_acks.lock().len();
         let mut high = 0usize;
         let mut normal = 0usize;
         let mut low = 0usize;
+        let mut queued_bytes = 0usize;
+        let mut oldest_queued_at_ms: Option<u64> = None;
         for queue in self.send_queues.lock().values() {
             high += queue.high.len();
             normal += queue.normal.len();
             low += queue.low.len();
+            queued_bytes = queued_bytes.saturating_add(queue.queued_bytes);
+            for item in queue.high.iter().chain(&queue.normal).chain(&queue.low) {
+                oldest_queued_at_ms = Some(
+                    oldest_queued_at_ms
+                        .map(|current| current.min(item.queued_at_ms))
+                        .unwrap_or(item.queued_at_ms),
+                );
+            }
         }
         status.priority_queue_depth = high + normal + low;
         status.high_priority_queue_depth = high;
         status.normal_priority_queue_depth = normal;
         status.low_priority_queue_depth = low;
+        status.queued_bytes = queued_bytes;
+        status.oldest_queued_age_ms = oldest_queued_at_ms
+            .map(|queued_at| now_ms().saturating_sub(queued_at))
+            .unwrap_or_default();
         status
     }
 
@@ -628,6 +716,15 @@ impl WebRTCRsConnectionHandler {
             "highPriorityQueueDepth": status.high_priority_queue_depth,
             "normalPriorityQueueDepth": status.normal_priority_queue_depth,
             "lowPriorityQueueDepth": status.low_priority_queue_depth,
+            "queuedBytes": status.queued_bytes,
+            "rejectedFrames": status.rejected_frames,
+            "oldestQueuedAgeMs": status.oldest_queued_age_ms,
+            "peerCount": status.peer_count,
+            "openDataChannels": status.open_data_channels,
+            "signalingSocketConnected": status.signaling_socket_connected,
+            "signalingJoinAccepted": status.signaling_join_accepted,
+            "turnConfigured": status.turn_configured,
+            "credentialedTurnReady": status.credentialed_turn_ready,
             "lastSendPriority": status.last_send_priority,
             "lastAckLagMs": status.last_ack_lag_ms,
             "lastBufferedAmount": status.last_buffered_amount,
@@ -1282,9 +1379,29 @@ impl WebRTCRsConnectionHandler {
             let active = active_map.get(peer).unwrap_or(&empty);
             class.classify(active)
         };
+        let queued_bytes = class.text.len();
         let should_drain = {
             let mut queues = self.send_queues.lock();
             let queue = queues.entry(peer.clone()).or_default();
+            let queued_frames = queue.high.len() + queue.normal.len() + queue.low.len();
+            if queued_frames >= MAX_PEER_SEND_QUEUE_FRAMES
+                || queue.queued_bytes.saturating_add(queued_bytes) > MAX_PEER_SEND_QUEUE_BYTES
+            {
+                self.record_status(|status| {
+                    status.rejected_frames = status.rejected_frames.saturating_add(1);
+                });
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "WebRTC per-peer send queue budget exceeded",
+                        "peer": peer,
+                        "queuedFrames": queued_frames,
+                        "queuedBytes": queue.queued_bytes,
+                        "maxFrames": MAX_PEER_SEND_QUEUE_FRAMES,
+                        "maxBytes": MAX_PEER_SEND_QUEUE_BYTES,
+                    })),
+                ));
+            }
             let should_drain = !queue.draining;
             queue.push(QueuedSend {
                 text: class.text,
@@ -1292,6 +1409,7 @@ impl WebRTCRsConnectionHandler {
                 collection: class.collection,
                 intrinsic_high: class.intrinsic_high,
                 oversized_write: class.oversized_write,
+                queued_at_ms: now_ms(),
                 result: result_tx,
             });
             if should_drain {
@@ -1901,16 +2019,30 @@ impl WebRTCRsConnectionHandler {
         let mut high = 0usize;
         let mut normal = 0usize;
         let mut low = 0usize;
+        let mut queued_bytes = 0usize;
+        let mut oldest_queued_at_ms: Option<u64> = None;
         for queue in self.send_queues.lock().values() {
             high += queue.high.len();
             normal += queue.normal.len();
             low += queue.low.len();
+            queued_bytes = queued_bytes.saturating_add(queue.queued_bytes);
+            for item in queue.high.iter().chain(&queue.normal).chain(&queue.low) {
+                oldest_queued_at_ms = Some(
+                    oldest_queued_at_ms
+                        .map(|current| current.min(item.queued_at_ms))
+                        .unwrap_or(item.queued_at_ms),
+                );
+            }
         }
         self.record_status(|status| {
             status.priority_queue_depth = high + normal + low;
             status.high_priority_queue_depth = high;
             status.normal_priority_queue_depth = normal;
             status.low_priority_queue_depth = low;
+            status.queued_bytes = queued_bytes;
+            status.oldest_queued_age_ms = oldest_queued_at_ms
+                .map(|queued_at| now_ms().saturating_sub(queued_at))
+                .unwrap_or_default();
         });
     }
 
@@ -2088,7 +2220,7 @@ async fn build_peer_connection(
         .with_interceptor_registry(registry)
         .with_handler(event_handler)
         .with_runtime(runtime)
-        .with_udp_addrs(vec![handler.udp_bind_addr.clone()])
+        .with_udp_addrs(advertisable_udp_bind_addrs(&handler.udp_bind_addr))
         .build()
         .await
         .map_err(|e| webrtc_error("build peer connection", e))?;
@@ -2501,6 +2633,28 @@ fn default_udp_bind_addr() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_UDP_BIND_ADDR.to_string())
+}
+
+fn advertisable_udp_bind_addrs(configured: &str) -> Vec<String> {
+    let configured = configured.trim();
+    if !configured.is_empty() && configured != DEFAULT_UDP_BIND_ADDR {
+        return vec![configured.to_string()];
+    }
+
+    // Binding the rtc socket to 0.0.0.0 makes the current rtc crate publish
+    // 0.0.0.0 as its host ICE candidate. That candidate is unusable, and two
+    // peers on the same LAN then depend on NAT hairpin support. A connected UDP
+    // socket discovers the interface chosen by the OS without sending traffic.
+    let local = UdpSocket::bind(DEFAULT_UDP_BIND_ADDR)
+        .and_then(|socket| {
+            socket.connect("1.1.1.1:80")?;
+            socket.local_addr()
+        })
+        .ok()
+        .filter(|addr| !addr.ip().is_unspecified())
+        .map(|addr| format!("{}:0", addr.ip()));
+
+    vec![local.unwrap_or_else(|| "127.0.0.1:0".to_string())]
 }
 
 fn now_ms() -> u64 {
@@ -3198,6 +3352,7 @@ mod tests {
                     collection: Some(collection.to_string()),
                     intrinsic_high: false,
                     oversized_write: false,
+                    queued_at_ms: now_ms(),
                     result: tx,
                 },
                 _rx,
@@ -3233,9 +3388,25 @@ mod tests {
     }
 
     #[test]
-    fn default_handler_binds_udp_on_all_interfaces_for_managed_business_os() {
+    fn default_handler_keeps_the_managed_udp_bind_sentinel() {
         let handler = WebRTCRsConnectionHandler::new();
         assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
+    }
+
+    #[test]
+    fn managed_udp_bind_never_advertises_an_unspecified_host_candidate() {
+        let addresses = advertisable_udp_bind_addrs(DEFAULT_UDP_BIND_ADDR);
+        assert_eq!(addresses.len(), 1);
+        assert_ne!(addresses[0], DEFAULT_UDP_BIND_ADDR);
+        assert!(!addresses[0].starts_with("0.0.0.0:"));
+    }
+
+    #[test]
+    fn explicit_udp_bind_address_is_preserved() {
+        assert_eq!(
+            advertisable_udp_bind_addrs("192.0.2.42:0"),
+            vec!["192.0.2.42:0".to_string()]
+        );
     }
 
     #[test]
@@ -3257,6 +3428,7 @@ mod tests {
             collection: None,
             intrinsic_high: true,
             oversized_write: false,
+            queued_at_ms: now_ms(),
             result: high_tx,
         });
         queue.push(QueuedSend {
@@ -3265,6 +3437,7 @@ mod tests {
             collection: None,
             intrinsic_high: false,
             oversized_write: true,
+            queued_at_ms: now_ms(),
             result: low_tx,
         });
         handler
@@ -3285,6 +3458,45 @@ mod tests {
         assert_eq!(
             json.get("highPriorityQueueDepth").and_then(Value::as_u64),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn weighted_send_queue_gives_low_priority_bounded_progress() {
+        let mut queue = PeerSendQueue::default();
+        for index in 0..12 {
+            let (tx, _rx) = tokio::sync::oneshot::channel();
+            queue.push(QueuedSend {
+                text: format!("high-{index}"),
+                priority: SendPriority::High,
+                collection: None,
+                intrinsic_high: true,
+                oversized_write: false,
+                queued_at_ms: now_ms(),
+                result: tx,
+            });
+        }
+        let (low_tx, _low_rx) = tokio::sync::oneshot::channel();
+        queue.push(QueuedSend {
+            text: "low".to_string(),
+            priority: SendPriority::Low,
+            collection: None,
+            intrinsic_high: false,
+            oversized_write: true,
+            queued_at_ms: now_ms(),
+            result: low_tx,
+        });
+        let mut low_position = None;
+        for position in 0..FAIR_SEND_SCHEDULE.len() {
+            let item = queue.pop_next().expect("scheduled item");
+            if item.priority == SendPriority::Low {
+                low_position = Some(position);
+                break;
+            }
+        }
+        assert!(
+            low_position.is_some(),
+            "low priority must progress within one weighted schedule cycle"
         );
     }
 

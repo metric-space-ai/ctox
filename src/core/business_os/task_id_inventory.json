@@ -1,0 +1,174 @@
+{
+  "schema": "ctox.business_os.task_id_inventory.v1",
+  "compatibility_rule": "task_id remains read-only compatibility data; new lifecycle code must use execution_task_id, target_task_id or target_record_id",
+  "sites": [
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "accept_rxdb_business_command_with_origin",
+      "occurrence": 1,
+      "semantics": "compatibility_mixed",
+      "target_field": "return explicit execution_task_id/target fields"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "accept_rxdb_business_command_with_origin",
+      "occurrence": 2,
+      "semantics": "compatibility_mixed",
+      "target_field": "return explicit execution_task_id/target fields"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "accept_rxdb_business_command_with_origin",
+      "occurrence": 3,
+      "semantics": "compatibility_mixed",
+      "target_field": "return explicit execution_task_id/target fields"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "complete_business_command_from_app_validation_success",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "delete_ctox_task",
+      "occurrence": 1,
+      "semantics": "target_task",
+      "target_field": "target_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "fail_business_command_from_queue_error",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "outbound_queue_research_scraper_generation",
+      "occurrence": 1,
+      "semantics": "domain_queue_reference",
+      "target_field": "target_task_id or a domain-specific queue reference"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_business_chat_reply",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_cv_print_parse_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_cv_print_parse_command",
+      "occurrence": 2,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_documents_report_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_documents_report_command",
+      "occurrence": 2,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_source_parse_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_source_parse_command",
+      "occurrence": 2,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_systematic_research_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_systematic_research_command",
+      "occurrence": 2,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "process_systematic_research_command",
+      "occurrence": 3,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "push_repair_action",
+      "occurrence": 1,
+      "semantics": "domain_queue_reference",
+      "target_field": "target_task_id or a domain-specific repair-task reference"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "record_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "record_report",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "record_report_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "record_report_command",
+      "occurrence": 2,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "write_rxdb_control_command_outcome",
+      "occurrence": 1,
+      "semantics": "compatibility_target",
+      "target_field": "target_task_id/target_record_id; execution_task_id stays empty"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "function": "write_rxdb_control_command_outcome",
+      "occurrence": 2,
+      "semantics": "compatibility_target",
+      "target_field": "target_task_id/target_record_id; execution_task_id stays empty"
+    }
+  ]
+}

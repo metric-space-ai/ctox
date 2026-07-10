@@ -4,9 +4,27 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createCommandBus, normalizeCommandClientContext } from './command-bus.js';
+import {
+  createCommandBus,
+  getBusinessOsCapabilityToken,
+  normalizeCommandClientContext,
+  resetBusinessOsCapabilityTokenCacheForTests,
+} from './command-bus.js';
 
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'command-bus.js'), 'utf8');
+
+test.beforeEach(() => {
+  resetBusinessOsCapabilityTokenCacheForTests();
+  globalThis.CTOX_BUSINESS_OS_SESSION = {
+    capability_token: 'test-capability-token',
+    capability_expires_at_ms: Date.now() + 60 * 60 * 1000,
+  };
+});
+
+test.afterEach(() => {
+  delete globalThis.CTOX_BUSINESS_OS_SESSION;
+  resetBusinessOsCapabilityTokenCacheForTests();
+});
 
 test('command client context normalizer preserves visible app scope and canonical aliases', () => {
   const actor = {
@@ -131,12 +149,16 @@ test('command bus reports missing queue projection as transient tracking state',
   assert.doesNotMatch(source, /noch keinen echten Queue-Task/);
 });
 
-test('command bus actively pulls command projections while waiting', () => {
-  assert.match(source, /waitForAuthoritativeQueueProjection\(\s*currentDb,\s*commandId,[\s\S]*syncPlan/);
+test('command bus pulls projections without restarting the shared room', () => {
+  assert.match(source, /waitForCommandState\(\{[\s\S]*until/);
   assert.match(source, /refreshProjectionBridges\(syncPlan\?\.afterCommand\)/);
   assert.match(source, /pullFromRemotePeers/);
-  assert.match(source, /restartProjectionCollections\(syncPlan\?\.sync\)/);
-  assert.match(source, /restartCollections\(\['business_commands', 'ctox_queue_tasks'\]\)/);
+  assert.doesNotMatch(source, /restartProjectionCollections/);
+  assert.doesNotMatch(source, /restartCollections\(\['business_commands', 'ctox_queue_tasks'\]\)/);
+  assert.match(source, /async submit\(command\)/);
+  assert.match(source, /async waitForAccepted\(commandId/);
+  assert.match(source, /async waitForTerminal\(commandId/);
+  assert.match(source, /subscribe\(commandId, observer\)/);
 });
 
 test('command bus returns direct control-command result after projection pull', async () => {
@@ -147,6 +169,7 @@ test('command bus returns direct control-command result after projection pull', 
     },
     findOne(id) {
       return {
+        $: { subscribe() { return { unsubscribe() {} }; } },
         async exec() {
           if (!stored || stored.id !== id) return null;
           return { toJSON: () => ({ ...stored }) };
@@ -196,4 +219,255 @@ test('command bus returns direct control-command result after projection pull', 
   assert.equal(result.task_id, '');
   assert.equal(result.result.user_code, 'T123-ABCDE');
   assert.ok(pullCount > 0);
+});
+
+test('submit writes an immutable lifecycle-v2 shadow envelope and returns locally', async () => {
+  let stored = null;
+  const metrics = [];
+  const collection = {
+    async insert(doc) {
+      stored = { ...doc };
+    },
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: { recordCommandMetric(metric) { metrics.push(metric); } },
+  });
+
+  const receipt = await bus.submit({
+    id: 'cmd-v2-shadow',
+    command_type: 'business_os.chat.task',
+    module: 'ctox',
+    payload: { instruction: 'Run once' },
+  });
+
+  assert.equal(receipt.status, 'local');
+  assert.equal(stored.contract_version, 2);
+  assert.equal(stored.idempotency_key, 'cmd-v2-shadow');
+  assert.match(stored.payload_hash, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(stored.status, 'pending_sync');
+  assert.equal(stored.execution_phase, undefined);
+  assert.deepEqual(metrics.map((metric) => metric.name), ['local_submit', 'submit_receipt']);
+  assert.ok(metrics.every((metric) => metric.commandId === 'cmd-v2-shadow'));
+});
+
+test('submit can push a new command before historical command pull is complete', async () => {
+  let stored = null;
+  let pushCount = 0;
+  let initialReplicationAwaited = false;
+  const collection = {
+    async insert(doc) {
+      stored = { ...doc };
+    },
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection() {
+        return {
+          bridge: {
+            state: {
+              getTransportStatus() {
+                return { demandLoading: { peerConnected: true } };
+              },
+              async awaitInSync() {
+                initialReplicationAwaited = true;
+                await new Promise(() => {});
+              },
+              async pushToRemotePeers() {
+                pushCount += 1;
+              },
+            },
+          },
+        };
+      },
+    },
+  });
+
+  const receipt = await bus.submit({
+    id: 'cmd_cold_history_push',
+    module: 'notes',
+    command_type: 'business_os.context.ask',
+    record_id: 'note_1',
+    payload: { prompt: 'read only' },
+  });
+
+  assert.equal(receipt.command_id, 'cmd_cold_history_push');
+  assert.equal(stored.id, 'cmd_cold_history_push');
+  assert.equal(initialReplicationAwaited, false);
+  assert.equal(pushCount, 2);
+});
+
+test('duplicate command id rejects a changed immutable payload without regressing state', async () => {
+  let stored = null;
+  const collection = {
+    async insert(doc) {
+      if (stored) throw new Error('RxDB Error-Code: CONFLICT');
+      stored = { ...doc };
+    },
+    findOne() {
+      return { async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; } };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+  });
+  await bus.submit({
+    id: 'cmd-idempotency',
+    command_type: 'business_os.chat.task',
+    payload: { instruction: 'Original' },
+  });
+  stored = { ...stored, status: 'completed', result: { ok: true } };
+
+  await assert.rejects(
+    bus.submit({
+      id: 'cmd-idempotency',
+      command_type: 'business_os.chat.task',
+      payload: { instruction: 'Changed' },
+    }),
+    (error) => error.code === 'idempotency_conflict',
+  );
+  assert.equal(stored.status, 'completed');
+});
+
+test('completed control command treats legacy task_id as a target rather than an execution task', async () => {
+  let stored = null;
+  const commands = {
+    async insert(doc) {
+      stored = {
+        ...doc,
+        status: 'completed',
+        task_id: 'workspace-branding',
+        result: { outcome: { ok: true } },
+      };
+    },
+    findOne() {
+      return {
+        $: { subscribe() { return { unsubscribe() {} }; } },
+        async exec() { return stored; },
+      };
+    },
+  };
+  const queue = {
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands, ctox_queue_tasks: queue } } });
+  const result = await bus.dispatch({
+    id: 'cmd-branding-target',
+    command_type: 'ctox.business_os.branding.update',
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.execution_task_id, '');
+  assert.equal(result.target_task_id, 'workspace-branding');
+});
+
+test('sync push errors remain typed instead of becoming a command timeout', async () => {
+  const collection = {
+    async insert() {},
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection() {
+        return {
+          state: {
+            async awaitInSync() {},
+            async pushToRemotePeers() {
+              const error = new Error('schema hash mismatch');
+              error.code = 'ctox_rxdb_schema_hash_mismatch';
+              throw error;
+            },
+          },
+        };
+      },
+    },
+  });
+
+  await assert.rejects(
+    bus.submit({ id: 'cmd-sync-error', command_type: 'business_os.chat.task' }),
+    /schema hash mismatch/,
+  );
+});
+
+test('capability lookup aborts a hanging request and negatively caches the outage', async (context) => {
+  delete globalThis.CTOX_BUSINESS_OS_SESSION;
+  resetBusinessOsCapabilityTokenCacheForTests();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (_url, options = {}) => {
+    calls += 1;
+    return new Promise((_, reject) => {
+      options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    resetBusinessOsCapabilityTokenCacheForTests();
+  });
+
+  assert.equal(await getBusinessOsCapabilityToken({ timeoutMs: 20 }), null);
+  assert.equal(await getBusinessOsCapabilityToken({ timeoutMs: 20 }), null);
+  assert.equal(calls, 1);
+});
+
+test('command mutation fails before local insertion when authorization is unavailable', async (context) => {
+  delete globalThis.CTOX_BUSINESS_OS_SESSION;
+  resetBusinessOsCapabilityTokenCacheForTests();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('offline'); };
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let inserts = 0;
+  const collection = {
+    async insert() { inserts += 1; },
+    findOne() { return { async exec() { return null; } }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+  });
+  await assert.rejects(
+    bus.submit({ id: 'cmd-auth-required', command_type: 'business_os.chat.task' }),
+    (error) => error.code === 'auth_required' && error.retryable === true,
+  );
+  assert.equal(inserts, 0);
+});
+
+test('command subscriptions are bounded and release capacity on unsubscribe', async () => {
+  const collection = {
+    findOne() {
+      return {
+        $: {
+          subscribe() {
+            return { unsubscribe() {} };
+          },
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+  });
+  const subscriptions = Array.from({ length: 128 }, (_, index) => (
+    bus.subscribe(`cmd-watcher-${index}`, () => {})
+  ));
+  await Promise.all(subscriptions.map((subscription) => subscription.ready));
+  assert.throws(
+    () => bus.subscribe('cmd-watcher-overflow', () => {}),
+    (error) => error.code === 'projection_delayed' && error.retryable === true,
+  );
+  subscriptions[0].unsubscribe();
+  const replacement = bus.subscribe('cmd-watcher-replacement', () => {});
+  await replacement.ready;
+  replacement.unsubscribe();
+  subscriptions.slice(1).forEach((subscription) => subscription.unsubscribe());
 });

@@ -16,17 +16,17 @@ const RXDB_RESET_TIMEOUT_MS = 5000;
 const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
 const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
-const RXDB_RECOVERY_OPEN_TIMEOUT_MS = 20000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260708-skf-queryfetch-v1';
+const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260710-observable-backpressure-v9';
 
 export async function createBusinessDb({ name }) {
+  const storageHealth = await inspectBrowserStorageDurability(name);
   try {
     const db = await Promise.race([
       createRxBusinessDb({ name }),
       timeoutAfter(RXDB_OPEN_TIMEOUT_MS, `RxDB database creation timed out after ${RXDB_OPEN_TIMEOUT_MS}ms (possible IndexedDB lock)`),
     ]);
     clearRecoveryDatabaseName(name);
-    return db;
+    return attachDatabaseDurability(db, storageHealth);
   } catch (error) {
     if (!isIndexedDbOpenStall(error)) throw error;
     console.info('[business-os] IndexedDB open stalled; retrying local RxDB open once without deleting cache', error);
@@ -36,10 +36,14 @@ export async function createBusinessDb({ name }) {
         timeoutAfter(RXDB_OPEN_RETRY_TIMEOUT_MS, `RxDB database retry timed out after ${RXDB_OPEN_RETRY_TIMEOUT_MS}ms (possible IndexedDB lock)`),
       ]);
       clearRecoveryDatabaseName(name);
-      return db;
+      return attachDatabaseDurability(db, storageHealth);
     } catch (retryError) {
       if (!isIndexedDbOpenStall(retryError)) throw retryError;
-      return openRecoveryBusinessDb({ name, cause: retryError });
+      const journal = recordBlockedRecoveryJournal(name, retryError, storageHealth);
+      const blocked = new Error(`Primary IndexedDB remains blocked; writes are disabled until the stale handle closes (${name}).`);
+      blocked.code = 'indexeddb_blocked';
+      blocked.recovery = journal;
+      throw blocked;
     }
   }
 }
@@ -103,47 +107,18 @@ async function createRxBusinessDb({ name }) {
       }
     },
     collection: (name) => db[name],
+    getUnsyncedWriteSummary: () => db.getUnsyncedWriteSummary?.() || Promise.resolve({ total: 0, byCollection: {} }),
     close: () => db.close(),
   };
 }
 
-async function openRecoveryBusinessDb({ name, cause }) {
-  const recoveryName = recoveryDatabaseName(name);
-  console.warn('[business-os] primary IndexedDB remained blocked; opening recovery database', {
-    name,
-    recoveryName,
-    error: String(cause?.message || cause || ''),
-  });
-  const db = await Promise.race([
-    createRxBusinessDb({ name: recoveryName }),
-    timeoutAfter(RXDB_RECOVERY_OPEN_TIMEOUT_MS, `RxDB recovery database open timed out after ${RXDB_RECOVERY_OPEN_TIMEOUT_MS}ms (primary IndexedDB remained blocked)`),
-  ]);
-  return {
-    ...db,
-    recovery: {
-      requestedName: name,
-      activeName: recoveryName,
-      reason: String(cause?.message || cause || ''),
-    },
-  };
-}
-
-function recoveryDatabaseName(name) {
-  const key = `ctox.businessOs.rxdbRecoveryDb.${name}`;
-  try {
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const next = `${name}__recovery_${Date.now().toString(36)}`;
-    sessionStorage.setItem(key, next);
-    return next;
-  } catch {
-    return `${name}__recovery_${Date.now().toString(36)}`;
-  }
-}
-
 function clearRecoveryDatabaseName(name) {
   try {
-    sessionStorage.removeItem(`ctox.businessOs.rxdbRecoveryDb.${name}`);
+    const key = `ctox.businessOs.rxdbRecoveryJournal.${name}`;
+    const current = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!current || Number(current.uniqueUnsyncedWrites || 0) === 0) {
+      localStorage.removeItem(key);
+    }
   } catch {}
 }
 
@@ -170,14 +145,14 @@ function openAndDeleteProbeDatabase(indexedDb, probeName) {
   return new Promise((resolve, reject) => {
     const request = indexedDb.open(probeName, 1);
     request.onerror = () => reject(request.error || new Error(`Failed to open IndexedDB probe ${probeName}`));
-    request.onblocked = () => resolve();
+    request.onblocked = () => reject(new Error(`IndexedDB probe open blocked for ${probeName}`));
     request.onsuccess = () => {
       const db = request.result;
       db.close();
       const deleteRequest = indexedDb.deleteDatabase(probeName);
       deleteRequest.onsuccess = () => resolve();
       deleteRequest.onerror = () => reject(deleteRequest.error || new Error(`Failed to delete IndexedDB probe ${probeName}`));
-      deleteRequest.onblocked = () => resolve();
+      deleteRequest.onblocked = () => reject(new Error(`IndexedDB probe delete blocked for ${probeName}`));
     };
   });
 }
@@ -192,8 +167,113 @@ function deleteIndexedDb(name) {
     const request = indexedDb.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error || new Error(`Failed to delete IndexedDB ${name}`));
-    request.onblocked = () => resolve();
+    request.onblocked = () => reject(new Error(`IndexedDB delete blocked for ${name}`));
   });
+}
+
+async function inspectBrowserStorageDurability(databaseName = '') {
+  const storage = globalThis.navigator?.storage;
+  let persistent = null;
+  let persistenceRequested = false;
+  let estimate = null;
+  try {
+    persistent = typeof storage?.persisted === 'function' ? await storage.persisted() : null;
+    if (persistent === false && typeof storage?.persist === 'function') {
+      persistenceRequested = true;
+      persistent = await storage.persist();
+    }
+  } catch {}
+  try {
+    estimate = typeof storage?.estimate === 'function' ? await storage.estimate() : null;
+  } catch {}
+  const usage = Number(estimate?.usage || 0);
+  const quota = Number(estimate?.quota || 0);
+  let unsyncedWrites = null;
+  try {
+    unsyncedWrites = JSON.parse(
+      localStorage.getItem(`ctox.businessOs.unsyncedWrites.${databaseName}`) || 'null',
+    );
+  } catch {}
+  return {
+    persistent,
+    persistenceRequested,
+    usageBytes: usage,
+    quotaBytes: quota,
+    pressureRatio: quota > 0 ? usage / quota : null,
+    ephemeralLikely: persistent === false || quota > 0 && quota < 128 * 1024 * 1024,
+    wasDiscarded: Boolean(globalThis.document?.wasDiscarded),
+    unsyncedWrites: Number(unsyncedWrites?.total || 0),
+    unsyncedByCollection: unsyncedWrites?.byCollection || {},
+    capturedAtMs: Date.now(),
+  };
+}
+
+function recordBlockedRecoveryJournal(name, cause, storageHealth) {
+  let persistedUnsynced = null;
+  try {
+    persistedUnsynced = JSON.parse(
+      localStorage.getItem(`ctox.businessOs.unsyncedWrites.${name}`) || 'null',
+    );
+  } catch {}
+  const journal = {
+    schema: 'ctox.indexeddb.recovery-journal.v1',
+    databaseName: name,
+    state: 'blocked',
+    uniqueUnsyncedWrites: Number(persistedUnsynced?.total || 0),
+    unsyncedByCollection: persistedUnsynced?.byCollection || {},
+    reason: String(cause?.message || cause || ''),
+    storageHealth,
+    updatedAtMs: Date.now(),
+  };
+  try {
+    localStorage.setItem(`ctox.businessOs.rxdbRecoveryJournal.${name}`, JSON.stringify(journal));
+  } catch {}
+  return journal;
+}
+
+function attachDatabaseDurability(db, storageHealth) {
+  const lifecycle = { state: 'active', lastEvent: 'open', updatedAtMs: Date.now() };
+  const update = (state, event) => {
+    lifecycle.state = state;
+    lifecycle.lastEvent = event;
+    lifecycle.updatedAtMs = Date.now();
+    globalThis.dispatchEvent?.(new CustomEvent('ctox-rxdb-lifecycle', {
+      detail: { databaseName: db.name, state, event, updatedAtMs: lifecycle.updatedAtMs },
+    }));
+  };
+  const listeners = [
+    [globalThis.document, 'visibilitychange', () => update(document.visibilityState === 'hidden' ? 'background' : 'active', 'visibilitychange')],
+    [globalThis.document, 'freeze', () => update('frozen', 'freeze')],
+    [globalThis.document, 'resume', () => update('active', 'resume')],
+    [globalThis, 'pagehide', () => update('pagehide', 'pagehide')],
+    [globalThis, 'pageshow', () => update('active', 'pageshow')],
+  ];
+  for (const [target, type, handler] of listeners) target?.addEventListener?.(type, handler);
+  const refreshStorageHealth = async () => {
+    const latest = await inspectBrowserStorageDurability(db.name);
+    Object.assign(storageHealth, latest);
+    if (Number(latest.pressureRatio || 0) >= 0.8) {
+      globalThis.dispatchEvent?.(new CustomEvent('ctox-indexeddb-storage-pressure', {
+        detail: { databaseName: db.name, ...latest },
+      }));
+    }
+    return storageHealth;
+  };
+  const storageHealthTimer = setInterval(() => {
+    refreshStorageHealth().catch(() => {});
+  }, 60_000);
+  storageHealthTimer.unref?.();
+  const close = db.close;
+  db.close = async () => {
+    clearInterval(storageHealthTimer);
+    for (const [target, type, handler] of listeners) target?.removeEventListener?.(type, handler);
+    update('closed', 'close');
+    return close();
+  };
+  db.storageHealth = storageHealth;
+  db.refreshStorageHealth = refreshStorageHealth;
+  db.lifecycle = lifecycle;
+  return db;
 }
 
 function normalizeCollectionDefinition(definition) {

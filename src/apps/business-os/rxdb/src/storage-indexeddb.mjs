@@ -1,6 +1,7 @@
 import { CtoxEventEmitter } from './event-target.mjs';
 import { sha256Hex } from './schema.mjs';
 import { normalizeConflictStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
+import { formatHybridLogicalClock, nextHybridLogicalClock } from './hybrid-logical-clock.mjs';
 
 const DB_VERSION = 3;
 const DOCUMENT_STORE = 'documents';
@@ -11,6 +12,7 @@ const REPLICATION_SCAN_MULTIPLIER = 50;
 const REPLICATION_MIN_SCAN_LIMIT = 1;
 const REPLICATION_MAX_SCAN_LIMIT = 5000;
 const INDEX_HIGH_KEY = '\uffff';
+const unsyncedCountScheduled = new WeakSet();
 
 export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_os_js_v1' } = {}) {
   if (!globalThis.indexedDB) {
@@ -30,6 +32,10 @@ export class CtoxIndexedDbStorage {
       throw new TypeError('collection name must be a non-empty string');
     }
     return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
+  }
+
+  async unsyncedWriteSummary() {
+    return countUnsyncedWrites(this.db);
   }
 
   close() {
@@ -105,12 +111,19 @@ export class CtoxIndexedDbCollection {
     if (!mergeEnabled || !existingIsLocalWrite) {
       return { doc, lwt, replicationOrigin, base: undefined };
     }
-    const { merged, identicalToMaster } = threeWayMergeDocuments(
+    const { merged, identicalToMaster, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
       previous.base,
       previous.doc,
       doc,
       { primaryPath: this.primaryPath },
     );
+    if (requiresManualResolution) {
+      const error = new Error(`Structured conflict requires native/manual resolution for ${this.name}: ${conflictFields.join(', ')}`);
+      error.code = 'structured_conflict_requires_resolution';
+      error.collection = this.name;
+      error.fields = conflictFields;
+      throw error;
+    }
     if (identicalToMaster) {
       // No local-only change survived (e.g. the own push round-tripped):
       // store the master row normally, which clears the base and leaves the
@@ -180,12 +193,14 @@ export class CtoxIndexedDbCollection {
         indexSignature: this.indexSignature,
         replicationOrigin: resolved.replicationOrigin,
         base: resolved.base,
+        previous,
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
 
     await done;
+    schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit('change', {
         collection: this.name,
@@ -250,12 +265,14 @@ export class CtoxIndexedDbCollection {
         indexSignature: this.indexSignature,
         replicationOrigin: resolved.replicationOrigin,
         base: resolved.base,
+        previous,
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
 
     await done;
+    schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit('change', {
         collection: this.name,
@@ -686,13 +703,74 @@ function openDatabase(databaseName) {
       }
     };
     request.onsuccess = () => {
-      if (!finish(resolve, request.result)) {
+      const db = request.result;
+      db.onversionchange = () => {
+        try { db.close(); } catch {}
+        globalThis.dispatchEvent?.(new CustomEvent('ctox-indexeddb-versionchange', {
+          detail: { databaseName, oldVersion: db.version },
+        }));
+      };
+      if (!finish(resolve, db)) {
         try { request.result?.close?.(); } catch {}
       }
     };
     request.onerror = () => finish(reject, request.error || new Error(`Failed to open IndexedDB ${databaseName}`));
     request.onblocked = () => finish(reject, new Error(`IndexedDB open blocked for ${databaseName}`));
   });
+}
+
+function schedulePersistUnsyncedWriteCount(db) {
+  if (unsyncedCountScheduled.has(db)) return;
+  unsyncedCountScheduled.add(db);
+  const timer = setTimeout(async () => {
+    try {
+      const summary = await countUnsyncedWrites(db);
+      globalThis.localStorage?.setItem?.(
+        `ctox.businessOs.unsyncedWrites.${db.name}`,
+        JSON.stringify({ ...summary, capturedAtMs: Date.now() }),
+      );
+      const recoveryKey = `ctox.businessOs.rxdbRecoveryJournal.${db.name}`;
+      const recovery = JSON.parse(globalThis.localStorage?.getItem?.(recoveryKey) || 'null');
+      if (recovery) {
+        if (summary.total === 0) {
+          globalThis.localStorage?.removeItem?.(recoveryKey);
+        } else {
+          globalThis.localStorage?.setItem?.(recoveryKey, JSON.stringify({
+            ...recovery,
+            uniqueUnsyncedWrites: summary.total,
+            unsyncedByCollection: summary.byCollection,
+            updatedAtMs: Date.now(),
+          }));
+        }
+      }
+    } catch {
+      // Diagnostics must never turn a committed IndexedDB write into failure.
+    } finally {
+      unsyncedCountScheduled.delete(db);
+    }
+  // Keep diagnostics out of the caller's write critical path. A short
+  // debounce also coalesces bursty bulk writes into one durability scan.
+  }, 1_000);
+  timer?.unref?.();
+}
+
+async function countUnsyncedWrites(db) {
+  const tx = db.transaction(DOCUMENT_STORE, 'readonly');
+  const store = tx.objectStore(DOCUMENT_STORE);
+  const byCollection = {};
+  let total = 0;
+  await iterateCursor(store.openCursor(), (cursor) => {
+    if (!cursor) return false;
+    const record = cursor.value;
+    if (Number(record?.pushable || 0) === 1) {
+      total += 1;
+      const collection = String(record.collection || 'unknown');
+      byCollection[collection] = (byCollection[collection] || 0) + 1;
+    }
+    return true;
+  });
+  await idbTransactionDone(tx);
+  return { total, byCollection };
 }
 
 function documentId(doc) {
@@ -702,7 +780,7 @@ function documentId(doc) {
   return String(doc.id || doc._id || doc.document_id || doc.documentId || '');
 }
 
-function normalizeDocument(doc, lwt, replicationOrigin = null) {
+function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) {
   const normalized = { ...doc };
   const id = documentId(doc);
   if (!normalized.id) {
@@ -710,16 +788,22 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   }
   normalized._meta = { ...(normalized._meta || {}), lwt };
   if (replicationOrigin?.role) {
+    normalized._meta.ctoxHlc = normalized._meta.ctoxHlc
+      || formatHybridLogicalClock({ physicalMs: lwt, nodeId: 'native' });
     normalized._meta.ctoxReplicationOrigin = sanitizeReplicationOrigin(replicationOrigin);
   } else {
+    normalized._meta.ctoxHlc = nextHybridLogicalClock(
+      previous?._meta?.ctoxHlc || normalized._meta.ctoxHlc,
+      { nowMs: Math.max(Date.now(), Number(lwt) || 0) },
+    );
     delete normalized._meta.ctoxReplicationOrigin;
   }
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
 }
 
-function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = undefined }) {
-  const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin);
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = undefined, previous = null }) {
+  const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin, previous?.doc || null);
   const replicationOriginRole = String(replicationOrigin?.role || '').slice(0, 64);
   const record = {
     collection,

@@ -39,8 +39,8 @@ assert(chunks.length === 3, 'all 3 chunks returned');
 assert(fetchCalls === 1, 'fetch called once');
 assert(status.activeFileStreams === 0, 'inflight back to zero');
 assert(written.length === 3, 'three chunk rows written to primary store');
-assert(writeBatches.length === 1, `chunks persisted in one batch (got ${writeBatches.length})`);
-assert(writeBatches[0].length === 3, 'batch contains all chunk rows');
+assert(writeBatches.length === 3, `chunks persist incrementally (got ${writeBatches.length} writes)`);
+assert(writeBatches.every((batch) => batch.length === 1), 'incremental writes retain at most one stream chunk');
 assert(written[0].file_id === 'file-1', 'chunk row has file_id');
 assert(written[0].sequence === 0, 'chunk row has sequence');
 
@@ -107,6 +107,18 @@ try {
 }
 assert(caught && /peer offline/.test(caught.message), 'peer error propagates');
 assert(status.fileStreamErrors === 1, 'error counter bumped');
+
+const boundedLoader = createFileDemandLoader({
+  collectionName: 'desktop_files',
+  storageCollection,
+  sidecarBackend: backend,
+  persistChunks: false,
+  returnBudgetBytes: 2,
+  requestFileFetch: async () => [{ sequence: 0, bytesBase64: 'AAAA', hash: null }],
+  status,
+});
+const budgetError = await boundedLoader.fetchFile('file-too-large').catch((error) => error);
+assert(budgetError?.code === 'FILE_RETURN_BUDGET_EXCEEDED', 'whole-file return is bounded and requires ranges');
 
 // Abort path: in-flight dedup slot is released and the transport cancel hook
 // receives the correlated request id so peer loss cannot leave a hanging file

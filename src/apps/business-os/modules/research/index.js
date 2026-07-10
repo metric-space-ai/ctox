@@ -31,6 +31,7 @@ const RESEARCH_OPTIONAL_COLLECTIONS = Object.freeze([
   'document_versions',
   'document_blob_chunks',
 ]);
+const RESEARCH_DEMAND_ONLY_COLLECTIONS = new Set(['document_blob_chunks']);
 const STOP_TERMS = new Set(['eine', 'einen', 'einer', 'eines', 'und', 'oder', 'auf', 'basis', 'nutze', 'score', 'quellen', 'source', 'sources', 'dashboard', 'research', 'knowledge', 'base', 'table', 'data', 'fuer', 'from', 'with', 'that', 'this', 'the']);
 
 const BASE_AXES = Object.freeze([
@@ -374,7 +375,15 @@ async function startResearchCollections() {
       return;
     }
     try {
-      await state.ctx.sync.startCollection(collection);
+      if (RESEARCH_DEMAND_ONLY_COLLECTIONS.has(collection)) {
+        if (typeof state.ctx.sync.leaseCollection !== 'function') {
+          throw new Error(`${collection} requires sync.leaseCollection().`);
+        }
+        const lease = await state.ctx.sync.leaseCollection(collection, 'research-document-blob-sync');
+        state.cleanup.push(() => lease?.release?.().catch?.(() => null));
+      } else {
+        await state.ctx.sync.startCollection(collection);
+      }
       markCollectionDiagnostic(collection, 'sync', 'ok', state.t('syncReady', 'Sync bereit'));
     } catch (error) {
       markCollectionDiagnostic(collection, 'sync', 'failed', errorMessage(error));
@@ -2250,18 +2259,12 @@ async function runSelectedResearch() {
       },
     },
   };
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: `${runInfoActionLabel(task)}: ${task.title}`,
-      module: 'research',
-      source_title: 'Research',
+  const dispatched = await state.ctx.commandBus.dispatch({
+      id: commandId,
       command_id: commandId,
+      module: 'research',
       command_type: 'research.systematic.run',
       record_id: task.id,
-      title,
-      instruction,
-      thread_key: threadKey,
-      reuseActive: false,
       payload,
       client_context: {
         action: 'research-run-chat',
@@ -2271,13 +2274,13 @@ async function runSelectedResearch() {
         knowledge_domain: task.knowledge_domain,
         knowledge_tables: base?.tables || [],
       },
-    },
-  }));
+  });
   const result = {
+    ...(dispatched || {}),
     ok: true,
     command_id: commandId,
-    status: 'queued',
-    task_status: 'queued',
+    status: dispatched?.status || 'queued',
+    task_status: dispatched?.task_status || dispatched?.status || 'queued',
     title,
     thread_key: threadKey,
     transport: 'business-chat',

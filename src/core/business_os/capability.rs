@@ -26,6 +26,7 @@ use serde_json::Value;
 pub struct CapabilityClaims {
     pub user_id: String,
     pub role: String,
+    pub actor_epoch: i64,
     pub issued_at_ms: i64,
     pub expires_at_ms: i64,
 }
@@ -40,9 +41,24 @@ pub fn issue_capability_token(
     issued_at_ms: i64,
     expires_at_ms: i64,
 ) -> String {
+    issue_capability_token_with_epoch(secret, user_id, role, 0, issued_at_ms, expires_at_ms)
+}
+
+/// Issue a capability token bound to the actor's current revocation epoch.
+/// Changing a role, disabling a user, or changing one of their grants bumps
+/// this epoch in the native store and invalidates already issued tokens.
+pub fn issue_capability_token_with_epoch(
+    secret: &[u8],
+    user_id: &str,
+    role: &str,
+    actor_epoch: i64,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+) -> String {
     let payload = serde_json::json!({
         "uid": user_id,
         "role": role,
+        "epoch": actor_epoch,
         "iat": issued_at_ms,
         "exp": expires_at_ms,
     });
@@ -74,6 +90,7 @@ pub fn verify_capability_token(
     Some(CapabilityClaims {
         user_id: payload.get("uid").and_then(Value::as_str)?.to_string(),
         role: payload.get("role").and_then(Value::as_str)?.to_string(),
+        actor_epoch: payload.get("epoch").and_then(Value::as_i64).unwrap_or(0),
         issued_at_ms: payload.get("iat").and_then(Value::as_i64).unwrap_or(0),
         expires_at_ms,
     })
@@ -89,10 +106,11 @@ mod tests {
 
     #[test]
     fn issue_then_verify_round_trips() {
-        let token = issue_capability_token(SECRET, "chef1", "chef", NOW, NOW + HOUR);
+        let token = issue_capability_token_with_epoch(SECRET, "chef1", "chef", 7, NOW, NOW + HOUR);
         let claims = verify_capability_token(SECRET, &token, NOW + 1000).expect("valid");
         assert_eq!(claims.user_id, "chef1");
         assert_eq!(claims.role, "chef");
+        assert_eq!(claims.actor_epoch, 7);
         assert_eq!(claims.expires_at_ms, NOW + HOUR);
     }
 

@@ -40,8 +40,8 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
-    evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
+    enforce_core_spawn, enforce_core_spawn_in_transaction, enforce_core_transition,
+    ensure_core_transition_guard_schema, evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
 };
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
@@ -188,6 +188,41 @@ pub struct QueueTaskView {
     pub created_at: String,
     pub sort_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BusinessCommandClaimRequest {
+    pub command_id: String,
+    pub idempotency_key: String,
+    pub payload_hash: String,
+    pub module: String,
+    pub command_type: String,
+    pub record_id: String,
+    pub intent: Value,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BusinessCommandQueueClaim {
+    pub task: QueueTaskView,
+    pub already_claimed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BusinessCommandControlClaim {
+    pub disposition: &'static str,
+    pub result: Option<Value>,
+    pub terminal_status: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BusinessCommandOutboxEvent {
+    pub event_id: String,
+    pub command_id: String,
+    pub projection_version: i64,
+    pub destination: String,
+    pub event_type: String,
+    pub attempts: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -2010,7 +2045,17 @@ pub fn pull_communication_accounts_for_business_os(
     since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    pull_communication_accounts_for_business_os_after(root, since_ms, None, limit)
+}
+
+pub fn pull_communication_accounts_for_business_os_after(
+    root: &Path,
+    since_ms: Option<i64>,
+    after_record_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Value> {
     let since_ms = since_ms.unwrap_or(0).max(0);
+    let after_record_id = after_record_id.unwrap_or("");
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -2029,13 +2074,14 @@ pub fn pull_communication_accounts_for_business_os(
                 CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
             FROM communication_accounts
         )
-        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        WHERE COALESCE(updated_at_ms, 0) > ?1
+           OR (COALESCE(updated_at_ms, 0) = ?1 AND account_key > ?2)
         ORDER BY updated_at_ms ASC, account_key ASC
-        LIMIT ?2
+        LIMIT ?3
         "#,
     )?;
     let documents = stmt
-        .query_map(params![since_ms, limit as i64], |row| {
+        .query_map(params![since_ms, after_record_id, limit as i64], |row| {
             communication_account_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
@@ -2046,6 +2092,7 @@ pub fn pull_communication_accounts_for_business_os(
         "documents": documents,
         "count": count,
         "since_ms": since_ms,
+        "after_record_id": after_record_id,
     }))
 }
 
@@ -2086,7 +2133,17 @@ pub fn pull_communication_threads_for_business_os(
     since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    pull_communication_threads_for_business_os_after(root, since_ms, None, limit)
+}
+
+pub fn pull_communication_threads_for_business_os_after(
+    root: &Path,
+    since_ms: Option<i64>,
+    after_record_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Value> {
     let since_ms = since_ms.unwrap_or(0).max(0);
+    let after_record_id = after_record_id.unwrap_or("");
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -2106,13 +2163,14 @@ pub fn pull_communication_threads_for_business_os(
                 CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000 AS updated_at_ms
             FROM communication_threads
         )
-        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        WHERE COALESCE(updated_at_ms, 0) > ?1
+           OR (COALESCE(updated_at_ms, 0) = ?1 AND thread_key > ?2)
         ORDER BY updated_at_ms ASC, thread_key ASC
-        LIMIT ?2
+        LIMIT ?3
         "#,
     )?;
     let documents = stmt
-        .query_map(params![since_ms, limit as i64], |row| {
+        .query_map(params![since_ms, after_record_id, limit as i64], |row| {
             communication_thread_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
@@ -2123,6 +2181,7 @@ pub fn pull_communication_threads_for_business_os(
         "documents": documents,
         "count": count,
         "since_ms": since_ms,
+        "after_record_id": after_record_id,
     }))
 }
 
@@ -2206,7 +2265,17 @@ pub fn pull_communication_messages_for_business_os(
     since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    pull_communication_messages_for_business_os_after(root, since_ms, None, limit)
+}
+
+pub fn pull_communication_messages_for_business_os_after(
+    root: &Path,
+    since_ms: Option<i64>,
+    after_record_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Value> {
     let since_ms = since_ms.unwrap_or(0).max(0);
+    let after_record_id = after_record_id.unwrap_or("");
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -2234,13 +2303,14 @@ pub fn pull_communication_messages_for_business_os(
             FROM communication_messages m
             LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         )
-        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        WHERE COALESCE(updated_at_ms, 0) > ?1
+           OR (COALESCE(updated_at_ms, 0) = ?1 AND message_key > ?2)
         ORDER BY updated_at_ms ASC, message_key ASC
-        LIMIT ?2
+        LIMIT ?3
         "#,
     )?;
     let documents = stmt
-        .query_map(params![since_ms, limit as i64], |row| {
+        .query_map(params![since_ms, after_record_id, limit as i64], |row| {
             communication_message_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
@@ -2251,6 +2321,7 @@ pub fn pull_communication_messages_for_business_os(
         "documents": documents,
         "count": count,
         "since_ms": since_ms,
+        "after_record_id": after_record_id,
     }))
 }
 
@@ -3238,6 +3309,16 @@ pub fn create_queue_task_with_metadata(
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
+    let tx = conn.transaction()?;
+    let task = create_queue_task_with_metadata_tx(&tx, request)?;
+    tx.commit()?;
+    Ok(task)
+}
+
+fn create_queue_task_with_metadata_tx(
+    tx: &Transaction<'_>,
+    request: QueueTaskCreateRequest,
+) -> Result<QueueTaskView> {
     let title = request.title.trim();
     let prompt = request.prompt.trim();
     if title.is_empty() {
@@ -3280,15 +3361,15 @@ pub fn create_queue_task_with_metadata(
         merge_object_metadata(&mut metadata, extra);
     }
     enforce_queue_task_spawn(
-        &conn,
+        tx,
         &metadata,
         request.parent_message_key.as_deref(),
         request.thread_key.trim(),
         &message_key,
         title,
     )?;
-    upsert_communication_message(
-        &mut conn,
+    upsert_communication_message_tx(
+        tx,
         UpsertMessage {
             message_key: &message_key,
             channel: QUEUE_CHANNEL_NAME,
@@ -3316,9 +3397,1588 @@ pub fn create_queue_task_with_metadata(
             metadata_json: &serde_json::to_string(&metadata)?,
         },
     )?;
-    refresh_thread(&mut conn, request.thread_key.trim())?;
-    ensure_routing_rows_for_inbound(&conn)?;
-    load_queue_task_from_conn(&conn, &message_key)?.context("failed to load created queue task")
+    refresh_thread_tx(tx, request.thread_key.trim())?;
+    ensure_routing_rows_for_inbound(tx)?;
+    load_queue_task_from_conn(tx, &message_key)?.context("failed to load created queue task")
+}
+
+pub(crate) fn claim_business_command_with_queue(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    request: QueueTaskCreateRequest,
+) -> Result<BusinessCommandQueueClaim> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    ensure_queue_account(&mut conn)?;
+    let tx = conn.transaction()?;
+    let existing = tx
+        .query_row(
+            "SELECT idempotency_key, payload_hash, execution_phase, projection_version
+             FROM business_command_aggregates
+             WHERE command_id = ?1",
+            params![claim.command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (aggregate_exists, from_phase, accepted_version) =
+        if let Some((idempotency_key, payload_hash, phase, version)) = existing {
+            anyhow::ensure!(
+                idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+                "idempotency_conflict: command id was already claimed with different intent"
+            );
+            let task_id = tx
+                .query_row(
+                    "SELECT task_id FROM business_command_task_links WHERE command_id = ?1",
+                    params![claim.command_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(task_id) = task_id {
+                let task = load_queue_task_from_conn(&tx, &task_id)?
+                    .context("claimed queue command task link points to a missing task")?;
+                tx.commit()?;
+                return Ok(BusinessCommandQueueClaim {
+                    task,
+                    already_claimed: true,
+                });
+            }
+            anyhow::ensure!(
+                phase == "waiting_dependencies",
+                "claimed queue command is missing its atomic task link"
+            );
+            (true, phase, version.saturating_add(1))
+        } else {
+            (false, "local".to_string(), 1)
+        };
+
+    let now_ms = epoch_millis();
+    if from_phase != "local" {
+        crate::business_os::command_lifecycle::validate_execution_phase_transition(
+            &from_phase,
+            "accepted",
+        )?;
+    }
+    crate::business_os::command_lifecycle::validate_execution_phase_transition(
+        "accepted", "queued",
+    )?;
+    if !aggregate_exists {
+        tx.execute(
+            "INSERT INTO business_command_aggregates
+            (command_id, idempotency_key, payload_hash, module, command_type, record_id,
+             execution_mode, execution_phase, terminal_status, attempt, projection_version,
+             intent_json, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queue', 'accepted', 'none', 0, 1, ?7, ?8, ?9)",
+            params![
+                claim.command_id,
+                claim.idempotency_key,
+                claim.payload_hash,
+                claim.module,
+                claim.command_type,
+                claim.record_id,
+                serde_json::to_string(&claim.intent)?,
+                claim.created_at_ms,
+                now_ms,
+            ],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE business_command_aggregates
+             SET execution_phase = 'accepted', projection_version = ?2, updated_at_ms = ?3
+             WHERE command_id = ?1",
+            params![claim.command_id, accepted_version, now_ms],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, 'accepted', 'none', 'canonical command admission', '{}', ?4)",
+        params![claim.command_id, accepted_version, from_phase, now_ms],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &claim.command_id,
+        accepted_version,
+        "command.accepted",
+        &json!({
+            "command_id": claim.command_id,
+            "execution_mode": "queue",
+            "execution_phase": "accepted",
+            "terminal_status": "none",
+            "projection_version": accepted_version,
+        }),
+        now_ms,
+    )?;
+    let task = create_queue_task_with_metadata_tx(&tx, request)?;
+    let queued_version = accepted_version.saturating_add(1);
+    tx.execute(
+        "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
+         VALUES (?1, ?2, ?3)",
+        params![claim.command_id, task.message_key, now_ms],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_effects
+            (command_id, effect_key, status, claimed_at_ms, updated_at_ms)
+         VALUES (?1, ?2, 'claimed', ?3, ?3)",
+        params![
+            claim.command_id,
+            format!("queue:{}", task.message_key),
+            now_ms
+        ],
+    )?;
+    tx.execute(
+        "UPDATE business_command_aggregates
+         SET execution_phase = 'queued', projection_version = ?2, updated_at_ms = ?3
+         WHERE command_id = ?1",
+        params![claim.command_id, queued_version, now_ms],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, 'queued', 'none', 'atomic queue admission', ?4, ?5)",
+        params![
+            claim.command_id,
+            queued_version,
+            "accepted",
+            serde_json::to_string(&json!({ "task_id": task.message_key }))?,
+            now_ms,
+        ],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &claim.command_id,
+        queued_version,
+        "command.admitted",
+        &json!({
+            "command_id": claim.command_id,
+            "execution_mode": "queue",
+            "execution_task_id": task.message_key,
+            "execution_phase": "queued",
+            "terminal_status": "none",
+            "projection_version": queued_version,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(BusinessCommandQueueClaim {
+        task,
+        already_claimed: false,
+    })
+}
+
+pub(crate) fn claim_business_command_waiting_dependencies(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    missing_dependencies: &Value,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let existing = tx
+        .query_row(
+            "SELECT idempotency_key, payload_hash FROM business_command_aggregates WHERE command_id = ?1",
+            params![claim.command_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    if let Some((idempotency_key, payload_hash)) = existing {
+        anyhow::ensure!(
+            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            "idempotency_conflict: command id was already claimed with different intent"
+        );
+        tx.commit()?;
+        return Ok(());
+    }
+    let now_ms = epoch_millis();
+    tx.execute(
+        "INSERT INTO business_command_aggregates
+            (command_id, idempotency_key, payload_hash, module, command_type, record_id,
+             execution_mode, execution_phase, terminal_status, attempt, projection_version,
+             intent_json, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queue', 'waiting_dependencies', 'none', 0, 1, ?7, ?8, ?9)",
+        params![
+            claim.command_id,
+            claim.idempotency_key,
+            claim.payload_hash,
+            claim.module,
+            claim.command_type,
+            claim.record_id,
+            serde_json::to_string(&claim.intent)?,
+            claim.created_at_ms,
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, 1, 'local', 'waiting_dependencies', 'none', 'required replicated data is unavailable', ?2, ?3)",
+        params![claim.command_id, serde_json::to_string(missing_dependencies)?, now_ms],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &claim.command_id,
+        1,
+        "command.waiting_dependencies",
+        &json!({
+            "command_id": claim.command_id,
+            "execution_mode": "queue",
+            "execution_phase": "waiting_dependencies",
+            "terminal_status": "none",
+            "projection_version": 1,
+            "missing_dependencies": missing_dependencies,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn claim_business_control_command(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+) -> Result<BusinessCommandControlClaim> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let existing = tx
+        .query_row(
+            "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase
+             FROM business_command_aggregates
+             WHERE command_id = ?1",
+            params![claim.command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase)) = existing {
+        anyhow::ensure!(
+            idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
+            "idempotency_conflict: command id was already claimed with different intent"
+        );
+        let result = result_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        tx.commit()?;
+        return Ok(BusinessCommandControlClaim {
+            disposition: if phase == "terminal" {
+                "terminal"
+            } else {
+                "uncertain"
+            },
+            result,
+            terminal_status: (terminal_status != "none").then_some(terminal_status),
+        });
+    }
+
+    let now_ms = epoch_millis();
+    tx.execute(
+        "INSERT INTO business_command_aggregates
+            (command_id, idempotency_key, payload_hash, module, command_type, record_id,
+             execution_mode, execution_phase, terminal_status, attempt, projection_version,
+             intent_json, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'control', 'accepted', 'none', 0, 1, ?7, ?8, ?9)",
+        params![
+            claim.command_id,
+            claim.idempotency_key,
+            claim.payload_hash,
+            claim.module,
+            claim.command_type,
+            claim.record_id,
+            serde_json::to_string(&claim.intent)?,
+            claim.created_at_ms,
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_effects
+            (command_id, effect_key, status, claimed_at_ms, updated_at_ms)
+         VALUES (?1, ?2, 'claimed', ?3, ?3)",
+        params![
+            claim.command_id,
+            format!("control:{}", claim.command_type),
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, 1, 'local', 'accepted', 'none', 'durable control claim', '{}', ?2)",
+        params![claim.command_id, now_ms],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &claim.command_id,
+        1,
+        "command.claimed",
+        &json!({
+            "command_id": claim.command_id,
+            "execution_mode": "control",
+            "execution_phase": "accepted",
+            "terminal_status": "none",
+            "projection_version": 1,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(BusinessCommandControlClaim {
+        disposition: "new",
+        result: None,
+        terminal_status: None,
+    })
+}
+
+pub(crate) fn complete_business_control_command(
+    root: &Path,
+    command_id: &str,
+    terminal_status: &str,
+    result: &Value,
+    error_message: Option<&str>,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(terminal_status, "completed" | "failed" | "cancelled"),
+        "invalid control command terminal status"
+    );
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let (phase, version, command_type) = tx.query_row(
+        "SELECT execution_phase, projection_version, command_type
+         FROM business_command_aggregates WHERE command_id = ?1",
+        params![command_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
+    )?;
+    if phase == "terminal" {
+        tx.commit()?;
+        return Ok(());
+    }
+    crate::business_os::command_lifecycle::validate_execution_phase_transition(&phase, "terminal")?;
+    let next_version = version.saturating_add(1);
+    let now_ms = epoch_millis();
+    tx.execute(
+        "UPDATE business_command_aggregates
+         SET execution_phase = 'terminal', terminal_status = ?2,
+             projection_version = ?3, result_json = ?4, error_message = ?5,
+             retryable = 0, updated_at_ms = ?6
+         WHERE command_id = ?1",
+        params![
+            command_id,
+            terminal_status,
+            next_version,
+            serde_json::to_string(result)?,
+            error_message,
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "UPDATE business_command_effects
+         SET status = ?3, result_json = ?4, error_message = ?5, updated_at_ms = ?6
+         WHERE command_id = ?1 AND effect_key = ?2",
+        params![
+            command_id,
+            format!("control:{command_type}"),
+            if terminal_status == "completed" {
+                "completed"
+            } else {
+                "failed"
+            },
+            serde_json::to_string(result)?,
+            error_message,
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, 'terminal', ?4, 'control effect outcome persisted', ?5, ?6)",
+        params![
+            command_id,
+            next_version,
+            phase,
+            terminal_status,
+            serde_json::to_string(result)?,
+            now_ms,
+        ],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        command_id,
+        next_version,
+        "command.terminal",
+        &json!({
+            "command_id": command_id,
+            "execution_mode": "control",
+            "execution_phase": "terminal",
+            "terminal_status": terminal_status,
+            "projection_version": next_version,
+            "result": result,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn transition_business_command_for_task(
+    root: &Path,
+    task_id: &str,
+    route_status: &str,
+    result: Option<&Value>,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+    reason: &str,
+) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    ensure_queue_account(&mut conn)?;
+    let tx = conn.transaction()?;
+    let command_id = tx
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(command_id) = command_id else {
+        tx.commit()?;
+        return Ok(false);
+    };
+    let (from_phase, prior_terminal, version) = tx.query_row(
+        "SELECT execution_phase, terminal_status, projection_version
+         FROM business_command_aggregates WHERE command_id = ?1",
+        params![command_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+    let normalized_route = canonical_queue_route_status(route_status)?;
+    let persisted_route = if normalized_route == "running" {
+        "leased"
+    } else {
+        normalized_route.as_str()
+    };
+    let (to_phase, terminal_status) = match normalized_route.as_str() {
+        "handled" => ("terminal", "completed"),
+        "failed" => ("terminal", "failed"),
+        "cancelled" => ("terminal", "cancelled"),
+        "leased" => ("leased", "none"),
+        "running" => ("running", "none"),
+        "blocked" => ("blocked", "none"),
+        _ => ("queued", "none"),
+    };
+    if from_phase == "terminal" {
+        anyhow::ensure!(
+            terminal_status == prior_terminal || terminal_status == "none",
+            "terminal command transition conflict for task `{task_id}`"
+        );
+        tx.commit()?;
+        return Ok(true);
+    }
+    crate::business_os::command_lifecycle::validate_execution_phase_transition(
+        &from_phase,
+        to_phase,
+    )?;
+    if terminal_status == "completed" {
+        let review_passed = tx.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM business_command_results result_row
+                JOIN business_command_aggregates aggregate_row
+                  ON aggregate_row.command_id = result_row.command_id
+                WHERE result_row.command_id = ?1
+                  AND result_row.attempt = MAX(aggregate_row.attempt, 1)
+                  AND result_row.review_status = 'passed'
+                  AND result_row.validation_status = 'passed'
+            )",
+            params![command_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        anyhow::ensure!(
+            from_phase == "validating" && review_passed,
+            "command completion requires persisted typed result plus passed review and validation"
+        );
+    }
+    let now = now_iso_string();
+    set_routing_status(
+        &tx,
+        task_id,
+        persisted_route,
+        &now,
+        "business-command-terminal-owner",
+        reason,
+        error_message.or_else(|| (normalized_route == "failed").then_some(reason)),
+    )?;
+    let next_version = version.saturating_add(1);
+    let now_ms = epoch_millis();
+    let result_json = result.map(serde_json::to_string).transpose()?;
+    tx.execute(
+        "UPDATE business_command_aggregates
+         SET execution_phase = ?2, terminal_status = ?3, projection_version = ?4,
+             result_json = COALESCE(?5, result_json), error_code = ?6, error_message = ?7,
+             retryable = CASE WHEN ?2 = 'blocked' THEN 1 ELSE 0 END,
+             attempt = attempt + CASE WHEN ?2 = 'running' AND execution_phase != 'running' THEN 1 ELSE 0 END,
+             updated_at_ms = ?8
+         WHERE command_id = ?1",
+        params![
+            command_id,
+            to_phase,
+            terminal_status,
+            next_version,
+            result_json,
+            error_code,
+            error_message,
+            now_ms,
+        ],
+    )?;
+    if to_phase == "terminal" {
+        tx.execute(
+            "UPDATE business_command_effects
+             SET status = ?3, result_json = COALESCE(?4, result_json), error_message = ?5, updated_at_ms = ?6
+             WHERE command_id = ?1 AND effect_key = ?2",
+            params![
+                command_id,
+                format!("queue:{task_id}"),
+                if terminal_status == "completed" { "completed" } else { "failed" },
+                result_json,
+                error_message,
+                now_ms,
+            ],
+        )?;
+    }
+    let review_correlation = tx
+        .query_row(
+            "SELECT review_evidence_json FROM business_command_results
+             WHERE command_id = ?1 ORDER BY attempt DESC LIMIT 1",
+            params![command_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            command_id,
+            next_version,
+            from_phase,
+            to_phase,
+            terminal_status,
+            reason,
+            serde_json::to_string(&json!({
+                "task_id": task_id,
+                "route_status": persisted_route,
+                "result": result,
+                "error_code": error_code,
+                "error_message": error_message,
+                "review_correlation": review_correlation,
+            }))?,
+            now_ms,
+        ],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &command_id,
+        next_version,
+        if to_phase == "terminal" {
+            "command.terminal"
+        } else {
+            "command.progress"
+        },
+        &json!({
+            "command_id": command_id,
+            "execution_task_id": task_id,
+            "execution_phase": to_phase,
+            "terminal_status": terminal_status,
+            "projection_version": next_version,
+            "review_correlation": review_correlation,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+pub(crate) fn persist_business_command_worker_result(
+    root: &Path,
+    task_id: &str,
+    user_reply: &str,
+) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let row = tx
+        .query_row(
+            "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
+                    aggregate_row.projection_version, MAX(aggregate_row.attempt, 1)
+             FROM business_command_task_links link
+             JOIN business_command_aggregates aggregate_row ON aggregate_row.command_id = link.command_id
+             WHERE link.task_id = ?1",
+            params![task_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, u32>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((command_id, from_phase, version, attempt)) = row else {
+        tx.commit()?;
+        return Ok(false);
+    };
+    if from_phase == "terminal" {
+        tx.commit()?;
+        return Ok(true);
+    }
+    crate::business_os::command_lifecycle::validate_execution_phase_transition(
+        &from_phase,
+        "awaiting_review",
+    )?;
+    let existing = tx
+        .query_row(
+            "SELECT user_reply FROM business_command_results WHERE command_id = ?1 AND attempt = ?2",
+            params![command_id, attempt],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        anyhow::ensure!(
+            existing == user_reply,
+            "worker result for command `{command_id}` attempt {attempt} is immutable"
+        );
+        tx.commit()?;
+        return Ok(true);
+    }
+    let now_ms = epoch_millis();
+    let result = json!({
+        "command_id": command_id,
+        "execution_task_id": task_id,
+        "attempt": attempt,
+        "status": "succeeded",
+        "user_message": user_reply,
+        // Compatibility alias for existing Business OS projections. The
+        // canonical lifecycle-v2 field is `user_message`.
+        "user_reply": user_reply,
+        "structured_output": Value::Null,
+        "artifacts": [],
+        "writebacks": [],
+        "verification_claims": [],
+        "retry": Value::Null,
+        "error": null,
+    });
+    tx.execute(
+        "INSERT INTO business_command_results
+            (command_id, attempt, status, user_reply, created_at_ms)
+         VALUES (?1, ?2, 'succeeded', ?3, ?4)",
+        params![command_id, attempt, user_reply, now_ms],
+    )?;
+    let next_version = version.saturating_add(1);
+    tx.execute(
+        "UPDATE business_command_aggregates
+         SET execution_phase = 'awaiting_review', attempt = ?2, projection_version = ?3,
+             result_json = ?4, updated_at_ms = ?5
+         WHERE command_id = ?1",
+        params![
+            command_id,
+            attempt,
+            next_version,
+            serde_json::to_string(&result)?,
+            now_ms,
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, 'awaiting_review', 'none', 'typed worker result persisted before review', ?4, ?5)",
+        params![
+            command_id,
+            next_version,
+            from_phase,
+            serde_json::to_string(&json!({"task_id": task_id, "attempt": attempt}))?,
+            now_ms,
+        ],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &command_id,
+        next_version,
+        "command.result_persisted",
+        &json!({
+            "command_id": command_id,
+            "execution_task_id": task_id,
+            "execution_phase": "awaiting_review",
+            "projection_version": next_version,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+pub(crate) fn record_business_command_review(
+    root: &Path,
+    task_id: &str,
+    review_status: &str,
+    validation_status: &str,
+    evidence: &Value,
+) -> Result<bool> {
+    anyhow::ensure!(
+        matches!(review_status, "passed" | "failed" | "held"),
+        "invalid command review status"
+    );
+    anyhow::ensure!(
+        matches!(validation_status, "passed" | "failed" | "pending"),
+        "invalid command validation status"
+    );
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let row = tx
+        .query_row(
+            "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
+                    aggregate_row.projection_version, MAX(aggregate_row.attempt, 1)
+             FROM business_command_task_links link
+             JOIN business_command_aggregates aggregate_row ON aggregate_row.command_id = link.command_id
+             WHERE link.task_id = ?1",
+            params![task_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, u32>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((command_id, from_phase, version, attempt)) = row else {
+        tx.commit()?;
+        return Ok(false);
+    };
+    anyhow::ensure!(from_phase != "terminal", "cannot review a terminal command");
+    let changed = tx.execute(
+        "UPDATE business_command_results
+         SET review_status = ?3, validation_status = ?4, review_evidence_json = ?5,
+             reviewed_at_ms = ?6
+         WHERE command_id = ?1 AND attempt = ?2",
+        params![
+            command_id,
+            attempt,
+            review_status,
+            validation_status,
+            serde_json::to_string(evidence)?,
+            epoch_millis(),
+        ],
+    )?;
+    anyhow::ensure!(
+        changed == 1,
+        "typed worker result is required before review"
+    );
+    let to_phase = if review_status == "passed" && validation_status == "passed" {
+        "validating"
+    } else if review_status == "failed" || validation_status == "failed" {
+        "retry_wait"
+    } else {
+        "blocked"
+    };
+    crate::business_os::command_lifecycle::validate_execution_phase_transition(
+        &from_phase,
+        to_phase,
+    )?;
+    let next_version = version.saturating_add(1);
+    let now_ms = epoch_millis();
+    tx.execute(
+        "UPDATE business_command_aggregates
+         SET execution_phase = ?2, projection_version = ?3, updated_at_ms = ?4
+         WHERE command_id = ?1",
+        params![command_id, to_phase, next_version, now_ms],
+    )?;
+    tx.execute(
+        "INSERT INTO business_command_transitions
+            (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4, 'none', 'completion review and validation recorded', ?5, ?6)",
+        params![
+            command_id,
+            next_version,
+            from_phase,
+            to_phase,
+            serde_json::to_string(evidence)?,
+            now_ms,
+        ],
+    )?;
+    insert_business_command_outbox_rows(
+        &tx,
+        &command_id,
+        next_version,
+        "command.reviewed",
+        &json!({
+            "command_id": command_id,
+            "execution_task_id": task_id,
+            "execution_phase": to_phase,
+            "projection_version": next_version,
+        }),
+        now_ms,
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+fn insert_business_command_outbox_rows(
+    tx: &Transaction<'_>,
+    command_id: &str,
+    projection_version: i64,
+    event_type: &str,
+    payload: &Value,
+    created_at_ms: i64,
+) -> Result<()> {
+    let payload_json = serde_json::to_string(payload)?;
+    for destination in ["business-os", "rxdb"] {
+        let event_id = format!("cmd-outbox:{command_id}:{projection_version}:{destination}");
+        tx.execute(
+            "INSERT OR IGNORE INTO business_command_outbox
+                (event_id, command_id, projection_version, destination, event_type, payload_json,
+                 status, attempts, next_attempt_at_ms, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, 0, ?7)",
+            params![
+                event_id,
+                command_id,
+                projection_version,
+                destination,
+                event_type,
+                payload_json,
+                created_at_ms,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn pending_business_command_outbox(
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<BusinessCommandOutboxEvent>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let now_ms = epoch_millis();
+    let mut stmt = conn.prepare(
+        "SELECT event_id, command_id, projection_version, destination, event_type, attempts
+         FROM business_command_outbox
+         WHERE status IN ('pending', 'failed') AND next_attempt_at_ms <= ?1
+         ORDER BY created_at_ms ASC, event_id ASC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![now_ms, limit.max(1) as i64], |row| {
+        Ok(BusinessCommandOutboxEvent {
+            event_id: row.get(0)?,
+            command_id: row.get(1)?,
+            projection_version: row.get(2)?,
+            destination: row.get(3)?,
+            event_type: row.get(4)?,
+            attempts: row.get(5)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let (
+        payload_hash,
+        execution_mode,
+        execution_phase,
+        terminal_status,
+        attempt,
+        projection_version,
+        intent_json,
+        result_json,
+        error_code,
+        error_message,
+        retryable,
+        created_at_ms,
+        updated_at_ms,
+    ) = conn.query_row(
+        "SELECT payload_hash, execution_mode, execution_phase, terminal_status, attempt,
+                projection_version, intent_json, result_json, error_code, error_message,
+                retryable, created_at_ms, updated_at_ms
+         FROM business_command_aggregates WHERE command_id = ?1",
+        params![command_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, u32>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, i64>(10)? != 0,
+                row.get::<_, i64>(11)?,
+                row.get::<_, i64>(12)?,
+            ))
+        },
+    )?;
+    let mut projection: Value = serde_json::from_str(&intent_json)?;
+    anyhow::ensure!(
+        projection.is_object(),
+        "canonical command intent must be an object"
+    );
+    let task_id = conn
+        .query_row(
+            "SELECT task_id FROM business_command_task_links WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let status = if execution_phase == "terminal" {
+        terminal_status.as_str()
+    } else if execution_phase == "waiting_dependencies" {
+        "waiting_dependencies"
+    } else {
+        "accepted"
+    };
+    let object = projection.as_object_mut().expect("object checked above");
+    object.insert("id".to_string(), Value::String(command_id.to_string()));
+    object.insert(
+        "command_id".to_string(),
+        Value::String(command_id.to_string()),
+    );
+    object.insert("contract_version".to_string(), Value::from(2));
+    object.insert("status".to_string(), Value::String(status.to_string()));
+    object.insert(
+        "replication_phase".to_string(),
+        Value::String("native_observed".to_string()),
+    );
+    object.insert(
+        "execution_mode".to_string(),
+        Value::String(execution_mode.clone()),
+    );
+    object.insert(
+        "execution_phase".to_string(),
+        Value::String(execution_phase.clone()),
+    );
+    object.insert(
+        "terminal_status".to_string(),
+        Value::String(terminal_status.clone()),
+    );
+    object.insert(
+        "execution_task_id".to_string(),
+        Value::String(task_id.clone()),
+    );
+    object.insert("task_id".to_string(), Value::String(task_id));
+    let (route_status, task_status) = if execution_phase == "terminal" {
+        match terminal_status.as_str() {
+            "completed" => ("handled", "completed"),
+            "cancelled" => ("cancelled", "cancelled"),
+            _ => ("failed", "failed"),
+        }
+    } else {
+        match execution_phase.as_str() {
+            "leased" | "running" | "awaiting_review" | "validating" => ("leased", "running"),
+            "blocked" | "waiting_dependencies" => ("blocked", "blocked"),
+            _ => ("pending", "queued"),
+        }
+    };
+    object.insert(
+        "route_status".to_string(),
+        Value::String(route_status.to_string()),
+    );
+    object.insert(
+        "task_status".to_string(),
+        Value::String(task_status.to_string()),
+    );
+    object.insert("attempt".to_string(), Value::from(attempt));
+    object.insert(
+        "projection_version".to_string(),
+        Value::from(projection_version),
+    );
+    object.insert("payload_hash".to_string(), Value::String(payload_hash));
+    object.insert("retryable".to_string(), Value::Bool(retryable));
+    object.insert("created_at_ms".to_string(), Value::from(created_at_ms));
+    object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    if let Some(raw) = result_json {
+        let result: Value = serde_json::from_str(&raw)?;
+        if let Some(result_object) = result.as_object() {
+            for field in ["outbound_text", "response", "answer"] {
+                if let Some(value) = result_object.get(field) {
+                    object.insert(field.to_string(), value.clone());
+                }
+            }
+        }
+        object.insert("result".to_string(), result);
+    }
+    if let Some(value) = error_code {
+        object.insert("error_code".to_string(), Value::String(value));
+    }
+    if let Some(value) = error_message {
+        object.insert("error_message".to_string(), Value::String(value));
+    }
+    Ok(projection)
+}
+
+pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
+            params![command_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(None);
+    }
+    let mut command = business_command_projection(root, command_id)?;
+    redact_command_secrets(&mut command);
+    let task_id = conn
+        .query_row(
+            "SELECT task_id FROM business_command_task_links WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut transitions = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT projection_version, from_phase, to_phase, terminal_status, reason,
+                evidence_json, created_at_ms
+         FROM business_command_transitions WHERE command_id = ?1
+         ORDER BY projection_version ASC",
+    )?;
+    let rows = stmt.query_map(params![command_id], |row| {
+        Ok(json!({
+            "projection_version": row.get::<_, i64>(0)?,
+            "from_phase": row.get::<_, String>(1)?,
+            "to_phase": row.get::<_, String>(2)?,
+            "terminal_status": row.get::<_, String>(3)?,
+            "reason": row.get::<_, String>(4)?,
+            "evidence": serde_json::from_str::<Value>(&row.get::<_, String>(5)?)
+                .unwrap_or(Value::Null),
+            "created_at_ms": row.get::<_, i64>(6)?,
+        }))
+    })?;
+    for row in rows {
+        transitions.push(row?);
+    }
+    let dependencies = command
+        .pointer("/payload/dependencies")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let attachments = command
+        .pointer("/payload/attachments")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    Ok(Some(json!({
+        "schema": "ctox.business_os.command_context.v1",
+        "command": command,
+        "execution_task_id": task_id,
+        "dependencies": dependencies,
+        "attachments": attachments,
+        "transitions": transitions,
+    })))
+}
+
+pub(crate) fn inspect_business_command_for_task(
+    root: &Path,
+    task_id: &str,
+) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let command_id = conn
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    command_id
+        .as_deref()
+        .map(|command_id| inspect_business_command(root, command_id))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn redact_command_secrets(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for key in [
+                "capability_token",
+                "authorization",
+                "access_token",
+                "refresh_token",
+                "secret",
+            ] {
+                if object.contains_key(key) {
+                    object.insert(key.to_string(), Value::String("[REDACTED]".to_string()));
+                }
+            }
+            for child in object.values_mut() {
+                redact_command_secrets(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_command_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn mark_business_command_outbox_delivered(root: &Path, event_id: &str) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    Ok(conn.execute(
+        "UPDATE business_command_outbox
+         SET status = 'delivered', delivered_at_ms = ?2, last_error = NULL
+         WHERE event_id = ?1 AND status != 'delivered'",
+        params![event_id, epoch_millis()],
+    )? > 0)
+}
+
+pub(crate) fn mark_business_command_outbox_failed(
+    root: &Path,
+    event_id: &str,
+    error: &str,
+    max_attempts: u32,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let attempts = tx.query_row(
+        "SELECT attempts + 1 FROM business_command_outbox WHERE event_id = ?1",
+        params![event_id],
+        |row| row.get::<_, u32>(0),
+    )?;
+    let dead_letter = attempts >= max_attempts.max(1);
+    let backoff_ms = 250_i64.saturating_mul(1_i64 << attempts.min(8));
+    tx.execute(
+        "UPDATE business_command_outbox
+         SET status = ?2, attempts = ?3, next_attempt_at_ms = ?4, last_error = ?5
+         WHERE event_id = ?1",
+        params![
+            event_id,
+            if dead_letter { "dead_letter" } else { "failed" },
+            attempts,
+            epoch_millis().saturating_add(backoff_ms),
+            error,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn business_command_core_diagnostics(root: &Path) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let aggregate_count = conn.query_row(
+        "SELECT COUNT(*) FROM business_command_aggregates",
+        [],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let queue_commands_without_link = conn.query_row(
+        "SELECT COUNT(*) FROM business_command_aggregates aggregate_row
+         LEFT JOIN business_command_task_links link ON link.command_id = aggregate_row.command_id
+         WHERE aggregate_row.execution_mode = 'queue'
+           AND aggregate_row.execution_phase NOT IN ('waiting_dependencies', 'terminal')
+           AND link.command_id IS NULL",
+        [],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let links_without_task = conn.query_row(
+        "SELECT COUNT(*) FROM business_command_task_links link
+         LEFT JOIN communication_messages task ON task.message_key = link.task_id
+         WHERE task.message_key IS NULL",
+        [],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let (pending_outbox, dead_letter_outbox, oldest_pending_created_at_ms) = conn.query_row(
+        "SELECT
+            COALESCE(SUM(CASE WHEN status IN ('pending', 'failed') THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END), 0),
+            MIN(CASE WHEN status IN ('pending', 'failed') THEN created_at_ms END)
+         FROM business_command_outbox",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, u64>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        },
+    )?;
+    let uncertain_effects = conn.query_row(
+        "SELECT COUNT(*) FROM business_command_effects WHERE status = 'uncertain'",
+        [],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let (open_intake_failures, exhausted_intake_failures) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN exhausted = 1 THEN 1 ELSE 0 END), 0)
+         FROM business_command_intake_failures WHERE resolved_at_ms IS NULL",
+        [],
+        |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+    )?;
+    let oldest_outbox_age_ms =
+        oldest_pending_created_at_ms.map(|created| epoch_millis().saturating_sub(created).max(0));
+    Ok(json!({
+        "aggregate_count": aggregate_count,
+        "queue_commands_without_link": queue_commands_without_link,
+        "links_without_task": links_without_task,
+        "orphan_link_count": queue_commands_without_link.saturating_add(links_without_task),
+        "pending_outbox": pending_outbox,
+        "dead_letter_outbox": dead_letter_outbox,
+        "oldest_outbox_age_ms": oldest_outbox_age_ms,
+        "uncertain_effects": uncertain_effects,
+        "open_intake_failures": open_intake_failures,
+        "exhausted_intake_failures": exhausted_intake_failures,
+        "duplicate_effect_count": 0,
+    }))
+}
+
+pub(crate) fn record_business_command_intake_failure(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let attempt = tx.query_row(
+        "SELECT COALESCE(MAX(attempt), 0) + 1
+         FROM business_command_intake_failures
+         WHERE command_id = ?1 AND resolved_at_ms IS NULL",
+        params![claim.command_id],
+        |row| row.get::<_, u32>(0),
+    )?;
+    let exhausted = attempt >= retry_budget.max(1);
+    let now_ms = epoch_millis();
+    tx.execute(
+        "INSERT INTO business_command_intake_failures
+            (command_id, attempt, error_message, exhausted, observed_at_ms, resolved_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+        params![
+            claim.command_id,
+            attempt,
+            error_message,
+            if exhausted { 1 } else { 0 },
+            now_ms,
+        ],
+    )?;
+    let canonical_exists = tx
+        .query_row(
+            "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
+            params![claim.command_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let canonical_failure_created = exhausted && !canonical_exists;
+    if canonical_failure_created {
+        tx.execute(
+            "INSERT INTO business_command_aggregates
+                (command_id, idempotency_key, payload_hash, module, command_type, record_id,
+                 execution_mode, execution_phase, terminal_status, attempt, projection_version,
+                 intent_json, result_json, error_code, error_message, retryable,
+                 created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'control', 'terminal', 'failed', ?7, 1,
+                     ?8, ?9, 'native_unavailable', ?10, 0, ?11, ?12)",
+            params![
+                claim.command_id,
+                claim.idempotency_key,
+                claim.payload_hash,
+                claim.module,
+                claim.command_type,
+                claim.record_id,
+                attempt,
+                serde_json::to_string(&claim.intent)?,
+                serde_json::to_string(&json!({
+                    "ok": false,
+                    "error_code": "native_unavailable",
+                    "error_message": error_message,
+                }))?,
+                error_message,
+                claim.created_at_ms,
+                now_ms,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO business_command_transitions
+                (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
+             VALUES (?1, 1, 'native_observed', 'terminal', 'failed', 'native intake retry budget exhausted', ?2, ?3)",
+            params![
+                claim.command_id,
+                serde_json::to_string(&json!({
+                    "attempt": attempt,
+                    "error_message": error_message,
+                }))?,
+                now_ms,
+            ],
+        )?;
+        insert_business_command_outbox_rows(
+            &tx,
+            &claim.command_id,
+            1,
+            "command.intake_exhausted",
+            &json!({
+                "command_id": claim.command_id,
+                "execution_phase": "terminal",
+                "terminal_status": "failed",
+                "projection_version": 1,
+            }),
+            now_ms,
+        )?;
+    }
+    tx.commit()?;
+    let failure_document = if canonical_failure_created {
+        business_command_projection(root, &claim.command_id)?
+    } else {
+        claim.intent
+    };
+    Ok(json!({
+        "command_id": claim.command_id,
+        "attempt": attempt,
+        "exhausted": exhausted,
+        "canonical_exists": canonical_exists,
+        "canonical_failure_created": canonical_failure_created,
+        "failure_document": failure_document,
+    }))
+}
+
+pub(crate) fn resolve_business_command_intake_failures(
+    root: &Path,
+    command_id: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    Ok(conn.execute(
+        "UPDATE business_command_intake_failures SET resolved_at_ms = ?2
+         WHERE command_id = ?1 AND resolved_at_ms IS NULL",
+        params![command_id, epoch_millis()],
+    )?)
+}
+
+pub(crate) fn business_command_retention_maintenance(root: &Path, apply: bool) -> Result<Value> {
+    const LARGE_RESULT_BYTES: usize = 64 * 1024;
+    const DELIVERED_OUTBOX_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let mut candidates = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT command_id, result_json FROM business_command_aggregates aggregate_row
+             WHERE execution_phase = 'terminal'
+               AND length(COALESCE(result_json, '')) > ?1
+               AND NOT EXISTS (
+                    SELECT 1 FROM business_command_outbox outbox
+                    WHERE outbox.command_id = aggregate_row.command_id
+                      AND outbox.status != 'delivered'
+               )",
+        )?;
+        let rows = stmt.query_map(params![LARGE_RESULT_BYTES as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            candidates.push(row?);
+        }
+    }
+    let artifact_root = root.join("runtime/business-command-artifacts");
+    let mut externalized = 0_u64;
+    if apply && !candidates.is_empty() {
+        fs::create_dir_all(&artifact_root)?;
+        let tx = conn.transaction()?;
+        for (command_id, result_json) in &candidates {
+            let digest = sha256_hex(result_json.as_bytes());
+            let file_name = format!(
+                "{}-{}.json",
+                sanitize_path_component(command_id),
+                &digest[..16]
+            );
+            let path = artifact_root.join(file_name);
+            fs::write(&path, result_json)?;
+            let reference = json!({
+                "externalized": true,
+                "artifact_ref": path.strip_prefix(root).unwrap_or(&path).display().to_string(),
+                "sha256": digest,
+                "size_bytes": result_json.len(),
+            });
+            tx.execute(
+                "UPDATE business_command_aggregates SET result_json = ?2 WHERE command_id = ?1",
+                params![command_id, serde_json::to_string(&reference)?],
+            )?;
+            externalized = externalized.saturating_add(1);
+        }
+        tx.commit()?;
+    }
+    let cutoff = epoch_millis().saturating_sub(DELIVERED_OUTBOX_RETENTION_MS);
+    let delivered_outbox_candidates = conn.query_row(
+        "SELECT COUNT(*) FROM business_command_outbox
+         WHERE status = 'delivered' AND delivered_at_ms < ?1",
+        params![cutoff],
+        |row| row.get::<_, u64>(0),
+    )?;
+    let pruned_outbox = if apply {
+        conn.execute(
+            "DELETE FROM business_command_outbox
+             WHERE status = 'delivered' AND delivered_at_ms < ?1",
+            params![cutoff],
+        )? as u64
+    } else {
+        0
+    };
+    Ok(json!({
+        "apply": apply,
+        "large_result_candidates": candidates.len(),
+        "externalized_results": externalized,
+        "delivered_outbox_candidates": delivered_outbox_candidates,
+        "pruned_delivered_outbox": pruned_outbox,
+        "aggregate_and_transition_evidence_deleted": 0,
+        "policy": {
+            "large_result_bytes": LARGE_RESULT_BYTES,
+            "delivered_outbox_retention_ms": DELIVERED_OUTBOX_RETENTION_MS,
+        },
+    }))
+}
+
+pub(crate) fn reconcile_business_command_invariants(root: &Path, apply: bool) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let mut missing_links = Vec::new();
+    let mut missing_tasks = Vec::new();
+    let mut missing_outbox = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT aggregate_row.command_id, aggregate_row.execution_phase
+             FROM business_command_aggregates aggregate_row
+             LEFT JOIN business_command_task_links link ON link.command_id = aggregate_row.command_id
+             WHERE aggregate_row.execution_mode = 'queue'
+               AND aggregate_row.execution_phase NOT IN ('waiting_dependencies', 'terminal')
+               AND link.command_id IS NULL",
+        )?;
+        for row in stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
+            let (command_id, phase) = row?;
+            missing_links.push(json!({"command_id": command_id, "execution_phase": phase}));
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT link.command_id, link.task_id FROM business_command_task_links link
+             LEFT JOIN communication_messages task ON task.message_key = link.task_id
+             WHERE task.message_key IS NULL",
+        )?;
+        for row in stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
+            let (command_id, task_id) = row?;
+            missing_tasks.push(json!({"command_id": command_id, "execution_task_id": task_id}));
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT aggregate_row.command_id, aggregate_row.projection_version
+             FROM business_command_aggregates aggregate_row
+             WHERE EXISTS (
+                SELECT 1 FROM (SELECT 'business-os' AS destination UNION ALL SELECT 'rxdb') expected
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM business_command_outbox outbox
+                    WHERE outbox.command_id = aggregate_row.command_id
+                      AND outbox.projection_version = aggregate_row.projection_version
+                      AND outbox.destination = expected.destination
+                )
+             )",
+        )?;
+        for row in stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })? {
+            let (command_id, version) = row?;
+            missing_outbox.push((command_id, version));
+        }
+    }
+    let mut repaired_outbox = 0_u64;
+    if apply && !missing_outbox.is_empty() {
+        let tx = conn.transaction()?;
+        for (command_id, version) in &missing_outbox {
+            insert_business_command_outbox_rows(
+                &tx,
+                command_id,
+                *version,
+                "command.reconciled",
+                &json!({
+                    "command_id": command_id,
+                    "projection_version": version,
+                    "reason": "missing current-version outbox repaired",
+                }),
+                epoch_millis(),
+            )?;
+            repaired_outbox = repaired_outbox.saturating_add(1);
+        }
+        tx.commit()?;
+    }
+    Ok(json!({
+        "apply": apply,
+        "missing_task_links": missing_links,
+        "task_links_to_missing_tasks": missing_tasks,
+        "missing_current_outbox": missing_outbox.iter().map(|(command_id, version)| json!({
+            "command_id": command_id,
+            "projection_version": version,
+        })).collect::<Vec<_>>(),
+        "repaired_outbox_commands": repaired_outbox,
+        "unsafe_repairs_applied": 0,
+    }))
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn epoch_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
 }
 
 fn enforce_queue_task_spawn(
@@ -3388,7 +5048,7 @@ fn enforce_queue_task_spawn(
         edge_metadata.insert("self_work_kind".to_string(), kind);
     }
 
-    enforce_core_spawn(
+    enforce_core_spawn_in_transaction(
         conn,
         &CoreSpawnRequest {
             parent_entity_type,
@@ -8686,6 +10346,111 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             WHERE id = 1;
         END;
 
+        CREATE TABLE IF NOT EXISTS business_command_aggregates (
+            command_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            payload_hash TEXT NOT NULL,
+            module TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            record_id TEXT NOT NULL DEFAULT '',
+            execution_mode TEXT NOT NULL CHECK(execution_mode IN ('control', 'queue')),
+            execution_phase TEXT NOT NULL,
+            terminal_status TEXT NOT NULL DEFAULT 'none',
+            attempt INTEGER NOT NULL DEFAULT 0,
+            projection_version INTEGER NOT NULL DEFAULT 1,
+            intent_json TEXT NOT NULL,
+            result_json TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            retryable INTEGER NOT NULL DEFAULT 0,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_command_aggregates_state
+            ON business_command_aggregates(execution_phase, updated_at_ms);
+
+        CREATE TABLE IF NOT EXISTS business_command_task_links (
+            command_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            created_at_ms INTEGER NOT NULL,
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_transitions (
+            transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command_id TEXT NOT NULL,
+            projection_version INTEGER NOT NULL,
+            from_phase TEXT NOT NULL,
+            to_phase TEXT NOT NULL,
+            terminal_status TEXT NOT NULL DEFAULT 'none',
+            reason TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '{{}}',
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE(command_id, projection_version),
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_effects (
+            command_id TEXT NOT NULL,
+            effect_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('claimed', 'completed', 'failed', 'uncertain')),
+            result_json TEXT,
+            error_message TEXT,
+            claimed_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(command_id, effect_key),
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_results (
+            command_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed', 'cancelled')),
+            user_reply TEXT NOT NULL DEFAULT '',
+            artifacts_json TEXT NOT NULL DEFAULT '[]',
+            writebacks_json TEXT NOT NULL DEFAULT '[]',
+            claims_json TEXT NOT NULL DEFAULT '[]',
+            error_json TEXT,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            validation_status TEXT NOT NULL DEFAULT 'pending',
+            review_evidence_json TEXT NOT NULL DEFAULT '{{}}',
+            created_at_ms INTEGER NOT NULL,
+            reviewed_at_ms INTEGER,
+            PRIMARY KEY(command_id, attempt),
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_outbox (
+            event_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL,
+            projection_version INTEGER NOT NULL,
+            destination TEXT NOT NULL CHECK(destination IN ('business-os', 'rxdb')),
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'failed', 'dead_letter')),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at_ms INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at_ms INTEGER NOT NULL,
+            delivered_at_ms INTEGER,
+            UNIQUE(command_id, projection_version, destination)
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_command_outbox_delivery
+            ON business_command_outbox(status, next_attempt_at_ms, created_at_ms);
+
+        CREATE TABLE IF NOT EXISTS business_command_intake_failures (
+            failure_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            error_message TEXT NOT NULL,
+            exhausted INTEGER NOT NULL DEFAULT 0,
+            observed_at_ms INTEGER NOT NULL,
+            resolved_at_ms INTEGER,
+            UNIQUE(command_id, attempt)
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_command_intake_failures_open
+            ON business_command_intake_failures(command_id, resolved_at_ms, attempt);
+
         CREATE TABLE IF NOT EXISTS communication_founder_reply_reviews (
             approval_key TEXT PRIMARY KEY,
             inbound_message_key TEXT NOT NULL,
@@ -10408,6 +12173,13 @@ fn queue_rework_has_witness_proof(conn: &Connection, message_key: &str) -> Resul
 }
 
 fn queue_terminal_policy_proof(actor: &str, reason: &str) -> Option<String> {
+    if actor == "business-command-terminal-owner" {
+        // This actor is reachable only through
+        // `transition_business_command_for_task`, which has already verified
+        // the immutable typed result plus passed review and validation in the
+        // same core transaction.
+        return Some("policy:business-command-reviewed-terminal-success".to_string());
+    }
     if actor == "ctox-queue-update" && reason.starts_with("business-os:terminal-success:") {
         return Some("policy:business-os-queued-command-terminal-success".to_string());
     }
@@ -10476,11 +12248,12 @@ fn canonical_queue_priority(raw: &str) -> Result<String> {
 fn canonical_queue_route_status(raw: &str) -> Result<String> {
     let normalized = raw.trim().to_lowercase();
     match normalized.as_str() {
-        "pending" | "blocked" | "failed" | "handled" | "cancelled" | "review_rework" => {
+        "pending" | "leased" | "running" | "blocked" | "failed" | "handled" | "cancelled"
+        | "review_rework" => {
             Ok(normalized)
         }
         _ => anyhow::bail!(
-            "unsupported queue route status '{raw}' (expected pending|blocked|failed|handled|cancelled|review_rework)"
+            "unsupported queue route status '{raw}' (expected pending|leased|running|blocked|failed|handled|cancelled|review_rework)"
         ),
     }
 }
@@ -15950,5 +17723,473 @@ mod tests {
         assert!(
             super::queue_terminal_policy_proof("ctox-queue-ack", "duplicate_inbound").is_none()
         );
+    }
+
+    fn business_command_test_root(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{prefix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create business command test root");
+        root
+    }
+
+    fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessCommandClaimRequest {
+        BusinessCommandClaimRequest {
+            command_id: command_id.to_string(),
+            idempotency_key: command_id.to_string(),
+            payload_hash: payload_hash.to_string(),
+            module: "tests".to_string(),
+            command_type: "tests.command".to_string(),
+            record_id: "record-1".to_string(),
+            intent: json!({"command_id": command_id, "payload": {"value": 1}}),
+            created_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn business_command_queue_claim_is_atomic_and_idempotent() {
+        let root = business_command_test_root("ctox-business-command-queue-claim");
+        let request = || QueueTaskCreateRequest {
+            title: "Atomic business command".to_string(),
+            prompt: "Execute the command once.".to_string(),
+            thread_key: "business-os/tests/atomic".to_string(),
+            workspace_root: Some(root.display().to_string()),
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"idempotency_key": "command-atomic-1"})),
+        };
+
+        let first = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-atomic-1", "sha256:first"),
+            request(),
+        )
+        .expect("first atomic queue claim");
+        assert!(!first.already_claimed);
+        let retry = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-atomic-1", "sha256:first"),
+            request(),
+        )
+        .expect("idempotent queue claim retry");
+        assert!(retry.already_claimed);
+        assert_eq!(first.task.message_key, retry.task.message_key);
+
+        let conflict = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-atomic-1", "sha256:changed"),
+            request(),
+        )
+        .expect_err("changed immutable intent must conflict");
+        assert!(conflict.to_string().contains("idempotency_conflict"));
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("reopen core db");
+        let counts: (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM business_command_aggregates WHERE command_id = 'command-atomic-1'),
+                    (SELECT COUNT(*) FROM business_command_task_links WHERE command_id = 'command-atomic-1'),
+                    (SELECT COUNT(*) FROM business_command_transitions WHERE command_id = 'command-atomic-1'),
+                    (SELECT COUNT(*) FROM business_command_outbox WHERE command_id = 'command-atomic-1')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("count atomic command rows");
+        assert_eq!(counts, (1, 1, 2, 4));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn business_control_claim_suppresses_uncertain_replay_and_returns_terminal_result() {
+        let root = business_command_test_root("ctox-business-command-control-claim");
+        let first = claim_business_control_command(
+            &root,
+            business_command_claim("command-control-1", "sha256:control"),
+        )
+        .expect("first control claim");
+        assert_eq!(first.disposition, "new");
+
+        let uncertain = claim_business_control_command(
+            &root,
+            business_command_claim("command-control-1", "sha256:control"),
+        )
+        .expect("retry before outcome");
+        assert_eq!(uncertain.disposition, "uncertain");
+
+        complete_business_control_command(
+            &root,
+            "command-control-1",
+            "completed",
+            &json!({"ok": true, "value": 42}),
+            None,
+        )
+        .expect("persist control outcome");
+        let terminal = claim_business_control_command(
+            &root,
+            business_command_claim("command-control-1", "sha256:control"),
+        )
+        .expect("terminal retry");
+        assert_eq!(terminal.disposition, "terminal");
+        assert_eq!(terminal.terminal_status.as_deref(), Some("completed"));
+        assert_eq!(terminal.result, Some(json!({"ok": true, "value": 42})));
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("reopen core db");
+        let counts: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM business_command_effects WHERE command_id = 'command-control-1'),
+                    (SELECT COUNT(*) FROM business_command_transitions WHERE command_id = 'command-control-1'),
+                    (SELECT COUNT(*) FROM business_command_outbox WHERE command_id = 'command-control-1')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("count control command rows");
+        assert_eq!(counts, (1, 2, 4));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn business_command_cannot_complete_before_typed_result_review_and_validation() {
+        let root = business_command_test_root("ctox-business-command-terminal-gate");
+        let claimed = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-terminal-gate", "sha256:terminal-gate"),
+            QueueTaskCreateRequest {
+                title: "Terminal gate".to_string(),
+                prompt: "Prove terminal ordering.".to_string(),
+                thread_key: "business-os/tests/terminal-gate".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key": "command-terminal-gate"})),
+            },
+        )
+        .expect("claim command");
+        let task_id = claimed.task.message_key;
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "worker leased",
+        )
+        .expect("lease command");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "worker started",
+        )
+        .expect("start command");
+        persist_business_command_worker_result(&root, &task_id, "done")
+            .expect("persist typed result");
+        let persisted = business_command_projection(&root, "command-terminal-gate")
+            .expect("load persisted result envelope");
+        assert_eq!(persisted["result"]["command_id"], "command-terminal-gate");
+        assert_eq!(persisted["result"]["execution_task_id"], task_id);
+        assert_eq!(persisted["result"]["user_message"], "done");
+        assert!(persisted["result"]["structured_output"].is_null());
+        assert!(persisted["result"]["verification_claims"].is_array());
+
+        let premature = transition_business_command_for_task(
+            &root,
+            &task_id,
+            "handled",
+            Some(&json!({"user_reply": "done"})),
+            None,
+            None,
+            "assistant prose claimed completion",
+        )
+        .expect_err("completion before review must fail");
+        assert!(premature
+            .to_string()
+            .contains("passed review and validation"));
+
+        record_business_command_review(
+            &root,
+            &task_id,
+            "passed",
+            "passed",
+            &json!({"review": "PASS", "validation": "PASS"}),
+        )
+        .expect("persist review");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "handled",
+            Some(&json!({"user_reply": "done"})),
+            None,
+            None,
+            "reviewed completion",
+        )
+        .expect("terminalize after evidence");
+        let projection =
+            business_command_projection(&root, "command-terminal-gate").expect("load projection");
+        assert_eq!(projection["execution_phase"], "terminal");
+        assert_eq!(projection["terminal_status"], "completed");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn waiting_dependency_command_promotes_once_to_one_queue_task() {
+        let root = business_command_test_root("ctox-business-command-dependency-promotion");
+        let claim = business_command_claim("command-dependency", "sha256:dependency");
+        claim_business_command_waiting_dependencies(
+            &root,
+            claim.clone(),
+            &json!([{"collection": "desktop_files", "record_id": "file-1"}]),
+        )
+        .expect("record dependency wait");
+        let request = || QueueTaskCreateRequest {
+            title: "Dependency ready".to_string(),
+            prompt: "Run after dependency materializes.".to_string(),
+            thread_key: "business-os/tests/dependency".to_string(),
+            workspace_root: Some(root.display().to_string()),
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"idempotency_key": "command-dependency"})),
+        };
+        let promoted = claim_business_command_with_queue(&root, claim.clone(), request())
+            .expect("promote dependency command");
+        let replay = claim_business_command_with_queue(&root, claim, request())
+            .expect("replay promoted command");
+        assert_eq!(promoted.task.message_key, replay.task.message_key);
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+        let counts: (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM business_command_task_links WHERE command_id = 'command-dependency'),
+                    (SELECT COUNT(*) FROM communication_messages WHERE message_key = ?1)",
+                params![promoted.task.message_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("count promoted rows");
+        assert_eq!(counts, (1, 1));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn command_reconciler_repairs_only_missing_current_outbox() {
+        let root = business_command_test_root("ctox-business-command-reconcile");
+        claim_business_control_command(
+            &root,
+            business_command_claim("command-reconcile", "sha256:reconcile"),
+        )
+        .expect("claim control command");
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("open core db");
+        conn.execute(
+            "DELETE FROM business_command_outbox
+             WHERE command_id = 'command-reconcile' AND destination = 'rxdb'",
+            [],
+        )
+        .expect("remove one outbox row");
+        drop(conn);
+        let report = reconcile_business_command_invariants(&root, false).expect("report drift");
+        assert_eq!(
+            report["missing_current_outbox"].as_array().map(Vec::len),
+            Some(1)
+        );
+        let applied = reconcile_business_command_invariants(&root, true).expect("repair drift");
+        assert_eq!(applied["repaired_outbox_commands"], 1);
+        let clean = reconcile_business_command_invariants(&root, false).expect("verify repair");
+        assert_eq!(
+            clean["missing_current_outbox"].as_array().map(Vec::len),
+            Some(0)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn review_rework_reuses_task_and_increments_attempt() {
+        let root = business_command_test_root("ctox-business-command-rework-attempt");
+        let claimed = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-rework", "sha256:rework"),
+            QueueTaskCreateRequest {
+                title: "Rework continuity".to_string(),
+                prompt: "Keep this command and task.".to_string(),
+                thread_key: "business-os/tests/rework".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key": "command-rework"})),
+            },
+        )
+        .expect("claim command");
+        let task_id = claimed.task.message_key;
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "attempt one lease",
+        )
+        .expect("lease first attempt");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "attempt one",
+        )
+        .expect("start first attempt");
+        persist_business_command_worker_result(&root, &task_id, "first answer")
+            .expect("persist first result");
+        record_business_command_review(
+            &root,
+            &task_id,
+            "failed",
+            "pending",
+            &json!({"feedback": "fix it"}),
+        )
+        .expect("record rework");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "attempt two lease",
+        )
+        .expect("lease second attempt");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "attempt two",
+        )
+        .expect("start second attempt");
+        persist_business_command_worker_result(&root, &task_id, "second answer")
+            .expect("persist second result");
+        let projection =
+            business_command_projection(&root, "command-rework").expect("load projection");
+        assert_eq!(projection["attempt"], 2);
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+        let result_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM business_command_results WHERE command_id = 'command-rework'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count attempt results");
+        assert_eq!(result_count, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retention_externalizes_large_terminal_results_only_after_delivery() {
+        let root = business_command_test_root("ctox-business-command-retention");
+        claim_business_control_command(
+            &root,
+            business_command_claim("command-retention", "sha256:retention"),
+        )
+        .expect("claim control command");
+        complete_business_control_command(
+            &root,
+            "command-retention",
+            "completed",
+            &json!({"payload": "x".repeat(70 * 1024)}),
+            None,
+        )
+        .expect("complete large command");
+        let before_delivery = business_command_retention_maintenance(&root, false)
+            .expect("retention report before delivery");
+        assert_eq!(before_delivery["large_result_candidates"], 0);
+
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("open core db");
+        conn.execute(
+            "UPDATE business_command_outbox
+             SET status = 'delivered', delivered_at_ms = 1
+             WHERE command_id = 'command-retention'",
+            [],
+        )
+        .expect("mark projections delivered");
+        drop(conn);
+        let applied = business_command_retention_maintenance(&root, true).expect("apply retention");
+        assert_eq!(applied["externalized_results"], 1);
+        assert_eq!(applied["aggregate_and_transition_evidence_deleted"], 0);
+        let conn = open_channel_db(&db_path).expect("reopen core db");
+        let (result_json, transitions, outbox): (String, i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT result_json FROM business_command_aggregates WHERE command_id = 'command-retention'),
+                    (SELECT COUNT(*) FROM business_command_transitions WHERE command_id = 'command-retention'),
+                    (SELECT COUNT(*) FROM business_command_outbox WHERE command_id = 'command-retention')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("inspect retained evidence");
+        let reference: Value = serde_json::from_str(&result_json).expect("artifact reference json");
+        assert_eq!(reference["externalized"], true);
+        assert_eq!(transitions, 2);
+        assert_eq!(outbox, 0);
+        let artifact = root.join(reference["artifact_ref"].as_str().expect("artifact path"));
+        assert!(artifact.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn projection_outbox_retries_with_backoff_then_dead_letters() {
+        let root = business_command_test_root("ctox-business-command-outbox-retry");
+        claim_business_control_command(
+            &root,
+            business_command_claim("command-outbox-retry", "sha256:outbox-retry"),
+        )
+        .expect("claim command");
+        let event = pending_business_command_outbox(&root, 1)
+            .expect("list pending outbox")
+            .into_iter()
+            .next()
+            .expect("pending event");
+        mark_business_command_outbox_failed(&root, &event.event_id, "projection offline", 2)
+            .expect("first delivery failure");
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("open core db");
+        let first: (String, i64, i64) = conn
+            .query_row(
+                "SELECT status, attempts, next_attempt_at_ms FROM business_command_outbox WHERE event_id = ?1",
+                params![event.event_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("inspect failed event");
+        assert_eq!(first.0, "failed");
+        assert_eq!(first.1, 1);
+        assert!(first.2 > 0);
+        drop(conn);
+        mark_business_command_outbox_failed(&root, &event.event_id, "still offline", 2)
+            .expect("second delivery failure");
+        let conn = open_channel_db(&db_path).expect("reopen core db");
+        let terminal: (String, i64) = conn
+            .query_row(
+                "SELECT status, attempts FROM business_command_outbox WHERE event_id = ?1",
+                params![event.event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("inspect dead letter");
+        assert_eq!(terminal, ("dead_letter".to_string(), 2));
+        let _ = fs::remove_dir_all(root);
     }
 }

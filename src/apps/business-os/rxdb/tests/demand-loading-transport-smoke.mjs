@@ -137,6 +137,48 @@ assert(retrySent[0].timeoutMs >= 30000, `retry test query.fetch must use a deman
 assert(retrySent[1].params?.[0]?.requestId === 'q-timeout|retry-1', 'retry uses a fresh request id');
 assert(retryResult.documents[0]?.id === 'retried', 'retry result materialised');
 
+// The native token bucket deliberately rejects an excessive short burst with
+// a retryable RATE_LIMITED response. Apps must wait for refill and retry
+// instead of failing their mount (the accounting app legitimately fans out
+// across many demand-only collections during startup).
+const rateTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-rate' });
+let rateAttempts = 0;
+rateTransport.attach({
+  connections: new Map([
+    ['peer-rate', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(_peerId, _method, params) {
+    rateAttempts += 1;
+    const requestId = params?.[0]?.requestId;
+    queueMicrotask(() => {
+      if (rateAttempts === 1) {
+        rateTransport.requestHandlers['rxdb.query.error']({
+          params: [{
+            requestId,
+            code: 'RATE_LIMITED',
+            message: 'per-peer query-fetch rate limit reached',
+            retryable: true,
+          }],
+        });
+      } else {
+        rateTransport.requestHandlers['rxdb.query.chunk']({
+          params: [{
+            requestId,
+            sequence: 0,
+            documents: [{ id: 'after-rate-refill', status: 'open' }],
+            complete: true,
+            authoritativeRevision: 'rev-rate',
+          }],
+        });
+      }
+    });
+    return { ack: true };
+  },
+});
+const rateResult = await rateTransport.requestQueryFetch({ ...envelope, requestId: 'q-rate' });
+assert(rateAttempts === 2, `rate-limited query.fetch must retry once (got ${rateAttempts})`);
+assert(rateResult.documents[0]?.id === 'after-rate-refill', 'rate-limit retry result materialised');
+
 // Cancel path: removes the in-flight collector AND rejects the outstanding
 // fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
 // semantics — previously the promise just hung forever).
@@ -214,6 +256,138 @@ assert(fileDiagnostics.bufferedFileChunkBytes === 0, 'completed file fetch clear
 assert(fileDiagnostics.fileChunksReceived >= 2, 'diagnostics count received file chunks');
 assert(fileDiagnostics.maxBufferedFileChunks >= 2, 'diagnostics record file chunk buffer peak');
 assert(fileDiagnostics.maxBufferedFileChunkBytes >= 10, 'diagnostics record file chunk byte peak');
+
+// Incremental file consumers keep the transport collector at zero retained
+// bytes while each chunk is durably consumed by the loader/sink.
+const incrementallyConsumed = [];
+const incrementalFilePromise = transport.requestFileFetch({
+  requestId: 'file-incremental',
+  collectionName: 'desktop_files',
+  fileId: 'file-incremental',
+  async onChunk(chunk) { incrementallyConsumed.push(chunk.sequence); },
+});
+await new Promise((r) => setImmediate(r));
+await transport.requestHandlers['rxdb.file.chunk']({
+  params: [{ requestId: 'file-incremental', sequence: 0, bytesBase64: 'AAAA', complete: false }],
+});
+assert(transport.diagnostics().bufferedFileChunkBytes === 0, 'incremental sink retains no base64 collector bytes');
+await transport.requestHandlers['rxdb.file.chunk']({
+  params: [{ requestId: 'file-incremental', sequence: 1, bytesBase64: 'BBBB', complete: true }],
+});
+const incrementalResult = await incrementalFilePromise;
+assert(incrementalResult.length === 0, 'incremental transport returns no duplicate whole-file buffer');
+assert(incrementallyConsumed.join(',') === '0,1', 'incremental consumer receives ordered chunks');
+
+const budgetTransport = createDemandLoadingTransport({
+  getPeerId: () => 'peer-budget',
+  fileCollectorBudgetBytes: 262144,
+});
+const budgetRequests = [];
+budgetTransport.attach({
+  connections: new Map([
+    ['peer-budget', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(peerId, method, params) {
+    budgetRequests.push({ peerId, method, params });
+    return { ack: true };
+  },
+});
+const overBudget = budgetTransport.requestFileFetch({
+  requestId: 'file-over-budget',
+  collectionName: 'desktop_files',
+  fileId: 'file-over-budget',
+}).catch((error) => error);
+await new Promise((r) => setImmediate(r));
+await budgetTransport.requestHandlers['rxdb.file.chunk']({
+  params: [{
+    requestId: 'file-over-budget',
+    sequence: 0,
+    bytesBase64: 'A'.repeat(262145),
+    complete: false,
+  }],
+});
+const collectorBudgetError = await overBudget;
+assert(collectorBudgetError?.code === 'FILE_COLLECTOR_BUDGET_EXCEEDED', 'collector rejects accepted stream beyond byte budget');
+assert(budgetTransport.pendingFileCount() === 0, 'byte-budget rejection releases collector');
+assert(budgetTransport.diagnostics().fileCollectorBudgetExceeded === 1, 'byte-budget rejection is observable');
+assert(budgetRequests.some((request) => request.method === 'rxdb.file.cancel'), 'byte-budget rejection cancels native stream');
+
+// Lost terminal frames must not leave collectors alive forever after the
+// native acknowledgement. The timeout rejects and emits a peer-scoped cancel.
+const timeoutTransport = createDemandLoadingTransport({
+  getPeerId: () => 'peer-timeout',
+  collectorTimeoutMs: 20,
+});
+const timeoutSent = [];
+timeoutTransport.attach({
+  connections: new Map([
+    ['peer-timeout', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(peerId, method, params, timeoutMs) {
+    timeoutSent.push({ peerId, method, params, timeoutMs });
+    return { ack: true };
+  },
+});
+const lostTerminal = timeoutTransport.requestQueryFetch({ ...envelope, requestId: 'q-lost-terminal' })
+  .catch((error) => error);
+const lostTerminalError = await lostTerminal;
+assert(lostTerminalError?.code === 'QUERY_COLLECTOR_TIMEOUT', 'lost query terminal frame rejects on collector deadline');
+assert(timeoutTransport.pendingQueryCount() === 0, 'query collector deadline releases pending state');
+assert(timeoutTransport.diagnostics().queryCollectorTimeouts === 1, 'query collector timeout is observable');
+assert(
+  timeoutSent.some((entry) => entry.method === 'rxdb.query.cancel'
+    && entry.params?.[0]?.requestId === 'q-lost-terminal'),
+  'query collector deadline sends a cancel for the same peer request',
+);
+
+const lostFileTerminal = timeoutTransport.requestFileFetch({
+  requestId: 'file-lost-terminal',
+  collectionName: 'desktop_files',
+  fileId: 'file-lost-terminal',
+}).catch((error) => error);
+const lostFileTerminalError = await lostFileTerminal;
+assert(lostFileTerminalError?.code === 'FILE_COLLECTOR_TIMEOUT', 'lost file terminal frame rejects on collector deadline');
+assert(timeoutTransport.pendingFileCount() === 0, 'file collector deadline releases pending state');
+assert(timeoutTransport.diagnostics().fileCollectorTimeouts === 1, 'file collector timeout is observable');
+
+// Browser-side admission is bounded before work reaches the native peer.
+const admissionTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-admission' });
+admissionTransport.attach({
+  connections: new Map([
+    ['peer-admission', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request() { return { ack: true }; },
+});
+const activeQueries = Array.from({ length: 6 }, (_, index) => (
+  admissionTransport.requestQueryFetch({ ...envelope, requestId: `q-admission-${index}` })
+    .catch((error) => error)
+));
+await new Promise((r) => setImmediate(r));
+const oversizedQueuedQuery = await admissionTransport.requestQueryFetch({
+  ...envelope,
+  requestId: 'q-admission-overflow',
+  query: { selector: { oversized: 'x'.repeat(1024 * 1024) } },
+}).catch((error) => error);
+assert(oversizedQueuedQuery?.code === 'QUERY_QUEUE_LIMIT', 'queued query bytes are rejected at the browser budget');
+admissionTransport.abortPeerRequests('peer-admission', 'test-cleanup');
+await Promise.all(activeQueries);
+
+const activeFiles = Array.from({ length: 8 }, (_, index) => (
+  admissionTransport.requestFileFetch({
+    requestId: `file-admission-${index}`,
+    collectionName: 'desktop_files',
+    fileId: `file-admission-${index}`,
+  }).catch((error) => error)
+));
+await new Promise((r) => setImmediate(r));
+const fileAdmissionOverflow = await admissionTransport.requestFileFetch({
+  requestId: 'file-admission-overflow',
+  collectionName: 'desktop_files',
+  fileId: 'file-admission-overflow',
+}).catch((error) => error);
+assert(fileAdmissionOverflow?.code === 'FILE_COLLECTOR_LIMIT', 'file collector count is bounded in the browser');
+admissionTransport.abortPeerRequests('peer-admission', 'test-cleanup');
+await Promise.all(activeFiles);
 
 console.log('ctox-rxdb-js demand-loading transport smoke OK', {
   docs: result.documents.length,

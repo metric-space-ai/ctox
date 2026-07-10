@@ -180,20 +180,22 @@ pub(super) fn is_threads_owned_collection(collection: &str) -> bool {
     )
 }
 
-pub(super) fn may_accept_peer_write(_root: &Path, _token: &str, collection: &str) -> bool {
+pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) -> bool {
     if is_threads_owned_collection(collection) {
         return false;
-    }
-    if collection == "business_commands" {
-        // Command documents carry their own authenticated client context and
-        // are admitted by `accept_rxdb_business_command`; do not pre-filter
-        // them by the peer-session token here.
-        return true;
     }
     if collection == "ctox_queue_tasks" {
         return false;
     }
-    true
+    // Commands receive a second, command-specific authorization when the
+    // native consumer accepts the document. The peer still needs an exact
+    // data.write grant to put anything onto the replicated command bus.
+    store::capability_allows_collection_permission(
+        root,
+        token,
+        collection,
+        BusinessOsPermission::DataWrite,
+    )
 }
 
 pub(super) fn may_replicate_document(
@@ -202,10 +204,16 @@ pub(super) fn may_replicate_document(
     collection: &str,
     document: &Value,
 ) -> bool {
+    if !store::capability_allows_collection_permission(
+        root,
+        token,
+        collection,
+        BusinessOsPermission::DataRead,
+    ) {
+        return false;
+    }
     let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
-        return !is_threads_owned_collection(collection)
-            && collection != "business_commands"
-            && collection != "ctox_queue_tasks";
+        return false;
     };
     if matches!(
         super::policy::parse_role(&role),
@@ -251,6 +259,7 @@ pub(super) fn project_ctox_relevance(
     let commands = pull_projection_documents(root, "business_commands", command_since_ms, limit)?;
     let tasks = pull_projection_documents(root, "ctox_queue_tasks", task_since_ms, limit)?;
     let mut command_by_id = BTreeMap::new();
+    let mut task_by_command_id = BTreeMap::new();
     let mut max_command_updated_at_ms = command_since_ms;
     for command in &commands {
         max_command_updated_at_ms = max_command_updated_at_ms.max(document_updated_at_ms(command));
@@ -268,21 +277,37 @@ pub(super) fn project_ctox_relevance(
     let mut max_task_updated_at_ms = task_since_ms;
     for task in &tasks {
         max_task_updated_at_ms = max_task_updated_at_ms.max(document_updated_at_ms(task));
+        let command_id = value_string(task, "command_id");
+        if !command_id.is_empty() {
+            task_by_command_id.insert(command_id, task.clone());
+        }
     }
 
     let conn = store::open_store(root)?;
     let mut projections = Vec::new();
+    let mut projected_command_ids = BTreeSet::new();
     for command in commands
         .iter()
         .filter(|document| !document_is_deleted(document))
     {
-        project_ctox_command_document(root, &conn, command, None, &mut projections)?;
+        let command_id = first_non_empty_owned([
+            value_string(command, "command_id"),
+            value_string(command, "id"),
+        ]);
+        let task = task_by_command_id.get(&command_id);
+        project_ctox_command_document(root, &conn, command, task, &mut projections)?;
+        if !command_id.is_empty() {
+            projected_command_ids.insert(command_id);
+        }
     }
     for task in tasks
         .iter()
         .filter(|document| !document_is_deleted(document))
     {
         let command_id = value_string(task, "command_id");
+        if projected_command_ids.contains(&command_id) {
+            continue;
+        }
         let command = command_by_id.get(&command_id).cloned().or_else(|| {
             load_record(root, "business_commands", &command_id)
                 .ok()
@@ -1969,11 +1994,14 @@ fn upsert_app_record_link(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_thread_links", &link_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_thread_links",
-        record_id: link_id,
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_thread_links",
+        &link_id,
+        now,
+        record,
+        projections,
+    )?;
     Ok(())
 }
 
@@ -2033,11 +2061,14 @@ fn upsert_app_status_notifications(
             "created_at_ms": now,
             "updated_at_ms": now,
         });
-        store::upsert_business_record(conn, "user_notifications", &notification_id, now, record)?;
-        projections.push(ProjectionRef {
-            collection: "user_notifications",
-            record_id: notification_id,
-        });
+        upsert_projection_record_if_changed(
+            conn,
+            "user_notifications",
+            &notification_id,
+            now,
+            record,
+            projections,
+        )?;
     }
     Ok(())
 }
@@ -2368,11 +2399,7 @@ fn upsert_thread(
         "created_at_ms": created_at_ms,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_threads", thread_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_threads",
-        record_id: thread_id.to_owned(),
-    });
+    upsert_projection_record_if_changed(conn, "user_threads", thread_id, now, record, projections)?;
     Ok(())
 }
 
@@ -2445,11 +2472,14 @@ fn upsert_message(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_thread_messages", message_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_thread_messages",
-        record_id: message_id.to_owned(),
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_thread_messages",
+        message_id,
+        now,
+        record,
+        projections,
+    )?;
     Ok(())
 }
 
@@ -2484,11 +2514,14 @@ fn upsert_source_link(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_thread_links", &link_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_thread_links",
-        record_id: link_id,
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_thread_links",
+        &link_id,
+        now,
+        record,
+        projections,
+    )?;
     Ok(())
 }
 
@@ -2528,11 +2561,14 @@ fn upsert_notifications(
             "created_at_ms": now,
             "updated_at_ms": now,
         });
-        store::upsert_business_record(conn, "user_notifications", &notification_id, now, record)?;
-        projections.push(ProjectionRef {
-            collection: "user_notifications",
-            record_id: notification_id,
-        });
+        upsert_projection_record_if_changed(
+            conn,
+            "user_notifications",
+            &notification_id,
+            now,
+            record,
+            projections,
+        )?;
     }
     Ok(())
 }
@@ -2542,6 +2578,49 @@ fn load_record(root: &Path, collection: &str, record_id: &str) -> anyhow::Result
         return Ok(None);
     }
     store::pull_collection_record(root, collection, record_id)
+}
+
+fn upsert_projection_record_if_changed(
+    conn: &Connection,
+    collection: &'static str,
+    record_id: &str,
+    updated_at_ms: i64,
+    record: Value,
+    projections: &mut Vec<ProjectionRef>,
+) -> anyhow::Result<bool> {
+    let existing = conn
+        .query_row(
+            "SELECT deleted, updated_at_ms, payload_json
+               FROM business_records
+              WHERE collection = ?1 AND record_id = ?2",
+            params![collection, record_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some((deleted, existing_updated_at_ms, payload_json)) = existing {
+        let mut existing_payload =
+            serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+        if let Some(object) = existing_payload.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+            object.remove("_deleted");
+        }
+        if deleted == 0 && existing_updated_at_ms == updated_at_ms && existing_payload == record {
+            return Ok(false);
+        }
+    }
+    store::upsert_business_record(conn, collection, record_id, updated_at_ms, record)?;
+    projections.push(ProjectionRef {
+        collection,
+        record_id: record_id.to_owned(),
+    });
+    Ok(true)
 }
 
 fn pull_projection_documents(
@@ -2830,11 +2909,14 @@ fn upsert_ctox_command_link(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_thread_links", &link_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_thread_links",
-        record_id: link_id,
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_thread_links",
+        &link_id,
+        now,
+        record,
+        projections,
+    )?;
     if let Some(task) = task {
         upsert_ctox_task_link(conn, thread_id, task, source, now, projections)?;
     }
@@ -2874,11 +2956,14 @@ fn upsert_ctox_task_link(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_thread_links", &link_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_thread_links",
-        record_id: link_id,
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_thread_links",
+        &link_id,
+        now,
+        record,
+        projections,
+    )?;
     Ok(())
 }
 
@@ -2932,11 +3017,14 @@ fn upsert_status_notification(
         "created_at_ms": now,
         "updated_at_ms": now,
     });
-    store::upsert_business_record(conn, "user_notifications", &notification_id, now, record)?;
-    projections.push(ProjectionRef {
-        collection: "user_notifications",
-        record_id: notification_id,
-    });
+    upsert_projection_record_if_changed(
+        conn,
+        "user_notifications",
+        &notification_id,
+        now,
+        record,
+        projections,
+    )?;
     Ok(())
 }
 
@@ -4632,6 +4720,12 @@ mod tests {
         );
         assert_eq!(value_string(&notification, "user_id"), "alice");
 
+        let unchanged = project_ctox_relevance(temp.path(), 0, 0, 50)?;
+        assert_eq!(
+            unchanged.changed_count, 0,
+            "replaying unchanged CTOX sources must not rewrite thread projections"
+        );
+
         Ok(())
     }
 
@@ -4704,6 +4798,12 @@ mod tests {
             "notif_app_needs_review_ctox_ticket_approvals_approval-1_bob",
         )?
         .is_none());
+
+        let unchanged = project_app_relevance(temp.path(), &[("ctox_ticket_approvals", 0)], 50)?;
+        assert_eq!(
+            unchanged.changed_count, 0,
+            "replaying unchanged app sources must not rewrite thread projections"
+        );
 
         Ok(())
     }

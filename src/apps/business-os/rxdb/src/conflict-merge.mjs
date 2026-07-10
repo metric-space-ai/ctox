@@ -92,12 +92,22 @@ export function threeWayMergeDocuments(base, local, master, { primaryPath = 'id'
   merged[primaryPath] = safeMaster[primaryPath] ?? safeLocal[primaryPath];
 
   let localOnlyChange = false;
+  const unsafeStructuredConflictFields = [];
   for (const key of businessFieldKeys(safeBase, safeLocal, safeMaster)) {
     if (key === primaryPath) continue;
     const baseValue = safeBase[key];
     const localValue = safeLocal[key];
     const masterValue = safeMaster[key];
     const localChanged = !deepEqualJson(localValue, baseValue);
+    const masterChanged = !deepEqualJson(masterValue, baseValue);
+    if (
+      localChanged
+      && masterChanged
+      && !deepEqualJson(localValue, masterValue)
+      && (isStructuredValue(localValue) || isStructuredValue(masterValue))
+    ) {
+      unsafeStructuredConflictFields.push(key);
+    }
     const winner = localChanged ? localValue : masterValue;
     if (localChanged && !deepEqualJson(localValue, masterValue)) {
       localOnlyChange = true;
@@ -107,7 +117,16 @@ export function threeWayMergeDocuments(base, local, master, { primaryPath = 'id'
     }
   }
 
-  return { merged, identicalToMaster: !localOnlyChange };
+  return {
+    merged,
+    identicalToMaster: !localOnlyChange,
+    requiresManualResolution: unsafeStructuredConflictFields.length > 0,
+    conflictFields: unsafeStructuredConflictFields,
+  };
+}
+
+function isStructuredValue(value) {
+  return value !== null && typeof value === 'object';
 }
 
 export function normalizeConflictStrategy(value) {

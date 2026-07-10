@@ -426,4 +426,70 @@ if (core.CTOX_RXDB_PROTOCOL !== CTOX_RXDB_PROTOCOL || typeof core.replicateWebRT
   }
 }
 
+{
+  const peer = createCtoxWebRtcNativePeer({
+    signalingUrl: 'ws://127.0.0.1:19998',
+    room: 'ctox-business-os:test:weighted-fairness',
+    clientId: 'browser-peer',
+  });
+  const sent = [];
+  const connection = {
+    remotePeerId: 'ctox-peer',
+    channel: {
+      readyState: 'open',
+      bufferedAmount: 0,
+      send: (text) => sent.push(JSON.parse(text)),
+    },
+  };
+  peer.connections.set(connection.remotePeerId, connection);
+  for (let index = 0; index < 12; index += 1) {
+    peer.enqueueSendFrame(connection, {
+      payload: { id: `high-${index}`, method: 'token' },
+      text: JSON.stringify({ id: `high-${index}`, method: 'token' }),
+      inline: true,
+      priority: 'high',
+    });
+  }
+  peer.enqueueSendFrame(connection, {
+    payload: { id: 'low-progress', method: 'masterWrite' },
+    text: JSON.stringify({ id: 'low-progress', method: 'masterWrite' }),
+    inline: true,
+    priority: 'low',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const lowIndex = sent.findIndex((frame) => frame.id === 'low-progress');
+  if (lowIndex < 0 || lowIndex > 6) {
+    throw new Error(`low-priority traffic must progress within one weighted cycle (index=${lowIndex})`);
+  }
+}
+
+{
+  const peer = createCtoxWebRtcNativePeer({
+    signalingUrl: 'ws://127.0.0.1:19998',
+    room: 'ctox-business-os:test:queue-budget',
+    clientId: 'browser-peer',
+  });
+  const connection = {
+    remotePeerId: 'ctox-peer',
+    channel: { readyState: 'open', bufferedAmount: 0, send() {} },
+    sendQueue: { high: [], normal: [], low: [], draining: true, nextSequence: 0, queuedBytes: 0, scheduleCursor: 0 },
+  };
+  peer.connections.set(connection.remotePeerId, connection);
+  let accepted = 0;
+  for (let index = 0; index < 1025; index += 1) {
+    if (peer.enqueueSendFrame(connection, {
+      payload: { id: `queued-${index}`, method: 'masterWrite' },
+      text: JSON.stringify({ id: `queued-${index}`, method: 'masterWrite' }),
+      inline: true,
+      priority: 'low',
+    })) accepted += 1;
+  }
+  if (accepted !== 1024 || peer.connections.has(connection.remotePeerId)) {
+    throw new Error('send queue frame budget must reject and recycle a wedged peer at 1024 frames');
+  }
+  if (peer.getTransportStatus().rejectedFrames < 1) {
+    throw new Error('send queue budget rejection must be observable');
+  }
+}
+
 console.log('ctox-rxdb-js import smoke OK');

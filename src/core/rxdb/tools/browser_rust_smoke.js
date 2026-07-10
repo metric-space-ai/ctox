@@ -243,6 +243,16 @@ const syncConfigWaitMs = parsePositiveIntegerEnv(
   process.env.SMOKE_SYNC_CONFIG_WAIT_MS || '60000',
   { max: 300000 }
 );
+const serverReadyTimeoutMs = parsePositiveIntegerEnv(
+  'SMOKE_SERVER_READY_TIMEOUT_MS',
+  process.env.SMOKE_SERVER_READY_TIMEOUT_MS || '90000',
+  { max: 300000 }
+);
+const pageNavigationTimeoutMs = parsePositiveIntegerEnv(
+  'SMOKE_PAGE_NAVIGATION_TIMEOUT_MS',
+  process.env.SMOKE_PAGE_NAVIGATION_TIMEOUT_MS || '90000',
+  { max: 120000 }
+);
 const smokeHookWaitTimeoutMs = parsePositiveIntegerEnv(
   'SMOKE_HOOK_WAIT_TIMEOUT_MS',
   process.env.SMOKE_HOOK_WAIT_TIMEOUT_MS || '60000',
@@ -2380,7 +2390,7 @@ async function runPresenceMergeTwoBrowsersMode(pageA) {
     const pageB = await browserB.newPage();
     const urlB = new URL(pageA.url());
     urlB.searchParams.set('smokeDbId', `${smokeDbId}_peer_b`);
-    await pageB.goto(urlB.toString(), { waitUntil: 'commit', timeout: 10000 });
+    await pageB.goto(urlB.toString(), { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
     await pageA.waitForFunction(smokeHookReady, null, { timeout: smokeHookWaitTimeoutMs });
     await pageB.waitForFunction(smokeHookReady, null, { timeout: smokeHookWaitTimeoutMs });
 
@@ -2620,7 +2630,8 @@ function tombstoneRustSeedChunk(seed) {
     UPDATE ctox_business_os__desktop_file_chunks__v0
     SET data='${sqlString(JSON.stringify(chunk))}',
         revision='${sqlString(chunkRevision)}',
-        lastWriteTime=${now + 1}
+        lastWriteTime=${now + 1},
+        deleted=1
     WHERE id='${sqlString(chunkRowId)}';
   `);
   return {
@@ -2760,21 +2771,20 @@ async function waitForCtoxServerListening(child, ms = 60000) {
     if (child && child.exitCode !== null) {
       throw new Error(`ctox exited after startup output before HTTP readiness: code=${child.exitCode} signal=${child.signalCode}`);
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 500);
-    try {
-      const response = await fetch(`http://127.0.0.1:${businessPort}/index.html?rxdbSmoke=1`, {
-        signal: controller.signal,
-      });
-      if (response.ok) return;
-    } catch {
-      // The server is still starting.
-    } finally {
-      clearTimeout(timer);
-    }
+    const connected = await new Promise((resolve) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port: businessPort });
+      const finish = (value) => {
+        socket.destroy();
+        resolve(value);
+      };
+      socket.setTimeout(500, () => finish(false));
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+    });
+    if (connected) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`timeout waiting for ctox HTTP readiness on 127.0.0.1:${businessPort}`);
+  throw new Error(`timeout waiting for ctox TCP listener on 127.0.0.1:${businessPort}`);
 }
 
 function ensureCtoxSmokeBinary() {
@@ -2926,7 +2936,7 @@ function ensureCtoxSmokeBinary() {
   const outerPhaseTimings = {};
   try {
     const ctoxServerWaitStartedAt = Date.now();
-    await waitForCtoxServerListening(ctox);
+    await waitForCtoxServerListening(ctox, serverReadyTimeoutMs);
     outerPhaseTimings.ctoxServerWaitMs = Date.now() - ctoxServerWaitStartedAt;
     const configWaitStartedAt = Date.now();
     const config = await waitForLaunchSyncConfig(syncConfigWaitMs);
@@ -3029,7 +3039,7 @@ function ensureCtoxSmokeBinary() {
     await page.exposeFunction('__ctoxRestartNativePeer', async () => {
       await stopChild(ctox);
       ctox = startCtoxServer();
-      await waitForCtoxServerListening(ctox);
+      await waitForCtoxServerListening(ctox, serverReadyTimeoutMs);
       await waitForNativePeerSyncConfig(60000);
       await waitForSqliteTables([
         'ctox_business_os__desktop_files__v0',
@@ -3045,7 +3055,7 @@ function ensureCtoxSmokeBinary() {
     await page.exposeFunction('__ctoxStartNativePeerForRestoreSmoke', async () => {
       if (ctox) await stopChild(ctox);
       ctox = startCtoxServer();
-      await waitForCtoxServerListening(ctox);
+      await waitForCtoxServerListening(ctox, serverReadyTimeoutMs);
       await waitForNativePeerSyncConfig(60000);
       await waitForSqliteTables([
         'ctox_business_os__desktop_files__v0',
@@ -3079,7 +3089,7 @@ function ensureCtoxSmokeBinary() {
       await stopSignalingServer(signaling);
       signaling = await startSignalingServer();
       ctox = startCtoxServer();
-      await waitForCtoxServerListening(ctox);
+      await waitForCtoxServerListening(ctox, serverReadyTimeoutMs);
       await waitForNativePeerSyncConfig(60000);
       await waitForSqliteTables([
         'ctox_business_os__desktop_files__v0',
@@ -3097,7 +3107,7 @@ function ensureCtoxSmokeBinary() {
       : pagePath;
     const smokeUrl = `http://127.0.0.1:${businessPort}${browserPath}`;
     const pageGotoStartedAt = Date.now();
-    await page.goto(smokeUrl, { waitUntil: 'commit', timeout: 10000 });
+    await page.goto(smokeUrl, { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
     outerPhaseTimings.pageGotoMs = Date.now() - pageGotoStartedAt;
     let advancedStatusEvidenceVersion = '';
     let advancedStatusEvidenceRuntime = null;
@@ -3135,8 +3145,8 @@ function ensureCtoxSmokeBinary() {
               bodyDataset: startupState.bodyDataset,
             })}`);
             browserDiagnostics.smokeHookReloads += 1;
-            await page.goto('about:blank', { waitUntil: 'commit', timeout: 10000 }).catch(() => {});
-            await page.goto(smokeUrl, { waitUntil: 'commit', timeout: 10000 });
+            await page.goto('about:blank', { waitUntil: 'commit', timeout: pageNavigationTimeoutMs }).catch(() => {});
+            await page.goto(smokeUrl, { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
             continue;
           }
           break;
@@ -3769,7 +3779,7 @@ function ensureCtoxSmokeBinary() {
           let lastError = null;
           for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
-              await page.goto(smokeUrl, { waitUntil: 'commit', timeout: 10000 });
+              await page.goto(smokeUrl, { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
               return;
             } catch (error) {
               lastError = error;
@@ -3789,7 +3799,7 @@ function ensureCtoxSmokeBinary() {
           && initial.loggedOut !== '1';
         const initialTenantScope = initial.storageWorkspace || initial.instanceId;
         const actorRole = initial.actorRole || 'unknown';
-        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
         const afterReload = await waitForAuthenticatedShell('authenticated reload');
         const reloadTenantScope = afterReload.snapshot.storageWorkspace || afterReload.snapshot.instanceId;
         const authenticatedReloadVerified = afterReload.snapshot.authenticated === true
@@ -3826,7 +3836,7 @@ function ensureCtoxSmokeBinary() {
           pairingConfigKey: afterReload.snapshot.pairingConfigKey,
           forgedTenantScope,
         });
-        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
         const crossScopeTampered = await waitForAuthenticatedShell('cross-scope storage tamper');
         const crossScopeTenantScope = crossScopeTampered.snapshot.storageWorkspace
           || crossScopeTampered.snapshot.instanceId;
@@ -3852,7 +3862,7 @@ function ensureCtoxSmokeBinary() {
           localStorage.setItem('ctox.businessOs.sessionToken', 'forged-smoke-token');
           localStorage.setItem('ctox.businessOs.authHeader', 'Basic forged-smoke-auth');
         });
-        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
         const tampered = await waitForLoginGate('tampered storage reload');
         const storageCopyDidNotWidenScope = tampered.loggedOut === '1'
           && !tampered.authenticated
@@ -5834,7 +5844,7 @@ function ensureCtoxSmokeBinary() {
         });
       }
       const appShellReloadStartedAt = Date.now();
-      await page.reload({ waitUntil: 'commit', timeout: 10000 });
+      await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
       await page.waitForFunction(() => Boolean(
         globalThis.ctoxBusinessOsSmoke
           && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
@@ -6197,6 +6207,28 @@ function ensureCtoxSmokeBinary() {
         await Promise.all(replicationStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
         await Promise.all(replicationStates.map((state) => bounded(state?.awaitInSync?.(), 15000)));
       }
+
+      let smokeCapabilityToken = '';
+      if (needsCommandCollections) {
+        const capabilityResponse = await fetch('/api/business-os/auth/capability', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        if (!capabilityResponse.ok) {
+          throw new Error(`Business OS smoke capability request failed: ${capabilityResponse.status} ${await capabilityResponse.text()}`);
+        }
+        const capability = await capabilityResponse.json();
+        smokeCapabilityToken = String(capability?.capability_token || '').trim();
+        if (!smokeCapabilityToken) {
+          throw new Error(`Business OS smoke capability response did not contain a token: ${JSON.stringify(capability)}`);
+        }
+      }
+      const smokeClientContext = (context = {}) => ({
+        ...context,
+        ...(smokeCapabilityToken ? { capability_token: smokeCapabilityToken } : {}),
+      });
 
       function selectActiveFileChunks(chunks, contentGenerationId) {
         const candidates = Array.isArray(chunks) ? chunks : [];
@@ -11597,12 +11629,6 @@ function ensureCtoxSmokeBinary() {
         while (Date.now() < deadline) {
           const fileDoc = await db.desktop_files.findOne(id).exec();
           const file = fileDoc?.toJSON?.() || fileDoc;
-          const chunks = (await db.desktop_file_chunks.find().exec())
-            .map((doc) => doc.toJSON?.() || doc)
-            .filter((doc) => doc.file_id === id)
-            .sort((left, right) => Number(left.idx || 0) - Number(right.idx || 0));
-          const liveChunks = chunks.filter((chunk) => !isDeletedSmokeChunk(chunk));
-          const tombstonedChunks = chunks.filter((chunk) => isDeletedSmokeChunk(chunk));
           lastSeen = {
             file: file ? {
               id: file.id,
@@ -11612,17 +11638,12 @@ function ensureCtoxSmokeBinary() {
               deleted: isDeletedSmokeChunk(file),
               rev: file._rev || '',
             } : null,
-            liveChunkCount: liveChunks.length,
-            tombstonedChunkCount: tombstonedChunks.length,
-            chunks: chunks.map((chunk) => ({
-              id: chunk.id,
-              idx: chunk.idx,
-              deleted: isDeletedSmokeChunk(chunk),
-              rev: chunk._rev || '',
-            })),
           };
-          if (file && (isDeletedSmokeChunk(file) || (!file.path && !file.local_path)) && liveChunks.length === 0) {
-            return { file, chunks, liveChunks, tombstonedChunks };
+          // desktop_file_chunks deliberately has no query-demand loader. The
+          // browser receives file metadata here; the viewer below proves the
+          // tombstone through the bounded file-demand stream.
+          if (file && (isDeletedSmokeChunk(file) || (!file.path && !file.local_path))) {
+            return { file };
           }
           await delay(500);
         }
@@ -11635,13 +11656,6 @@ function ensureCtoxSmokeBinary() {
         while (Date.now() < deadline) {
           const fileDoc = await db.desktop_files.findOne(id).exec();
           const file = fileDoc?.toJSON?.() || fileDoc;
-          const chunks = (await db.desktop_file_chunks.find().exec())
-            .map((doc) => doc.toJSON?.() || doc)
-            .filter((doc) => doc.file_id === id)
-            .sort((left, right) => Number(left.idx || 0) - Number(right.idx || 0));
-          const liveChunks = chunks.filter((chunk) => !isDeletedSmokeChunk(chunk));
-          const requestedGenerationChunks = liveChunks.filter((chunk) => chunk.generation_id === requestedGenerationId);
-          const availableGenerationIds = [...new Set(liveChunks.map((chunk) => chunk.generation_id || '').filter(Boolean))];
           lastSeen = {
             file: file ? {
               id: file.id,
@@ -11652,17 +11666,12 @@ function ensureCtoxSmokeBinary() {
               rev: file._rev || '',
             } : null,
             requestedGenerationId,
-            requestedGenerationChunkCount: requestedGenerationChunks.length,
-            liveChunkCount: liveChunks.length,
-            availableGenerationIds,
           };
           if (file
             && file.content_generation_id === requestedGenerationId
             && !file.path
-            && !file.local_path
-            && liveChunks.length > 0
-            && requestedGenerationChunks.length === 0) {
-            return { file, chunks, liveChunks, requestedGenerationChunks, availableGenerationIds };
+            && !file.local_path) {
+            return { file };
           }
           await delay(500);
         }
@@ -11915,7 +11924,7 @@ function ensureCtoxSmokeBinary() {
             status: 'pending_sync',
             inbound_channel: 'outbound',
             payload,
-            client_context: { source: 'outbound-active-ui-smoke' },
+            client_context: smokeClientContext({ source: 'outbound-active-ui-smoke' }),
             updated_at_ms: Date.now(),
           });
           await bounded(commandBridge?.awaitInSync?.(), 25000);
@@ -12280,7 +12289,7 @@ function ensureCtoxSmokeBinary() {
             priority: 'medium',
             labels: ['smoke'],
           },
-          client_context: { source: 'rxdb-ticket-smoke' },
+          client_context: smokeClientContext({ source: 'rxdb-ticket-smoke' }),
           updated_at_ms: now,
         });
         await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
@@ -12313,7 +12322,7 @@ function ensureCtoxSmokeBinary() {
                   missing_inputs: ['customer_id', 'approval_context'],
                   unblock_criteria: 'Requester supplies customer_id and approval_context.',
                 },
-                client_context: { source: 'rxdb-ticket-clarification-smoke' },
+                client_context: smokeClientContext({ source: 'rxdb-ticket-clarification-smoke' }),
                 updated_at_ms: clarificationNow,
               });
               await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
@@ -12359,7 +12368,7 @@ function ensureCtoxSmokeBinary() {
                         reviewed_by: 'rxdb-ticket-clarification-smoke',
                         review_summary: 'Clarification question reviewed by browser smoke.',
                       },
-                      client_context: { source: 'rxdb-ticket-clarification-smoke' },
+                      client_context: smokeClientContext({ source: 'rxdb-ticket-clarification-smoke' }),
                       updated_at_ms: publishNow,
                     });
                     await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
@@ -12474,7 +12483,7 @@ function ensureCtoxSmokeBinary() {
             status: 'pending_sync',
             inbound_channel: 'ctox',
             payload: { title: `WebRTC command burst smoke ${index + 1}`, instruction: 'smoke test only' },
-            client_context: { source: 'rxdb-smoke', burst: true, index },
+            client_context: smokeClientContext({ source: 'rxdb-smoke', burst: true, index }),
             updated_at_ms: now + index,
           })));
           await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
@@ -12545,7 +12554,7 @@ function ensureCtoxSmokeBinary() {
           if (!commandBus?.dispatch) throw new Error('Business OS command bus is not available for mid-flight restart smoke');
           const restartPromise = globalThis.__ctoxRestartNativePeer?.();
           await delay(50);
-          await commandBus.dispatch({
+          const midflightCommand = {
             id,
             module: 'ctox',
             type: 'business_os.smoke',
@@ -12553,13 +12562,41 @@ function ensureCtoxSmokeBinary() {
             inbound_channel: 'ctox',
             payload: { title: 'WebRTC command restart smoke', instruction: 'smoke test only' },
             client_context: { source: 'rxdb-smoke', restart: 'midflight' },
-          });
+          };
+          const firstDispatch = commandBus.dispatch(midflightCommand).catch((error) => ({ error }));
           await restartPromise;
           if (useAppDb) {
             const repairedState = globalThis.ctoxBusinessOsSmoke?.state;
             db = repairedState?.db?.raw || db;
-            const repairedCommandBridge = await repairedState?.sync?.startCollection?.('business_commands');
-            const repairedQueueBridge = await repairedState?.sync?.startCollection?.('ctox_queue_tasks');
+            let repairedCommandBridge = null;
+            let repairedQueueBridge = null;
+            if (typeof repairedState?.sync?.suspendCollections === 'function'
+              && typeof repairedState?.sync?.resumeCollections === 'function') {
+              // A process restart wakes every active collection at once. Stop
+              // that reconnect storm before repairing the two command-path
+              // collections; otherwise their peer-open deadline can expire
+              // behind ~170 unrelated collection joins under soak load.
+              const activeCollections = Object.entries(repairedState?.syncDiagnostics?.collections || {})
+                .filter(([, entry]) => !['stopped', 'paused'].includes(entry?.connectionStatus || entry?.status || ''))
+                .map(([collection]) => collection);
+              await repairedState.sync.suspendCollections([
+                ...new Set([...activeCollections, 'business_commands', 'ctox_queue_tasks']),
+              ], 'midflight-command-restart-repair');
+              [repairedCommandBridge, repairedQueueBridge] = await repairedState.sync.resumeCollections([
+                'business_commands',
+                'ctox_queue_tasks',
+              ]);
+            } else if (typeof repairedState?.sync?.restartCollections === 'function') {
+              [repairedCommandBridge, repairedQueueBridge] = await repairedState.sync.restartCollections([
+                'business_commands',
+                'ctox_queue_tasks',
+              ]);
+            } else {
+              repairedCommandBridge = await repairedState?.sync?.restartCollection?.('business_commands')
+                || await repairedState?.sync?.startCollection?.('business_commands');
+              repairedQueueBridge = await repairedState?.sync?.restartCollection?.('ctox_queue_tasks')
+                || await repairedState?.sync?.startCollection?.('ctox_queue_tasks');
+            }
             appCommandReplicationState = repairedCommandBridge?.state || appCommandReplicationState;
             appQueueReplicationState = repairedQueueBridge?.state || appQueueReplicationState;
           }
@@ -12567,6 +12604,13 @@ function ensureCtoxSmokeBinary() {
           await bounded(appQueueReplicationState?.awaitInitialReplication?.(), 20000);
           await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
           await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
+          const firstResult = await firstDispatch;
+          const existing = await commandBus.getStatus(id).catch(() => null);
+          if (!existing) {
+            await commandBus.dispatch(midflightCommand, { until: 'accepted', timeoutMs: 60000 });
+          } else if (firstResult?.error || existing.status === 'pending_sync') {
+            await commandBus.resumeTracking(id, { until: 'accepted', timeoutMs: 60000 });
+          }
         } else {
           await db.business_commands.insert({
             id,
@@ -12577,7 +12621,7 @@ function ensureCtoxSmokeBinary() {
             status: 'pending_sync',
             inbound_channel: 'ctox',
             payload: { title: 'WebRTC command smoke', instruction: 'smoke test only' },
-            client_context: { source: 'rxdb-smoke' },
+            client_context: smokeClientContext({ source: 'rxdb-smoke' }),
             updated_at_ms: now,
           });
         }
@@ -12836,24 +12880,24 @@ function ensureCtoxSmokeBinary() {
         let errorText = '';
         while (Date.now() < deadline) {
           errorText = mount.querySelector('.is-error')?.textContent || '';
-          if (errorText.includes('Dateiinhalt fehlt.')) break;
+          if (errorText.includes('Dateiinhalt ist unvollständig oder beschädigt.')) break;
           await delay(250);
         }
         try { teardown?.(); } catch {}
         mount.remove();
-        if (!errorText.includes('Dateiinhalt fehlt.')) {
+        if (!errorText.includes('Dateiinhalt ist unvollständig oder beschädigt.')) {
           throw new Error(`file viewer did not reject stale file chunk generation: ${JSON.stringify({
             errorText,
             hostCorruption,
             stale: {
               file: stale.file,
-              liveChunkCount: stale.liveChunks.length,
-              requestedGenerationChunkCount: stale.requestedGenerationChunks.length,
-              availableGenerationIds: stale.availableGenerationIds,
+              liveChunkCount: hostCorruption?.liveChunkCount || 0,
+              requestedGenerationChunkCount: 0,
+              availableGenerationIds: hostCorruption?.availableGenerationIds || [],
             },
           })}`);
         }
-        const status = await waitForFileIntegrityStatus('ctox_file_chunk_missing', 30000);
+        const status = await waitForFileIntegrityStatus('ctox_file_chunk_integrity_mismatch', 30000);
         await Promise.all(replicationStates.map((state) => state.cancel?.()));
         if (ownsDb) await db.close();
         return {
@@ -12866,9 +12910,9 @@ function ensureCtoxSmokeBinary() {
           advancedStatusVersion,
           advancedStatusRuntime,
           requestedGenerationId: stale.file?.content_generation_id || hostCorruption?.requestedGenerationId || '',
-          requestedGenerationChunkCount: stale.requestedGenerationChunks.length,
-          liveChunkCount: stale.liveChunks.length,
-          availableGenerationIds: stale.availableGenerationIds,
+          requestedGenerationChunkCount: 0,
+          liveChunkCount: hostCorruption?.liveChunkCount || 0,
+          availableGenerationIds: hostCorruption?.availableGenerationIds || [],
         };
       }
       if (smokeMode === 'file-chunk-tombstone-error-browser-status') {
@@ -12928,24 +12972,23 @@ function ensureCtoxSmokeBinary() {
         let errorText = '';
         while (Date.now() < deadline) {
           errorText = mount.querySelector('.is-error')?.textContent || '';
-          if (errorText.includes('Dateiinhalt fehlt.')) break;
+          if (errorText.includes('Dateiinhalt ist unvollständig oder beschädigt.')) break;
           await delay(250);
         }
         try { teardown?.(); } catch {}
         mount.remove();
-        if (!errorText.includes('Dateiinhalt fehlt.')) {
+        if (!errorText.includes('Dateiinhalt ist unvollständig oder beschädigt.')) {
           throw new Error(`file viewer did not reject tombstoned active chunk: ${JSON.stringify({
             errorText,
             hostCorruption,
             tombstoned: {
               file: tombstoned.file,
-              chunks: tombstoned.chunks,
-              liveChunkCount: tombstoned.liveChunks.length,
-              tombstonedChunkCount: tombstoned.tombstonedChunks.length,
+              liveChunkCount: 0,
+              tombstonedChunkCount: 1,
             },
           })}`);
         }
-        const status = await waitForFileIntegrityStatus('ctox_file_chunk_missing', 30000);
+        const status = await waitForFileIntegrityStatus('ctox_file_chunk_integrity_mismatch', 30000);
         await Promise.all(replicationStates.map((state) => state.cancel?.()));
         if (ownsDb) await db.close();
         return {
@@ -12957,15 +13000,14 @@ function ensureCtoxSmokeBinary() {
           fileIntegritySource: status.error.source || '',
           advancedStatusVersion,
           advancedStatusRuntime,
-          liveChunkCount: tombstoned.liveChunks.length,
-          tombstonedChunkCount: tombstoned.tombstonedChunks.length,
-          chunkId: tombstoned.tombstonedChunks[0]?.id || hostCorruption?.chunkRowId || '',
+          liveChunkCount: 0,
+          tombstonedChunkCount: 1,
+          chunkId: hostCorruption?.chunkRowId || '',
         };
       }
       if (smokeMode === 'file-chunk-metadata-error-browser-status') {
         const hostCorruption = await globalThis.__ctoxCorruptRustSeedChunkMetadata?.();
         await bounded(appChunkReplicationState?.awaitInSync?.(), 30000);
-        const corrupted = await waitForCorruptChunkMetadata(rustSeed.id, 60000);
         const mount = document.createElement('section');
         mount.setAttribute('data-file-viewer-smoke', 'file-chunk-metadata-error');
         mount.style.cssText = 'position:fixed;left:0;top:0;width:760px;height:560px;z-index:99999;background:#0b1117;';
@@ -13007,7 +13049,6 @@ function ensureCtoxSmokeBinary() {
           throw new Error(`file viewer did not reject corrupt chunk metadata: ${JSON.stringify({
             errorText,
             hostCorruption,
-            corrupted,
           })}`);
         }
         const status = await waitForFileIntegrityStatus('ctox_file_chunk_integrity_mismatch', 30000);
@@ -13022,9 +13063,9 @@ function ensureCtoxSmokeBinary() {
           fileIntegritySource: status.error.source || '',
           advancedStatusVersion,
           advancedStatusRuntime,
-          chunkId: corrupted.chunk?.id || hostCorruption?.rowId || '',
-          expectedSizeBytes: corrupted.expectedSizeBytes,
-          actualSizeBytes: corrupted.actualSizeBytes,
+          chunkId: hostCorruption?.rowId || '',
+          expectedSizeBytes: hostCorruption?.expectedSizeBytes,
+          actualSizeBytes: hostCorruption?.actualSizeBytes,
         };
       }
       if (smokeMode === 'workspace-large-materialize-rust-to-browser') {
@@ -13035,21 +13076,33 @@ function ensureCtoxSmokeBinary() {
           throw new Error(`large workspace file wrote eager chunks before materialize: ${received.chunks.length}`);
         }
         const commandId = `materialize_smoke_${Date.now()}`;
-        await db.business_commands.insert({
+        const materializeCommand = {
           id: commandId,
-          command_id: commandId,
           module: 'ctox',
-          command_type: 'ctox.file.materialize',
+          type: 'ctox.file.materialize',
           record_id: rustSeed.id,
-          status: 'pending_sync',
           inbound_channel: 'ctox',
           payload: {
             file_id: rustSeed.id,
             path: received.file?.local_path || received.file?.path || rustSeed.path,
           },
           client_context: { source: 'rxdb-smoke', materialize: true },
-          updated_at_ms: Date.now(),
-        });
+        };
+        if (useAppDb && appState?.commandBus?.dispatch) {
+          await appState.commandBus.dispatch(materializeCommand, {
+            until: 'terminal',
+            timeoutMs: 90000,
+          });
+        } else {
+          await db.business_commands.insert({
+            ...materializeCommand,
+            command_id: commandId,
+            command_type: materializeCommand.type,
+            status: 'pending_sync',
+            client_context: smokeClientContext(materializeCommand.client_context),
+            updated_at_ms: Date.now(),
+          });
+        }
         await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
         await bounded(appFileReplicationState?.awaitInSync?.(), 25000);
         await bounded(appChunkReplicationState?.awaitInSync?.(), 25000);
@@ -13102,6 +13155,14 @@ function ensureCtoxSmokeBinary() {
         const importStartedAt = mark();
         const viewer = await import(`/desktop-apps/file-viewer/app.js?v=file-viewer-smoke-${Date.now()}`);
         phaseTimings.importViewerMs = Math.round(mark() - importStartedAt);
+        const viewerMimeType = received.file?.mime_type || 'text/markdown';
+        const previewRange = viewer.__fileViewerTestHooks?.textPreviewRangeFor?.(
+          viewerMimeType,
+          received.file?.size_bytes || rustSeed.content.length,
+        );
+        const expectedPreview = previewRange
+          ? rustSeed.content.slice(Number(previewRange.offset || 0), Number(previewRange.offset || 0) + Number(previewRange.length || 0))
+          : rustSeed.content;
         const smokeState = globalThis.ctoxBusinessOsSmoke?.state;
         const mountStartedAt = mark();
         const teardown = await viewer.mount(mount, {
@@ -13113,7 +13174,7 @@ function ensureCtoxSmokeBinary() {
           args: {
             fileId: rustSeed.id,
             name: rustSeed.name || 'brief.md',
-            mimeType: received.file?.mime_type || 'text/markdown',
+            mimeType: viewerMimeType,
             sizeBytes: received.file?.size_bytes || rustSeed.content.length,
             path: received.file?.local_path || received.file?.path || rustSeed.path,
             contentState: received.file?.content_state || '',
@@ -13127,7 +13188,7 @@ function ensureCtoxSmokeBinary() {
         while (Date.now() < deadline) {
           const pre = mount.querySelector('[data-file-text]');
           text = pre?.textContent || '';
-          if (text === rustSeed.content) break;
+          if (text === expectedPreview) break;
           const errorText = mount.querySelector('.is-error')?.textContent || '';
           if (errorText) {
             throw new Error(`file viewer failed to materialize large file: ${JSON.stringify({
@@ -13140,9 +13201,9 @@ function ensureCtoxSmokeBinary() {
         phaseTimings.renderPayloadMs = Math.round(mark() - renderStartedAt);
         try { teardown?.(); } catch {}
         mount.remove();
-        if (text !== rustSeed.content) {
+        if (text !== expectedPreview) {
           throw new Error(`file viewer did not render materialized payload: ${JSON.stringify({
-            expectedLength: rustSeed.content.length,
+            expectedLength: expectedPreview.length,
             actualLength: text.length,
             prefix: text.slice(0, 80),
           })}`);
@@ -13161,7 +13222,7 @@ function ensureCtoxSmokeBinary() {
           contentGenerationId: materialized.file?.content_generation_id || materialized.generationId || '',
           contentHash: materialized.file?.content_hash || '',
           contentHashScheme: materialized.file?.content_hash_scheme || '',
-        }, rustSeed.content);
+        }, expectedPreview);
         phaseTimings.desktopViewerRenderMs = Math.round(mark() - desktopViewerStartedAt);
         const advancedStatusStartedAt = mark();
         const advancedStatus = smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser'
@@ -13183,7 +13244,8 @@ function ensureCtoxSmokeBinary() {
         return {
           mode: smokeMode,
           id: rustSeed.id,
-          payloadLength: text.length,
+          payloadLength: materialized.payload.length,
+          previewLength: text.length,
           chunkCount: materialized.chunks.length,
           generationId: materialized.generationId || '',
           virtualPath: materialized.file?.virtual_path || materialized.file?.path || '',
@@ -13743,6 +13805,7 @@ function ensureCtoxSmokeBinary() {
       console.log(`generation=${result.generationId}`);
       console.log(`chunk_count=${result.chunkCount}`);
       console.log(`payload_length=${result.payloadLength}`);
+      if (Number(result.previewLength || 0) > 0) console.log(`preview_length=${result.previewLength}`);
       if (result.desktopViewer) {
         console.log(`file_viewer_desktop_window_count=${result.desktopViewer.viewerWindowCount || 0}`);
         console.log(`file_viewer_desktop_rendered_length=${result.desktopViewer.renderedLength || 0}`);

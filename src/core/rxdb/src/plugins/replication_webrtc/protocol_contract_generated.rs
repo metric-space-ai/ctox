@@ -35,3 +35,5 @@ pub(super) const CTOX_PRESENCE_RPC_UPDATE: &str = "rxdb.presence.update";
 pub(super) const CTOX_PRESENCE_STREAM_ID: &str = "presence$";
 pub(super) const CTOX_PRESENCE_TTL_MS: u64 = 45000;
 pub(super) const CTOX_PRESENCE_MAX_ENTRIES_PER_PEER: usize = 32;
+#[allow(dead_code)]
+pub(super) const CTOX_COMMAND_LIFECYCLE_CAPABILITY: &str = "ctox-command-lifecycle-v2";

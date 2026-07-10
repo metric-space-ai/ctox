@@ -1,9 +1,9 @@
 // REGRESSION: command-bus acknowledgement contract for the two native
 // command classes (src/core/business_os/store.rs):
 //
-// 1. Queue-backed commands (chat tasks, tickets, ...) are acknowledged with a
-//    task_id + a replicated ctox_queue_tasks doc — the bus must wait for BOTH
-//    and report the task.
+// 1. Queue-backed commands (chat tasks, tickets, ...) are admitted by the
+//    authoritative command receipt. A ctox_queue_tasks projection may enrich
+//    the UI later, but admission must not wait for that secondary projection.
 // 2. Control commands (ctox.file.materialize, ctox.module.*, ...) are
 //    executed directly and acknowledged via write_rxdb_control_command_outcome
 //    with a terminal status 'completed' and an INTENTIONALLY EMPTY task_id.
@@ -19,6 +19,11 @@
 
 import { createCommandBus } from '../../shared/command-bus.js';
 
+globalThis.CTOX_BUSINESS_OS_SESSION = {
+  capability_token: 'projection-smoke-capability-token',
+  capability_expires_at_ms: Date.now() + 60 * 60 * 1000,
+};
+
 function mockCollection(docsById, events = null, name = '') {
   return {
     async insert(doc) {
@@ -27,6 +32,7 @@ function mockCollection(docsById, events = null, name = '') {
     },
     findOne(id) {
       return {
+        $: { subscribe() { return { unsubscribe() {} }; } },
         async exec() {
           return docsById.get(id) || null;
         },
@@ -99,7 +105,7 @@ const assert = (condition, message) => {
   const result = await bus.dispatch({ type: 'business_os.chat.task', module: 'chat' });
   assert(result.ok === true, 'queue command: ok');
   assert(result.task_id === 'queue:system::abc', 'queue command: task id projected');
-  assert(result.task_status === 'queued', 'queue command: task status from queue doc');
+  assert(result.task_status === 'accepted', 'queue command: admission does not require queue projection detail');
 }
 
 // --- 2. control command: terminal completed WITHOUT task_id is success -----

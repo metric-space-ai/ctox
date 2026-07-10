@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use tokio_stream::StreamExt;
 
+use crate::plugins::utils::utils_object_deep_equal::deep_equal;
 use crate::types::{
     FirstSyncDone, ReplicationEvents, ReplicationStats, RxStorageInstanceReplicationInput,
     RxStorageInstanceReplicationState, StreamQueue,
@@ -319,15 +320,18 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
                 (Some(master_state), Some(assumed)) => {
                     let master_state_doc =
                         write_doc_to_doc_state(&master_state, has_attachments, self.keep_meta);
-                    if self
+                    let handler_matches = self
                         .conflict_handler
                         .is_equal(
                             &master_state_doc,
                             assumed,
                             "rxStorageInstanceToReplicationHandler-masterWrite",
                         )
-                        .await
-                    {
+                        .await;
+                    // Mixed-version peers can use conflict handlers that reject
+                    // two structurally identical wire states. The exact JSON
+                    // equality is authoritative for this optimistic-lock check.
+                    if handler_matches || deep_equal(&master_state_doc, assumed) {
                         let doc = doc_state_to_write_doc(
                             &self.database_instance_token,
                             has_attachments,

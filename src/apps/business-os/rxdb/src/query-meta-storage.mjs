@@ -10,13 +10,20 @@ export const SIDECAR_DATABASE_NAME = 'ctox_business_os_v1_5_meta';
 export const SIDECAR_PIN_RECENT_READ_TTL_MS = 60_000;
 
 const PIN_RECENT_READ = 'recently-read';
+const evictionSchedulerGroups = new Map();
 
 export class QueryMetaStorage {
-  constructor(backend, { databaseName, clock = Date.now, primaryDelete = null } = {}) {
+  constructor(backend, {
+    databaseName,
+    schedulerKey = databaseName,
+    clock = Date.now,
+    primaryDelete = null,
+  } = {}) {
     if (!backend) throw new TypeError('QueryMetaStorage requires a backend');
     if (!databaseName) throw new TypeError('QueryMetaStorage requires a databaseName');
     this.backend = backend;
     this.databaseName = databaseName;
+    this.schedulerKey = schedulerKey;
     this.clock = clock;
     // V1.5 production hardening: primaryDelete(collection, id) actually
     // removes the document from the primary IndexedDB `documents` store.
@@ -307,7 +314,9 @@ export class QueryMetaStorage {
       await this.setBudgetBytes(tighten);
       await this.runEvictionIfOverBudget({ forceRecount: true });
       try {
-        return await writeFn();
+        const result = await writeFn();
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        return result;
       } catch (retryErr) {
         // Restore budget for visibility; rethrow.
         if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
@@ -319,22 +328,53 @@ export class QueryMetaStorage {
   /// Starts a periodic eviction scheduler. The handle returned has a
   /// `stop()` method. Idempotent: calling twice with the same handle is
   /// safe. Default interval: 30s.
-  startEvictionScheduler({ intervalMs = 30_000 } = {}) {
-    if (this._evictionTimer) return { stop: () => this.stopEvictionScheduler() };
-    this._evictionTimer = setInterval(() => {
-      this.runEvictionIfOverBudget().catch(() => {});
-    }, intervalMs);
-    if (typeof this._evictionTimer.unref === 'function') {
-      this._evictionTimer.unref();
+  startEvictionScheduler({
+    intervalMs = 30_000,
+    globalBudgetBytes = 0,
+    shareBudgetBytes = 0,
+  } = {}) {
+    if (this._evictionSchedulerGroupKey) {
+      return { stop: () => this.stopEvictionScheduler() };
+    }
+    const key = String(this.schedulerKey || this.databaseName);
+    let group = evictionSchedulerGroups.get(key);
+    if (!group) {
+      group = {
+        storages: new Set(),
+        timer: null,
+        intervalMs,
+        globalBudgetBytes: Math.max(0, Number(globalBudgetBytes) || 0),
+      };
+      evictionSchedulerGroups.set(key, group);
+    }
+    group.globalBudgetBytes = Math.max(
+      group.globalBudgetBytes,
+      Math.max(0, Number(globalBudgetBytes) || 0),
+    );
+    this._configuredShareBudgetBytes = Math.max(0, Number(shareBudgetBytes) || 0);
+    this._evictionSchedulerGroupKey = key;
+    group.storages.add(this);
+    rebalanceEvictionSchedulerGroup(group).catch(() => {});
+    if (!group.timer) {
+      group.timer = setInterval(() => runEvictionSchedulerGroup(group), group.intervalMs);
+      if (typeof group.timer.unref === 'function') group.timer.unref();
     }
     return { stop: () => this.stopEvictionScheduler() };
   }
 
   stopEvictionScheduler() {
-    if (this._evictionTimer) {
-      clearInterval(this._evictionTimer);
-      this._evictionTimer = null;
+    const key = this._evictionSchedulerGroupKey;
+    if (!key) return;
+    this._evictionSchedulerGroupKey = null;
+    const group = evictionSchedulerGroups.get(key);
+    if (!group) return;
+    group.storages.delete(this);
+    if (group.storages.size === 0) {
+      if (group.timer) clearInterval(group.timer);
+      evictionSchedulerGroups.delete(key);
+      return;
     }
+    rebalanceEvictionSchedulerGroup(group).catch(() => {});
   }
 
   /// Orphan-window GC: drop sidecar query-window entries that haven't been
@@ -359,6 +399,26 @@ export class QueryMetaStorage {
     }
     return removed;
   }
+}
+
+async function rebalanceEvictionSchedulerGroup(group) {
+  const storages = [...group.storages];
+  if (!storages.length) return;
+  const globalShare = group.globalBudgetBytes > 0
+    ? Math.max(1, Math.floor(group.globalBudgetBytes / storages.length))
+    : Number.POSITIVE_INFINITY;
+  await Promise.all(storages.map(async (storage) => {
+    const configured = storage._configuredShareBudgetBytes || globalShare;
+    const effective = Math.max(1, Math.floor(Math.min(configured, globalShare)));
+    await storage.setBudgetBytes(effective);
+  }));
+}
+
+async function runEvictionSchedulerGroup(group) {
+  await rebalanceEvictionSchedulerGroup(group);
+  await Promise.all(
+    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0)),
+  );
 }
 
 function normalizeEstimatedBytes(estimatedBytes) {

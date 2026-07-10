@@ -112,6 +112,40 @@ assert(liveStorage.stats.queryCalls === 1, 'collection.$ must apply change delta
 assert(collectionEmissions.at(-1).documents.map((doc) => doc.id).sort().join(',') === 'a,b', 'collection.$ delta must include created doc');
 collectionSub.unsubscribe();
 
+const retryStorage = createRetryingLiveStorage([
+  { id: 'retry-a', title: 'Retry Alpha', status: 'open' },
+], 2);
+const retryDb = await createRxDatabase({
+  name: 'query-live-retry-fake',
+  storage: {
+    nativeStorage: {
+      collection() {
+        return retryStorage;
+      },
+      close() {},
+    },
+  },
+});
+await retryDb.addCollections({
+  retry_items: {
+    schema: {
+      version: 0,
+      primaryKey: 'id',
+      type: 'object',
+      properties: { id: { type: 'string' }, title: { type: 'string' } },
+    },
+  },
+});
+const retryEmissions = [];
+const retrySub = retryDb.retry_items.$.subscribe((value) => {
+  retryEmissions.push(value);
+});
+await waitFor(() => retryEmissions.length === 1, { timeoutMs: 1_500 });
+assert(retryStorage.stats.queryCalls === 3, `collection.$ must retry queue backpressure (got ${retryStorage.stats.queryCalls} calls)`);
+assert(retryEmissions[0].documents[0].id === 'retry-a', 'collection.$ retry must eventually emit the initial snapshot');
+retrySub.unsubscribe();
+await retryDb.close();
+
 const findOneEmissions = [];
 const findOneSub = liveDb.live_items.findOne('a').$.subscribe((value) => {
   findOneEmissions.push(value);
@@ -224,6 +258,24 @@ function createLiveStorage(seedDocs = []) {
       }
     },
   };
+}
+
+function createRetryingLiveStorage(seedDocs = [], failures = 1) {
+  const storage = createLiveStorage(seedDocs);
+  const queryDocuments = storage.queryDocuments.bind(storage);
+  let remainingFailures = failures;
+  storage.queryDocuments = async (...args) => {
+    if (remainingFailures > 0) {
+      remainingFailures -= 1;
+      storage.stats.queryCalls += 1;
+      const error = new Error('QUERY_QUEUE_LIMIT: queued demand requests exceed the browser count/byte budget');
+      error.code = 'QUERY_QUEUE_LIMIT';
+      error.retryable = true;
+      throw error;
+    }
+    return queryDocuments(...args);
+  };
+  return storage;
 }
 
 function sleep(ms) {

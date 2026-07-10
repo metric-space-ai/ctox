@@ -55,11 +55,12 @@ use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::RxSubject;
 use crate::types::{DocumentsWithCheckpoint, RxReplicationHandler, RxReplicationMasterChange};
 use protocol_contract_generated::{
-    CTOX_PRESENCE_CAPABILITY, CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING,
-    CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH, CTOX_PROTOCOL_ERROR_MISMATCH,
-    CTOX_PROTOCOL_ERROR_MISSING, CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
-    CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH, CTOX_QUERY_FETCH_CAPABILITY,
-    CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+    CTOX_COMMAND_LIFECYCLE_CAPABILITY, CTOX_PRESENCE_CAPABILITY,
+    CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
+    CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
+    CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
+    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL,
+    CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
@@ -72,6 +73,7 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
     CTOX_QUERY_FETCH_CAPABILITY,
+    CTOX_COMMAND_LIFECYCLE_CAPABILITY,
     // Presence is ephemeral transport state (ctox-presence-v1): always
     // advertised, never gated on a runtime flag — there is no persistence or
     // policy surface behind it, only the in-memory hub in the connection
@@ -676,7 +678,10 @@ where
                     if let Ok(request_id) =
                         super::query_fetch_handler::parse_query_cancel_request(&item.message)
                     {
-                        pool_clone.query_fetch_registry.cancel(&request_id);
+                        let peer_identity = handler.peer_identity(&item.peer);
+                        pool_clone
+                            .query_fetch_registry
+                            .cancel(&peer_identity, &request_id);
                     }
                     continue;
                 }
@@ -702,7 +707,10 @@ where
                     if let Ok(request_id) =
                         super::file_fetch_handler::parse_file_cancel_request(&item.message)
                     {
-                        pool_clone.file_fetch_registry.cancel(&request_id);
+                        let peer_identity = handler.peer_identity(&item.peer);
+                        pool_clone
+                            .file_fetch_registry
+                            .cancel(&peer_identity, &request_id);
                     }
                     continue;
                 }
@@ -2206,6 +2214,9 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|value| value.as_str() == Some("ctox-checkpoint-epoch-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some(CTOX_COMMAND_LIFECYCLE_CAPABILITY)));
         assert_eq!(
             payload
                 .pointer("/collection/schemaHash")

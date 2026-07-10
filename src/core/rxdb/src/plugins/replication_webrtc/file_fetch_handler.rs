@@ -155,8 +155,9 @@ impl FileFetchRegistry {
         })
     }
 
-    pub fn cancel(&self, request_id: &str) -> bool {
-        if let Some(flag) = self.inflight.lock().get(request_id) {
+    pub fn cancel(&self, peer_identity: &str, request_id: &str) -> bool {
+        let key = inflight_key(peer_identity, request_id);
+        if let Some(flag) = self.inflight.lock().get(&key) {
             flag.store(true, Ordering::SeqCst);
             true
         } else {
@@ -164,22 +165,30 @@ impl FileFetchRegistry {
         }
     }
 
-    fn try_acquire(&self, request_id: &str) -> Option<Arc<AtomicBool>> {
-        if self.inflight_count.load(Ordering::SeqCst) >= self.max_inflight {
+    fn try_acquire(&self, peer_identity: &str, request_id: &str) -> Option<Arc<AtomicBool>> {
+        let key = inflight_key(peer_identity, request_id);
+        let mut inflight = self.inflight.lock();
+        if inflight.len() as u64 >= self.max_inflight || inflight.contains_key(&key) {
             return None;
         }
-        self.inflight_count.fetch_add(1, Ordering::SeqCst);
         let flag = Arc::new(AtomicBool::new(false));
-        self.inflight
-            .lock()
-            .insert(request_id.to_string(), Arc::clone(&flag));
+        inflight.insert(key, Arc::clone(&flag));
+        self.inflight_count
+            .store(inflight.len() as u64, Ordering::SeqCst);
         Some(flag)
     }
 
-    fn release(&self, request_id: &str) {
-        self.inflight.lock().remove(request_id);
-        self.inflight_count.fetch_sub(1, Ordering::SeqCst);
+    fn release(&self, peer_identity: &str, request_id: &str) {
+        let key = inflight_key(peer_identity, request_id);
+        let mut inflight = self.inflight.lock();
+        inflight.remove(&key);
+        self.inflight_count
+            .store(inflight.len() as u64, Ordering::SeqCst);
     }
+}
+
+fn inflight_key(peer_identity: &str, request_id: &str) -> String {
+    format!("{peer_identity}\u{1f}{request_id}")
 }
 
 pub fn parse_file_fetch_request(message: &WebRTCMessage) -> RxResult<FileFetchRequest> {
@@ -279,7 +288,7 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
         }
     };
 
-    let cancel_flag = match registry.try_acquire(&request.request_id) {
+    let cancel_flag = match registry.try_acquire(&peer_identity, &request.request_id) {
         Some(f) => f,
         None => {
             send_file_error(
@@ -305,7 +314,7 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
     let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
 
     let outcome = stream_file(handler.as_ref(), &peer, &request, &source, &cancel_flag).await;
-    registry.release(&request.request_id);
+    registry.release(&peer_identity, &request.request_id);
     outcome
 }
 
@@ -698,6 +707,19 @@ mod tests {
             })],
             collection: Some(collection.to_string()),
         }
+    }
+
+    #[test]
+    fn identical_file_request_ids_are_isolated_per_peer() {
+        let registry = FileFetchRegistry::new(4);
+        let first = registry.try_acquire("p1", "same-request").unwrap();
+        let second = registry.try_acquire("p2", "same-request").unwrap();
+        assert_eq!(registry.inflight_count.load(Ordering::SeqCst), 2);
+        assert!(registry.cancel("p1", "same-request"));
+        assert!(first.load(Ordering::SeqCst));
+        assert!(!second.load(Ordering::SeqCst));
+        registry.release("p1", "same-request");
+        registry.release("p2", "same-request");
     }
 
     fn authorized_file_registry(max_inflight: u64) -> Arc<FileFetchRegistry> {

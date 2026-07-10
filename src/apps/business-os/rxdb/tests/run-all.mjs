@@ -10,7 +10,7 @@
 // src/core/rxdb/src/plugins/replication_webrtc/.
 //
 // Notes:
-// - cross-process-* tests need the release wire daemon:
+// - cross-process-* tests need a release or debug wire daemon:
 //     (cd src/core/rxdb && CARGO_TARGET_DIR=<repo>/runtime/build/cargo-target \
 //        cargo build --release --example v15_wire_daemon)
 //   They SKIP (loudly) when the binary is missing so the JS-only suite stays
@@ -29,7 +29,9 @@ const failFast = process.argv.includes('--fail-fast');
 
 const daemonCandidates = [
   join(repoRoot, 'runtime/build/cargo-target/release/examples/v15_wire_daemon'),
+  join(repoRoot, 'runtime/build/cargo-target/debug/examples/v15_wire_daemon'),
   join(repoRoot, 'src/core/rxdb/runtime/build/cargo-target/release/examples/v15_wire_daemon'),
+  join(repoRoot, 'src/core/rxdb/runtime/build/cargo-target/debug/examples/v15_wire_daemon'),
 ];
 const daemonAvailable = daemonCandidates.some((path) => existsSync(path));
 

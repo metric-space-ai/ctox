@@ -2764,90 +2764,10 @@ async function dispatchModuleCommand({
       actor: actorContext(session),
     },
   };
-  const dispatched = await dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync });
-  if (commandProjectionIsReady(dispatched, { requireResult })) return dispatched;
-  return waitForCommandProjection(db, commandId, { sync, timeoutMs, requireResult });
-}
-
-async function dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync } = {}) {
-  let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await commandBus.dispatch(command);
-    } catch (error) {
-      if (!isClosedRxDbCollectionError(error)) throw error;
-      lastError = error;
-      await recoverBusinessCommandsCollection({ db, sync });
-    }
-  }
-  throw lastError || new Error('business_commands collection is required for module governance commands');
-}
-
-async function waitForCommandProjection(db, commandId, options = {}) {
-  const timeoutMs = Number(options.timeoutMs || 45000);
-  const deadline = Date.now() + timeoutMs;
-  let lastError = null;
-  while (Date.now() < deadline) {
-    try {
-      const collection = db?.collection?.('business_commands');
-      const doc = await collection?.findOne(commandId).exec();
-      const data = doc?.toJSON?.();
-      if (data && data.status && data.status !== 'pending_sync') {
-        if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
-        if (options.requireResult && data.result == null) {
-          lastError = new Error(`Command ${commandId} wurde noch ohne Ergebnis synchronisiert.`);
-        } else {
-          return data;
-        }
-      }
-    } catch (error) {
-      if (!isClosedRxDbCollectionError(error)) throw error;
-      lastError = error;
-      await recoverBusinessCommandsCollection({ db, sync: options.sync });
-    }
-    await delay(300);
-  }
-  if (lastError) throw lastError;
-  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
-}
-
-function commandProjectionIsReady(value, options = {}) {
-  if (!value || typeof value !== 'object') return false;
-  if (value.status === 'failed') return true;
-  if (!value.status || value.status === 'pending_sync') return false;
-  if (options.requireResult && value.result == null) return false;
-  return true;
-}
-
-async function recoverBusinessCommandsCollection({ db, sync } = {}) {
-  try {
-    await sync?.restartCollection?.('business_commands');
-  } catch {
-    await sync?.startCollection?.('business_commands');
-  }
-  const deadline = Date.now() + 6000;
-  let lastError = null;
-  while (Date.now() < deadline) {
-    try {
-      const collection = db?.collection?.('business_commands');
-      if (collection) {
-        await collection.findOne('__ctox_recovery_probe__').exec();
-        return;
-      }
-    } catch (error) {
-      if (!isClosedRxDbCollectionError(error)) return;
-      lastError = error;
-    }
-    await delay(200);
-  }
-  if (lastError) throw lastError;
-}
-
-function isClosedRxDbCollectionError(error) {
-  const message = String(error?.message || error || '');
-  return message.includes('RxDB Error-Code: COL21')
-    || message.includes('collection is closed')
-    || message.includes('closed collection');
+  return commandBus.dispatch(command, {
+    until: requireResult ? 'terminal' : 'accepted',
+    timeoutMs,
+  });
 }
 
 function actorContext(session) {

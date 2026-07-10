@@ -164,6 +164,22 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         description: "Blocks inbound work from unauthorized email senders instead of letting unsafe requests enter the active loop.",
     },
     DefaultMechanism {
+        mechanism_id: "approval_nag_exhausted",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_wait_escalation",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/mission/approval_nag.rs",
+        description: "Records that the finite approval reminder cadence ended while the approval gate remains open, keeping the unresolved wait operator-visible without sending unbounded reminders.",
+    },
+    DefaultMechanism {
+        mechanism_id: "plan_emit_failure",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_retry_backoff",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/mission/plan.rs",
+        description: "Isolates one failed planned-goal emission, records durable failure evidence, and schedules bounded exponential-backoff retry without blocking other goals.",
+    },
+    DefaultMechanism {
         mechanism_id: "secret_input_boundary",
         mechanism_class: "safety",
         autonomy: "autonomous_input_block",

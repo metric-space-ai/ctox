@@ -651,7 +651,7 @@ export async function mount(container, ctx) {
       throw new Error('business_commands collection is required for source edits');
     }
     const commandId = `cmd_${newId()}`;
-    await ctx.commandBus.dispatch({
+    const accepted = await ctx.commandBus.dispatch({
       id: commandId,
       module: 'ctox',
       type,
@@ -663,22 +663,8 @@ export async function mount(container, ctx) {
         module_id: state.moduleId,
         actor: actorContext(ctx.session),
       },
-    });
-    return waitForCommandProjection(commandId);
-  }
-
-  async function waitForCommandProjection(commandId, timeoutMs = 45000) {
-    const collection = ctx.db?.collection?.('business_commands');
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const doc = await collection?.findOne(commandId).exec();
-      const data = doc?.toJSON?.();
-      if (data && data.status && data.status !== 'pending_sync') {
-        return assertSourceCommandSucceeded(data);
-      }
-      await delay(300);
-    }
-    throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+    }, { until: 'accepted' });
+    return assertSourceCommandSucceeded(accepted);
   }
 
   async function waitForSourceFiles(expectedCount, timeoutMs = 45000) {

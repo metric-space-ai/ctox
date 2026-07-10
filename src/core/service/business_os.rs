@@ -2327,6 +2327,45 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
 fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
+        Some("diagnostics") => {
+            let mut diagnostics = crate::business_os::store::business_command_diagnostics(root)?;
+            if let Some(object) = diagnostics.as_object_mut() {
+                object.insert(
+                    "native_peer".to_string(),
+                    crate::business_os::native_peer_status(root),
+                );
+            }
+            print_json(&diagnostics)
+        }
+        Some("inspect") => {
+            let command_id = args
+                .get(1)
+                .context("usage: ctox business-os commands inspect <command-id>")?;
+            let inspected =
+                crate::mission::channels::inspect_business_command(root, command_id)?
+                    .with_context(|| format!("business command `{command_id}` was not found"))?;
+            print_json(&inspected)
+        }
+        Some("gc") => {
+            let apply = args.iter().any(|arg| arg == "--apply");
+            anyhow::ensure!(
+                apply || args.iter().any(|arg| arg == "--dry-run"),
+                "usage: ctox business-os commands gc (--dry-run | --apply)"
+            );
+            print_json(
+                &crate::mission::channels::business_command_retention_maintenance(root, apply)?,
+            )
+        }
+        Some("reconcile") => {
+            let apply = args.iter().any(|arg| arg == "--apply");
+            anyhow::ensure!(
+                apply || args.iter().any(|arg| arg == "--dry-run"),
+                "usage: ctox business-os commands reconcile (--dry-run | --apply)"
+            );
+            print_json(
+                &crate::mission::channels::reconcile_business_command_invariants(root, apply)?,
+            )
+        }
         Some("process") | Some("process-source-parse") => {
             let command_id = args
                 .get(1)
@@ -3620,6 +3659,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
             "  ctox business-os backup inspect-manifest --manifest <path>\n  ctox business-os backup key-escrow-status\n  ctox business-os backup prune-drills [--dry-run]",
+        )
+        .replace(
+            "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)",
+            "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os commands diagnostics --json\n  ctox business-os commands inspect <command-id>\n  ctox business-os commands gc (--dry-run | --apply)\n  ctox business-os commands reconcile (--dry-run | --apply)",
         )
         .replace(
             "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",

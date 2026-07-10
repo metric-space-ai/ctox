@@ -530,7 +530,7 @@ const modeEvidenceRequirements = {
     keys: ['file_integrity_error_name', 'file_integrity_error_code', 'file_integrity_error_phase', 'replicated_id', 'live_chunk_count'],
     values: {
       file_integrity_error_name: 'CtoxFileChunkIntegrityError',
-      file_integrity_error_code: 'ctox_file_chunk_missing',
+      file_integrity_error_code: 'ctox_file_chunk_integrity_mismatch',
       file_integrity_error_phase: 'file-chunk-reconstruct',
       live_chunk_count: 0,
     },
@@ -548,7 +548,7 @@ const modeEvidenceRequirements = {
     ],
     values: {
       file_integrity_error_name: 'CtoxFileChunkIntegrityError',
-      file_integrity_error_code: 'ctox_file_chunk_missing',
+      file_integrity_error_code: 'ctox_file_chunk_integrity_mismatch',
       file_integrity_error_phase: 'file-chunk-reconstruct',
       requested_generation_chunk_count: 0,
     },

@@ -2835,13 +2835,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     {
         return respond_status(request, 403, "forbidden");
     }
-    let static_root = if rel.starts_with("installed-modules/") || rel.starts_with("local-modules/")
-    {
-        resolve_business_os_installed_app_root(root)
-    } else {
-        app_root.to_path_buf()
-    };
-    let file = static_root.join(rel);
+    let file = resolve_business_os_static_file(root, app_root, rel);
     let target = if file.is_dir() {
         file.join("index.html")
     } else {
@@ -2894,6 +2888,31 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     };
     respond_static_success(request, &bytes, mime, cache_control)?;
     Ok(())
+}
+
+fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
+    if rel.starts_with("installed-modules/") || rel.starts_with("local-modules/") {
+        return resolve_business_os_installed_app_root(root).join(rel);
+    }
+
+    let app_file = app_root.join(rel);
+    if app_file.exists() {
+        return app_file;
+    }
+
+    // Imported repository notes and help surfaces can contain repository-root
+    // relative references such as `docs/site/assets/...`. Release installs
+    // already ship those documentation assets next to `business-os`; expose
+    // only that static subtree instead of duplicating it into the shell bundle.
+    // This is an asset route, never a Business OS collection/data fallback.
+    if rel.starts_with("docs/") {
+        let docs_file = root.join(rel);
+        if docs_file.exists() {
+            return docs_file;
+        }
+    }
+
+    app_file
 }
 
 fn inject_launch_context(
@@ -3089,6 +3108,11 @@ fn mime_for(path: &PathBuf) -> &'static str {
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "json" => "application/json; charset=utf-8",
         "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
         "wasm" => "application/wasm",
         _ => "application/octet-stream",
     }
@@ -3192,5 +3216,37 @@ mod tests {
         assert!(raw.contains("\r\nContent-Length: 18\r\n"));
         assert!(raw.contains("\r\nConnection: close\r\n"));
         assert!(raw.ends_with("\r\n\r\nconsole.log('ok');"));
+    }
+
+    #[test]
+    fn business_os_static_files_can_reuse_packaged_documentation_assets() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let app_root = root.path().join("business-os");
+        let docs_asset = root.path().join("docs/site/assets/logo.png");
+        std::fs::create_dir_all(docs_asset.parent().expect("asset parent"))
+            .expect("create docs asset directory");
+        std::fs::create_dir_all(&app_root).expect("create app root");
+        std::fs::write(&docs_asset, b"png").expect("write docs asset");
+
+        assert_eq!(
+            resolve_business_os_static_file(root.path(), &app_root, "docs/site/assets/logo.png"),
+            docs_asset
+        );
+
+        let app_asset = app_root.join("docs/site/assets/logo.png");
+        std::fs::create_dir_all(app_asset.parent().expect("app asset parent"))
+            .expect("create app asset directory");
+        std::fs::write(&app_asset, b"app-png").expect("write app asset");
+        assert_eq!(
+            resolve_business_os_static_file(root.path(), &app_root, "docs/site/assets/logo.png"),
+            app_asset
+        );
+    }
+
+    #[test]
+    fn static_image_assets_use_browser_image_mime_types() {
+        assert_eq!(mime_for(&PathBuf::from("logo.png")), "image/png");
+        assert_eq!(mime_for(&PathBuf::from("photo.jpeg")), "image/jpeg");
+        assert_eq!(mime_for(&PathBuf::from("preview.webp")), "image/webp");
     }
 }

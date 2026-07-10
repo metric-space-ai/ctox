@@ -775,7 +775,7 @@ async function dispatchModuleCommand({
     state.ctx.sync?.startCollection?.('business_module_releases'),
   ]);
   const commandId = `cmd_${newId()}`;
-  await state.ctx.commandBus.dispatch({
+  return state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'ctox',
     type: commandType,
@@ -787,23 +787,7 @@ async function dispatchModuleCommand({
       module_id: moduleId,
       actor: actorContext(state.ctx.session),
     },
-  });
-  return waitForCommandProjection(commandId);
-}
-
-async function waitForCommandProjection(commandId, timeoutMs = 45000) {
-  const collection = state.ctx.db?.collection?.('business_commands');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const doc = await collection?.findOne(commandId).exec();
-    const data = doc?.toJSON?.();
-    if (data && data.status && data.status !== 'pending_sync') {
-      if (data.status === 'failed') throw new Error(data.error || state.t('commandFailed', 'Aktion {0} ist fehlgeschlagen.', commandId));
-      return data;
-    }
-    await delay(300);
-  }
-  throw new Error(state.t('commandNotSynced', 'Aktion {0} wurde noch nicht abgeschlossen.', commandId));
+  }, { until: 'accepted' });
 }
 
 function fact(label, value) {

@@ -213,10 +213,12 @@ jobs:
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
           node --check src/apps/business-os/scripts/assert-module-conformance.mjs
+          node --check src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
           node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
           node src/apps/business-os/scripts/assert-module-conformance.mjs
+          node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node src/apps/business-os/scripts/assert-production-release-docs.mjs
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
@@ -236,7 +238,15 @@ jobs:
           # *-smoke.mjs, incl. contract-drift, bundle-reproducibility and the
           # data-plane ratchet guards). The three explicit smoke invocations
           # above stay for the release-evidence contract.
-          node src/apps/business-os/rxdb/tests/run-all.mjs
+          COMMAND_PLANE_BASELINE_PATH=runtime/build/command-plane/ci-baseline.json node src/apps/business-os/rxdb/tests/run-all.mjs
+
+      - name: Upload command-plane baseline
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v7
+        with:
+          name: command-plane-ci-baseline
+          path: runtime/build/command-plane/ci-baseline.json
+          if-no-files-found: error
 
       - name: rxdb-rs crate tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'

@@ -19,6 +19,7 @@
 // errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
 import { getBusinessOsCapabilityToken } from './command-bus.js';
+import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 const CTOX_BROWSER_CAPABILITIES = [
@@ -28,9 +29,14 @@ const CTOX_BROWSER_CAPABILITIES = [
   'ctox-schema-hash-v1',
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
+  CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
-const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
+// Native peer bring-up can legitimately include store recovery, projection
+// refresh, and signaling-room rejoin. Keep this above the observed cold-start
+// tail so restartCollections does not turn a healthy slow reconnect into a
+// user-visible command failure.
+const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
@@ -54,6 +60,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const runtimeMode = 'webrtc';
   const diagnostics = createDiagnostics(config, runtimeMode);
   let diagnosticEmitTimer = null;
+  const commandMetricSeen = new Set();
   let lastDiagnosticEmitAtMs = 0;
   const flushDiagnostic = () => {
     if (!onDiagnostic) return;
@@ -138,7 +145,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const collectionNeedsRestart = (collection) => {
     const current = diagnostics.collections[collection] || {};
     const status = current.connectionStatus || current.status || '';
-    return ['reconnecting', 'failed', 'error', 'stopped'].includes(status);
+    if (!['reconnecting', 'failed', 'error', 'stopped'].includes(status)) return false;
+    // Schema/auth/protocol rejection is terminal until configuration or
+    // credentials change. Replaying it in a timer only hammers signaling.
+    return current.lastError?.retryable !== false;
   };
   const scheduleRestartOfUnhealthyCollections = (triggerCollection, delayMs = 5000) => {
     if (stopped) return;
@@ -148,10 +158,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       globalRestartTimer = null;
       const collections = [...activeCollections].filter(collectionNeedsRestart);
       try {
-        for (const collection of collections) {
-          await syncRuntime.restartCollection(collection);
-          await delay(250);
-        }
+        if (collections.length) await syncRuntime.restartCollections(collections);
       } catch (restartError) {
         const restartSerialized = serializeError(restartError);
         if (triggerCollection) {
@@ -194,6 +201,16 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     config,
     mode: runtimeMode,
     diagnostics,
+    recordCommandMetric(metric = {}) {
+      const name = String(metric.name || '').trim();
+      if (!name) return;
+      const commandId = String(metric.commandId || '').trim();
+      const dedupeKey = commandId ? `${name}:${commandId}` : '';
+      if (dedupeKey && commandMetricSeen.has(dedupeKey)) return;
+      if (dedupeKey) commandMetricSeen.add(dedupeKey);
+      recordCommandPlaneMetric(diagnostics.commandPlane, name, metric.durationMs);
+      emitDiagnostic({ phase: diagnostics.phase || 'ready' });
+    },
     async startModule(moduleManifest) {
       const collections = moduleManifest?.collections || [];
       const results = [];
@@ -260,7 +277,11 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           status: 'skipped',
           connectionStatus: 'demand-only',
           reason: 'demand-only-requires-lease',
-          lastError: serializeError(error),
+          // This is an expected API-contract rejection, not a transport or
+          // replication failure. Keeping it in lastError poisoned Advanced
+          // Status for the rest of the browser session even after the caller
+          // recovered or used the correct scoped lease.
+          lastError: null,
           reconnectingSince: null,
         });
         throw error;
@@ -663,7 +684,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260708-skf-queryfetch-v1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260710-observable-backpressure-v9');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1303,9 +1324,40 @@ function createDiagnostics(config, mode = 'webrtc') {
     protocol: CTOX_RXDB_PROTOCOL,
     capabilities: CTOX_BROWSER_CAPABILITIES,
     collections: {},
+    commandPlane: createCommandPlaneDiagnostics(),
     lastError: null,
     lastLifecycleEvent: null,
   };
+}
+
+function createCommandPlaneDiagnostics() {
+  return {
+    schema: 'ctox.browser.command_plane.v1',
+    counters: {},
+    latency: {},
+    commandTriggeredRestarts: 0,
+  };
+}
+
+function recordCommandPlaneMetric(commandPlane, name, durationMs) {
+  commandPlane.counters[name] = Number(commandPlane.counters[name] || 0) + 1;
+  const duration = Number(durationMs);
+  if (!Number.isFinite(duration) || duration < 0) return;
+  const current = commandPlane.latency[name] || {
+    samples: 0,
+    totalMs: 0,
+    maxMs: 0,
+    recentMs: [],
+  };
+  current.samples += 1;
+  current.totalMs += duration;
+  current.maxMs = Math.max(current.maxMs, duration);
+  current.recentMs.push(duration);
+  if (current.recentMs.length > 256) current.recentMs.shift();
+  const sorted = [...current.recentMs].sort((left, right) => left - right);
+  current.avgMs = Math.round(current.totalMs / current.samples);
+  current.p95Ms = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] || 0;
+  commandPlane.latency[name] = current;
 }
 
 function snapshotDiagnostics(diagnostics) {

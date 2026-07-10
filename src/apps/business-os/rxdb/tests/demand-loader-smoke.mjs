@@ -92,6 +92,41 @@ assert(a.length === b.length && b.length === c.length, 'concurrent resolves retu
 assert(fetchCount === 1, `concurrent resolves dedup to 1 fetch (got ${fetchCount})`);
 assert(status.queryFetchDedupHitCount === 2, `dedup hits = 2 (got ${status.queryFetchDedupHitCount})`);
 
+// Broker regression: local in-flight dedup must be installed BEFORE leader
+// election. Otherwise the second same-tab query calls claim() while the first
+// owns it, waits for an event this exact channel object cannot receive from
+// itself, and eventually throws "Timed out waiting for multi-tab query owner".
+{
+  const brokerSidecar = createSidecarWithMemoryBackend({ databaseName: 'broker-sidecar' });
+  const brokerStorage = makeFakeStorageCollection();
+  let brokerClaims = 0;
+  let brokerFetches = 0;
+  const brokerLoader = createQueryDemandLoader({
+    storageCollection: brokerStorage,
+    sidecar: brokerSidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    requestQueryFetch: async () => {
+      brokerFetches += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { documents: [{ id: 'cmd-1', status: 'pending' }] };
+    },
+    multiTabBroker: {
+      closed: false,
+      async claim() { brokerClaims += 1; return brokerClaims === 1; },
+      async release() {},
+      async waitForRemote() { throw new Error('same-tab duplicate must not wait on the broker'); },
+    },
+  });
+  const [first, second] = await Promise.all([
+    brokerLoader.resolveQuery({ selector: { status: 'pending' } }),
+    brokerLoader.resolveQuery({ selector: { status: 'pending' } }),
+  ]);
+  assert(first.length === 1 && second.length === 1, 'broker-dedup queries both resolve');
+  assert(brokerClaims === 1, `same-tab duplicate performs one broker claim (got ${brokerClaims})`);
+  assert(brokerFetches === 1, `same-tab duplicate performs one remote fetch (got ${brokerFetches})`);
+}
+
 // Error path: failing fetch increments error counter.
 status.queryFetchErrorCount = 0;
 await sidecar.clear();

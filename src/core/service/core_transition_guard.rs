@@ -540,6 +540,62 @@ pub fn enforce_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Resu
     anyhow::bail!("{}", proof.message);
 }
 
+/// Transaction-aware variant used when the spawn edge and its child record
+/// must commit atomically in a caller-owned SQLite transaction.
+pub fn enforce_core_spawn_in_transaction(
+    conn: &Connection,
+    request: &CoreSpawnRequest,
+) -> Result<CoreSpawnProof> {
+    ensure_core_transition_guard_schema(conn)?;
+    let request_json = serde_json::to_string(request)?;
+    let edge_id = deterministic_spawn_edge_id(&request_json);
+    let violation_codes = validate_core_spawn(conn, request, &edge_id)?;
+    let accepted = violation_codes.is_empty();
+    let message = core_spawn_message(&violation_codes);
+    conn.execute(
+        r#"
+        INSERT INTO ctox_core_spawn_edges (
+            edge_id, parent_entity_type, parent_entity_id, child_entity_type,
+            child_entity_id, spawn_kind, spawn_reason, actor, checkpoint_key,
+            budget_key, max_attempts, accepted, violation_codes_json,
+            request_json, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+        ON CONFLICT(edge_id) DO UPDATE SET
+            accepted = excluded.accepted,
+            violation_codes_json = excluded.violation_codes_json,
+            request_json = excluded.request_json,
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            &edge_id,
+            &request.parent_entity_type,
+            &request.parent_entity_id,
+            &request.child_entity_type,
+            &request.child_entity_id,
+            &request.spawn_kind,
+            &request.spawn_reason,
+            &request.actor,
+            request.checkpoint_key.as_deref(),
+            request.budget_key.as_deref(),
+            request.max_attempts,
+            if accepted { 1 } else { 0 },
+            serde_json::to_string(&violation_codes)?,
+            request_json,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    if !accepted {
+        anyhow::bail!("{message}");
+    }
+    Ok(CoreSpawnProof {
+        edge_id,
+        accepted,
+        violation_codes,
+        message,
+    })
+}
+
 pub fn check_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Result<CoreSpawnProof> {
     ensure_core_transition_guard_schema(conn)?;
 

@@ -29,6 +29,7 @@ import {
   schemaHashSource,
 } from './schema.mjs';
 import {
+  CTOX_COMMAND_LIFECYCLE_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
   CTOX_PRESENCE_RPC,
   CTOX_QUERY_FETCH_CAPABILITY,
@@ -42,7 +43,9 @@ import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { threeWayMergeDocuments } from './conflict-merge.mjs';
+import { compareHybridLogicalClocks } from './hybrid-logical-clock.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
+import { createBroadcastChannelBroker } from './multi-tab-broker.mjs';
 
 // Phase 2: the wire method the browser uses to tell the native peer which
 // collections are foreground (subscription-driven). Must match the native
@@ -54,7 +57,8 @@ export const ACTIVE_COLLECTIONS_METHOD = 'rxdb.activeCollections';
 // once the working set exceeds this. Without a budget the default is 0 and
 // eviction never runs, so the cache grows unbounded under real-time
 // replication. 128 MiB is a sane ceiling for a peer-driven cache.
-export const DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
+export const GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
+export const DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
 const LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
 
 const BROWSER_CAPABILITIES = [
@@ -65,6 +69,7 @@ const BROWSER_CAPABILITIES = [
   'ctox-checkpoint-epoch-v1',
   CTOX_QUERY_FETCH_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
+  CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 
 // Presence is optional on the wire: a native peer that predates
@@ -809,7 +814,8 @@ class CtoxWebRtcReplicationState {
     // Checkpoints retained across a peer drop, keyed by the remote storage
     // epoch + native peer session. Reused on reconnect when both still match,
     // so a transport blip does not force a from-scratch resync.
-    this.retainedCheckpoints = null;
+    this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
+    this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -913,7 +919,6 @@ class CtoxWebRtcReplicationState {
       peerGeneration: 1,
       checkpoint,
       role: 'browser',
-      capabilityToken,
       capabilities: BROWSER_CAPABILITIES,
       capabilityToken: typeof capabilityToken === 'string' ? capabilityToken : null,
     });
@@ -953,6 +958,7 @@ class CtoxWebRtcReplicationState {
         // checkpoints are meaningless there — drop them so this and every
         // later reconnect does the (correct) full resync.
         this.retainedCheckpoints = null;
+        clearPersistentCheckpoints(this.checkpointStorageKey);
       }
     }
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
@@ -1072,6 +1078,7 @@ class CtoxWebRtcReplicationState {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
+      this.persistCheckpointsForPeer(activePeerId);
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -1159,6 +1166,10 @@ class CtoxWebRtcReplicationState {
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       this.recordLocalPushChangedSinceRead(result, documents);
+      for (const document of documents) {
+        const id = primaryValue(document, this.collection.schema.primaryPath);
+        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, true);
+      }
       if (!documents.length) {
         const nextCheckpoint = result?.checkpoint || checkpoint;
         if (
@@ -1168,10 +1179,12 @@ class CtoxWebRtcReplicationState {
         ) {
           checkpoint = nextCheckpoint;
           this.pushCheckpointsByPeer.set(peerId, checkpoint);
+          this.persistCheckpointsForPeer(peerId);
           continue;
         }
         checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
+        this.persistCheckpointsForPeer(peerId);
         break;
       }
       let rows = documents.map((doc) => ({
@@ -1199,6 +1212,10 @@ class CtoxWebRtcReplicationState {
           })
           .filter(Boolean);
         if (!rows.length) break;
+        if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
+          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+          if (!rows.length) break;
+        }
         // Field-merge collections: absorb the master's concurrent state into
         // the retry rows instead of force-overwriting it whole-doc (the
         // default LWW retry keeps its local-wins semantics unchanged).
@@ -1210,10 +1227,44 @@ class CtoxWebRtcReplicationState {
       if (rows.length) {
         throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
       }
+      for (const document of documents) {
+        const id = primaryValue(document, this.collection.schema.primaryPath);
+        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+      }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
+      this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
     }
+  }
+
+  async resolveWholeDocumentLwwConflicts(rows, peerId) {
+    const retryRows = [];
+    const acceptedMaster = [];
+    for (const row of rows) {
+      const local = row?.newDocumentState;
+      const master = row?.assumedMasterState;
+      const nativeAuthoritative = ['business_commands', 'ctox_queue_tasks']
+        .includes(this.collection.name);
+      const order = compareHybridLogicalClocks(
+        local?._meta?.ctoxHlc,
+        master?._meta?.ctoxHlc,
+      );
+      if (nativeAuthoritative || order < 0) {
+        if (master) acceptedMaster.push(master);
+      } else {
+        // A stamped local row outranks an unstamped mixed-version master;
+        // once both peers emit HLC, ordering is fully deterministic.
+        retryRows.push(row);
+      }
+    }
+    if (acceptedMaster.length) {
+      await this.collection.storageCollection.bulkWrite(acceptedMaster, {
+        replicationOrigin: this.replicationOriginForPeer(peerId),
+      });
+      await this.invalidateDemandCacheForRemoteWrite(acceptedMaster);
+    }
+    return retryRows;
   }
 
   recordLocalPushChangedSinceRead(result, documents = []) {
@@ -1252,12 +1303,19 @@ class CtoxWebRtcReplicationState {
       try {
         record = await storage.getStoredRecord?.(id);
       } catch {}
-      const { merged } = threeWayMergeDocuments(
+      const { merged, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
         record?.base,
         row.newDocumentState,
         row.assumedMasterState,
         { primaryPath },
       );
+      if (requiresManualResolution) {
+        const error = new Error(`Structured conflict requires native/manual resolution for ${this.collection.name}: ${conflictFields.join(', ')}`);
+        error.code = 'structured_conflict_requires_resolution';
+        error.collection = this.collection.name;
+        error.fields = conflictFields;
+        throw error;
+      }
       if (storage.mergeStats) storage.mergeStats.pushConflictMerges += 1;
       try {
         // Keep the local store in step with what we are about to push — a
@@ -1364,10 +1422,21 @@ class CtoxWebRtcReplicationState {
     const shared = this.shared;
     this.shared = null;
     try { shared?.unregister?.(this.collection.name); } catch {}
+    // Queries look up the loader on the shared collection object at execution
+    // time. Detach this state before closing its broker so a late module query
+    // cannot post through a closed BroadcastChannel during a restart.
+    if (this.collection?.demandLoader === this.demandLoader) {
+      try { this.collection.setDemandLoader?.(null); } catch {}
+    }
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
+    try { this.multiTabBroker?.close?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
+    this.demandLoader = null;
+    this.demandFileLoader = null;
+    this.multiTabBroker = null;
+    this.demandLoaderActive = false;
   }
 
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
@@ -1395,18 +1464,26 @@ class CtoxWebRtcReplicationState {
       return null;
     }
     const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
+    this.multiTabBroker = createBroadcastChannelBroker({
+      databaseName: this.collection.storageCollection?.databaseName || this.topic,
+    });
     const backend = indexedDbAvailable
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
     const primaryDelete = async (collection, id) => {
       if (collection !== this.collection.name) return;
+      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
+      if (!stored || Number(stored.pushable || 0) !== 0) {
+        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+      }
       if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
         await this.collection.storageCollection.hardDeleteByIds([id]);
       }
     };
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
+      schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
       primaryDelete,
     });
     // Phase 4: set a memory budget so eviction ACTUALLY RUNS. Without this the
@@ -1418,7 +1495,13 @@ class CtoxWebRtcReplicationState {
     try { await this.demandSidecar.setBudgetBytes(DEFAULT_QUERY_META_BUDGET_BYTES); } catch {}
     // Run cache eviction periodically in production. 30 s is conservative
     // for a peer-driven cache that grows from real-time replication.
-    try { this.demandSidecar.startEvictionScheduler({ intervalMs: 30_000 }); } catch {}
+    try {
+      this.demandSidecar.startEvictionScheduler({
+        intervalMs: 30_000,
+        globalBudgetBytes: GLOBAL_QUERY_META_BUDGET_BYTES,
+        shareBudgetBytes: DEFAULT_QUERY_META_BUDGET_BYTES,
+      });
+    } catch {}
 
     // Demand-fetched documents are MASTER state: stamp them with the active
     // peer's replication origin so the push pipeline never echoes them back
@@ -1435,6 +1518,7 @@ class CtoxWebRtcReplicationState {
       requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
+      multiTabBroker: this.multiTabBroker,
       replicationOrigin: demandReplicationOrigin,
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
@@ -1447,12 +1531,13 @@ class CtoxWebRtcReplicationState {
       sidecarBackend: backend,
       persistChunks: shouldPersistFetchedFileChunks(this.collection.name),
       replicationOrigin: demandReplicationOrigin,
-      requestFileFetch: ({ requestId, fileId, range, knownSequences }) =>
+      requestFileFetch: ({ requestId, fileId, range, knownSequences, onChunk }) =>
         demandTransport.requestFileFetch({
           requestId,
           fileId,
           range,
           knownSequences,
+          onChunk,
           collectionName: this.collection.name,
         }),
       requestFileCancel: ({ requestId, reason }) =>
@@ -1486,6 +1571,7 @@ class CtoxWebRtcReplicationState {
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
     if (validityKey && (retainedPull || retainedPush)) {
       this.retainedCheckpoints = { validityKey, pull: retainedPull, push: retainedPush };
+      writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
     }
     peerStates.delete(peerId);
     this.pullCheckpointsByPeer.delete(peerId);
@@ -1509,6 +1595,21 @@ class CtoxWebRtcReplicationState {
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
+  }
+
+  persistCheckpointsForPeer(peerId) {
+    const validityKey = this.checkpointValidityKeyForPeer(peerId);
+    if (!validityKey) return;
+    const retained = {
+      validityKey,
+      pull: this.pullCheckpointsByPeer.get(peerId) || null,
+      push: this.pushCheckpointsByPeer.get(peerId) || null,
+      collection: this.collection.name,
+      schemaHash: this.schemaHashValue || '',
+      updatedAtMs: Date.now(),
+    };
+    this.retainedCheckpoints = retained;
+    writePersistentCheckpoints(this.checkpointStorageKey, retained);
   }
 
   remoteProtocolForPeer(peerId) {
@@ -1710,8 +1811,38 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   const sessionId = typeof remoteProtocol.peerSession?.sessionId === 'string'
     ? remoteProtocol.peerSession.sessionId.trim()
     : '';
-  if (!epoch || !sessionId) return '';
-  return `${epoch}|${sessionId}`;
+  const schemaHashValue = String(
+    remoteProtocol.collection?.schemaHash
+      || remoteProtocol.schemaHash
+      || remoteProtocol.schema?.hash
+      || '',
+  ).trim();
+  if (!epoch || !sessionId || !schemaHashValue) return '';
+  return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+
+function persistentCheckpointStorageKey(topic, collection) {
+  return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ''))}.${encodeURIComponent(String(collection || ''))}`;
+}
+
+function readPersistentCheckpoints(key) {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem?.(key) || 'null');
+    if (!parsed || typeof parsed !== 'object' || !parsed.validityKey) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistentCheckpoints(key, value) {
+  try {
+    globalThis.localStorage?.setItem?.(key, JSON.stringify(value));
+  } catch {}
+}
+
+function clearPersistentCheckpoints(key) {
+  try { globalThis.localStorage?.removeItem?.(key); } catch {}
 }
 
 function browserInitiatorPeerId(topic) {

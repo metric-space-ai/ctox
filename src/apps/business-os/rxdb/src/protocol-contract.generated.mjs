@@ -48,3 +48,4 @@ export const CTOX_PRESENCE_RPC = Object.freeze({
   refreshMs: 20000,
   maxEntriesPerPeer: 32
 });
+export const CTOX_COMMAND_LIFECYCLE_CAPABILITY = "ctox-command-lifecycle-v2";

@@ -97,6 +97,7 @@ use crate::service::core_transition_guard::{
     enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
     CoreSpawnRequest,
 };
+use crate::service::harness_flow;
 use crate::state_invariants;
 use crate::verification;
 
@@ -5618,6 +5619,7 @@ fn start_prompt_worker(
             let conversation_thread_key = conversation_thread_key_for_queue_job(&root, &job);
             let conversation_id =
                 turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
+            let command_turn_id = format!("business-command-turn:{}", uuid::Uuid::new_v4());
             // Plan-step messages force a continuity refresh directly.
             // Internal-work closures (which the service performs after the
             // turn, post completion review) are picked up by the turn
@@ -5650,23 +5652,31 @@ fn start_prompt_worker(
             } else {
                 artifact_first_execution_prompt(&job)
             };
-            let execution_prompt =
-                outbound_email_first_execution_prompt(&job, base_execution_prompt);
-            let session_options = chat_turn_session_options_for_queue_job(&job);
-            let result = turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
+            let execution_prompt = attach_typed_business_command_context(
                 &root,
-                &db_path,
-                &execution_prompt,
-                workspace_root,
-                conversation_id,
-                job.suggested_skill.as_deref(),
-                force_continuity_refresh,
-                None, // TUI service: per-turn clients (persistent session TODO)
-                session_options,
-                |event| {
-                    push_event(&event_state, format!("phase {} {}", event_source, event));
-                },
-            );
+                &job,
+                base_execution_prompt,
+                &command_turn_id,
+                conversation_thread_key.as_deref(),
+            )
+            .map(|prompt| outbound_email_first_execution_prompt(&job, prompt));
+            let session_options = chat_turn_session_options_for_queue_job(&job);
+            let result = execution_prompt.and_then(|execution_prompt| {
+                turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
+                    &root,
+                    &db_path,
+                    &execution_prompt,
+                    workspace_root,
+                    conversation_id,
+                    job.suggested_skill.as_deref(),
+                    force_continuity_refresh,
+                    None, // TUI service: per-turn clients (persistent session TODO)
+                    session_options,
+                    |event| {
+                        push_event(&event_state, format!("phase {} {}", event_source, event));
+                    },
+                )
+            });
             let timeout_follow_up_outcome = match &result {
                 Err(err) => maybe_enqueue_timeout_continuation(&root, &job, &err.to_string())
                     .ok()
@@ -5895,7 +5905,7 @@ fn start_prompt_worker(
                     }
                 }
             }
-            let mut app_validation_precompleted = false;
+            let app_validation_precompleted = false;
             let app_validation_before_review = if result.is_ok()
                 && business_os_app_module_target_from_prompt(&job.prompt).is_some()
             {
@@ -5912,34 +5922,10 @@ fn start_prompt_worker(
                         Some(false)
                     }
                     Ok(None) => {
-                        match complete_business_os_app_validation_success_to_leased_queue(
-                            &root,
-                            &job,
-                            "Business OS app artifacts validated before completion review",
-                        ) {
-                            Ok(updated) if updated > 0 => {
-                                app_validation_precompleted = true;
-                                push_event(
-                                    &state,
-                                    format!(
-                                        "Marked {updated} app-validation-verified queue task(s) handled before completion review"
-                                    ),
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(err) => push_event(
-                                &state,
-                                format!(
-                                    "Business OS app validation passed before completion review but queue completion failed for {}; retrying during finalization: {}",
-                                    job.source_label,
-                                    clip_text(&err.to_string(), 220)
-                                ),
-                            ),
-                        }
                         push_event(
                             &state,
                             format!(
-                                "Business OS app validation passed before completion review for {}; app validator owns completion",
+                                "Business OS app validation passed before completion review for {}; terminalization is deferred until typed result and validation evidence are durable",
                                 job.source_label
                             ),
                         );
@@ -5967,9 +5953,29 @@ fn start_prompt_worker(
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Reviewer errors/timeouts hold terminal completion; they
             // must not silently complete the worker slice.
-            let review_disposition = if let Some(app_validation_passed) =
-                app_validation_before_review
-            {
+            let typed_result = result
+                .as_ref()
+                .ok()
+                .map(|reply_text| persist_typed_business_command_result(&root, &job, reply_text))
+                .transpose()
+                .map(Option::flatten);
+            let review_disposition = if let Err(error) = &typed_result {
+                push_event(
+                    &state,
+                    format!(
+                        "Typed Business OS result persistence failed for {}: {error:#}",
+                        job.source_label
+                    ),
+                );
+                CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::Technical {
+                        policy_id: "typed-command-result-persist".to_string(),
+                    },
+                    summary: format!(
+                        "Typed command result could not be persisted before review: {error}"
+                    ),
+                }
+            } else if let Some(app_validation_passed) = app_validation_before_review {
                 push_event(
                     &state,
                     format!(
@@ -6021,6 +6027,35 @@ fn start_prompt_worker(
                 disposition
             } else {
                 CompletionReviewDisposition::None
+            };
+            let review_disposition = match typed_result {
+                Ok(Some(task_id)) => {
+                    if let Err(error) = record_typed_business_command_review(
+                        &root,
+                        &task_id,
+                        &review_disposition,
+                        app_validation_before_review,
+                        &command_turn_id,
+                        conversation_thread_key.as_deref(),
+                    ) {
+                        push_event(
+                            &state,
+                            format!(
+                                "Typed Business OS review persistence failed for {}: {error:#}",
+                                job.source_label
+                            ),
+                        );
+                        CompletionReviewDisposition::Hold {
+                            reason: review::HoldReason::MissingReviewEvidence,
+                            summary: format!(
+                                "Command review evidence could not be persisted: {error}"
+                            ),
+                        }
+                    } else {
+                        review_disposition
+                    }
+                }
+                _ => review_disposition,
             };
             let mut review_requeue: Option<(String, String)> = None;
             let mut outcome_recovery_prompt: Option<QueuedPrompt> = None;
@@ -6557,14 +6592,16 @@ fn start_prompt_worker(
                                 ),
                             );
                         } else if !job.leased_message_keys.is_empty() && should_handle_messages {
-                            record_ack_failure_locked(
+                            record_queue_ack_and_refresh_business_os_projections_locked(
+                                &root,
                                 &mut shared,
-                                channels::ack_leased_messages(
+                                terminalize_reviewed_queue_messages(
                                     &root,
                                     &job.leased_message_keys,
-                                    "handled",
+                                    &reply,
                                 ),
                                 "handled queue lease(s)",
+                                &job.leased_message_keys,
                             );
                             // Auto-complete plan steps whose emit message was
                             // just handled by this turn so the plan advances
@@ -6575,7 +6612,8 @@ fn start_prompt_worker(
                                 }
                             }
                         } else if !job.leased_message_keys.is_empty() && terminal_no_send {
-                            record_ack_failure_locked(
+                            record_queue_ack_and_refresh_business_os_projections_locked(
+                                &root,
                                 &mut shared,
                                 channels::ack_leased_messages(
                                     &root,
@@ -6583,6 +6621,7 @@ fn start_prompt_worker(
                                     "cancelled",
                                 ),
                                 "cancelled queue lease(s)",
+                                &job.leased_message_keys,
                             );
                         } else if !job.leased_message_keys.is_empty() {
                             let terminal_queue_failure = matches!(
@@ -7108,7 +7147,8 @@ fn start_prompt_worker(
                         if cv_print_parser_recovered_after_worker_error
                             && !job.leased_message_keys.is_empty()
                         {
-                            record_ack_failure_locked(
+                            record_queue_ack_and_refresh_business_os_projections_locked(
+                                &root,
                                 &mut shared,
                                 channels::ack_leased_messages(
                                     &root,
@@ -7116,6 +7156,7 @@ fn start_prompt_worker(
                                     "handled",
                                 ),
                                 "handled recovered CV print parser queue lease(s)",
+                                &job.leased_message_keys,
                             );
                         }
                         if app_validation_verified_after_worker_error
@@ -8512,7 +8553,8 @@ fn completion_review_is_reviewer_limited_internal_work(
 }
 
 fn completion_review_should_skip_feedback_turn(root: &Path, job: &QueuedPrompt) -> bool {
-    job.source_label == QUEUE_GUARD_SOURCE_LABEL || is_business_os_chat_queue_job(root, job)
+    let _ = root;
+    job.source_label == QUEUE_GUARD_SOURCE_LABEL
 }
 
 fn conversation_thread_key_for_queue_job(root: &Path, job: &QueuedPrompt) -> Option<String> {
@@ -8549,6 +8591,223 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
         "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
+}
+
+fn attach_typed_business_command_context(
+    root: &Path,
+    job: &QueuedPrompt,
+    mut execution_prompt: String,
+    turn_id: &str,
+    thread_key: Option<&str>,
+) -> Result<String> {
+    let mut context = None;
+    let mut task_id = None;
+    for message_key in &job.leased_message_keys {
+        if let Some(found) = channels::inspect_business_command_for_task(root, message_key)? {
+            task_id = Some(message_key.clone());
+            context = Some(found);
+            break;
+        }
+    }
+    let Some(mut context) = context else {
+        return Ok(execution_prompt);
+    };
+    let command_id = context
+        .pointer("/command/command_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let payload_hash = context
+        .pointer("/command/payload_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    anyhow::ensure!(
+        !command_id.is_empty() && !payload_hash.is_empty(),
+        "typed Business OS command context is incomplete at lease"
+    );
+    let authorization =
+        crate::business_os::store::revalidate_business_command_execution_authorization(
+            root,
+            &command_id,
+        )?;
+    let task_id_value = task_id
+        .as_deref()
+        .context("canonical Business OS command has no leased task id")?;
+    channels::transition_business_command_for_task(
+        root,
+        task_id_value,
+        "leased",
+        None,
+        None,
+        None,
+        "harness acquired durable command lease after authorization revalidation",
+    )?;
+    channels::transition_business_command_for_task(
+        root,
+        task_id_value,
+        "running",
+        None,
+        None,
+        None,
+        "harness loaded canonical command context",
+    )?;
+    context = channels::inspect_business_command_for_task(root, task_id_value)?
+        .context("command/task link disappeared during harness lease transition")?;
+    harness_flow::record_harness_flow_event_lossy(
+        root,
+        harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: "business_command_context_loaded",
+            title: "Canonical Business OS command loaded",
+            body_text:
+                "The worker resolved canonical command intent and lifecycle state at lease time.",
+            message_key: task_id.as_deref(),
+            work_id: job.ticket_self_work_id.as_deref(),
+            ticket_key: None,
+            attempt_index: context.pointer("/command/attempt").and_then(Value::as_i64),
+            metadata: serde_json::json!({
+                "command_id": command_id,
+                "execution_task_id": task_id,
+                "payload_hash": payload_hash,
+                "projection_version": context.pointer("/command/projection_version").cloned(),
+                "turn_id": turn_id,
+                "thread_key": thread_key,
+                "authorization": authorization,
+            }),
+        },
+    );
+    execution_prompt.push_str(
+        "\n\nCanonical Business OS command context (resolved from the durable core aggregate at lease time; this block, not mutable prompt prose, owns identity, payload, dependencies and routing):\n```json\n",
+    );
+    execution_prompt.push_str(&serde_json::to_string_pretty(&context)?);
+    execution_prompt.push_str("\n```\n");
+    Ok(execution_prompt)
+}
+
+fn persist_typed_business_command_result(
+    root: &Path,
+    job: &QueuedPrompt,
+    reply_text: &str,
+) -> Result<Option<String>> {
+    for message_key in &job.leased_message_keys {
+        if channels::persist_business_command_worker_result(root, message_key, reply_text)? {
+            return Ok(Some(message_key.clone()));
+        }
+    }
+    Ok(None)
+}
+
+fn terminalize_reviewed_queue_messages(
+    root: &Path,
+    message_keys: &[String],
+    user_reply: &str,
+) -> Result<usize> {
+    let mut updated = 0usize;
+    let mut ordinary = Vec::new();
+    for message_key in message_keys {
+        if let Some(context) = channels::inspect_business_command_for_task(root, message_key)? {
+            let result = serde_json::json!({
+                "status": "succeeded",
+                "user_reply": user_reply,
+            });
+            if channels::transition_business_command_for_task(
+                root,
+                message_key,
+                "handled",
+                Some(&result),
+                None,
+                None,
+                "review and validation passed; canonical terminal owner committed task and command",
+            )? {
+                harness_flow::record_harness_flow_event_lossy(
+                    root,
+                    harness_flow::RecordHarnessFlowEventRequest {
+                        event_kind: "business_command_terminal_committed",
+                        title: "Business OS command terminal transition committed",
+                        body_text: "Typed result, review, validation, queue route and projection outbox committed through the canonical terminal owner.",
+                        message_key: Some(message_key),
+                        work_id: None,
+                        ticket_key: None,
+                        attempt_index: None,
+                        metadata: serde_json::json!({
+                            "command_id": context.pointer("/command/command_id").cloned(),
+                            "execution_task_id": message_key,
+                            "attempt": context.pointer("/command/attempt").cloned(),
+                            "projection_version_before_terminal": context.pointer("/command/projection_version").cloned(),
+                            "terminal_status": "completed",
+                        }),
+                    },
+                );
+                updated = updated.saturating_add(1);
+            }
+        } else {
+            ordinary.push(message_key.clone());
+        }
+    }
+    if !ordinary.is_empty() {
+        updated =
+            updated.saturating_add(channels::ack_leased_messages(root, &ordinary, "handled")?);
+    }
+    Ok(updated)
+}
+
+fn record_typed_business_command_review(
+    root: &Path,
+    task_id: &str,
+    disposition: &CompletionReviewDisposition,
+    app_validation: Option<bool>,
+    turn_id: &str,
+    thread_key: Option<&str>,
+) -> Result<()> {
+    let (review_status, validation_status) = match disposition {
+        CompletionReviewDisposition::Approved { .. }
+        | CompletionReviewDisposition::NoSend { .. } => ("passed", "passed"),
+        CompletionReviewDisposition::FeedbackRetry { .. }
+        | CompletionReviewDisposition::RequeueInternalWork { .. } => ("failed", "pending"),
+        CompletionReviewDisposition::TerminalQueueFailure { .. } => ("failed", "failed"),
+        CompletionReviewDisposition::Hold { .. } => ("held", "pending"),
+        CompletionReviewDisposition::None => match app_validation {
+            Some(true) => ("passed", "passed"),
+            Some(false) => ("failed", "failed"),
+            None => ("held", "pending"),
+        },
+    };
+    let recorded = channels::record_business_command_review(
+        root,
+        task_id,
+        review_status,
+        validation_status,
+        &serde_json::json!({
+            "disposition": completion_review_disposition_label(disposition),
+            "app_validation": app_validation,
+            "turn_id": turn_id,
+            "thread_key": thread_key,
+        }),
+    )?;
+    anyhow::ensure!(
+        recorded,
+        "command/task link disappeared before review persistence"
+    );
+    harness_flow::record_harness_flow_event_lossy(
+        root,
+        harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: "business_command_review_recorded",
+            title: "Business OS command review and validation recorded",
+            body_text: "Completion review disposition and command validation evidence were durably persisted.",
+            message_key: Some(task_id),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: None,
+            metadata: serde_json::json!({
+                "execution_task_id": task_id,
+                "turn_id": turn_id,
+                "thread_key": thread_key,
+                "review_status": review_status,
+                "validation_status": validation_status,
+            }),
+        },
+    );
+    Ok(())
 }
 
 fn is_cv_print_parser_queue_job(job: &QueuedPrompt) -> bool {
@@ -30760,6 +31019,123 @@ Business OS command:
         assert_eq!(
             queue_projection.get("route_status").and_then(Value::as_str),
             Some("failed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queue_ack_refreshes_business_os_command_projection() -> anyhow::Result<()> {
+        let root = temp_root("business-os-queue-ack-projection");
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some("cmd_queue_ack_projection".to_string()),
+                module: "ctox".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("ctox".to_string()),
+                payload: serde_json::json!({
+                    "title": "Projection task",
+                    "instruction": "Answer OK",
+                    "prompt": "Answer OK"
+                }),
+                client_context: serde_json::json!({
+                    "action": "context-chat",
+                    "module": "ctox"
+                }),
+            },
+        )?;
+        let task_id = accepted.task_id.expect("queue task id");
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)?;
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "test worker leased",
+        )?;
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "test worker started",
+        )?;
+        channels::persist_business_command_worker_result(&root, &task_id, "OK")?;
+        channels::record_business_command_review(
+            &root,
+            &task_id,
+            "passed",
+            "passed",
+            &serde_json::json!({"test": true}),
+        )?;
+        crate::business_os::store::complete_business_command_from_queue_reply(
+            &root, &task_id, "OK",
+        )?
+        .expect("expected business command writeback");
+
+        let mut shared = SharedState::default();
+        let message_keys = vec![task_id.clone()];
+        record_queue_ack_and_refresh_business_os_projections_locked(
+            &root,
+            &mut shared,
+            channels::ack_leased_messages(&root, &message_keys, "handled"),
+            "handled queue lease(s)",
+            &message_keys,
+        );
+
+        assert!(
+            shared.recent_events.is_empty(),
+            "ack and projection refresh should not emit diagnostic failures: {:?}",
+            shared.recent_events
+        );
+        assert_eq!(route_status_for(&root, &task_id), "handled");
+
+        let conn = crate::business_os::store::open_store(&root)?;
+        let command_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = ?1 AND deleted = 0",
+            params![accepted.command_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let command_projection: Value = serde_json::from_str(&command_payload)?;
+        assert_eq!(
+            command_projection.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            command_projection
+                .get("task_status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            command_projection
+                .get("route_status")
+                .and_then(Value::as_str),
+            Some("handled")
+        );
+
+        let queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1 AND deleted = 0",
+            params![task_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let queue_projection: Value = serde_json::from_str(&queue_payload)?;
+        assert_eq!(
+            queue_projection.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            queue_projection.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        assert_eq!(
+            queue_projection.get("task_status").and_then(Value::as_str),
+            Some("completed")
         );
         Ok(())
     }

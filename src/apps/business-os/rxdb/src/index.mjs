@@ -75,6 +75,14 @@ export {
   threeWayMergeDocuments,
 } from './conflict-merge.mjs';
 
+export {
+  compareHybridLogicalClocks,
+  formatHybridLogicalClock,
+  hybridLogicalClockNodeId,
+  nextHybridLogicalClock,
+  parseHybridLogicalClock,
+} from './hybrid-logical-clock.mjs';
+
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';
 export { CtoxSubject } from './observable.mjs';
 

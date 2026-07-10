@@ -48,6 +48,7 @@ var CTOX_PRESENCE_RPC = Object.freeze({
   refreshMs: 2e4,
   maxEntriesPerPeer: 32
 });
+var CTOX_COMMAND_LIFECYCLE_CAPABILITY = "ctox-command-lifecycle-v2";
 
 // src/apps/business-os/rxdb/src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
@@ -654,12 +655,17 @@ function threeWayMergeDocuments(base, local, master, { primaryPath = "id" } = {}
   }
   merged[primaryPath] = safeMaster[primaryPath] ?? safeLocal[primaryPath];
   let localOnlyChange = false;
+  const unsafeStructuredConflictFields = [];
   for (const key of businessFieldKeys(safeBase, safeLocal, safeMaster)) {
     if (key === primaryPath) continue;
     const baseValue = safeBase[key];
     const localValue = safeLocal[key];
     const masterValue = safeMaster[key];
     const localChanged = !deepEqualJson(localValue, baseValue);
+    const masterChanged = !deepEqualJson(masterValue, baseValue);
+    if (localChanged && masterChanged && !deepEqualJson(localValue, masterValue) && (isStructuredValue(localValue) || isStructuredValue(masterValue))) {
+      unsafeStructuredConflictFields.push(key);
+    }
     const winner = localChanged ? localValue : masterValue;
     if (localChanged && !deepEqualJson(localValue, masterValue)) {
       localOnlyChange = true;
@@ -668,10 +674,73 @@ function threeWayMergeDocuments(base, local, master, { primaryPath = "id" } = {}
       merged[key] = winner;
     }
   }
-  return { merged, identicalToMaster: !localOnlyChange };
+  return {
+    merged,
+    identicalToMaster: !localOnlyChange,
+    requiresManualResolution: unsafeStructuredConflictFields.length > 0,
+    conflictFields: unsafeStructuredConflictFields
+  };
+}
+function isStructuredValue(value) {
+  return value !== null && typeof value === "object";
 }
 function normalizeConflictStrategy(value) {
   return value === "field-merge" ? "field-merge" : "lww";
+}
+
+// src/apps/business-os/rxdb/src/hybrid-logical-clock.mjs
+var HLC_NODE_STORAGE_KEY = "ctox.businessOs.hlcNodeId.v1";
+var cachedNodeId = null;
+function hybridLogicalClockNodeId() {
+  if (cachedNodeId) return cachedNodeId;
+  try {
+    const stored = globalThis.localStorage?.getItem?.(HLC_NODE_STORAGE_KEY);
+    if (stored) return cachedNodeId = sanitizeNodeId(stored);
+  } catch {
+  }
+  const generated = sanitizeNodeId(
+    globalThis.crypto?.randomUUID?.() || `browser-${Math.random().toString(36).slice(2, 14)}`
+  );
+  cachedNodeId = generated;
+  try {
+    globalThis.localStorage?.setItem?.(HLC_NODE_STORAGE_KEY, generated);
+  } catch {
+  }
+  return generated;
+}
+function nextHybridLogicalClock(previous, {
+  nowMs = Date.now(),
+  nodeId = hybridLogicalClockNodeId()
+} = {}) {
+  const prior = parseHybridLogicalClock(previous);
+  const wall = Math.max(0, Math.floor(Number(nowMs) || 0));
+  const physicalMs = Math.max(wall, prior?.physicalMs || 0);
+  const logical = prior && physicalMs === prior.physicalMs ? prior.logical + 1 : 0;
+  return formatHybridLogicalClock({ physicalMs, logical, nodeId });
+}
+function compareHybridLogicalClocks(left, right) {
+  const a = parseHybridLogicalClock(left);
+  const b = parseHybridLogicalClock(right);
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  if (a.physicalMs !== b.physicalMs) return a.physicalMs < b.physicalMs ? -1 : 1;
+  if (a.logical !== b.logical) return a.logical < b.logical ? -1 : 1;
+  return a.nodeId.localeCompare(b.nodeId);
+}
+function parseHybridLogicalClock(value) {
+  const match = /^([0-9a-z]+):([0-9a-z]+):([0-9a-z_-]+)$/i.exec(String(value || ""));
+  if (!match) return null;
+  const physicalMs = Number.parseInt(match[1], 36);
+  const logical = Number.parseInt(match[2], 36);
+  if (!Number.isSafeInteger(physicalMs) || !Number.isSafeInteger(logical)) return null;
+  return { physicalMs, logical, nodeId: sanitizeNodeId(match[3]) };
+}
+function formatHybridLogicalClock({ physicalMs, logical = 0, nodeId = "native" }) {
+  return `${Math.max(0, Math.floor(physicalMs)).toString(36)}:${Math.max(0, Math.floor(logical)).toString(36)}:${sanitizeNodeId(nodeId)}`;
+}
+function sanitizeNodeId(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^0-9a-z_-]/g, "").slice(0, 48) || "unknown";
 }
 
 // src/apps/business-os/rxdb/src/storage-indexeddb.mjs
@@ -684,6 +753,7 @@ var REPLICATION_SCAN_MULTIPLIER = 50;
 var REPLICATION_MIN_SCAN_LIMIT = 1;
 var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 var INDEX_HIGH_KEY = "\uFFFF";
+var unsyncedCountScheduled = /* @__PURE__ */ new WeakSet();
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -700,6 +770,9 @@ var CtoxIndexedDbStorage = class {
       throw new TypeError("collection name must be a non-empty string");
     }
     return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
+  }
+  async unsyncedWriteSummary() {
+    return countUnsyncedWrites(this.db);
   }
   close() {
     this.db.close();
@@ -754,12 +827,19 @@ var CtoxIndexedDbCollection = class {
     if (!mergeEnabled || !existingIsLocalWrite) {
       return { doc, lwt, replicationOrigin, base: void 0 };
     }
-    const { merged, identicalToMaster } = threeWayMergeDocuments(
+    const { merged, identicalToMaster, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
       previous.base,
       previous.doc,
       doc,
       { primaryPath: this.primaryPath }
     );
+    if (requiresManualResolution) {
+      const error = new Error(`Structured conflict requires native/manual resolution for ${this.name}: ${conflictFields.join(", ")}`);
+      error.code = "structured_conflict_requires_resolution";
+      error.collection = this.name;
+      error.fields = conflictFields;
+      throw error;
+    }
     if (identicalToMaster) {
       return { doc, lwt, replicationOrigin, base: void 0 };
     }
@@ -822,12 +902,14 @@ var CtoxIndexedDbCollection = class {
         indexes: this.indexes,
         indexSignature: this.indexSignature,
         replicationOrigin: resolved.replicationOrigin,
-        base: resolved.base
+        base: resolved.base,
+        previous
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
     await done;
+    schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
@@ -884,12 +966,14 @@ var CtoxIndexedDbCollection = class {
         indexes: this.indexes,
         indexSignature: this.indexSignature,
         replicationOrigin: resolved.replicationOrigin,
-        base: resolved.base
+        base: resolved.base,
+        previous
       });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
     await done;
+    schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
@@ -1287,7 +1371,17 @@ function openDatabase(databaseName) {
       }
     };
     request.onsuccess = () => {
-      if (!finish(resolve, request.result)) {
+      const db = request.result;
+      db.onversionchange = () => {
+        try {
+          db.close();
+        } catch {
+        }
+        globalThis.dispatchEvent?.(new CustomEvent("ctox-indexeddb-versionchange", {
+          detail: { databaseName, oldVersion: db.version }
+        }));
+      };
+      if (!finish(resolve, db)) {
         try {
           request.result?.close?.();
         } catch {
@@ -1298,13 +1392,62 @@ function openDatabase(databaseName) {
     request.onblocked = () => finish(reject, new Error(`IndexedDB open blocked for ${databaseName}`));
   });
 }
+function schedulePersistUnsyncedWriteCount(db) {
+  if (unsyncedCountScheduled.has(db)) return;
+  unsyncedCountScheduled.add(db);
+  const timer = setTimeout(async () => {
+    try {
+      const summary = await countUnsyncedWrites(db);
+      globalThis.localStorage?.setItem?.(
+        `ctox.businessOs.unsyncedWrites.${db.name}`,
+        JSON.stringify({ ...summary, capturedAtMs: Date.now() })
+      );
+      const recoveryKey = `ctox.businessOs.rxdbRecoveryJournal.${db.name}`;
+      const recovery = JSON.parse(globalThis.localStorage?.getItem?.(recoveryKey) || "null");
+      if (recovery) {
+        if (summary.total === 0) {
+          globalThis.localStorage?.removeItem?.(recoveryKey);
+        } else {
+          globalThis.localStorage?.setItem?.(recoveryKey, JSON.stringify({
+            ...recovery,
+            uniqueUnsyncedWrites: summary.total,
+            unsyncedByCollection: summary.byCollection,
+            updatedAtMs: Date.now()
+          }));
+        }
+      }
+    } catch {
+    } finally {
+      unsyncedCountScheduled.delete(db);
+    }
+  }, 1e3);
+  timer?.unref?.();
+}
+async function countUnsyncedWrites(db) {
+  const tx = db.transaction(DOCUMENT_STORE, "readonly");
+  const store = tx.objectStore(DOCUMENT_STORE);
+  const byCollection = {};
+  let total = 0;
+  await iterateCursor(store.openCursor(), (cursor) => {
+    if (!cursor) return false;
+    const record = cursor.value;
+    if (Number(record?.pushable || 0) === 1) {
+      total += 1;
+      const collection = String(record.collection || "unknown");
+      byCollection[collection] = (byCollection[collection] || 0) + 1;
+    }
+    return true;
+  });
+  await idbTransactionDone(tx);
+  return { total, byCollection };
+}
 function documentId(doc) {
   if (!doc || typeof doc !== "object") {
     return "";
   }
   return String(doc.id || doc._id || doc.document_id || doc.documentId || "");
 }
-function normalizeDocument(doc, lwt, replicationOrigin = null) {
+function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) {
   const normalized = { ...doc };
   const id = documentId(doc);
   if (!normalized.id) {
@@ -1312,15 +1455,20 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   }
   normalized._meta = { ...normalized._meta || {}, lwt };
   if (replicationOrigin?.role) {
+    normalized._meta.ctoxHlc = normalized._meta.ctoxHlc || formatHybridLogicalClock({ physicalMs: lwt, nodeId: "native" });
     normalized._meta.ctoxReplicationOrigin = sanitizeReplicationOrigin(replicationOrigin);
   } else {
+    normalized._meta.ctoxHlc = nextHybridLogicalClock(
+      previous?._meta?.ctoxHlc || normalized._meta.ctoxHlc,
+      { nowMs: Math.max(Date.now(), Number(lwt) || 0) }
+    );
     delete normalized._meta.ctoxReplicationOrigin;
   }
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
 }
-function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = void 0 }) {
-  const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin);
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = void 0, previous = null }) {
+  const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin, previous?.doc || null);
   const replicationOriginRole = String(replicationOrigin?.role || "").slice(0, 64);
   const record = {
     collection,
@@ -1799,17 +1947,20 @@ var MAX_FRAME_RETRIES = 2;
 // src/apps/business-os/rxdb/src/webrtc-native.mjs
 var SEND_BUFFER_HIGH_WATER = 512 * 1024;
 var SEND_BUFFER_LOW_WATER = 128 * 1024;
+var SEND_BUFFER_STALL_TIMEOUT_MS = 3e4;
+var MAX_PEER_SEND_QUEUE_FRAMES = 1024;
+var MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
+var FAIR_SEND_SCHEDULE = ["high", "high", "high", "high", "normal", "normal", "low"];
 var MAX_SERIALIZED_FRAME_BYTES = 16384;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
-var SEND_PRIORITIES = ["high", "normal", "low"];
 var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var RTC_HANDSHAKE_TIMEOUT_MS = 6e4;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
-var ICE_DISCONNECTED_GRACE_MS = 8e3;
+var ICE_DISCONNECTED_GRACE_MS = 3e4;
 var SIGNALING_RECONNECT_BASE_MS = 1e3;
 var SIGNALING_RECONNECT_MAX_MS = 3e4;
 var TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS = 250;
@@ -1906,6 +2057,10 @@ var CtoxWebRtcNativePeer = class {
       highPriorityQueueDepth: 0,
       normalPriorityQueueDepth: 0,
       lowPriorityQueueDepth: 0,
+      queuedBytes: 0,
+      rejectedFrames: 0,
+      oldestQueuedAgeMs: 0,
+      turnCredentialExpiresAtMs: turnCredentialExpiryMs(iceServers),
       lastSendPriority: "normal",
       lastAckLagMs: 0,
       lastBufferedAmount: 0,
@@ -1983,23 +2138,40 @@ var CtoxWebRtcNativePeer = class {
       return false;
     }
     const text = JSON.stringify(payload);
-    this.enqueueSendFrame(connection, {
+    return this.enqueueSendFrame(connection, {
       payload,
       text,
       inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
       priority: classifySendPriority(payload, text)
     });
-    return true;
   }
   enqueueSendFrame(connection, item) {
     if (!connection.sendQueue) {
       connection.sendQueue = createSendQueue();
     }
-    connection.sendQueue[item.priority].push({
+    const queue = connection.sendQueue;
+    const itemBytes = encodedSize(item.text);
+    const queuedFrames = queue.high.length + queue.normal.length + queue.low.length;
+    if (queuedFrames >= MAX_PEER_SEND_QUEUE_FRAMES || queue.queuedBytes + itemBytes > MAX_PEER_SEND_QUEUE_BYTES) {
+      this.recordTransportStatus({ rejectedFrames: this.transportStats.rejectedFrames + 1 });
+      this.events.emit("error", {
+        code: "ctox_webrtc_send_queue_budget_exceeded",
+        peerId: connection.remotePeerId,
+        queuedFrames,
+        queuedBytes: queue.queuedBytes,
+        maxFrames: MAX_PEER_SEND_QUEUE_FRAMES,
+        maxBytes: MAX_PEER_SEND_QUEUE_BYTES
+      });
+      this.removeConnection(connection.remotePeerId, "send-queue-budget-exceeded");
+      return false;
+    }
+    queue[item.priority].push({
       ...item,
+      byteLength: itemBytes,
       queuedAtMs: Date.now(),
-      sequence: connection.sendQueue.nextSequence++
+      sequence: queue.nextSequence++
     });
+    queue.queuedBytes += itemBytes;
     this.recordTransportStatus({
       queuedFrames: this.transportStats.queuedFrames + 1,
       lastSendPriority: item.priority
@@ -2012,6 +2184,7 @@ var CtoxWebRtcNativePeer = class {
         message: error?.message || String(error)
       });
     });
+    return true;
   }
   async drainSendQueue(connection) {
     if (connection.sendQueue?.draining) return;
@@ -2230,16 +2403,26 @@ var CtoxWebRtcNativePeer = class {
       backpressureWaitCount: this.transportStats.backpressureWaitCount + 1,
       lastBufferedAmount: Number(channel.bufferedAmount || 0)
     });
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const previousThreshold = channel.bufferedAmountLowThreshold;
       channel.bufferedAmountLowThreshold = SEND_BUFFER_LOW_WATER;
-      const done = () => {
+      let timer = null;
+      const cleanup = () => {
         channel.removeEventListener?.("bufferedamountlow", done);
         channel.bufferedAmountLowThreshold = previousThreshold || 0;
+        if (timer) clearTimeout(timer);
+      };
+      const done = () => {
+        cleanup();
         resolve();
       };
       channel.addEventListener?.("bufferedamountlow", done, { once: true });
-      setTimeout(done, 250);
+      timer = setTimeout(() => {
+        cleanup();
+        const error = new Error("WebRTC send buffer remained above the high-water mark.");
+        error.code = "ctox_webrtc_send_buffer_stalled";
+        reject(error);
+      }, SEND_BUFFER_STALL_TIMEOUT_MS);
     });
   }
   // Phase 3 multiplex: callers tag a `collection` so one DataChannel can carry
@@ -2487,6 +2670,15 @@ var CtoxWebRtcNativePeer = class {
       }
       if (["closed", "failed"].includes(state)) {
         this.removeConnection(remotePeerId, `peer-${state}`);
+      } else if (state === "connected") {
+        updateSelectedCandidatePair(connection).then(() => {
+          this.recordConnectionEvent(connection, "selected-candidate-pair", {
+            localCandidateType: connection.signalStats.selectedLocalCandidateType,
+            remoteCandidateType: connection.signalStats.selectedRemoteCandidateType,
+            protocol: connection.signalStats.selectedCandidateProtocol
+          });
+        }).catch(() => {
+        });
       }
     };
     peer.ondatachannel = (event) => this.attachChannel(connection, event.channel);
@@ -3187,6 +3379,8 @@ var CtoxWebRtcNativePeer = class {
     let high = 0;
     let normal = 0;
     let low = 0;
+    let queuedBytes = 0;
+    let oldestQueuedAtMs = 0;
     const connections = connection ? [connection] : this.connections.values();
     for (const entry of connections) {
       const queue = entry?.sendQueue;
@@ -3194,12 +3388,21 @@ var CtoxWebRtcNativePeer = class {
       high += queue.high.length;
       normal += queue.normal.length;
       low += queue.low.length;
+      queuedBytes += Number(queue.queuedBytes || 0);
+      for (const item of [...queue.high, ...queue.normal, ...queue.low]) {
+        const queuedAtMs = Number(item?.queuedAtMs || 0);
+        if (queuedAtMs > 0 && (oldestQueuedAtMs === 0 || queuedAtMs < oldestQueuedAtMs)) {
+          oldestQueuedAtMs = queuedAtMs;
+        }
+      }
     }
     this.recordTransportStatus({
       priorityQueueDepth: high + normal + low,
       highPriorityQueueDepth: high,
       normalPriorityQueueDepth: normal,
-      lowPriorityQueueDepth: low
+      lowPriorityQueueDepth: low,
+      queuedBytes,
+      oldestQueuedAgeMs: oldestQueuedAtMs > 0 ? Math.max(0, Date.now() - oldestQueuedAtMs) : 0
     });
   }
   cleanupCompletedFrameAcks() {
@@ -3611,8 +3814,39 @@ function createPeerSignalStats() {
     localCandidateComplete: false,
     lastLocalCandidateType: "",
     lastRemoteCandidateType: "",
+    selectedLocalCandidateType: "",
+    selectedRemoteCandidateType: "",
+    selectedCandidateProtocol: "",
     lastSignalAtMs: 0
   };
+}
+async function updateSelectedCandidatePair(connection) {
+  const report = await connection?.peer?.getStats?.();
+  if (!report) return;
+  const values = [];
+  report.forEach?.((value) => values.push(value));
+  let pair = null;
+  const transport = values.find((entry) => entry?.type === "transport" && entry.selectedCandidatePairId);
+  if (transport) pair = values.find((entry) => entry.id === transport.selectedCandidatePairId) || null;
+  if (!pair) {
+    pair = values.find((entry) => entry?.type === "candidate-pair" && entry.state === "succeeded" && (entry.nominated || entry.selected)) || null;
+  }
+  if (!pair) return;
+  const local = values.find((entry) => entry.id === pair.localCandidateId) || null;
+  const remote = values.find((entry) => entry.id === pair.remoteCandidateId) || null;
+  connection.signalStats.selectedLocalCandidateType = local?.candidateType || "";
+  connection.signalStats.selectedRemoteCandidateType = remote?.candidateType || "";
+  connection.signalStats.selectedCandidateProtocol = local?.protocol || remote?.protocol || "";
+}
+function turnCredentialExpiryMs(iceServers = []) {
+  const expiries = [];
+  for (const server of Array.isArray(iceServers) ? iceServers : []) {
+    const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+    if (!urls.some((url) => /^turns?:/i.test(String(url || "")))) continue;
+    const expirySeconds = Number.parseInt(String(server?.username || "").split(":")[0], 10);
+    if (Number.isFinite(expirySeconds) && expirySeconds > 0) expiries.push(expirySeconds * 1e3);
+  }
+  return expiries.length ? Math.min(...expiries) : 0;
 }
 function peerConnectionSnapshot(connection) {
   const peer = connection?.peer;
@@ -3798,22 +4032,30 @@ function createSendQueue() {
     normal: [],
     low: [],
     draining: false,
-    nextSequence: 0
+    nextSequence: 0,
+    queuedBytes: 0,
+    scheduleCursor: 0
   };
 }
 function nextQueuedSend(queue) {
-  for (const priority of SEND_PRIORITIES) {
+  for (let offset = 0; offset < FAIR_SEND_SCHEDULE.length; offset += 1) {
+    const priority = FAIR_SEND_SCHEDULE[queue.scheduleCursor % FAIR_SEND_SCHEDULE.length];
+    queue.scheduleCursor = (queue.scheduleCursor + 1) % FAIR_SEND_SCHEDULE.length;
     if (queue[priority].length) {
-      return queue[priority].shift();
+      const item = queue[priority].shift();
+      queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item?.byteLength || 0));
+      return item;
     }
   }
   return null;
 }
 function nextHighPriorityInlineSend(queue) {
   if (!queue?.high?.length) return null;
-  const index = queue.high.findIndex((item) => item?.inline);
+  const index = queue.high.findIndex((item2) => item2?.inline);
   if (index < 0) return null;
-  return queue.high.splice(index, 1)[0] || null;
+  const item = queue.high.splice(index, 1)[0] || null;
+  if (item) queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item.byteLength || 0));
+  return item;
 }
 function shouldRecycleConnectionAfterRequestTimeout(method = "") {
   return ["ctoxProtocol", "token"].includes(String(method || ""));
@@ -3914,16 +4156,30 @@ async function deflateInflate(bytes) {
 var ACK_RESPONSE = Object.freeze({ ack: true });
 var SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
 var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
+var CLIENT_QUERY_QUEUE_LIMIT = 128;
+var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
+var CLIENT_FILE_COLLECTOR_LIMIT = 8;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
+var QUERY_RATE_LIMIT_RETRY_MS = 100;
+var QUERY_RATE_LIMIT_RETRIES = 16;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
 var QUERY_PEER_WAIT_TIMEOUT_MS = 8e3;
 var QUERY_PEER_WAIT_POLL_MS = 100;
 var QUERY_FETCH_REQUEST_TIMEOUT_MS = 45e3;
+var DEFAULT_COLLECTOR_TIMEOUT_MS = Math.max(
+  1e3,
+  Number(CTOX_QUERY_RPC.maxQueryRuntimeMs) + 5e3 || 35e3
+);
 var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 var CANCELLED_QUERY_REQUEST_LIMIT = 256;
-function createDemandLoadingTransport({ getPeerId } = {}) {
+var DEFAULT_FILE_COLLECTOR_BUDGET_BYTES = 512 * 1024;
+function createDemandLoadingTransport({
+  getPeerId,
+  collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
+  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+} = {}) {
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
   }
@@ -3932,6 +4188,11 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   const queryStreamState = getGlobalQueryStreamState();
   const cancelledQueryRequests = /* @__PURE__ */ new Map();
   const transportOwner = /* @__PURE__ */ Symbol("ctox-demand-transport-owner");
+  const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
+  const acceptedFileBudgetBytes = Math.max(
+    Number(CTOX_FILE_RPC.maxBytesPerChunk) || 1,
+    Number(fileCollectorBudgetBytes) || DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+  );
   const metrics = {
     queryFetchRequests: 0,
     fileFetchRequests: 0,
@@ -3944,14 +4205,19 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     maxPendingQueryCollectors: 0,
     maxPendingFileCollectors: 0,
     maxQueuedQueryRequests: 0,
+    maxQueuedQueryBytes: 0,
     maxBufferedQueryChunks: 0,
     maxBufferedFileChunks: 0,
-    maxBufferedFileChunkBytes: 0
+    maxBufferedFileChunkBytes: 0,
+    queryCollectorTimeouts: 0,
+    fileCollectorTimeouts: 0,
+    fileCollectorBudgetExceeded: 0
   };
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
     metrics.maxPendingFileCollectors = Math.max(metrics.maxPendingFileCollectors, fileCollectors.size);
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
+    metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
@@ -3965,6 +4231,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     updatePeaks();
     if (chunk.complete) {
       queryCollectors.delete(chunk.requestId);
+      clearCollectorTimer(slot);
       slot.resolve(slot.chunks);
     }
   }
@@ -3973,22 +4240,53 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = queryCollectors.get(err.requestId);
     if (!slot) return;
     queryCollectors.delete(err.requestId);
+    clearCollectorTimer(slot);
     metrics.queryCollectorsRejected += 1;
     const e = new Error(`${err.code || "QUERY_ERROR"}: ${err.message || ""}`);
     e.code = err.code;
     e.retryable = Boolean(err.retryable);
     slot.reject(e);
   }
-  function routeFileChunk(chunk) {
+  async function routeFileChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
     const slot = fileCollectors.get(chunk.requestId);
     if (!slot) return;
-    slot.chunks.push(chunk);
-    metrics.fileChunksReceived += 1;
-    updatePeaks();
-    if (chunk.complete) {
+    const chunkBytes = typeof chunk.bytesBase64 === "string" ? chunk.bytesBase64.length : 0;
+    try {
+      if (typeof slot.onChunk === "function") {
+        await slot.onChunk(chunk);
+      } else {
+        slot.bufferedBytes += chunkBytes;
+        if (slot.bufferedBytes > acceptedFileBudgetBytes) {
+          const error = new Error(`FILE_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedFileBudgetBytes}`);
+          error.code = "FILE_COLLECTOR_BUDGET_EXCEEDED";
+          error.retryable = false;
+          throw error;
+        }
+        slot.chunks.push(chunk);
+      }
+      metrics.fileChunksReceived += 1;
+      updatePeaks();
+      if (chunk.complete) {
+        fileCollectors.delete(chunk.requestId);
+        clearCollectorTimer(slot);
+        slot.resolve(slot.chunks);
+      }
+    } catch (error) {
       fileCollectors.delete(chunk.requestId);
-      slot.resolve(slot.chunks);
+      clearCollectorTimer(slot);
+      metrics.fileCollectorsRejected += 1;
+      if (error?.code === "FILE_COLLECTOR_BUDGET_EXCEEDED") {
+        metrics.fileCollectorBudgetExceeded += 1;
+      }
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(slot.peerId, CTOX_FILE_RPC.cancel, [{
+          requestId: chunk.requestId,
+          reason: error?.code || "file-chunk-consumer-failed"
+        }], 2e3)
+      ).catch(() => {
+      });
     }
   }
   function routeFileError(err) {
@@ -3996,6 +4294,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = fileCollectors.get(err.requestId);
     if (!slot) return;
     fileCollectors.delete(err.requestId);
+    clearCollectorTimer(slot);
     metrics.fileCollectorsRejected += 1;
     const e = new Error(`${err.code || "FILE_ERROR"}: ${err.message || ""}`);
     e.code = err.code;
@@ -4012,7 +4311,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       return ACK_RESPONSE;
     },
     "rxdb.file.chunk": async ({ params }) => {
-      routeFileChunk(params?.[0]);
+      await routeFileChunk(params?.[0]);
       return ACK_RESPONSE;
     },
     "rxdb.file.error": async ({ params }) => {
@@ -4025,10 +4324,12 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     peer = p;
   }
   async function requestQueryFetch(envelope) {
-    return withQueryStreamSlot(envelope?.requestId, () => requestQueryFetchWithRetry(envelope));
+    return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
   }
-  function withQueryStreamSlot(requestId, fn) {
+  function withQueryStreamSlot(envelope, fn) {
     return new Promise((resolve, reject) => {
+      const requestId = String(envelope?.requestId || "");
+      const estimatedBytes = estimateEnvelopeBytes(envelope);
       const run = () => {
         queryStreamState.active += 1;
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {
@@ -4039,7 +4340,18 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       };
       if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
       else {
-        queryStreamState.queue.push({ requestId: String(requestId || ""), run, reject, owner: transportOwner });
+        const queuedBytes = queryStreamState.queue.reduce(
+          (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
+          0
+        );
+        if (queryStreamState.queue.length >= CLIENT_QUERY_QUEUE_LIMIT || queuedBytes + estimatedBytes > CLIENT_QUERY_QUEUE_BUDGET_BYTES) {
+          const error = new Error("QUERY_QUEUE_LIMIT: queued demand requests exceed the browser count/byte budget");
+          error.code = "QUERY_QUEUE_LIMIT";
+          error.retryable = true;
+          reject(error);
+          return;
+        }
+        queryStreamState.queue.push({ requestId, run, reject, owner: transportOwner, estimatedBytes });
         updatePeaks();
       }
     });
@@ -4053,12 +4365,14 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
         return await requestQueryFetchOnce({ ...envelope, requestId });
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
-        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        const rateLimited = isRetryableQueryRateLimited(error);
+        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : rateLimited ? QUERY_RATE_LIMIT_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
         if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        await delay3((peerUnavailable ? QUERY_PEER_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS) * attempt);
+        const retryDelayMs = peerUnavailable ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
+        await delay3(retryDelayMs * attempt);
       }
     }
   }
@@ -4077,9 +4391,11 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     try {
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
+      clearCollectorTimer(queryCollectors.get(requestId));
       queryCollectors.delete(requestId);
       throw err;
     }
+    armCollectorTimeout(queryCollectors, requestId, "query", peerId, CTOX_QUERY_RPC.cancel);
     const chunks = await promise;
     const documents = [];
     let authoritativeRevision = null;
@@ -4096,7 +4412,12 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     return Boolean(error?.retryable) && (code === "STREAM_LIMIT_EXCEEDED" || message.includes("STREAM_LIMIT_EXCEEDED"));
   }
   function isRetryableQueryFetch(error) {
-    return isRetryableQueryStreamLimit(error) || isRetryableQueryPeerUnavailable(error);
+    return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isRetryableQueryPeerUnavailable(error);
+  }
+  function isRetryableQueryRateLimited(error) {
+    const code = String(error?.code || "");
+    const message = String(error?.message || "");
+    return Boolean(error?.retryable) && (code === "RATE_LIMITED" || message.includes("RATE_LIMITED"));
   }
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || "");
@@ -4128,12 +4449,25 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       }
     }
   }
-  async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
+  async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName, onChunk }) {
     if (!peer) throw new Error("demand transport has no peer attached");
+    if (fileCollectors.size >= CLIENT_FILE_COLLECTOR_LIMIT) {
+      const error = new Error("FILE_COLLECTOR_LIMIT: too many active browser file collectors");
+      error.code = "FILE_COLLECTOR_LIMIT";
+      error.retryable = true;
+      throw error;
+    }
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
-      fileCollectors.set(requestId, { chunks: [], resolve, reject, peerId });
+      fileCollectors.set(requestId, {
+        chunks: [],
+        resolve,
+        reject,
+        peerId,
+        onChunk: typeof onChunk === "function" ? onChunk : null,
+        bufferedBytes: 0
+      });
       metrics.fileFetchRequests += 1;
       updatePeaks();
     });
@@ -4146,9 +4480,11 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
         knownSequences: knownSequences ?? []
       }]);
     } catch (err) {
+      clearCollectorTimer(fileCollectors.get(requestId));
       fileCollectors.delete(requestId);
       throw err;
     }
+    armCollectorTimeout(fileCollectors, requestId, "file", peerId, CTOX_FILE_RPC.cancel);
     const chunks = await promise;
     return chunks.map((c) => ({ sequence: c.sequence, bytesBase64: c.bytesBase64, hash: c.hash }));
   }
@@ -4160,6 +4496,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     let cancelled = false;
     if (slot) {
       fileCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.fileCollectorsRejected += 1;
       slot.reject(error);
       cancelled = true;
@@ -4180,6 +4517,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     for (const [requestId, slot] of [...queryCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       queryCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.queryCollectorsRejected += 1;
       slot.reject(queryError);
       rejected += 1;
@@ -4187,6 +4525,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     for (const [requestId, slot] of [...fileCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       fileCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.fileCollectorsRejected += 1;
       slot.reject(fileError);
       rejected += 1;
@@ -4207,10 +4546,12 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       pendingQueryCollectors: queryCollectors.size,
       pendingFileCollectors: fileCollectors.size,
       queuedQueryRequests: queryStreamState.queue.length,
+      queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
+      fileCollectorBudgetBytes: acceptedFileBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics
     };
@@ -4230,6 +4571,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = queryCollectors.get(requestId);
     if (!slot) return false;
     queryCollectors.delete(requestId);
+    clearCollectorTimer(slot);
     metrics.queryCollectorsRejected += 1;
     slot.reject(error);
     return true;
@@ -4278,6 +4620,12 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     if (!entry || typeof entry === "function") return "";
     return String(entry.requestId || "");
   }
+  function queuedQueryBytes() {
+    return queryStreamState.queue.reduce(
+      (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
+      0
+    );
+  }
   function markQueryCancelled(requestId, reason) {
     const raw = String(requestId || "");
     if (!raw) return;
@@ -4314,6 +4662,45 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     error.code = "FILE_CANCELLED";
     error.retryable = false;
     return error;
+  }
+  function armCollectorTimeout(collectors, requestId, kind, peerId, cancelMethod) {
+    const slot = collectors.get(requestId);
+    if (!slot || slot.timer) return;
+    slot.timer = setTimeout(() => {
+      if (collectors.get(requestId) !== slot) return;
+      collectors.delete(requestId);
+      if (kind === "query") {
+        metrics.queryCollectorsRejected += 1;
+        metrics.queryCollectorTimeouts += 1;
+      } else {
+        metrics.fileCollectorsRejected += 1;
+        metrics.fileCollectorTimeouts += 1;
+      }
+      const error = new Error(`${kind.toUpperCase()}_COLLECTOR_TIMEOUT: terminal frame missing`);
+      error.code = `${kind.toUpperCase()}_COLLECTOR_TIMEOUT`;
+      error.retryable = true;
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(peerId, cancelMethod, [{ requestId, reason: "collector-timeout" }], 2e3)
+      ).catch(() => {
+      });
+    }, terminalTimeoutMs);
+  }
+  function clearCollectorTimer(slot) {
+    if (slot?.timer) {
+      clearTimeout(slot.timer);
+      slot.timer = null;
+    }
+  }
+  function estimateEnvelopeBytes(envelope) {
+    let encoded = "";
+    try {
+      encoded = JSON.stringify(envelope ?? null);
+    } catch {
+      return CLIENT_QUERY_QUEUE_BUDGET_BYTES + 1;
+    }
+    if (typeof TextEncoder === "function") return new TextEncoder().encode(encoded).byteLength;
+    return encoded.length * 2;
   }
   function resolvePeerId() {
     const configured = getPeerId();
@@ -4526,6 +4913,7 @@ function createQueryDemandLoader({
   }
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   const inflightByFingerprint = /* @__PURE__ */ new Map();
+  const coordinatedByFingerprint = /* @__PURE__ */ new Map();
   return {
     async resolveQuery(query, { window: window2 } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
@@ -4552,15 +4940,16 @@ function createQueryDemandLoader({
       const startFetchJob = () => {
         if (inflightByFingerprint.has(dedupKey)) {
           bumpStatus(status, "queryFetchDedupHitCount");
-          return inflightByFingerprint.get(dedupKey);
+          return inflightByFingerprint.get(dedupKey).job;
         }
         bumpStatus(status, "queryFetchInFlight", 1);
         v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        const requestId = `${dedupKey}|${clock()}`;
         const job = (async () => {
           const startedAt = clock();
           try {
             const result = await requestQueryFetch({
-              requestId: `${dedupKey}|${startedAt}`,
+              requestId,
               databaseName: storageCollection?.databaseName ?? null,
               collectionName,
               schemaVersion: schemaVersion ?? 0,
@@ -4605,21 +4994,64 @@ function createQueryDemandLoader({
             inflightByFingerprint.delete(dedupKey);
           }
         })();
-        inflightByFingerprint.set(dedupKey, job);
+        inflightByFingerprint.set(dedupKey, { job, requestId });
+        return job;
+      };
+      const runCoordinatedFetchJob = async () => {
+        if (!multiTabBroker?.claim) return startFetchJob();
+        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+        const leader = await multiTabBroker.claim(dedupKey);
+        if (leader) {
+          try {
+            return await startFetchJob();
+          } finally {
+            await multiTabBroker.release?.(dedupKey, { materialized: true });
+          }
+        }
+        await multiTabBroker.waitForRemote?.(dedupKey, 5e3);
+        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+        const materialized = await sidecar.getQueryWindow(sidecarKey);
+        if (materialized?.complete) {
+          bumpStatus(status, "queryFetchDedupHitCount");
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        }
+        const takeover = await multiTabBroker.claim(dedupKey);
+        if (!takeover) {
+          if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+          throw new Error(`Timed out waiting for multi-tab query owner ${dedupKey}`);
+        }
+        try {
+          return await startFetchJob();
+        } finally {
+          await multiTabBroker.release?.(dedupKey, { materialized: true, takeover: true });
+        }
+      };
+      const coordinatedFetchJob = () => {
+        const current = coordinatedByFingerprint.get(dedupKey);
+        if (current) {
+          bumpStatus(status, "queryFetchDedupHitCount");
+          return current;
+        }
+        const job = Promise.resolve().then(runCoordinatedFetchJob).finally(() => {
+          if (coordinatedByFingerprint.get(dedupKey) === job) {
+            coordinatedByFingerprint.delete(dedupKey);
+          }
+        });
+        coordinatedByFingerprint.set(dedupKey, job);
         return job;
       };
       if (cached?.everCompleted && !query?.requireRevision) {
-        startFetchJob().catch(() => {
+        coordinatedFetchJob().catch(() => {
         });
         bumpStatus(status, "queryFetchStaleServedCount");
         v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
         await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
         return readLocalDocuments(storageCollection, query, normalizedWindow);
       }
-      return startFetchJob();
+      return coordinatedFetchJob();
     },
     inflightSize() {
-      return inflightByFingerprint.size;
+      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size);
     },
     // Wave 7: invalidation hook. When the replication layer reports that a
     // document in `collectionName` was changed remotely, call this with the
@@ -4637,7 +5069,8 @@ function createQueryDemandLoader({
     // primary store so the next fetch starts from a clean slate (no orphans).
     async abortAllInFlight(reason = "reconnect") {
       const cancelled = [];
-      for (const [dedupKey, job] of inflightByFingerprint.entries()) {
+      for (const [dedupKey, entry] of inflightByFingerprint.entries()) {
+        const { job, requestId } = entry;
         const [, fingerprint] = dedupKey.split("|");
         cancelled.push({ dedupKey, fingerprint });
         try {
@@ -4647,12 +5080,13 @@ function createQueryDemandLoader({
         }
         if (typeof requestCancel === "function") {
           try {
-            await requestCancel({ requestId: dedupKey, fingerprint, reason });
+            await requestCancel({ requestId, fingerprint, reason });
           } catch {
           }
         }
       }
       inflightByFingerprint.clear();
+      coordinatedByFingerprint.clear();
       try {
         const allWindows = await sidecar.backend.scanQueryWindows();
         for (const { fingerprint } of cancelled) {
@@ -4837,6 +5271,7 @@ function applyQueryToDocs(docs, query, window2) {
 
 // src/apps/business-os/rxdb/src/file-demand-loader.mjs
 var FILE_CHUNK_PRESENCE_KEY = (collection, fileId) => `${collection}|${fileId}`;
+var DEFAULT_FILE_RETURN_BUDGET_BYTES = 32 * 1024 * 1024;
 function createFileDemandLoader({
   collectionName,
   storageCollection,
@@ -4849,7 +5284,8 @@ function createFileDemandLoader({
   // Origin stamp (object or provider fn): fetched chunk rows are master
   // state, not local writes — see query-demand-loader.mjs for the failure
   // modes an unstamped write causes (push echo, LWW veto of later pulls).
-  replicationOrigin = null
+  replicationOrigin = null,
+  returnBudgetBytes = DEFAULT_FILE_RETURN_BUDGET_BYTES
 }) {
   if (!collectionName) throw new TypeError("file loader requires collectionName");
   if (!storageCollection) throw new TypeError("file loader requires storageCollection");
@@ -4873,29 +5309,53 @@ function createFileDemandLoader({
         bump(status, "activeFileStreams", 1);
         try {
           const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
+          const validChunks = [];
+          const consumedSequences = /* @__PURE__ */ new Set();
+          let returnedBytes = 0;
+          const consumeChunk = async (chunk) => {
+            if (!chunk || typeof chunk !== "object" || chunk.complete && chunk.sequence == null) return;
+            const sequence = Number(chunk.sequence);
+            if (!Number.isFinite(sequence) || consumedSequences.has(sequence)) return;
+            const bytesBase64 = String(chunk.bytesBase64 || "");
+            const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
+            returnedBytes += decodedBytes;
+            if (returnedBytes > returnBudgetBytes) {
+              const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
+              error.code = "FILE_RETURN_BUDGET_EXCEEDED";
+              error.retryable = false;
+              throw error;
+            }
+            consumedSequences.add(sequence);
+            const normalized = {
+              sequence,
+              bytesBase64,
+              hash: chunk.hash || null
+            };
+            validChunks.push(normalized);
+            bump(status, "fileBytesReceived", bytesBase64.length);
+            if (persistChunks) {
+              await storageCollection.bulkWrite([{
+                id: `${fileId}-${sequence}`,
+                file_id: fileId,
+                sequence,
+                bytes_base64: bytesBase64,
+                hash: normalized.hash
+              }], { replicationOrigin: resolveReplicationOrigin() });
+            }
+          };
           const chunks = await requestFileFetch({
             requestId,
             collectionName,
             fileId,
             range,
-            knownSequences: presence?.presentSequences || []
+            knownSequences: presence?.presentSequences || [],
+            onChunk: consumeChunk
           });
           if (!Array.isArray(chunks)) {
             throw new TypeError("requestFileFetch must return an array of chunks");
           }
-          const validChunks = chunks.filter((chunk) => chunk && typeof chunk === "object");
-          for (const chunk of validChunks) bump(status, "fileBytesReceived", chunk?.bytesBase64?.length || 0);
-          if (persistChunks) {
-            const rows = validChunks.map((chunk) => ({
-              id: `${fileId}-${chunk.sequence}`,
-              file_id: fileId,
-              sequence: chunk.sequence,
-              bytes_base64: chunk.bytesBase64,
-              hash: chunk.hash || null
-            }));
-            if (rows.length) {
-              await storageCollection.bulkWrite(rows, { replicationOrigin: resolveReplicationOrigin() });
-            }
+          for (const chunk of chunks) {
+            await consumeChunk(chunk);
           }
           const sequences = validChunks.map((c) => c.sequence).sort((a, b) => a - b);
           if (persistChunks) {
@@ -4924,7 +5384,7 @@ function createFileDemandLoader({
             });
           }
           if (status) status.lastFileFetchMs = clock() - startedAt;
-          return chunks;
+          return validChunks.sort((left, right) => left.sequence - right.sequence);
         } catch (error) {
           bump(status, "fileStreamErrors");
           throw error;
@@ -5116,12 +5576,19 @@ function normalizeDocumentIds(ids) {
 var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
 var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
 var PIN_RECENT_READ = "recently-read";
+var evictionSchedulerGroups = /* @__PURE__ */ new Map();
 var QueryMetaStorage = class {
-  constructor(backend, { databaseName, clock = Date.now, primaryDelete = null } = {}) {
+  constructor(backend, {
+    databaseName,
+    schedulerKey = databaseName,
+    clock = Date.now,
+    primaryDelete = null
+  } = {}) {
     if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
     if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
     this.backend = backend;
     this.databaseName = databaseName;
+    this.schedulerKey = schedulerKey;
     this.clock = clock;
     this.primaryDelete = typeof primaryDelete === "function" ? primaryDelete : null;
   }
@@ -5376,7 +5843,9 @@ var QueryMetaStorage = class {
       await this.setBudgetBytes(tighten);
       await this.runEvictionIfOverBudget({ forceRecount: true });
       try {
-        return await writeFn();
+        const result = await writeFn();
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        return result;
       } catch (retryErr) {
         if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
         throw retryErr;
@@ -5386,22 +5855,54 @@ var QueryMetaStorage = class {
   /// Starts a periodic eviction scheduler. The handle returned has a
   /// `stop()` method. Idempotent: calling twice with the same handle is
   /// safe. Default interval: 30s.
-  startEvictionScheduler({ intervalMs = 3e4 } = {}) {
-    if (this._evictionTimer) return { stop: () => this.stopEvictionScheduler() };
-    this._evictionTimer = setInterval(() => {
-      this.runEvictionIfOverBudget().catch(() => {
-      });
-    }, intervalMs);
-    if (typeof this._evictionTimer.unref === "function") {
-      this._evictionTimer.unref();
+  startEvictionScheduler({
+    intervalMs = 3e4,
+    globalBudgetBytes = 0,
+    shareBudgetBytes = 0
+  } = {}) {
+    if (this._evictionSchedulerGroupKey) {
+      return { stop: () => this.stopEvictionScheduler() };
+    }
+    const key = String(this.schedulerKey || this.databaseName);
+    let group = evictionSchedulerGroups.get(key);
+    if (!group) {
+      group = {
+        storages: /* @__PURE__ */ new Set(),
+        timer: null,
+        intervalMs,
+        globalBudgetBytes: Math.max(0, Number(globalBudgetBytes) || 0)
+      };
+      evictionSchedulerGroups.set(key, group);
+    }
+    group.globalBudgetBytes = Math.max(
+      group.globalBudgetBytes,
+      Math.max(0, Number(globalBudgetBytes) || 0)
+    );
+    this._configuredShareBudgetBytes = Math.max(0, Number(shareBudgetBytes) || 0);
+    this._evictionSchedulerGroupKey = key;
+    group.storages.add(this);
+    rebalanceEvictionSchedulerGroup(group).catch(() => {
+    });
+    if (!group.timer) {
+      group.timer = setInterval(() => runEvictionSchedulerGroup(group), group.intervalMs);
+      if (typeof group.timer.unref === "function") group.timer.unref();
     }
     return { stop: () => this.stopEvictionScheduler() };
   }
   stopEvictionScheduler() {
-    if (this._evictionTimer) {
-      clearInterval(this._evictionTimer);
-      this._evictionTimer = null;
+    const key = this._evictionSchedulerGroupKey;
+    if (!key) return;
+    this._evictionSchedulerGroupKey = null;
+    const group = evictionSchedulerGroups.get(key);
+    if (!group) return;
+    group.storages.delete(this);
+    if (group.storages.size === 0) {
+      if (group.timer) clearInterval(group.timer);
+      evictionSchedulerGroups.delete(key);
+      return;
     }
+    rebalanceEvictionSchedulerGroup(group).catch(() => {
+    });
   }
   /// Orphan-window GC: drop sidecar query-window entries that haven't been
   /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
@@ -5426,6 +5927,22 @@ var QueryMetaStorage = class {
     return removed;
   }
 };
+async function rebalanceEvictionSchedulerGroup(group) {
+  const storages = [...group.storages];
+  if (!storages.length) return;
+  const globalShare = group.globalBudgetBytes > 0 ? Math.max(1, Math.floor(group.globalBudgetBytes / storages.length)) : Number.POSITIVE_INFINITY;
+  await Promise.all(storages.map(async (storage) => {
+    const configured = storage._configuredShareBudgetBytes || globalShare;
+    const effective = Math.max(1, Math.floor(Math.min(configured, globalShare)));
+    await storage.setBudgetBytes(effective);
+  }));
+}
+async function runEvictionSchedulerGroup(group) {
+  await rebalanceEvictionSchedulerGroup(group);
+  await Promise.all(
+    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0))
+  );
+}
 function normalizeEstimatedBytes(estimatedBytes) {
   const bytes = Math.max(0, Number(estimatedBytes) || 0);
   return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
@@ -6147,9 +6664,175 @@ function snapshotV1_5Status(state) {
   return snapshot;
 }
 
+// src/apps/business-os/rxdb/src/multi-tab-broker.mjs
+var CHANNEL_PREFIX = "ctox-rxdb-v1_5-broker-";
+var CLAIM_TTL_MS = 3e4;
+var CLAIM_ELECTION_MS = 25;
+var CLAIM_RENEW_MS = 1e4;
+function createBroadcastChannelBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
+  if (!databaseName) throw new TypeError("broker requires databaseName");
+  if (typeof globalThis.BroadcastChannel !== "function") {
+    return createMemoryBroker({ databaseName, tabId, clock });
+  }
+  const channel = new globalThis.BroadcastChannel(`${CHANNEL_PREFIX}${databaseName}`);
+  const localClaims = /* @__PURE__ */ new Map();
+  const remoteClaims = /* @__PURE__ */ new Map();
+  const completions = /* @__PURE__ */ new Map();
+  let closed = false;
+  function post(message) {
+    if (closed) return false;
+    try {
+      channel.postMessage(message);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  channel.onmessage = (event) => {
+    const msg = event?.data;
+    if (!msg || typeof msg !== "object") return;
+    const now = clock();
+    if (msg.type === "claim") {
+      remoteClaims.set(msg.windowKey, { tabId: msg.tabId, expiresAt: now + CLAIM_TTL_MS });
+      const local = localClaims.get(msg.windowKey);
+      if (local && String(msg.tabId) < String(tabId)) {
+        clearInterval(local.renewTimer);
+        localClaims.delete(msg.windowKey);
+      }
+    } else if (msg.type === "release") {
+      remoteClaims.delete(msg.windowKey);
+    } else if (msg.type === "complete") {
+      remoteClaims.delete(msg.windowKey);
+      const waiter = completions.get(msg.windowKey);
+      if (waiter) {
+        completions.delete(msg.windowKey);
+        waiter.resolve(msg.result);
+      }
+    }
+  };
+  function expired(claim, now) {
+    return !claim || claim.expiresAt < now;
+  }
+  return {
+    kind: "broadcast-channel",
+    tabId,
+    get closed() {
+      return closed;
+    },
+    async claim(windowKey) {
+      if (closed) return false;
+      const now = clock();
+      const remote = remoteClaims.get(windowKey);
+      if (remote && expired(remote, now)) {
+        remoteClaims.delete(windowKey);
+      } else if (remote) {
+        return false;
+      }
+      const local = localClaims.get(windowKey);
+      if (local && !expired(local, now)) return false;
+      const renewTimer = setInterval(() => {
+        const claim = localClaims.get(windowKey);
+        if (!claim) return;
+        claim.expiresAt = clock() + CLAIM_TTL_MS;
+        if (!post({ type: "claim", windowKey, tabId, at: clock(), renewal: true })) {
+          clearInterval(claim.renewTimer);
+          localClaims.delete(windowKey);
+        }
+      }, CLAIM_RENEW_MS);
+      localClaims.set(windowKey, { expiresAt: now + CLAIM_TTL_MS, renewTimer });
+      if (!post({ type: "claim", windowKey, tabId, at: now })) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, CLAIM_ELECTION_MS));
+      if (closed) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
+      const contender = remoteClaims.get(windowKey);
+      if (contender && !expired(contender, clock()) && String(contender.tabId) < String(tabId)) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
+      return true;
+    },
+    async release(windowKey, result = null) {
+      const local = localClaims.get(windowKey);
+      if (local) clearInterval(local.renewTimer);
+      localClaims.delete(windowKey);
+      post({ type: "complete", windowKey, tabId, result, at: clock() });
+    },
+    async waitForRemote(windowKey, timeoutMs = 5e3) {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          completions.delete(windowKey);
+          resolve(null);
+        }, timeoutMs);
+        completions.set(windowKey, {
+          resolve: (val) => {
+            clearTimeout(timer);
+            resolve(val);
+          }
+        });
+      });
+    },
+    close() {
+      if (closed) return;
+      for (const [windowKey, claim] of localClaims.entries()) {
+        clearInterval(claim.renewTimer);
+        post({ type: "release", windowKey, tabId, at: clock(), reason: "broker-close" });
+      }
+      localClaims.clear();
+      for (const waiter of completions.values()) waiter.resolve(null);
+      completions.clear();
+      closed = true;
+      channel.onmessage = null;
+      try {
+        channel.close();
+      } catch {
+      }
+    }
+  };
+}
+function createMemoryBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
+  const claims = /* @__PURE__ */ new Set();
+  let closed = false;
+  return {
+    kind: "memory",
+    tabId,
+    get closed() {
+      return closed;
+    },
+    async claim(windowKey) {
+      if (closed) return false;
+      if (claims.has(windowKey)) return false;
+      claims.add(windowKey);
+      return true;
+    },
+    async release(windowKey) {
+      claims.delete(windowKey);
+    },
+    async waitForRemote() {
+      return null;
+    },
+    close() {
+      closed = true;
+      claims.clear();
+    }
+  };
+}
+function randomTabId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `tab-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 // src/apps/business-os/rxdb/src/replication-webrtc.mjs
 var ACTIVE_COLLECTIONS_METHOD = "rxdb.activeCollections";
-var DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
+var GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
+var DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
 var LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
@@ -6158,7 +6841,8 @@ var BROWSER_CAPABILITIES = [
   "ctox-peer-session-v1",
   "ctox-checkpoint-epoch-v1",
   CTOX_QUERY_FETCH_CAPABILITY,
-  CTOX_PRESENCE_CAPABILITY
+  CTOX_PRESENCE_CAPABILITY,
+  CTOX_COMMAND_LIFECYCLE_CAPABILITY
 ];
 function remoteSupportsPresence(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
@@ -6786,7 +7470,8 @@ var CtoxWebRtcReplicationState = class {
     this.pullRetryTimer = null;
     this.pushRetryTimer = null;
     this.localPushTimer = null;
-    this.retainedCheckpoints = null;
+    this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
+    this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -6873,7 +7558,6 @@ var CtoxWebRtcReplicationState = class {
       peerGeneration: 1,
       checkpoint,
       role: "browser",
-      capabilityToken,
       capabilities: BROWSER_CAPABILITIES,
       capabilityToken: typeof capabilityToken === "string" ? capabilityToken : null
     });
@@ -6904,6 +7588,7 @@ var CtoxWebRtcReplicationState = class {
         }
       } else {
         this.retainedCheckpoints = null;
+        clearPersistentCheckpoints(this.checkpointStorageKey);
       }
     }
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
@@ -7017,6 +7702,7 @@ var CtoxWebRtcReplicationState = class {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
+      this.persistCheckpointsForPeer(activePeerId);
       if (!documents.length) break;
     }
   }
@@ -7087,15 +7773,21 @@ var CtoxWebRtcReplicationState = class {
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       this.recordLocalPushChangedSinceRead(result, documents);
+      for (const document2 of documents) {
+        const id = primaryValue(document2, this.collection.schema.primaryPath);
+        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, true);
+      }
       if (!documents.length) {
         const nextCheckpoint = result?.checkpoint || checkpoint;
         if (result?.scanLimitReached && nextCheckpoint && checkpointKey(nextCheckpoint) !== checkpointKey(checkpoint)) {
           checkpoint = nextCheckpoint;
           this.pushCheckpointsByPeer.set(peerId, checkpoint);
+          this.persistCheckpointsForPeer(peerId);
           continue;
         }
         checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
+        this.persistCheckpointsForPeer(peerId);
         break;
       }
       let rows = documents.map((doc) => ({
@@ -7121,6 +7813,10 @@ var CtoxWebRtcReplicationState = class {
           return assumedMasterState ? { ...row, assumedMasterState } : null;
         }).filter(Boolean);
         if (!rows.length) break;
+        if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
+          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+          if (!rows.length) break;
+        }
         rows = await this.absorbMasterStateIntoConflictRows(rows);
       }
       if (rows.length) {
@@ -7129,10 +7825,40 @@ var CtoxWebRtcReplicationState = class {
       if (rows.length) {
         throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
       }
+      for (const document2 of documents) {
+        const id = primaryValue(document2, this.collection.schema.primaryPath);
+        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+      }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
+      this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
     }
+  }
+  async resolveWholeDocumentLwwConflicts(rows, peerId) {
+    const retryRows = [];
+    const acceptedMaster = [];
+    for (const row of rows) {
+      const local = row?.newDocumentState;
+      const master = row?.assumedMasterState;
+      const nativeAuthoritative = ["business_commands", "ctox_queue_tasks"].includes(this.collection.name);
+      const order = compareHybridLogicalClocks(
+        local?._meta?.ctoxHlc,
+        master?._meta?.ctoxHlc
+      );
+      if (nativeAuthoritative || order < 0) {
+        if (master) acceptedMaster.push(master);
+      } else {
+        retryRows.push(row);
+      }
+    }
+    if (acceptedMaster.length) {
+      await this.collection.storageCollection.bulkWrite(acceptedMaster, {
+        replicationOrigin: this.replicationOriginForPeer(peerId)
+      });
+      await this.invalidateDemandCacheForRemoteWrite(acceptedMaster);
+    }
+    return retryRows;
   }
   recordLocalPushChangedSinceRead(result, documents = []) {
     const scanned = Number.isFinite(Number(result?.scanned)) ? Math.max(0, Number(result.scanned)) : Array.isArray(documents) ? documents.length : 0;
@@ -7165,12 +7891,19 @@ var CtoxWebRtcReplicationState = class {
         record = await storage.getStoredRecord?.(id);
       } catch {
       }
-      const { merged } = threeWayMergeDocuments(
+      const { merged, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
         record?.base,
         row.newDocumentState,
         row.assumedMasterState,
         { primaryPath }
       );
+      if (requiresManualResolution) {
+        const error = new Error(`Structured conflict requires native/manual resolution for ${this.collection.name}: ${conflictFields.join(", ")}`);
+        error.code = "structured_conflict_requires_resolution";
+        error.collection = this.collection.name;
+        error.fields = conflictFields;
+        throw error;
+      }
       if (storage.mergeStats) storage.mergeStats.pushConflictMerges += 1;
       try {
         await storage.bulkWrite([merged], { baseById: { [id]: row.assumedMasterState } });
@@ -7260,6 +7993,12 @@ var CtoxWebRtcReplicationState = class {
       shared?.unregister?.(this.collection.name);
     } catch {
     }
+    if (this.collection?.demandLoader === this.demandLoader) {
+      try {
+        this.collection.setDemandLoader?.(null);
+      } catch {
+      }
+    }
     try {
       this.demandLoader?.abortAllInFlight?.("replication-cancel");
     } catch {
@@ -7273,9 +8012,17 @@ var CtoxWebRtcReplicationState = class {
     } catch {
     }
     try {
+      this.multiTabBroker?.close?.();
+    } catch {
+    }
+    try {
       await this.demandSidecar?.close?.();
     } catch {
     }
+    this.demandLoader = null;
+    this.demandFileLoader = null;
+    this.multiTabBroker = null;
+    this.demandLoaderActive = false;
   }
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
   /// them to the underlying collection so that `find().exec()` and observable
@@ -7302,16 +8049,24 @@ var CtoxWebRtcReplicationState = class {
       return null;
     }
     const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
+    this.multiTabBroker = createBroadcastChannelBroker({
+      databaseName: this.collection.storageCollection?.databaseName || this.topic
+    });
     const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
     const primaryDelete = async (collection, id) => {
       if (collection !== this.collection.name) return;
+      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
+      if (!stored || Number(stored.pushable || 0) !== 0) {
+        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+      }
       if (typeof this.collection.storageCollection.hardDeleteByIds === "function") {
         await this.collection.storageCollection.hardDeleteByIds([id]);
       }
     };
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
+      schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
       primaryDelete
     });
     try {
@@ -7319,7 +8074,11 @@ var CtoxWebRtcReplicationState = class {
     } catch {
     }
     try {
-      this.demandSidecar.startEvictionScheduler({ intervalMs: 3e4 });
+      this.demandSidecar.startEvictionScheduler({
+        intervalMs: 3e4,
+        globalBudgetBytes: GLOBAL_QUERY_META_BUDGET_BYTES,
+        shareBudgetBytes: DEFAULT_QUERY_META_BUDGET_BYTES
+      });
     } catch {
     }
     const demandReplicationOrigin = () => this.replicationOriginForPeer(this.activeRemotePeerId) || { role: "ctox_instance", peerId: this.activeRemotePeerId || "", sessionId: "", collection: this.collection.name };
@@ -7331,6 +8090,7 @@ var CtoxWebRtcReplicationState = class {
       requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
+      multiTabBroker: this.multiTabBroker,
       replicationOrigin: demandReplicationOrigin
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
@@ -7342,11 +8102,12 @@ var CtoxWebRtcReplicationState = class {
       sidecarBackend: backend,
       persistChunks: shouldPersistFetchedFileChunks(this.collection.name),
       replicationOrigin: demandReplicationOrigin,
-      requestFileFetch: ({ requestId, fileId, range, knownSequences }) => demandTransport.requestFileFetch({
+      requestFileFetch: ({ requestId, fileId, range, knownSequences, onChunk }) => demandTransport.requestFileFetch({
         requestId,
         fileId,
         range,
         knownSequences,
+        onChunk,
         collectionName: this.collection.name
       }),
       requestFileCancel: ({ requestId, reason }) => demandTransport.requestFileCancel({ requestId, reason }),
@@ -7371,6 +8132,7 @@ var CtoxWebRtcReplicationState = class {
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
     if (validityKey && (retainedPull || retainedPush)) {
       this.retainedCheckpoints = { validityKey, pull: retainedPull, push: retainedPush };
+      writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
     }
     peerStates.delete(peerId);
     this.pullCheckpointsByPeer.delete(peerId);
@@ -7402,6 +8164,20 @@ var CtoxWebRtcReplicationState = class {
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
+  }
+  persistCheckpointsForPeer(peerId) {
+    const validityKey = this.checkpointValidityKeyForPeer(peerId);
+    if (!validityKey) return;
+    const retained = {
+      validityKey,
+      pull: this.pullCheckpointsByPeer.get(peerId) || null,
+      push: this.pushCheckpointsByPeer.get(peerId) || null,
+      collection: this.collection.name,
+      schemaHash: this.schemaHashValue || "",
+      updatedAtMs: Date.now()
+    };
+    this.retainedCheckpoints = retained;
+    writePersistentCheckpoints(this.checkpointStorageKey, retained);
   }
   remoteProtocolForPeer(peerId) {
     const localProtocol = (this.peerStates$.getValue() || /* @__PURE__ */ new Map()).get(peerId)?.remoteProtocol || null;
@@ -7570,8 +8346,35 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== "object") return "";
   const epoch = typeof remoteProtocol.checkpoint?.epoch === "string" ? remoteProtocol.checkpoint.epoch.trim() : "";
   const sessionId = typeof remoteProtocol.peerSession?.sessionId === "string" ? remoteProtocol.peerSession.sessionId.trim() : "";
-  if (!epoch || !sessionId) return "";
-  return `${epoch}|${sessionId}`;
+  const schemaHashValue = String(
+    remoteProtocol.collection?.schemaHash || remoteProtocol.schemaHash || remoteProtocol.schema?.hash || ""
+  ).trim();
+  if (!epoch || !sessionId || !schemaHashValue) return "";
+  return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+function persistentCheckpointStorageKey(topic, collection) {
+  return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ""))}.${encodeURIComponent(String(collection || ""))}`;
+}
+function readPersistentCheckpoints(key) {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem?.(key) || "null");
+    if (!parsed || typeof parsed !== "object" || !parsed.validityKey) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function writePersistentCheckpoints(key, value) {
+  try {
+    globalThis.localStorage?.setItem?.(key, JSON.stringify(value));
+  } catch {
+  }
+}
+function clearPersistentCheckpoints(key) {
+  try {
+    globalThis.localStorage?.removeItem?.(key);
+  } catch {
+  }
 }
 function browserInitiatorPeerId(topic) {
   const origin = browserPeerOriginId();
@@ -7736,7 +8539,7 @@ async function removeRxDatabase(name) {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error || new Error(`Failed to delete IndexedDB ${name}`));
-    request.onblocked = () => resolve();
+    request.onblocked = () => reject(new Error(`IndexedDB delete blocked for ${name}`));
   });
 }
 function addRxPlugin(_ignored = null) {
@@ -7795,6 +8598,9 @@ var CtoxRxDatabase = class {
   }
   collection(name) {
     return this.collections[name] || this[name] || null;
+  }
+  async getUnsyncedWriteSummary() {
+    return this.storage.unsyncedWriteSummary?.() || { total: 0, byCollection: {} };
   }
   async close() {
     this.storage.close();
@@ -7933,6 +8739,8 @@ var CtoxRxCollection = class {
         const registry = getActiveCollectionRegistry();
         registry.subscriptionStarted(this.name);
         let pendingTimer = null;
+        let initialRetryTimer = null;
+        let initialRetryAttempt = 0;
         let initialized = false;
         let pendingSuccess = {};
         const documentsById = /* @__PURE__ */ new Map();
@@ -7961,9 +8769,19 @@ var CtoxRxCollection = class {
             documents = await this.find().exec();
           } catch (error) {
             if (isIndexedDbConnectionClosingError(error)) return;
+            if (active && isRetryableObservableInitError(error)) {
+              const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
+              initialRetryAttempt += 1;
+              initialRetryTimer = setTimeout(() => {
+                initialRetryTimer = null;
+                void flushInitial();
+              }, delayMs);
+              return;
+            }
             throw error;
           }
           if (!active) return;
+          initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
             const id = documentIdFromDoc(doc);
@@ -7990,7 +8808,7 @@ var CtoxRxCollection = class {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
-        flushInitial();
+        void flushInitial();
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
@@ -7998,6 +8816,10 @@ var CtoxRxCollection = class {
             if (pendingTimer != null) {
               clearTimeout(pendingTimer);
               pendingTimer = null;
+            }
+            if (initialRetryTimer != null) {
+              clearTimeout(initialRetryTimer);
+              initialRetryTimer = null;
             }
             unsubscribe();
             registry.subscriptionEnded(this.name);
@@ -8008,6 +8830,21 @@ var CtoxRxCollection = class {
   }
 };
 var OBSERVABLE_DEBOUNCE_MS = 50;
+var OBSERVABLE_INIT_RETRY_BASE_MS = 100;
+var OBSERVABLE_INIT_RETRY_MAX_MS = 2e3;
+function isRetryableObservableInitError(error) {
+  if (error?.retryable === true) return true;
+  const code = String(error?.code || "").trim().toUpperCase();
+  if (code === "QUERY_QUEUE_LIMIT") return true;
+  return String(error?.message || error || "").includes("QUERY_QUEUE_LIMIT:");
+}
+function observableInitRetryDelayMs(attempt = 0) {
+  const exponent = Math.max(0, Math.min(8, Number(attempt) || 0));
+  return Math.min(
+    OBSERVABLE_INIT_RETRY_MAX_MS,
+    OBSERVABLE_INIT_RETRY_BASE_MS * 2 ** exponent
+  );
+}
 function isIndexedDbConnectionClosingError(error) {
   const message = String(error?.message || error || "");
   return error?.name === "InvalidStateError" && message.includes("database connection is closing");
@@ -8446,106 +9283,6 @@ var ctoxRxdbTestInternals = {
   sortDocuments
 };
 
-// src/apps/business-os/rxdb/src/multi-tab-broker.mjs
-var CHANNEL_PREFIX = "ctox-rxdb-v1_5-broker-";
-var CLAIM_TTL_MS = 3e4;
-function createBroadcastChannelBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
-  if (!databaseName) throw new TypeError("broker requires databaseName");
-  if (typeof globalThis.BroadcastChannel !== "function") {
-    return createMemoryBroker({ databaseName, tabId, clock });
-  }
-  const channel = new globalThis.BroadcastChannel(`${CHANNEL_PREFIX}${databaseName}`);
-  const localClaims = /* @__PURE__ */ new Map();
-  const remoteClaims = /* @__PURE__ */ new Map();
-  const completions = /* @__PURE__ */ new Map();
-  channel.onmessage = (event) => {
-    const msg = event?.data;
-    if (!msg || typeof msg !== "object") return;
-    const now = clock();
-    if (msg.type === "claim") {
-      remoteClaims.set(msg.windowKey, { tabId: msg.tabId, expiresAt: now + CLAIM_TTL_MS });
-    } else if (msg.type === "release") {
-      remoteClaims.delete(msg.windowKey);
-    } else if (msg.type === "complete") {
-      remoteClaims.delete(msg.windowKey);
-      const waiter = completions.get(msg.windowKey);
-      if (waiter) {
-        completions.delete(msg.windowKey);
-        waiter.resolve(msg.result);
-      }
-    }
-  };
-  function expired(claim, now) {
-    return !claim || claim.expiresAt < now;
-  }
-  return {
-    kind: "broadcast-channel",
-    tabId,
-    async claim(windowKey) {
-      const now = clock();
-      const remote = remoteClaims.get(windowKey);
-      if (remote && expired(remote, now)) {
-        remoteClaims.delete(windowKey);
-      } else if (remote) {
-        return false;
-      }
-      const local = localClaims.get(windowKey);
-      if (local && !expired(local, now)) return false;
-      localClaims.set(windowKey, { expiresAt: now + CLAIM_TTL_MS });
-      channel.postMessage({ type: "claim", windowKey, tabId, at: now });
-      return true;
-    },
-    async release(windowKey, result = null) {
-      localClaims.delete(windowKey);
-      channel.postMessage({ type: "complete", windowKey, tabId, result, at: clock() });
-    },
-    async waitForRemote(windowKey, timeoutMs = 5e3) {
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          completions.delete(windowKey);
-          resolve(null);
-        }, timeoutMs);
-        completions.set(windowKey, {
-          resolve: (val) => {
-            clearTimeout(timer);
-            resolve(val);
-          }
-        });
-      });
-    },
-    close() {
-      try {
-        channel.close();
-      } catch {
-      }
-    }
-  };
-}
-function createMemoryBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
-  const claims = /* @__PURE__ */ new Set();
-  return {
-    kind: "memory",
-    tabId,
-    async claim(windowKey) {
-      if (claims.has(windowKey)) return false;
-      claims.add(windowKey);
-      return true;
-    },
-    async release(windowKey) {
-      claims.delete(windowKey);
-    },
-    async waitForRemote() {
-      return null;
-    },
-    close() {
-    }
-  };
-}
-function randomTabId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return `tab-${Math.random().toString(36).slice(2, 12)}`;
-}
-
 // src/apps/business-os/rxdb/src/advanced-status-bridge.mjs
 function buildBusinessOsAdvancedStatus({
   v15Status,
@@ -8656,6 +9393,7 @@ export {
   canonicalJson,
   canonicalQueryJson,
   canonicalizeQueryInput,
+  compareHybridLogicalClocks,
   createActiveCollectionRegistry,
   createBroadcastChannelBroker,
   createCtoxWebRtcNativePeer,
@@ -8673,13 +9411,17 @@ export {
   ctoxRxdbTestInternals,
   decodeChunk,
   deepEqualJson,
+  formatHybridLogicalClock,
   getActiveCollectionRegistry,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
   getPresenceRegistry,
+  hybridLogicalClockNodeId,
+  nextHybridLogicalClock,
   normalizeConflictStrategy,
   normalizeSignalingControlPlaneError,
   openCtoxIndexedDbStorage,
+  parseHybridLogicalClock,
   projectStatusFromSidecar,
   queryFingerprint,
   remoteSupportsQueryFetch,

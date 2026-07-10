@@ -16,10 +16,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const daemonBin = resolve(here, '..', '..', '..', '..', 'core', 'rxdb', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon');
 // Cargo target is under repo runtime/; fall back to runtime/build/cargo-target.
 const fallbackBin = resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon');
+const debugFallbackBin = resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'debug', 'examples', 'v15_wire_daemon');
 import { existsSync } from 'node:fs';
-const bin = existsSync(daemonBin) ? daemonBin : fallbackBin;
-if (!existsSync(bin)) {
-  console.error('daemon binary not found at', daemonBin, 'or', fallbackBin);
+const bin = [daemonBin, fallbackBin, debugFallbackBin].find((candidate) => existsSync(candidate));
+if (!bin) {
+  console.error('daemon binary not found at', daemonBin, fallbackBin, 'or', debugFallbackBin);
   process.exit(2);
 }
 

@@ -717,8 +717,9 @@ async function promptText(title, defaultValue = '', required = false) {
 }
 
 async function dispatchTicketCommand(commandType, recordId, payload) {
-  const collection = state.ctx.db?.collection?.('business_commands');
-  if (!collection) throw new Error(state.t('commandUnavailable', 'Ticket-Aktionen sind gerade nicht verfügbar.'));
+  if (!state.ctx.commandBus?.dispatch) {
+    throw new Error(state.t('commandUnavailable', 'Ticket-Aktionen sind gerade nicht verfügbar.'));
+  }
   await state.ctx.sync?.startCollection?.('business_commands');
   const commandId = `cmd_${randomId()}`;
   setCommandStatus(state.t('commandPending', 'Befehl wird verarbeitet...'));
@@ -736,35 +737,12 @@ async function dispatchTicketCommand(commandType, recordId, payload) {
       actor: actorContext(state.ctx.session),
     },
   };
-  if (state.ctx.commandBus?.dispatch) {
-    await state.ctx.commandBus.dispatch(command);
-  } else {
-    const now = Date.now();
-    await collection.incrementalUpsert?.({
-      ...command,
-      status: 'pending_sync',
-      created_at_ms: now,
-      updated_at_ms: now,
-    });
+  const accepted = await state.ctx.commandBus.dispatch(command, { until: 'accepted' });
+  if (accepted?.status === 'failed') {
+    throw new Error(commandFailureMessage(accepted, commandId));
   }
-  await waitForCommandProjection(commandId);
   setCommandStatus(state.t('commandDone', 'Befehl abgeschlossen.'));
   await refreshTickets();
-}
-
-async function waitForCommandProjection(commandId, timeoutMs = 45000) {
-  const collection = state.ctx.db?.collection?.('business_commands');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const doc = await collection?.findOne(commandId).exec();
-    const data = doc?.toJSON?.();
-    if (data && data.status && data.status !== 'pending_sync') {
-      if (data.status === 'failed') throw new Error(commandFailureMessage(data, commandId));
-      return data;
-    }
-    await delay(300);
-  }
-  throw new Error(`Aktion ${commandId} wurde noch nicht abgeschlossen.`);
 }
 
 function commandFailureMessage(data, commandId) {

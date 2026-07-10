@@ -1,6 +1,8 @@
 import { createActiveCollectionRegistry } from '../dist/ctox-rxdb-js.mjs';
 
-const registry = createActiveCollectionRegistry({ recentExecMs: 150 });
+// Keep a wide margin over the 100 ms notification debounce so a busy CI host
+// cannot let the read expire before the first debounced notification runs.
+const registry = createActiveCollectionRegistry({ recentExecMs: 1_000 });
 const events = [];
 registry.onChange((list) => {
   events.push([...list]);
@@ -14,7 +16,7 @@ assert(
   'recent exec read must publish an active collection',
 );
 
-await delay(240);
+await delay(1_100);
 const latest = events.at(-1) || [];
 assert(!latest.includes('desktop_files'), 'expired exec read must publish inactive collection set');
 

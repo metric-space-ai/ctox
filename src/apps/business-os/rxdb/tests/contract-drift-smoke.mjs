@@ -26,12 +26,15 @@ const srcRoot = resolve(repoRoot, 'src');
 const GENERATORS = [
   'src/core/rxdb/tools/build_webrtc_frame_protocol_contract.mjs',
   'src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs',
+  'src/core/rxdb/tools/build_business_command_lifecycle_contract.mjs',
 ];
 const GENERATED = [
   'src/core/rxdb/src/plugins/replication_webrtc/frame_contract_generated.rs',
   'src/core/rxdb/src/plugins/replication_webrtc/protocol_contract_generated.rs',
   'src/apps/business-os/rxdb/src/frame-contract.generated.mjs',
   'src/apps/business-os/rxdb/src/protocol-contract.generated.mjs',
+  'src/core/business_os/command_lifecycle_generated.rs',
+  'src/apps/business-os/shared/command-lifecycle.generated.js',
 ];
 
 const originals = new Map();
@@ -100,7 +103,17 @@ if (!rustProtocol || rustProtocol !== jsProtocol) {
   process.exit(1);
 }
 
+const commandCapability = /ctox-command-lifecycle-v2/;
+const rustCommandCapability = originals.get(GENERATED[4]).match(commandCapability)?.[0];
+const jsCommandCapability = originals.get(GENERATED[5]).match(commandCapability)?.[0];
+if (!rustCommandCapability || rustCommandCapability !== jsCommandCapability) {
+  console.error(
+    `CONTRACT PARITY VIOLATION: command lifecycle capability differs (rust=${rustCommandCapability}, js=${jsCommandCapability})`,
+  );
+  process.exit(1);
+}
+
 console.log('ctox-rxdb contract drift guard OK', {
   generated: GENERATED.length,
-  parityChecks: pairs.length + 1,
+  parityChecks: pairs.length + 2,
 });

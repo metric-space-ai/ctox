@@ -48,6 +48,13 @@ pub fn doc_state_to_write_doc(
                 .unwrap_or(Value::Object(serde_json::Map::new()));
             if let Some(m_obj) = meta.as_object_mut() {
                 m_obj.insert("lwt".to_string(), json!(now()));
+                if let Some(ctox_hlc) = doc_state
+                    .get("_meta")
+                    .and_then(|value| value.get("ctoxHlc"))
+                    .cloned()
+                {
+                    m_obj.insert("ctoxHlc".to_string(), ctox_hlc);
+                }
             } else {
                 meta = json!({ "lwt": now() });
             }
@@ -81,7 +88,14 @@ pub fn write_doc_to_doc_state(write_doc: &Value, keep_attachments: bool, keep_me
             obj.remove("_attachments");
         }
         if !keep_meta {
+            let ctox_hlc = obj
+                .get("_meta")
+                .and_then(|meta| meta.get("ctoxHlc"))
+                .cloned();
             obj.remove("_meta");
+            if let Some(ctox_hlc) = ctox_hlc {
+                obj.insert("_meta".to_string(), json!({ "ctoxHlc": ctox_hlc }));
+            }
             obj.remove("_rev");
         }
     }
@@ -348,6 +362,27 @@ mod tests {
             checkpoint_queue: tokio::sync::Mutex::new(()),
             has_attachments,
         }
+    }
+
+    #[test]
+    fn keep_meta_false_preserves_only_ctox_hlc_across_wire_state() {
+        let write_doc = json!({
+            "id": "doc-1",
+            "_rev": "1-test",
+            "_meta": {
+                "lwt": 42,
+                "ctoxHlc": "16:1:browser-a",
+                "ctoxReplicationOrigin": {"role": "browser"}
+            }
+        });
+        let state = write_doc_to_doc_state(&write_doc, false, false);
+        assert_eq!(
+            state.pointer("/_meta/ctoxHlc"),
+            Some(&json!("16:1:browser-a"))
+        );
+        assert!(state.pointer("/_meta/lwt").is_none());
+        assert!(state.pointer("/_meta/ctoxReplicationOrigin").is_none());
+        assert!(state.get("_rev").is_none());
     }
 
     #[test]

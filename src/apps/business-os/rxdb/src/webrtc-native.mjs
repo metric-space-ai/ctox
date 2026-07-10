@@ -33,6 +33,10 @@ import { CTOX_PRESENCE_RPC } from './protocol-contract.generated.mjs';
 
 const SEND_BUFFER_HIGH_WATER = 512 * 1024;
 const SEND_BUFFER_LOW_WATER = 128 * 1024;
+const SEND_BUFFER_STALL_TIMEOUT_MS = 30_000;
+const MAX_PEER_SEND_QUEUE_FRAMES = 1024;
+const MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
+const FAIR_SEND_SCHEDULE = ['high', 'high', 'high', 'high', 'normal', 'normal', 'low'];
 // Hard wire invariant shared with the Rust peer (MAX_SERIALIZED_FRAME_BYTES in
 // connection_handler_rs.rs): a single serialized DataChannel message must stay
 // <= 16 KiB or browsers kill the channel. Chunks are budgeted by their
@@ -41,7 +45,6 @@ const MAX_SERIALIZED_FRAME_BYTES = 16384;
 const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
-const SEND_PRIORITIES = ['high', 'normal', 'low'];
 // TODO(rxdb-webrtc-multiplexing): the real fix is to multiplex every
 // collection over a single RTCPeerConnection instead of opening one
 // PeerConnection per collection. There are ~80 Business OS collections (see
@@ -56,7 +59,12 @@ const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1'
 const RECENT_RTC_EVENT_LIMIT = 40;
 // Grace window for transient ICE 'disconnected' before tearing the
 // connection down (mirrors the Rust peer's keep-through-Disconnected rule).
-const ICE_DISCONNECTED_GRACE_MS = 8_000;
+// Chromium can report `disconnected` while a busy local peer drains a large
+// replicated/query-fetch burst. Eight seconds was shorter than legitimate
+// Business OS app fan-out and tore down all multiplexed collections at once.
+// Keep the transport through a bounded recovery window; `failed` and `closed`
+// remain immediate terminal states.
+const ICE_DISCONNECTED_GRACE_MS = 30_000;
 // Signaling reconnection backoff. Post-multiplex the whole room shares ONE
 // signaling socket; a clean close used to only emit `signaling-close` (which had
 // no listener), so the peer could never re-discover the native side until an
@@ -166,6 +174,10 @@ export class CtoxWebRtcNativePeer {
       highPriorityQueueDepth: 0,
       normalPriorityQueueDepth: 0,
       lowPriorityQueueDepth: 0,
+      queuedBytes: 0,
+      rejectedFrames: 0,
+      oldestQueuedAgeMs: 0,
+      turnCredentialExpiresAtMs: turnCredentialExpiryMs(iceServers),
       lastSendPriority: 'normal',
       lastAckLagMs: 0,
       lastBufferedAmount: 0,
@@ -254,24 +266,44 @@ export class CtoxWebRtcNativePeer {
       return false;
     }
     const text = JSON.stringify(payload);
-    this.enqueueSendFrame(connection, {
+    return this.enqueueSendFrame(connection, {
       payload,
       text,
       inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
       priority: classifySendPriority(payload, text),
     });
-    return true;
   }
 
   enqueueSendFrame(connection, item) {
     if (!connection.sendQueue) {
       connection.sendQueue = createSendQueue();
     }
-    connection.sendQueue[item.priority].push({
+    const queue = connection.sendQueue;
+    const itemBytes = encodedSize(item.text);
+    const queuedFrames = queue.high.length + queue.normal.length + queue.low.length;
+    if (
+      queuedFrames >= MAX_PEER_SEND_QUEUE_FRAMES
+      || queue.queuedBytes + itemBytes > MAX_PEER_SEND_QUEUE_BYTES
+    ) {
+      this.recordTransportStatus({ rejectedFrames: this.transportStats.rejectedFrames + 1 });
+      this.events.emit('error', {
+        code: 'ctox_webrtc_send_queue_budget_exceeded',
+        peerId: connection.remotePeerId,
+        queuedFrames,
+        queuedBytes: queue.queuedBytes,
+        maxFrames: MAX_PEER_SEND_QUEUE_FRAMES,
+        maxBytes: MAX_PEER_SEND_QUEUE_BYTES,
+      });
+      this.removeConnection(connection.remotePeerId, 'send-queue-budget-exceeded');
+      return false;
+    }
+    queue[item.priority].push({
       ...item,
+      byteLength: itemBytes,
       queuedAtMs: Date.now(),
-      sequence: connection.sendQueue.nextSequence++,
+      sequence: queue.nextSequence++,
     });
+    queue.queuedBytes += itemBytes;
     this.recordTransportStatus({
       queuedFrames: this.transportStats.queuedFrames + 1,
       lastSendPriority: item.priority,
@@ -284,6 +316,7 @@ export class CtoxWebRtcNativePeer {
         message: error?.message || String(error),
       });
     });
+    return true;
   }
 
   async drainSendQueue(connection) {
@@ -512,16 +545,26 @@ export class CtoxWebRtcNativePeer {
       backpressureWaitCount: this.transportStats.backpressureWaitCount + 1,
       lastBufferedAmount: Number(channel.bufferedAmount || 0),
     });
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const previousThreshold = channel.bufferedAmountLowThreshold;
       channel.bufferedAmountLowThreshold = SEND_BUFFER_LOW_WATER;
-      const done = () => {
+      let timer = null;
+      const cleanup = () => {
         channel.removeEventListener?.('bufferedamountlow', done);
         channel.bufferedAmountLowThreshold = previousThreshold || 0;
+        if (timer) clearTimeout(timer);
+      };
+      const done = () => {
+        cleanup();
         resolve();
       };
       channel.addEventListener?.('bufferedamountlow', done, { once: true });
-      setTimeout(done, 250);
+      timer = setTimeout(() => {
+        cleanup();
+        const error = new Error('WebRTC send buffer remained above the high-water mark.');
+        error.code = 'ctox_webrtc_send_buffer_stalled';
+        reject(error);
+      }, SEND_BUFFER_STALL_TIMEOUT_MS);
     });
   }
 
@@ -797,6 +840,14 @@ export class CtoxWebRtcNativePeer {
       }
       if (['closed', 'failed'].includes(state)) {
         this.removeConnection(remotePeerId, `peer-${state}`);
+      } else if (state === 'connected') {
+        updateSelectedCandidatePair(connection).then(() => {
+          this.recordConnectionEvent(connection, 'selected-candidate-pair', {
+            localCandidateType: connection.signalStats.selectedLocalCandidateType,
+            remoteCandidateType: connection.signalStats.selectedRemoteCandidateType,
+            protocol: connection.signalStats.selectedCandidateProtocol,
+          });
+        }).catch(() => {});
       }
     };
     peer.ondatachannel = (event) => this.attachChannel(connection, event.channel);
@@ -1549,6 +1600,8 @@ export class CtoxWebRtcNativePeer {
     let high = 0;
     let normal = 0;
     let low = 0;
+    let queuedBytes = 0;
+    let oldestQueuedAtMs = 0;
     const connections = connection ? [connection] : this.connections.values();
     for (const entry of connections) {
       const queue = entry?.sendQueue;
@@ -1556,12 +1609,21 @@ export class CtoxWebRtcNativePeer {
       high += queue.high.length;
       normal += queue.normal.length;
       low += queue.low.length;
+      queuedBytes += Number(queue.queuedBytes || 0);
+      for (const item of [...queue.high, ...queue.normal, ...queue.low]) {
+        const queuedAtMs = Number(item?.queuedAtMs || 0);
+        if (queuedAtMs > 0 && (oldestQueuedAtMs === 0 || queuedAtMs < oldestQueuedAtMs)) {
+          oldestQueuedAtMs = queuedAtMs;
+        }
+      }
     }
     this.recordTransportStatus({
       priorityQueueDepth: high + normal + low,
       highPriorityQueueDepth: high,
       normalPriorityQueueDepth: normal,
       lowPriorityQueueDepth: low,
+      queuedBytes,
+      oldestQueuedAgeMs: oldestQueuedAtMs > 0 ? Math.max(0, Date.now() - oldestQueuedAtMs) : 0,
     });
   }
 
@@ -2040,8 +2102,45 @@ function createPeerSignalStats() {
     localCandidateComplete: false,
     lastLocalCandidateType: '',
     lastRemoteCandidateType: '',
+    selectedLocalCandidateType: '',
+    selectedRemoteCandidateType: '',
+    selectedCandidateProtocol: '',
     lastSignalAtMs: 0,
   };
+}
+
+async function updateSelectedCandidatePair(connection) {
+  const report = await connection?.peer?.getStats?.();
+  if (!report) return;
+  const values = [];
+  report.forEach?.((value) => values.push(value));
+  let pair = null;
+  const transport = values.find((entry) => entry?.type === 'transport' && entry.selectedCandidatePairId);
+  if (transport) pair = values.find((entry) => entry.id === transport.selectedCandidatePairId) || null;
+  if (!pair) {
+    pair = values.find((entry) => (
+      entry?.type === 'candidate-pair'
+      && entry.state === 'succeeded'
+      && (entry.nominated || entry.selected)
+    )) || null;
+  }
+  if (!pair) return;
+  const local = values.find((entry) => entry.id === pair.localCandidateId) || null;
+  const remote = values.find((entry) => entry.id === pair.remoteCandidateId) || null;
+  connection.signalStats.selectedLocalCandidateType = local?.candidateType || '';
+  connection.signalStats.selectedRemoteCandidateType = remote?.candidateType || '';
+  connection.signalStats.selectedCandidateProtocol = local?.protocol || remote?.protocol || '';
+}
+
+function turnCredentialExpiryMs(iceServers = []) {
+  const expiries = [];
+  for (const server of Array.isArray(iceServers) ? iceServers : []) {
+    const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+    if (!urls.some((url) => /^turns?:/i.test(String(url || '')))) continue;
+    const expirySeconds = Number.parseInt(String(server?.username || '').split(':')[0], 10);
+    if (Number.isFinite(expirySeconds) && expirySeconds > 0) expiries.push(expirySeconds * 1000);
+  }
+  return expiries.length ? Math.min(...expiries) : 0;
 }
 
 function peerConnectionSnapshot(connection) {
@@ -2276,13 +2375,19 @@ function createSendQueue() {
     low: [],
     draining: false,
     nextSequence: 0,
+    queuedBytes: 0,
+    scheduleCursor: 0,
   };
 }
 
 function nextQueuedSend(queue) {
-  for (const priority of SEND_PRIORITIES) {
+  for (let offset = 0; offset < FAIR_SEND_SCHEDULE.length; offset += 1) {
+    const priority = FAIR_SEND_SCHEDULE[queue.scheduleCursor % FAIR_SEND_SCHEDULE.length];
+    queue.scheduleCursor = (queue.scheduleCursor + 1) % FAIR_SEND_SCHEDULE.length;
     if (queue[priority].length) {
-      return queue[priority].shift();
+      const item = queue[priority].shift();
+      queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item?.byteLength || 0));
+      return item;
     }
   }
   return null;
@@ -2292,7 +2397,9 @@ function nextHighPriorityInlineSend(queue) {
   if (!queue?.high?.length) return null;
   const index = queue.high.findIndex((item) => item?.inline);
   if (index < 0) return null;
-  return queue.high.splice(index, 1)[0] || null;
+  const item = queue.high.splice(index, 1)[0] || null;
+  if (item) queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item.byteLength || 0));
+  return item;
 }
 
 function shouldRecycleConnectionAfterRequestTimeout(method = '') {

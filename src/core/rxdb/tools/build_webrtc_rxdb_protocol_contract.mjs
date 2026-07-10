@@ -16,6 +16,8 @@ const fileRpc = fixture.fileRpc || {};
 const presenceRpc = fixture.presenceRpc || {};
 const queryFetchCapability = fixture.optionalCapabilities?.queryFetch || 'ctox-rxdb-query-fetch-v1';
 const presenceCapability = fixture.optionalCapabilities?.presence || 'ctox-presence-v1';
+const commandLifecycleCapability = fixture.optionalCapabilities?.commandLifecycle
+  || 'ctox-command-lifecycle-v2';
 
 const js = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.json.
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
@@ -30,6 +32,7 @@ export const CTOX_QUERY_RPC = Object.freeze(${json(queryRpc)});
 export const CTOX_FILE_RPC = Object.freeze(${json(fileRpc)});
 export const CTOX_PRESENCE_CAPABILITY = ${json(presenceCapability)};
 export const CTOX_PRESENCE_RPC = Object.freeze(${json(presenceRpc)});
+export const CTOX_COMMAND_LIFECYCLE_CAPABILITY = ${json(commandLifecycleCapability)};
 `;
 
 const rust = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.json.
@@ -67,6 +70,8 @@ pub(super) const CTOX_PRESENCE_RPC_UPDATE: &str = ${rustString(presenceRpc.updat
 pub(super) const CTOX_PRESENCE_STREAM_ID: &str = ${rustString(presenceRpc.streamId || 'presence$')};
 pub(super) const CTOX_PRESENCE_TTL_MS: u64 = ${presenceRpc.ttlMs ?? 45000};
 pub(super) const CTOX_PRESENCE_MAX_ENTRIES_PER_PEER: usize = ${presenceRpc.maxEntriesPerPeer ?? 32};
+#[allow(dead_code)]
+pub(super) const CTOX_COMMAND_LIFECYCLE_CAPABILITY: &str = ${rustString(commandLifecycleCapability)};
 `;
 
 writeFileSync(jsPath, js);

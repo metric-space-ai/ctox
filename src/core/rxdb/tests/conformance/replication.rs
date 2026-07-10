@@ -9,9 +9,9 @@ use rxdb::rxjs_compat::RxStream;
 use rxdb::storage::sqlite::index_mod::get_rx_storage_sqlite;
 use rxdb::storage::sqlite::types::RxStorageSqliteSettings;
 use rxdb::types::{
-    BulkWriteRow, JsonSchema, PrimaryKey, RxJsonSchema, RxReplicationHandler,
-    RxReplicationMasterChange, RxReplicationWriteToMasterRow, RxStorage, RxStorageInstance,
-    RxStorageInstanceCreationParams,
+    BulkWriteRow, JsonSchema, PrimaryKey, RxConflictHandler, RxConflictHandlerInput, RxJsonSchema,
+    RxReplicationHandler, RxReplicationMasterChange, RxReplicationWriteToMasterRow, RxStorage,
+    RxStorageInstance, RxStorageInstanceCreationParams,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -20,6 +20,19 @@ struct Backend {
     name: &'static str,
     instance: Arc<dyn RxStorageInstance>,
     _temp_dir: Option<TempDir>,
+}
+
+struct RejectingEqualConflictHandler;
+
+#[async_trait::async_trait]
+impl RxConflictHandler for RejectingEqualConflictHandler {
+    async fn is_equal(&self, _a: &Value, _b: &Value, _ctx: &str) -> bool {
+        false
+    }
+
+    async fn resolve(&self, input: &RxConflictHandlerInput, _ctx: &str) -> Value {
+        input.real_master_state.clone()
+    }
 }
 
 impl Backend {
@@ -348,6 +361,42 @@ async fn storage_replication_handler_master_write_persists_and_reports_conflicts
         assert_eq!(
             conflicts,
             vec![doc_state("alice", "Alice", 31, false)],
+            "{}",
+            backend.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn storage_replication_handler_accepts_exact_assumed_master_despite_handler_false_negative() {
+    for backend in backend_pair("handler-equal-assumed-fallback").await {
+        seed(&backend.instance).await;
+        let handler = rx_storage_instance_to_replication_handler(
+            Arc::clone(&backend.instance),
+            Arc::new(RejectingEqualConflictHandler),
+            format!("replication-token-{}", backend.name),
+            false,
+        );
+        let mut assumed = doc_state("alice", "Alice", 31, false);
+        assumed["age"] = json!(31.0);
+
+        let conflicts = handler
+            .master_write(vec![RxReplicationWriteToMasterRow {
+                new_document_state: doc_state("alice", "Alicia", 32, false),
+                assumed_master_state: Some(assumed),
+            }])
+            .await
+            .expect("exact assumed master fallback");
+
+        assert!(conflicts.is_empty(), "{}", backend.name);
+        let stored = backend
+            .instance
+            .find_documents_by_id(&["alice".to_string()], false)
+            .await
+            .expect("find updated document");
+        assert_eq!(
+            stored[0].get("name"),
+            Some(&json!("Alicia")),
             "{}",
             backend.name
         );

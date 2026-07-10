@@ -8,6 +8,8 @@
 
 const CHANNEL_PREFIX = 'ctox-rxdb-v1_5-broker-';
 const CLAIM_TTL_MS = 30_000;
+const CLAIM_ELECTION_MS = 25;
+const CLAIM_RENEW_MS = 10_000;
 
 export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
   if (!databaseName) throw new TypeError('broker requires databaseName');
@@ -18,6 +20,17 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
   const localClaims = new Map(); // windowKey -> { expiresAt }
   const remoteClaims = new Map(); // windowKey -> { tabId, expiresAt }
   const completions = new Map(); // windowKey -> Promise resolvers waiting on remote completion
+  let closed = false;
+
+  function post(message) {
+    if (closed) return false;
+    try {
+      channel.postMessage(message);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   channel.onmessage = (event) => {
     const msg = event?.data;
@@ -25,6 +38,11 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
     const now = clock();
     if (msg.type === 'claim') {
       remoteClaims.set(msg.windowKey, { tabId: msg.tabId, expiresAt: now + CLAIM_TTL_MS });
+      const local = localClaims.get(msg.windowKey);
+      if (local && String(msg.tabId) < String(tabId)) {
+        clearInterval(local.renewTimer);
+        localClaims.delete(msg.windowKey);
+      }
     } else if (msg.type === 'release') {
       remoteClaims.delete(msg.windowKey);
     } else if (msg.type === 'complete') {
@@ -44,7 +62,9 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
   return {
     kind: 'broadcast-channel',
     tabId,
+    get closed() { return closed; },
     async claim(windowKey) {
+      if (closed) return false;
       const now = clock();
       // Drop expired remote claims (other tab crashed without releasing).
       const remote = remoteClaims.get(windowKey);
@@ -55,13 +75,40 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
       }
       const local = localClaims.get(windowKey);
       if (local && !expired(local, now)) return false;
-      localClaims.set(windowKey, { expiresAt: now + CLAIM_TTL_MS });
-      channel.postMessage({ type: 'claim', windowKey, tabId, at: now });
+      const renewTimer = setInterval(() => {
+        const claim = localClaims.get(windowKey);
+        if (!claim) return;
+        claim.expiresAt = clock() + CLAIM_TTL_MS;
+        if (!post({ type: 'claim', windowKey, tabId, at: clock(), renewal: true })) {
+          clearInterval(claim.renewTimer);
+          localClaims.delete(windowKey);
+        }
+      }, CLAIM_RENEW_MS);
+      localClaims.set(windowKey, { expiresAt: now + CLAIM_TTL_MS, renewTimer });
+      if (!post({ type: 'claim', windowKey, tabId, at: now })) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, CLAIM_ELECTION_MS));
+      if (closed) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
+      const contender = remoteClaims.get(windowKey);
+      if (contender && !expired(contender, clock()) && String(contender.tabId) < String(tabId)) {
+        clearInterval(renewTimer);
+        localClaims.delete(windowKey);
+        return false;
+      }
       return true;
     },
     async release(windowKey, result = null) {
+      const local = localClaims.get(windowKey);
+      if (local) clearInterval(local.renewTimer);
       localClaims.delete(windowKey);
-      channel.postMessage({ type: 'complete', windowKey, tabId, result, at: clock() });
+      post({ type: 'complete', windowKey, tabId, result, at: clock() });
     },
     async waitForRemote(windowKey, timeoutMs = 5_000) {
       return new Promise((resolve) => {
@@ -75,6 +122,19 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
       });
     },
     close() {
+      if (closed) return;
+      // Release every owned window before closing the channel. Without this,
+      // a replacement replication state in this or another tab keeps seeing
+      // the dead owner until CLAIM_TTL_MS and fails its first query window.
+      for (const [windowKey, claim] of localClaims.entries()) {
+        clearInterval(claim.renewTimer);
+        post({ type: 'release', windowKey, tabId, at: clock(), reason: 'broker-close' });
+      }
+      localClaims.clear();
+      for (const waiter of completions.values()) waiter.resolve(null);
+      completions.clear();
+      closed = true;
+      channel.onmessage = null;
       try { channel.close(); } catch {}
     },
   };
@@ -83,17 +143,20 @@ export function createBroadcastChannelBroker({ databaseName, tabId = randomTabId
 // In-Node / environments without BroadcastChannel: degenerate single-tab broker.
 export function createMemoryBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
   const claims = new Set();
+  let closed = false;
   return {
     kind: 'memory',
     tabId,
+    get closed() { return closed; },
     async claim(windowKey) {
+      if (closed) return false;
       if (claims.has(windowKey)) return false;
       claims.add(windowKey);
       return true;
     },
     async release(windowKey) { claims.delete(windowKey); },
     async waitForRemote() { return null; },
-    close() {},
+    close() { closed = true; claims.clear(); },
   };
 }
 

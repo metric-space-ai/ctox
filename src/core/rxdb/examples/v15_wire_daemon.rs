@@ -331,7 +331,7 @@ async fn main() {
                             .first()
                             .and_then(|v| v.get("requestId").and_then(Value::as_str))
                         {
-                            query_registry.cancel(rid);
+                            query_registry.cancel(&peer_identity, rid);
                         }
                     }
                     "rxdb.file.fetch" => {
@@ -345,7 +345,7 @@ async fn main() {
                             .first()
                             .and_then(|v| v.get("requestId").and_then(Value::as_str))
                         {
-                            file_registry.cancel(rid);
+                            file_registry.cancel(&peer_identity, rid);
                         }
                     }
                     other => {

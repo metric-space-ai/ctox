@@ -200,6 +200,24 @@ impl BusinessOsScope {
         }
     }
 
+    pub fn collection(collection: impl Into<String>) -> Self {
+        Self {
+            scope_type: BusinessOsScopeType::Collection,
+            scope_id: Some(collection.into()),
+            assigned_to_actor: false,
+            owned_by_actor: false,
+        }
+    }
+
+    pub fn record(record_id: impl Into<String>) -> Self {
+        Self {
+            scope_type: BusinessOsScopeType::Record,
+            scope_id: Some(record_id.into()),
+            assigned_to_actor: false,
+            owned_by_actor: false,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn task(task_id: impl Into<String>, owned_by_actor: bool, assigned_to_actor: bool) -> Self {
         Self {
@@ -232,7 +250,10 @@ impl PolicyDecision {
             scope_id: scope.scope_id.clone(),
             reason_code: "allowed",
             display_reason: "Allowed.",
-            requires_approval: false,
+            requires_approval: matches!(
+                permission,
+                BusinessOsPermission::DataWrite | BusinessOsPermission::AppsModify
+            ),
             audit_level: "decision",
         }
     }

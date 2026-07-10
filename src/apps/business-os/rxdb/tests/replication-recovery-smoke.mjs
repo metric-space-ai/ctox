@@ -252,6 +252,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const protoSameGeneration = {
     checkpoint: { epoch: 'checkpoint-epoch-1' },
     peerSession: { sessionId: 'rxdb-rs-run-A', role: 'ctox_instance' },
+    collection: { schemaHash: 'schema-hash-A' },
     capabilities: [],
   };
   state.remoteProtocolForPeer = () => protoSameGeneration;
@@ -283,6 +284,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const protoNewGeneration = {
     checkpoint: { epoch: 'checkpoint-epoch-1' },
     peerSession: { sessionId: 'rxdb-rs-run-B', role: 'ctox_instance' },
+    collection: { schemaHash: 'schema-hash-A' },
     capabilities: [],
   };
   await state.runPeerReady('peer-3', protoNewGeneration, false);

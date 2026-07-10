@@ -1441,7 +1441,7 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
   setBusy(true, label);
   try {
     const commandId = `cmd_${newId()}`;
-    await state.ctx.commandBus.dispatch({
+    const result = await state.ctx.commandBus.dispatch({
       id: commandId,
       wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
       module: 'app-store',
@@ -1455,8 +1455,7 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
         command_wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
         actor: actorContext(state.ctx.session),
       },
-    });
-    const result = await waitForCommandProjection(commandId, STORE_COMMAND_TIMEOUT_MS);
+    }, { until: 'accepted', timeoutMs: STORE_COMMAND_TIMEOUT_MS });
     await loadCatalog();
     setOperation(moduleId, {
       kind: 'success',
@@ -1480,24 +1479,6 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
   } finally {
     setBusy(false);
   }
-}
-
-async function waitForCommandProjection(commandId, timeoutMs = 60000) {
-  const collection = state.ctx.db?.collection?.('business_commands');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const doc = await collection?.findOne(commandId).exec();
-    const data = doc?.toJSON?.();
-    if (data && data.status && data.status !== 'pending_sync') {
-      if (data.status === 'failed') {
-        const reason = data.error || data.result?.error || `Command ${commandId} failed`;
-        throw new Error(reason);
-      }
-      return data;
-    }
-    await delay(300);
-  }
-  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
 }
 
 function setBusy(busy, text = '') {

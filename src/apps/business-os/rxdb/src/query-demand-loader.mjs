@@ -43,6 +43,7 @@ export function createQueryDemandLoader({
   );
 
   const inflightByFingerprint = new Map();
+  const coordinatedByFingerprint = new Map();
 
   return {
     async resolveQuery(query, { window } = {}) {
@@ -80,15 +81,16 @@ export function createQueryDemandLoader({
       const startFetchJob = () => {
         if (inflightByFingerprint.has(dedupKey)) {
           bumpStatus(status, 'queryFetchDedupHitCount');
-          return inflightByFingerprint.get(dedupKey);
+          return inflightByFingerprint.get(dedupKey).job;
         }
         bumpStatus(status, 'queryFetchInFlight', 1);
         v15Log('fetch:start', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        const requestId = `${dedupKey}|${clock()}`;
         const job = (async () => {
         const startedAt = clock();
         try {
           const result = await requestQueryFetch({
-            requestId: `${dedupKey}|${startedAt}`,
+            requestId,
             databaseName: storageCollection?.databaseName ?? null,
             collectionName,
             schemaVersion: schemaVersion ?? 0,
@@ -133,7 +135,60 @@ export function createQueryDemandLoader({
           inflightByFingerprint.delete(dedupKey);
         }
         })();
-        inflightByFingerprint.set(dedupKey, job);
+        inflightByFingerprint.set(dedupKey, { job, requestId });
+        return job;
+      };
+
+      const runCoordinatedFetchJob = async () => {
+        if (!multiTabBroker?.claim) return startFetchJob();
+        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+        const leader = await multiTabBroker.claim(dedupKey);
+        if (leader) {
+          try {
+            return await startFetchJob();
+          } finally {
+            await multiTabBroker.release?.(dedupKey, { materialized: true });
+          }
+        }
+        await multiTabBroker.waitForRemote?.(dedupKey, 5_000);
+        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+        const materialized = await sidecar.getQueryWindow(sidecarKey);
+        if (materialized?.complete) {
+          bumpStatus(status, 'queryFetchDedupHitCount');
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        }
+        // The owner may have crashed. Bounded wait plus TTL-aware re-claim
+        // lets this tab take over without leaving the query hung forever.
+        const takeover = await multiTabBroker.claim(dedupKey);
+        if (!takeover) {
+          if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+          throw new Error(`Timed out waiting for multi-tab query owner ${dedupKey}`);
+        }
+        try {
+          return await startFetchJob();
+        } finally {
+          await multiTabBroker.release?.(dedupKey, { materialized: true, takeover: true });
+        }
+      };
+      const coordinatedFetchJob = () => {
+        const current = coordinatedByFingerprint.get(dedupKey);
+        if (current) {
+          bumpStatus(status, 'queryFetchDedupHitCount');
+          return current;
+        }
+        // Install the local coordination promise synchronously, before the
+        // first await inside the broker election. Otherwise two identical
+        // same-tab queries can both enter claim(); the second then mistakes
+        // this tab's own live claim for a remote owner and times out because a
+        // BroadcastChannel never echoes completion to its sender object.
+        const job = Promise.resolve()
+          .then(runCoordinatedFetchJob)
+          .finally(() => {
+            if (coordinatedByFingerprint.get(dedupKey) === job) {
+              coordinatedByFingerprint.delete(dedupKey);
+            }
+          });
+        coordinatedByFingerprint.set(dedupKey, job);
         return job;
       };
 
@@ -146,7 +201,7 @@ export function createQueryDemandLoader({
       // module loads from a WebRTC round-trip into an IndexedDB read.
       // An explicit requireRevision keeps strict await semantics.
       if (cached?.everCompleted && !query?.requireRevision) {
-        startFetchJob().catch(() => {
+        coordinatedFetchJob().catch(() => {
           // Surfaced via queryFetchErrorCount; the next exec retries.
         });
         bumpStatus(status, 'queryFetchStaleServedCount');
@@ -155,10 +210,10 @@ export function createQueryDemandLoader({
         return readLocalDocuments(storageCollection, query, normalizedWindow);
       }
 
-      return startFetchJob();
+      return coordinatedFetchJob();
     },
     inflightSize() {
-      return inflightByFingerprint.size;
+      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size);
     },
 
     // Wave 7: invalidation hook. When the replication layer reports that a
@@ -178,7 +233,8 @@ export function createQueryDemandLoader({
     // primary store so the next fetch starts from a clean slate (no orphans).
     async abortAllInFlight(reason = 'reconnect') {
       const cancelled = [];
-      for (const [dedupKey, job] of inflightByFingerprint.entries()) {
+      for (const [dedupKey, entry] of inflightByFingerprint.entries()) {
+        const { job, requestId } = entry;
         const [, fingerprint] = dedupKey.split('|');
         cancelled.push({ dedupKey, fingerprint });
         try {
@@ -186,13 +242,14 @@ export function createQueryDemandLoader({
         } catch {}
         if (typeof requestCancel === 'function') {
           try {
-            await requestCancel({ requestId: dedupKey, fingerprint, reason });
+            await requestCancel({ requestId, fingerprint, reason });
           } catch {
             // best-effort cancel
           }
         }
       }
       inflightByFingerprint.clear();
+      coordinatedByFingerprint.clear();
 
       // Orphan cleanup: for every fingerprint that had an in-flight fetch
       // but no complete window in the sidecar, drop the partial document

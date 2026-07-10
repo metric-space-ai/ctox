@@ -258,8 +258,9 @@ impl QueryFetchRegistry {
             .contains_key(&collection_key(collection_name))
     }
 
-    pub fn cancel(&self, request_id: &str) -> bool {
-        if let Some(flag) = self.inflight.lock().get(request_id) {
+    pub fn cancel(&self, peer_identity: &str, request_id: &str) -> bool {
+        let key = inflight_key(peer_identity, request_id);
+        if let Some(flag) = self.inflight.lock().get(&key) {
             flag.store(true, Ordering::SeqCst);
             true
         } else {
@@ -275,27 +276,34 @@ impl QueryFetchRegistry {
         self.max_inflight
     }
 
-    fn try_acquire(&self, request_id: &str) -> Option<Arc<AtomicBool>> {
-        let count = self.inflight_count.load(Ordering::SeqCst);
-        if count >= self.max_inflight {
+    fn try_acquire(&self, peer_identity: &str, request_id: &str) -> Option<Arc<AtomicBool>> {
+        let key = inflight_key(peer_identity, request_id);
+        let mut inflight = self.inflight.lock();
+        if inflight.len() as u64 >= self.max_inflight || inflight.contains_key(&key) {
             return None;
         }
-        self.inflight_count.fetch_add(1, Ordering::SeqCst);
         let flag = Arc::new(AtomicBool::new(false));
-        self.inflight
-            .lock()
-            .insert(request_id.to_string(), Arc::clone(&flag));
+        inflight.insert(key, Arc::clone(&flag));
+        self.inflight_count
+            .store(inflight.len() as u64, Ordering::SeqCst);
         Some(flag)
     }
 
-    fn release(&self, request_id: &str) {
-        self.inflight.lock().remove(request_id);
-        self.inflight_count.fetch_sub(1, Ordering::SeqCst);
+    fn release(&self, peer_identity: &str, request_id: &str) {
+        let key = inflight_key(peer_identity, request_id);
+        let mut inflight = self.inflight.lock();
+        inflight.remove(&key);
+        self.inflight_count
+            .store(inflight.len() as u64, Ordering::SeqCst);
     }
 }
 
 fn collection_key(collection_name: &str) -> String {
     collection_name.to_string()
+}
+
+fn inflight_key(peer_identity: &str, request_id: &str) -> String {
+    format!("{peer_identity}\u{1f}{request_id}")
 }
 
 /// Parses a raw `WebRTCMessage` into a typed `QueryFetchRequest`. Returns
@@ -418,7 +426,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         return Ok(());
     }
 
-    let cancel_flag = match registry.try_acquire(&request.request_id) {
+    let cancel_flag = match registry.try_acquire(&peer_identity, &request.request_id) {
         Some(flag) => flag,
         None => {
             send_error(
@@ -455,7 +463,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         document_filter,
     )
     .await;
-    registry.release(&request.request_id);
+    registry.release(&peer_identity, &request.request_id);
     if let Err(err) = &outcome {
         let (code, retryable) = query_fetch_error_code_for_rx_error(err);
         let message = err.to_string();
@@ -1829,7 +1837,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_marks_inflight_flag() {
         let registry = Arc::new(QueryFetchRegistry::new(4));
-        let flag = registry.try_acquire("r4").unwrap();
+        let flag = registry.try_acquire("p1", "r4").unwrap();
         assert!(!flag.load(Ordering::SeqCst));
         let cancel_message = WebRTCMessage {
             id: "cancel-1".to_string(),
@@ -1839,9 +1847,24 @@ mod tests {
         };
         let request_id = parse_query_cancel_request(&cancel_message).unwrap();
         assert_eq!(request_id, "r4");
-        assert!(registry.cancel(&request_id));
+        assert!(!registry.cancel("p2", &request_id));
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(registry.cancel("p1", &request_id));
         assert!(flag.load(Ordering::SeqCst));
-        registry.release("r4");
+        registry.release("p1", "r4");
+    }
+
+    #[test]
+    fn identical_request_ids_are_isolated_per_peer() {
+        let registry = QueryFetchRegistry::new(4);
+        let first = registry.try_acquire("p1", "same-request").unwrap();
+        let second = registry.try_acquire("p2", "same-request").unwrap();
+        assert_eq!(registry.count_inflight(), 2);
+        assert!(registry.cancel("p1", "same-request"));
+        assert!(first.load(Ordering::SeqCst));
+        assert!(!second.load(Ordering::SeqCst));
+        registry.release("p1", "same-request");
+        registry.release("p2", "same-request");
     }
 
     #[tokio::test]
@@ -1849,7 +1872,7 @@ mod tests {
         let registry = authorized_query_registry(1);
         let collection = seeded_collection(10).await;
         registry.register(Arc::clone(&collection));
-        let _hold = registry.try_acquire("hold").unwrap();
+        let _hold = registry.try_acquire("p0", "hold").unwrap();
         let handler = Arc::new(MockHandler::new());
         let message = make_request("r5", "business_records", 0);
         run_query_fetch(

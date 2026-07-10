@@ -15,6 +15,7 @@
 //! drive ICE/SDP exchange with webrtc-rs.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
@@ -22,12 +23,12 @@ use std::sync::Once;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex as PlMutex;
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpStream};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{client_async_tls, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::plugins::replication_webrtc::signaling_protocol::{
@@ -43,6 +44,7 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// per-collection bring-up that awaits it. 20s matches the per-collection
 /// timeout enforced at the bring-up loop.
 const SIGNALING_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const SIGNALING_ADDRESS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Reconnection backoff bounds. Post-multiplex the whole instance shares ONE
 /// signaling socket, so a clean close or network blip used to deafen the native
@@ -81,6 +83,11 @@ pub struct SignalingClient {
     /// Send half of the WebSocket. Replaced on every reconnect; `None` only in
     /// the window between a socket dying and the supervisor re-establishing it.
     writer: TokioMutex<Option<WsWrite>>,
+    socket_connected: AtomicBool,
+    join_accepted: AtomicBool,
+    terminal_rejection: AtomicBool,
+    rejection: PlMutex<Option<(String, String)>>,
+    join_notify: tokio::sync::Notify,
     /// Set by `close()` so the reconnect supervisor stops instead of fighting an
     /// intentional shutdown.
     closed: Arc<AtomicBool>,
@@ -113,6 +120,11 @@ impl SignalingClient {
             own_peer_id: RxBehaviorSubject::new(None),
             joined_room: PlMutex::new(None),
             writer: TokioMutex::new(Some(write_half)),
+            socket_connected: AtomicBool::new(true),
+            join_accepted: AtomicBool::new(false),
+            terminal_rejection: AtomicBool::new(false),
+            rejection: PlMutex::new(None),
+            join_notify: tokio::sync::Notify::new(),
             closed: Arc::new(AtomicBool::new(false)),
             background_tasks: PlMutex::new(Vec::new()),
         });
@@ -125,14 +137,30 @@ impl SignalingClient {
         let supervisor_client = Arc::clone(&client);
         let supervisor: JoinHandle<()> = tokio::spawn(async move {
             let mut read_half = read_half;
+            let mut delay = SIGNALING_RECONNECT_BASE_DELAY;
             loop {
-                run_reader(&supervisor_client, &mut read_half).await;
+                let joined_before_disconnect = run_reader(&supervisor_client, &mut read_half).await;
+                supervisor_client
+                    .socket_connected
+                    .store(false, Ordering::Release);
+                supervisor_client
+                    .join_accepted
+                    .store(false, Ordering::Release);
                 if supervisor_client.closed.load(Ordering::Acquire) {
+                    return;
+                }
+                if supervisor_client.terminal_rejection.load(Ordering::Acquire) {
+                    tracing::error!(
+                        target: "ctox_rxdb::signaling_client",
+                        "terminal signaling rejection; reconnect paused until configuration changes",
+                    );
                     return;
                 }
                 // Drop the dead writer so send_frame fails fast until reconnect.
                 *supervisor_client.writer.lock().await = None;
-                let mut delay = SIGNALING_RECONNECT_BASE_DELAY;
+                if joined_before_disconnect {
+                    delay = SIGNALING_RECONNECT_BASE_DELAY;
+                }
                 loop {
                     if supervisor_client.closed.load(Ordering::Acquire) {
                         return;
@@ -143,6 +171,9 @@ impl SignalingClient {
                         Ok((write_half, new_read)) => {
                             *supervisor_client.writer.lock().await = Some(write_half);
                             read_half = new_read;
+                            supervisor_client
+                                .socket_connected
+                                .store(true, Ordering::Release);
                             let room = supervisor_client.joined_room.lock().clone();
                             if let Some(room) = room {
                                 if let Err(e) = supervisor_client
@@ -160,6 +191,10 @@ impl SignalingClient {
                                 url = %supervisor_client.url,
                                 "signaling socket reconnected",
                             );
+                            // A socket open is not a successful reconnect. Keep
+                            // increasing backoff until a Joined frame proves
+                            // that the control plane accepted us.
+                            delay = (delay * 2).min(SIGNALING_RECONNECT_MAX_DELAY);
                             break;
                         }
                         Err(e) => {
@@ -203,7 +238,38 @@ impl SignalingClient {
     /// Join a room. Server returns a `joined` broadcast with the room peer list.
     pub async fn join(self: &Arc<Self>, room: RoomId) -> Result<(), RxError> {
         *self.joined_room.lock() = Some(room.clone());
-        self.send_frame(&ClientToServer::Join { room }).await
+        self.join_accepted.store(false, Ordering::Release);
+        self.terminal_rejection.store(false, Ordering::Release);
+        *self.rejection.lock() = None;
+        self.send_frame(&ClientToServer::Join { room }).await?;
+        tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, async {
+            while !self.join_accepted.load(Ordering::Acquire)
+                && !self.terminal_rejection.load(Ordering::Acquire)
+            {
+                self.join_notify.notified().await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({
+                    "message": "signaling room join was not accepted before deadline",
+                })),
+            )
+        })?;
+        if let Some((code, reason)) = self.rejection.lock().clone() {
+            return Err(new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({
+                    "message": "signaling room join was rejected",
+                    "code": code,
+                    "reason": reason,
+                    "retryable": false,
+                })),
+            ));
+        }
+        Ok(())
     }
 
     /// Send a signaling payload to a specific other peer.
@@ -256,6 +322,14 @@ impl SignalingClient {
 
     pub fn own_peer_id(&self) -> Option<PeerId> {
         self.own_peer_id.get_value()
+    }
+
+    pub fn socket_connected(&self) -> bool {
+        self.socket_connected.load(Ordering::Acquire)
+    }
+
+    pub fn join_accepted(&self) -> bool {
+        self.join_accepted.load(Ordering::Acquire)
     }
 
     pub async fn close(self: &Arc<Self>) {
@@ -322,14 +396,13 @@ async fn establish_ws(url: &str) -> Result<(WsWrite, WsRead), RxError> {
             })),
         )
     })?;
-    let (ws_stream, _resp) =
-        match tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, connect_async(parsed.as_str())).await
-        {
-            Ok(result) => result.map_err(|e| {
+    let ws_stream =
+        match tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, connect_resolved_ws(&parsed)).await {
+            Ok(result) => result.map_err(|message| {
                 new_rx_error(
                     "RC_WEBRTC_SIGNAL",
                     Some(serde_json::json!({
-                        "message": format!("WebSocket connect failed: {e}"),
+                        "message": format!("WebSocket connect failed: {message}"),
                         "url": url,
                     })),
                 )
@@ -350,9 +423,73 @@ async fn establish_ws(url: &str) -> Result<(WsWrite, WsRead), RxError> {
     Ok(ws_stream.split())
 }
 
+/// Resolve signaling endpoints explicitly and try IPv4 before IPv6. Some
+/// otherwise healthy networks advertise IPv6 but black-hole outbound IPv6;
+/// `TcpStream::connect(hostname)` can then spend the entire outer deadline on
+/// the first IPv6 address and never reach a working IPv4 address. Keeping the
+/// fallback here also preserves IPv6-only deployments without introducing a
+/// second transport or changing the WebSocket/TLS hostname used for SNI.
+async fn connect_resolved_ws(parsed: &Url) -> Result<WsStream, String> {
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "signaling URL has no host".to_owned())?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "signaling URL has no known port".to_owned())?;
+    let mut addresses = lookup_host((host, port))
+        .await
+        .map_err(|error| format!("failed to resolve {host}:{port}: {error}"))?
+        .collect::<Vec<_>>();
+    prefer_ipv4_addresses(&mut addresses);
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(format!("no addresses resolved for {host}:{port}"));
+    }
+
+    let mut failures = Vec::new();
+    for address in addresses {
+        let stream = match tokio::time::timeout(
+            SIGNALING_ADDRESS_CONNECT_TIMEOUT,
+            TcpStream::connect(address),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                failures.push(format!("{address}: {error}"));
+                continue;
+            }
+            Err(_) => {
+                failures.push(format!(
+                    "{address}: timed out after {}s",
+                    SIGNALING_ADDRESS_CONNECT_TIMEOUT.as_secs()
+                ));
+                continue;
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        match client_async_tls(parsed.as_str(), stream).await {
+            Ok((ws_stream, _response)) => return Ok(ws_stream),
+            Err(error) => failures.push(format!(
+                "{address}: WebSocket/TLS handshake failed: {error}"
+            )),
+        }
+    }
+
+    Err(format!(
+        "all resolved signaling addresses failed ({})",
+        failures.join("; ")
+    ))
+}
+
+fn prefer_ipv4_addresses(addresses: &mut [SocketAddr]) {
+    addresses.sort_by_key(|address| if address.is_ipv4() { 0 } else { 1 });
+}
+
 /// Decode frames off `read_half` and fan them out via the client's subjects.
 /// Returns when the socket closes or errors, so the supervisor can reconnect.
-async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
+async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bool {
+    let mut joined_seen = false;
     while let Some(item) = read_half.next().await {
         match item {
             Ok(Message::Text(text)) => match serde_json::from_str::<ServerToClient>(&text) {
@@ -365,6 +502,9 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
                             other_peer_ids,
                             peers,
                         } => {
+                            joined_seen = true;
+                            client.join_accepted.store(true, Ordering::Release);
+                            client.join_notify.notify_waiters();
                             // Update the role map BEFORE emitting the peer
                             // list, so the connection handler's initiator
                             // decision sees fresh roles.
@@ -399,6 +539,11 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
                                 reason = %reason,
                                 "signaling server rejected this peer (control plane)",
                             );
+                            if signaling_rejection_is_terminal(code) {
+                                client.terminal_rejection.store(true, Ordering::Release);
+                                *client.rejection.lock() = Some((code.clone(), reason.clone()));
+                                client.join_notify.notify_waiters();
+                            }
                         }
                         _ => {}
                     }
@@ -421,12 +566,53 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
             _ => {}
         }
     }
+    joined_seen
+}
+
+fn signaling_rejection_is_terminal(code: &str) -> bool {
+    matches!(
+        code,
+        "protocol_missing"
+            | "protocol_mismatch"
+            | "instance_mismatch"
+            | "peer_revoked"
+            | "role_mismatch"
+            | "token_invalid"
+            | "token_signature_invalid"
+            | "credentials_revoked"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn terminal_control_plane_rejections_do_not_reconnect_hammer() {
+        assert!(signaling_rejection_is_terminal("protocol_mismatch"));
+        assert!(signaling_rejection_is_terminal("peer_revoked"));
+        assert!(!signaling_rejection_is_terminal(
+            "control_plane_token_expired"
+        ));
+        assert!(!signaling_rejection_is_terminal("temporary_unavailable"));
+    }
+
+    #[test]
+    fn signaling_addresses_prefer_ipv4_but_keep_ipv6_fallbacks() {
+        let mut addresses = vec![
+            "[2001:db8::1]:443".parse().unwrap(),
+            "192.0.2.10:443".parse().unwrap(),
+            "[2001:db8::2]:443".parse().unwrap(),
+            "192.0.2.11:443".parse().unwrap(),
+        ];
+        prefer_ipv4_addresses(&mut addresses);
+        assert!(addresses[0].is_ipv4());
+        assert!(addresses[1].is_ipv4());
+        assert!(addresses[2].is_ipv6());
+        assert!(addresses[3].is_ipv6());
+    }
+
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 
@@ -465,6 +651,11 @@ mod tests {
                         }
                     }
                 }
+                ws.send(Message::Text(
+                    r#"{"type":"joined","otherPeerIds":[],"peers":[]}"#.to_string(),
+                ))
+                .await
+                .unwrap();
                 if i == 0 {
                     drop(ws); // force reconnect
                 } else {

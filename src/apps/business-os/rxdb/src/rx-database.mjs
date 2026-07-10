@@ -49,7 +49,7 @@ export async function removeRxDatabase(name) {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error || new Error(`Failed to delete IndexedDB ${name}`));
-    request.onblocked = () => resolve();
+    request.onblocked = () => reject(new Error(`IndexedDB delete blocked for ${name}`));
   });
 }
 
@@ -117,6 +117,10 @@ class CtoxRxDatabase {
 
   collection(name) {
     return this.collections[name] || this[name] || null;
+  }
+
+  async getUnsyncedWriteSummary() {
+    return this.storage.unsyncedWriteSummary?.() || { total: 0, byCollection: {} };
   }
 
   async close() {
@@ -284,6 +288,8 @@ class CtoxRxCollection {
         // emissions per second. The 50 ms window collapses burst writes
         // into one re-evaluation. See docs/rxdb_on-demand-load.md Wave 3.
         let pendingTimer = null;
+        let initialRetryTimer = null;
+        let initialRetryAttempt = 0;
         let initialized = false;
         let pendingSuccess = {};
         const documentsById = new Map();
@@ -312,9 +318,19 @@ class CtoxRxCollection {
             documents = await this.find().exec();
           } catch (error) {
             if (isIndexedDbConnectionClosingError(error)) return;
+            if (active && isRetryableObservableInitError(error)) {
+              const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
+              initialRetryAttempt += 1;
+              initialRetryTimer = setTimeout(() => {
+                initialRetryTimer = null;
+                void flushInitial();
+              }, delayMs);
+              return;
+            }
             throw error;
           }
           if (!active) return;
+          initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
             const id = documentIdFromDoc(doc);
@@ -341,7 +357,10 @@ class CtoxRxCollection {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
-        flushInitial(); // initial emission is immediate, not debounced
+        // Initial reads can briefly hit the bounded demand-transport queue when
+        // a shell activates many collections at once. Treat that retryable
+        // backpressure as flow control, not as an unhandled page error.
+        void flushInitial(); // initial emission is immediate, not debounced
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
@@ -349,6 +368,10 @@ class CtoxRxCollection {
             if (pendingTimer != null) {
               clearTimeout(pendingTimer);
               pendingTimer = null;
+            }
+            if (initialRetryTimer != null) {
+              clearTimeout(initialRetryTimer);
+              initialRetryTimer = null;
             }
             unsubscribe();
             registry.subscriptionEnded(this.name);
@@ -360,6 +383,23 @@ class CtoxRxCollection {
 }
 
 export const OBSERVABLE_DEBOUNCE_MS = 50;
+export const OBSERVABLE_INIT_RETRY_BASE_MS = 100;
+export const OBSERVABLE_INIT_RETRY_MAX_MS = 2_000;
+
+function isRetryableObservableInitError(error) {
+  if (error?.retryable === true) return true;
+  const code = String(error?.code || '').trim().toUpperCase();
+  if (code === 'QUERY_QUEUE_LIMIT') return true;
+  return String(error?.message || error || '').includes('QUERY_QUEUE_LIMIT:');
+}
+
+function observableInitRetryDelayMs(attempt = 0) {
+  const exponent = Math.max(0, Math.min(8, Number(attempt) || 0));
+  return Math.min(
+    OBSERVABLE_INIT_RETRY_MAX_MS,
+    OBSERVABLE_INIT_RETRY_BASE_MS * (2 ** exponent),
+  );
+}
 
 function isIndexedDbConnectionClosingError(error) {
   const message = String(error?.message || error || '');

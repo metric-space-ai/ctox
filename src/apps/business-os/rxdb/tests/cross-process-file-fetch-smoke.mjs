@@ -18,6 +18,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const candidates = [
   resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'release', 'examples', 'v15_wire_daemon'),
+  resolve(here, '..', '..', '..', '..', '..', 'runtime', 'build', 'cargo-target', 'debug', 'examples', 'v15_wire_daemon'),
 ];
 const bin = candidates.find((c) => existsSync(c));
 if (!bin) { console.error('daemon not built'); process.exit(2); }

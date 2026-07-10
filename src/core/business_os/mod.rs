@@ -4,6 +4,8 @@
 mod ats_gates;
 mod browser_runtime;
 mod capability;
+pub(crate) mod command_lifecycle;
+mod command_lifecycle_generated;
 mod importer;
 mod invoices;
 pub mod mcp_channel;

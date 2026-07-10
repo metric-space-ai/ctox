@@ -13,20 +13,34 @@ import { CTOX_FILE_RPC, CTOX_QUERY_RPC } from './protocol-contract.generated.mjs
 const ACK_RESPONSE = Object.freeze({ ack: true });
 const SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
 const CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
+export const CLIENT_QUERY_QUEUE_LIMIT = 128;
+export const CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
+export const CLIENT_FILE_COLLECTOR_LIMIT = 8;
 const QUERY_STREAM_LIMIT_RETRY_MS = 160;
 const QUERY_STREAM_LIMIT_RETRIES = 6;
+const QUERY_RATE_LIMIT_RETRY_MS = 100;
+const QUERY_RATE_LIMIT_RETRIES = 16;
 const QUERY_PEER_RETRY_MS = 250;
 const QUERY_PEER_RETRIES = 24;
 const QUERY_PEER_WAIT_TIMEOUT_MS = 8000;
 const QUERY_PEER_WAIT_POLL_MS = 100;
 const QUERY_FETCH_REQUEST_TIMEOUT_MS = 45000;
+const DEFAULT_COLLECTOR_TIMEOUT_MS = Math.max(
+  1000,
+  Number(CTOX_QUERY_RPC.maxQueryRuntimeMs) + 5000 || 35000,
+);
 const GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for('ctox.rxdb.query-stream-state.v1');
 const CANCELLED_QUERY_REQUEST_LIMIT = 256;
+export const DEFAULT_FILE_COLLECTOR_BUDGET_BYTES = 512 * 1024;
 
 /// Build the request-handler map that should be merged into
 /// `createCtoxWebRtcNativePeer({ requestHandlers })`. The returned object
 /// also exposes `requestQueryFetch`, `requestFileFetch` etc.
-export function createDemandLoadingTransport({ getPeerId } = {}) {
+export function createDemandLoadingTransport({
+  getPeerId,
+  collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
+  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
+} = {}) {
   if (typeof getPeerId !== 'function') {
     throw new TypeError('createDemandLoadingTransport requires getPeerId');
   }
@@ -36,6 +50,11 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   const queryStreamState = getGlobalQueryStreamState();
   const cancelledQueryRequests = new Map();
   const transportOwner = Symbol('ctox-demand-transport-owner');
+  const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
+  const acceptedFileBudgetBytes = Math.max(
+    Number(CTOX_FILE_RPC.maxBytesPerChunk) || 1,
+    Number(fileCollectorBudgetBytes) || DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
+  );
   const metrics = {
     queryFetchRequests: 0,
     fileFetchRequests: 0,
@@ -48,15 +67,20 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     maxPendingQueryCollectors: 0,
     maxPendingFileCollectors: 0,
     maxQueuedQueryRequests: 0,
+    maxQueuedQueryBytes: 0,
     maxBufferedQueryChunks: 0,
     maxBufferedFileChunks: 0,
     maxBufferedFileChunkBytes: 0,
+    queryCollectorTimeouts: 0,
+    fileCollectorTimeouts: 0,
+    fileCollectorBudgetExceeded: 0,
   };
 
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
     metrics.maxPendingFileCollectors = Math.max(metrics.maxPendingFileCollectors, fileCollectors.size);
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
+    metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
@@ -71,6 +95,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     updatePeaks();
     if (chunk.complete) {
       queryCollectors.delete(chunk.requestId);
+      clearCollectorTimer(slot);
       slot.resolve(slot.chunks);
     }
   }
@@ -79,22 +104,52 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = queryCollectors.get(err.requestId);
     if (!slot) return;
     queryCollectors.delete(err.requestId);
+    clearCollectorTimer(slot);
     metrics.queryCollectorsRejected += 1;
     const e = new Error(`${err.code || 'QUERY_ERROR'}: ${err.message || ''}`);
     e.code = err.code;
     e.retryable = Boolean(err.retryable);
     slot.reject(e);
   }
-  function routeFileChunk(chunk) {
+  async function routeFileChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
     const slot = fileCollectors.get(chunk.requestId);
     if (!slot) return;
-    slot.chunks.push(chunk);
-    metrics.fileChunksReceived += 1;
-    updatePeaks();
-    if (chunk.complete) {
+    const chunkBytes = typeof chunk.bytesBase64 === 'string' ? chunk.bytesBase64.length : 0;
+    try {
+      if (typeof slot.onChunk === 'function') {
+        await slot.onChunk(chunk);
+      } else {
+        slot.bufferedBytes += chunkBytes;
+        if (slot.bufferedBytes > acceptedFileBudgetBytes) {
+          const error = new Error(`FILE_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedFileBudgetBytes}`);
+          error.code = 'FILE_COLLECTOR_BUDGET_EXCEEDED';
+          error.retryable = false;
+          throw error;
+        }
+        slot.chunks.push(chunk);
+      }
+      metrics.fileChunksReceived += 1;
+      updatePeaks();
+      if (chunk.complete) {
+        fileCollectors.delete(chunk.requestId);
+        clearCollectorTimer(slot);
+        slot.resolve(slot.chunks);
+      }
+    } catch (error) {
       fileCollectors.delete(chunk.requestId);
-      slot.resolve(slot.chunks);
+      clearCollectorTimer(slot);
+      metrics.fileCollectorsRejected += 1;
+      if (error?.code === 'FILE_COLLECTOR_BUDGET_EXCEEDED') {
+        metrics.fileCollectorBudgetExceeded += 1;
+      }
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(slot.peerId, CTOX_FILE_RPC.cancel, [{
+          requestId: chunk.requestId,
+          reason: error?.code || 'file-chunk-consumer-failed',
+        }], 2000),
+      ).catch(() => {});
     }
   }
   function routeFileError(err) {
@@ -102,6 +157,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = fileCollectors.get(err.requestId);
     if (!slot) return;
     fileCollectors.delete(err.requestId);
+    clearCollectorTimer(slot);
     metrics.fileCollectorsRejected += 1;
     const e = new Error(`${err.code || 'FILE_ERROR'}: ${err.message || ''}`);
     e.code = err.code;
@@ -112,7 +168,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   const requestHandlers = {
     'rxdb.query.chunk': async ({ params }) => { routeQueryChunk(params?.[0]); return ACK_RESPONSE; },
     'rxdb.query.error': async ({ params }) => { routeQueryError(params?.[0]); return ACK_RESPONSE; },
-    'rxdb.file.chunk':  async ({ params }) => { routeFileChunk(params?.[0]); return ACK_RESPONSE; },
+    'rxdb.file.chunk':  async ({ params }) => { await routeFileChunk(params?.[0]); return ACK_RESPONSE; },
     'rxdb.file.error':  async ({ params }) => { routeFileError(params?.[0]); return ACK_RESPONSE; },
   };
 
@@ -120,11 +176,13 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   function attach(p) { peer = p; }
 
   async function requestQueryFetch(envelope) {
-    return withQueryStreamSlot(envelope?.requestId, () => requestQueryFetchWithRetry(envelope));
+    return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
   }
 
-  function withQueryStreamSlot(requestId, fn) {
+  function withQueryStreamSlot(envelope, fn) {
     return new Promise((resolve, reject) => {
+      const requestId = String(envelope?.requestId || '');
+      const estimatedBytes = estimateEnvelopeBytes(envelope);
       const run = () => {
         queryStreamState.active += 1;
         Promise.resolve()
@@ -138,7 +196,21 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
       };
       if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
       else {
-        queryStreamState.queue.push({ requestId: String(requestId || ''), run, reject, owner: transportOwner });
+        const queuedBytes = queryStreamState.queue.reduce(
+          (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
+          0,
+        );
+        if (
+          queryStreamState.queue.length >= CLIENT_QUERY_QUEUE_LIMIT
+          || queuedBytes + estimatedBytes > CLIENT_QUERY_QUEUE_BUDGET_BYTES
+        ) {
+          const error = new Error('QUERY_QUEUE_LIMIT: queued demand requests exceed the browser count/byte budget');
+          error.code = 'QUERY_QUEUE_LIMIT';
+          error.retryable = true;
+          reject(error);
+          return;
+        }
+        queryStreamState.queue.push({ requestId, run, reject, owner: transportOwner, estimatedBytes });
         updatePeaks();
       }
     });
@@ -153,12 +225,22 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
         return await requestQueryFetchOnce({ ...envelope, requestId });
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
-        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        const rateLimited = isRetryableQueryRateLimited(error);
+        const retryLimit = peerUnavailable
+          ? QUERY_PEER_RETRIES
+          : rateLimited
+            ? QUERY_RATE_LIMIT_RETRIES
+            : QUERY_STREAM_LIMIT_RETRIES;
         if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        await delay((peerUnavailable ? QUERY_PEER_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS) * attempt);
+        const retryDelayMs = peerUnavailable
+          ? QUERY_PEER_RETRY_MS
+          : rateLimited
+            ? QUERY_RATE_LIMIT_RETRY_MS
+            : QUERY_STREAM_LIMIT_RETRY_MS;
+        await delay(retryDelayMs * attempt);
       }
     }
   }
@@ -178,9 +260,11 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     try {
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
+      clearCollectorTimer(queryCollectors.get(requestId));
       queryCollectors.delete(requestId);
       throw err;
     }
+    armCollectorTimeout(queryCollectors, requestId, 'query', peerId, CTOX_QUERY_RPC.cancel);
     const chunks = await promise;
     const documents = [];
     let authoritativeRevision = null;
@@ -200,7 +284,15 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
 
   function isRetryableQueryFetch(error) {
     return isRetryableQueryStreamLimit(error)
+      || isRetryableQueryRateLimited(error)
       || isRetryableQueryPeerUnavailable(error);
+  }
+
+  function isRetryableQueryRateLimited(error) {
+    const code = String(error?.code || '');
+    const message = String(error?.message || '');
+    return Boolean(error?.retryable)
+      && (code === 'RATE_LIMITED' || message.includes('RATE_LIMITED'));
   }
 
   function isRetryableQueryPeerUnavailable(error) {
@@ -243,12 +335,25 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     }
   }
 
-  async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
+  async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName, onChunk }) {
     if (!peer) throw new Error('demand transport has no peer attached');
+    if (fileCollectors.size >= CLIENT_FILE_COLLECTOR_LIMIT) {
+      const error = new Error('FILE_COLLECTOR_LIMIT: too many active browser file collectors');
+      error.code = 'FILE_COLLECTOR_LIMIT';
+      error.retryable = true;
+      throw error;
+    }
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
     const promise = new Promise((resolve, reject) => {
-      fileCollectors.set(requestId, { chunks: [], resolve, reject, peerId });
+      fileCollectors.set(requestId, {
+        chunks: [],
+        resolve,
+        reject,
+        peerId,
+        onChunk: typeof onChunk === 'function' ? onChunk : null,
+        bufferedBytes: 0,
+      });
       metrics.fileFetchRequests += 1;
       updatePeaks();
     });
@@ -261,9 +366,11 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
         knownSequences: knownSequences ?? [],
       }]);
     } catch (err) {
+      clearCollectorTimer(fileCollectors.get(requestId));
       fileCollectors.delete(requestId);
       throw err;
     }
+    armCollectorTimeout(fileCollectors, requestId, 'file', peerId, CTOX_FILE_RPC.cancel);
     const chunks = await promise;
     return chunks.map((c) => ({ sequence: c.sequence, bytesBase64: c.bytesBase64, hash: c.hash }));
   }
@@ -276,6 +383,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     let cancelled = false;
     if (slot) {
       fileCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.fileCollectorsRejected += 1;
       slot.reject(error);
       cancelled = true;
@@ -298,6 +406,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     for (const [requestId, slot] of [...queryCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       queryCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.queryCollectorsRejected += 1;
       slot.reject(queryError);
       rejected += 1;
@@ -305,6 +414,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     for (const [requestId, slot] of [...fileCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
       fileCollectors.delete(requestId);
+      clearCollectorTimer(slot);
       metrics.fileCollectorsRejected += 1;
       slot.reject(fileError);
       rejected += 1;
@@ -322,10 +432,12 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
       pendingQueryCollectors: queryCollectors.size,
       pendingFileCollectors: fileCollectors.size,
       queuedQueryRequests: queryStreamState.queue.length,
+      queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
+      fileCollectorBudgetBytes: acceptedFileBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics,
     };
@@ -347,6 +459,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     const slot = queryCollectors.get(requestId);
     if (!slot) return false;
     queryCollectors.delete(requestId);
+    clearCollectorTimer(slot);
     metrics.queryCollectorsRejected += 1;
     slot.reject(error);
     return true;
@@ -399,6 +512,13 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     return String(entry.requestId || '');
   }
 
+  function queuedQueryBytes() {
+    return queryStreamState.queue.reduce(
+      (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
+      0,
+    );
+  }
+
   function markQueryCancelled(requestId, reason) {
     const raw = String(requestId || '');
     if (!raw) return;
@@ -438,6 +558,43 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     error.code = 'FILE_CANCELLED';
     error.retryable = false;
     return error;
+  }
+
+  function armCollectorTimeout(collectors, requestId, kind, peerId, cancelMethod) {
+    const slot = collectors.get(requestId);
+    if (!slot || slot.timer) return;
+    slot.timer = setTimeout(() => {
+      if (collectors.get(requestId) !== slot) return;
+      collectors.delete(requestId);
+      if (kind === 'query') {
+        metrics.queryCollectorsRejected += 1;
+        metrics.queryCollectorTimeouts += 1;
+      } else {
+        metrics.fileCollectorsRejected += 1;
+        metrics.fileCollectorTimeouts += 1;
+      }
+      const error = new Error(`${kind.toUpperCase()}_COLLECTOR_TIMEOUT: terminal frame missing`);
+      error.code = `${kind.toUpperCase()}_COLLECTOR_TIMEOUT`;
+      error.retryable = true;
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(peerId, cancelMethod, [{ requestId, reason: 'collector-timeout' }], 2000),
+      ).catch(() => {});
+    }, terminalTimeoutMs);
+  }
+
+  function clearCollectorTimer(slot) {
+    if (slot?.timer) {
+      clearTimeout(slot.timer);
+      slot.timer = null;
+    }
+  }
+
+  function estimateEnvelopeBytes(envelope) {
+    let encoded = '';
+    try { encoded = JSON.stringify(envelope ?? null); } catch { return CLIENT_QUERY_QUEUE_BUDGET_BYTES + 1; }
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(encoded).byteLength;
+    return encoded.length * 2;
   }
 
   function resolvePeerId() {

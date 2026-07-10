@@ -58,6 +58,17 @@ const origin = { role: 'ctox_instance', peerId: 'peer-native' };
   );
   assert(conflicted.merged.name === 'Local Name', 'same-field conflict keeps the local value');
 
+  const structuredConflict = threeWayMergeDocuments(
+    { id: 'r1', tags: ['base'] },
+    { id: 'r1', tags: ['local'] },
+    { id: 'r1', tags: ['master'] },
+    { primaryPath: 'id' },
+  );
+  assert(structuredConflict.requiresManualResolution === true,
+    'concurrent list edits require explicit/manual resolution');
+  assert(structuredConflict.conflictFields.includes('tags'),
+    'structured conflict reports the exact field');
+
   // Local field deletion survives; untouched fields follow the master.
   const deletion = threeWayMergeDocuments(
     { id: 'r1', name: 'Acme', fax: '333' },
@@ -153,6 +164,25 @@ const origin = { role: 'ctox_instance', peerId: 'peer-native' };
   assert(mergedResolved.doc.phone === '222', 'master field change survived the pull');
   assert(mergedResolved.base === incomingMaster, 'incoming master doc becomes the new base');
   assert(mergedResolved.lwt > localRow.lwt, 'merged lwt stays monotonic');
+
+  const structuredLocalRow = {
+    ...localRow,
+    base: { id: 'r1', tags: ['base'] },
+    doc: { id: 'r1', tags: ['local'], _meta: { lwt: 2000 } },
+  };
+  let structuredError = null;
+  try {
+    mergeCollection.resolveIncomingWrite({
+      previous: structuredLocalRow,
+      doc: { id: 'r1', tags: ['master'] },
+      lwt: 2200,
+      replicationOrigin: origin,
+    });
+  } catch (error) {
+    structuredError = error;
+  }
+  assert(structuredError?.code === 'structured_conflict_requires_resolution',
+    'storage preserves a structured conflict as a stable typed failure');
 
   // Once the local change round-tripped, the master row lands normally.
   const roundTripped = mergeCollection.resolveIncomingWrite({

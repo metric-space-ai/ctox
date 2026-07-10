@@ -1045,6 +1045,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             object_schema(vec![required_string("module_id"), required_string("path")]),
         ),
         read_tool(
+            "business_os.read_app_skill_resource",
+            "Read one allowlisted Business OS app-development skill resource so a remote coding agent does not need local filesystem access.",
+            object_schema(vec![required_string("resource")]),
+        ),
+        read_tool(
             "business_os.search_app_source",
             "Use this when a coding agent needs to search app-scoped Business OS source files.",
             object_schema(vec![
@@ -1555,6 +1560,15 @@ pub fn create_app(
                 "app_title": title.as_str(),
                 "description": description.as_str(),
                 "category": category.as_str(),
+                "layout_hint": "windowed",
+                "presentation": {
+                    "default_mode": "window",
+                    "supported_modes": ["window", "maximized", "focus"],
+                    "initial_size": { "width": 960, "height": 680 },
+                    "minimum_size": { "width": 640, "height": 480 },
+                    "multi_instance": false,
+                    "auto_restore": false
+                },
                 "desired_version": version.as_str(),
                 "install_target": "runtime-installed-module",
                 "target": "app",
@@ -1678,26 +1692,20 @@ fn app_development_contract(
         source_root: source_root.clone(),
         required_skill: "business-os-app-module-development".to_string(),
         skill_resources: vec![
-            "src/skills/system/product_engineering/business-os-app-module-development/SKILL.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/design-guide.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/standalone-porting.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md"
-                .to_string(),
-            "src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md"
-                .to_string(),
+            "business-os-skill://business-os-app-module-development/SKILL.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/module-contract.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/design-guide.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/standalone-porting.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/dos-and-donts.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/green-checklist.md".to_string(),
+            "business-os-skill://business-os-app-module-development/references/architecture-translation.md".to_string(),
         ],
         source_files,
         source_tools: vec![
             "business_os.prepare_app_source".to_string(),
             "business_os.list_app_files".to_string(),
             "business_os.read_app_file".to_string(),
+            "business_os.read_app_skill_resource".to_string(),
             "business_os.search_app_source".to_string(),
             "business_os.write_app_file".to_string(),
             "business_os.validate_app".to_string(),
@@ -1843,6 +1851,54 @@ pub fn read_app_file(
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+pub fn read_app_skill_resource(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    resource: &str,
+) -> anyhow::Result<Value> {
+    context.validate()?;
+    let base = "src/skills/system/product_engineering/business-os-app-module-development";
+    let requested = resource.trim().trim_start_matches('/');
+    let relative = match requested {
+        "SKILL.md" | "skill" => "SKILL.md",
+        "module-contract" | "references/module-contract.md" => "references/module-contract.md",
+        "design-guide" | "references/design-guide.md" => "references/design-guide.md",
+        "standalone-porting" | "references/standalone-porting.md" => {
+            "references/standalone-porting.md"
+        }
+        "dos-and-donts" | "references/dos-and-donts.md" => "references/dos-and-donts.md",
+        "green-checklist" | "references/green-checklist.md" => "references/green-checklist.md",
+        "architecture-translation" | "references/architecture-translation.md" => {
+            "references/architecture-translation.md"
+        }
+        value if value.starts_with(&format!("{base}/")) => &value[base.len() + 1..],
+        _ => anyhow::bail!("unknown Business OS app skill resource `{requested}`"),
+    };
+    anyhow::ensure!(
+        matches!(
+            relative,
+            "SKILL.md"
+                | "references/module-contract.md"
+                | "references/design-guide.md"
+                | "references/standalone-porting.md"
+                | "references/dos-and-donts.md"
+                | "references/green-checklist.md"
+                | "references/architecture-translation.md"
+        ),
+        "skill resource is not allowlisted"
+    );
+    let path = root.join(base).join(relative);
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read skill resource {}", path.display()))?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "skill": "business-os-app-module-development",
+        "resource": relative,
+        "uri": format!("business-os-skill://business-os-app-module-development/{relative}"),
+        "content": content,
+    }))
 }
 
 pub fn search_app_source(
@@ -2373,6 +2429,10 @@ fn call_tool_inner(
             let module_id = required_arg(&arguments, "module_id")?;
             let path = required_arg(&arguments, "path")?;
             serde_json::to_value(read_app_file(root, &context, &module_id, &path)?)?
+        }
+        "business_os.read_app_skill_resource" => {
+            let resource = required_arg(&arguments, "resource")?;
+            read_app_skill_resource(root, &context, &resource)?
         }
         "business_os.search_app_source" => {
             let module_id = required_arg(&arguments, "module_id")?;
@@ -6431,6 +6491,9 @@ mod tests {
             .any(|tool| tool.name == "business_os.read_app_file"));
         assert!(tools
             .iter()
+            .any(|tool| tool.name == "business_os.read_app_skill_resource"));
+        assert!(tools
+            .iter()
             .any(|tool| tool.name == "business_os.search_app_source"));
         assert!(tools
             .iter()
@@ -6501,6 +6564,39 @@ mod tests {
                 "{forbidden} must not be exposed as a Business OS MCP tool"
             );
         }
+    }
+
+    #[test]
+    fn app_skill_resources_are_remote_readable_and_allowlisted() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let skill_root = temp
+            .path()
+            .join("src/skills/system/product_engineering/business-os-app-module-development");
+        std::fs::create_dir_all(skill_root.join("references"))?;
+        std::fs::write(skill_root.join("SKILL.md"), "# Business OS App Skill\n")?;
+        std::fs::write(
+            skill_root.join("references/design-guide.md"),
+            "# Design Guide\n",
+        )?;
+        let context = test_context("business_os.read_app_skill_resource");
+        let result = read_app_skill_resource(temp.path(), &context, "design-guide")?;
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("uri").and_then(Value::as_str),
+            Some(
+                "business-os-skill://business-os-app-module-development/references/design-guide.md"
+            )
+        );
+        assert!(result
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| content.contains("Design Guide")));
+        let traversal = read_app_skill_resource(temp.path(), &context, "../../AGENTS.md");
+        assert!(
+            traversal.is_err(),
+            "path traversal must not escape the allowlist"
+        );
+        Ok(())
     }
 
     #[test]

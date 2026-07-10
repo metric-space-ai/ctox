@@ -1,6 +1,13 @@
+import { withTimeout } from './async-timeout.js';
+import { CTOX_COMMAND_AUTHORIZATION } from './command-lifecycle.generated.js';
+
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_READY_TIMEOUT_MS = 15000;
 const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
+const COMMAND_CAPABILITY_TIMEOUT_MS = 5000;
+const COMMAND_CAPABILITY_NEGATIVE_CACHE_MS = 10000;
+const MAX_SIMULTANEOUS_COMMAND_WATCHERS = 128;
+let activeCommandWatcherCount = 0;
 const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
   'desktop_file_chunks',
   'document_blob_chunks',
@@ -9,49 +16,163 @@ const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
 
 export function createCommandBus({ db, sync = null, session = null } = {}) {
   return {
-    async dispatch(command) {
-      return dispatchRxdbCommand({ db, sync, session, command });
+    async submit(command) {
+      return submitRxdbCommand({ db, sync, session, command });
+    },
+    async waitForAccepted(commandId, options = {}) {
+      return waitForCommandState({ db, sync, commandId, until: 'accepted', options });
+    },
+    async waitForTerminal(commandId, options = {}) {
+      return waitForCommandState({ db, sync, commandId, until: 'terminal', options });
+    },
+    async resumeTracking(commandId, options = {}) {
+      return waitForCommandState({ db, sync, commandId, until: options.until || 'terminal', options });
+    },
+    activeCommandIds() {
+      return readActiveCommandIds();
+    },
+    async getStatus(commandId) {
+      const currentDb = await resolveCommandDb(db);
+      return findDoc(currentDb?.raw?.business_commands, commandId, { swallowErrors: false });
+    },
+    subscribe(commandId, observer) {
+      return subscribeToCommand({ db, sync, commandId, observer });
+    },
+    async cancel(commandId, { reason = 'cancelled by user', until = 'terminal' } = {}) {
+      const targetCommandId = cleanContextText(commandId);
+      if (!targetCommandId) throw commandError('', 'command_id is required for cancellation.', {
+        code: 'invalid_transition',
+        retryable: false,
+      });
+      const cancellation = {
+        id: `cmd_cancel_${crypto.randomUUID()}`,
+        module: 'ctox',
+        type: 'ctox.command.cancel',
+        record_id: targetCommandId,
+        payload: {
+          target_command_id: targetCommandId,
+          reason: cleanContextText(reason) || 'cancelled by user',
+        },
+      };
+      const receipt = await submitRxdbCommand({ db, sync, session, command: cancellation });
+      if (until === 'local') return receipt;
+      return waitForCommandState({
+        db,
+        sync,
+        commandId: receipt.command_id,
+        until: until === 'accepted' ? 'accepted' : 'terminal',
+        options: {},
+      });
+    },
+    async dispatch(command, options = {}) {
+      const receipt = await submitRxdbCommand({ db, sync, session, command });
+      const until = options.until || command?.until || 'accepted';
+      if (until === 'local') return receipt;
+      if (until === 'terminal') {
+        return waitForCommandState({
+          db,
+          sync,
+          commandId: receipt.command_id,
+          until,
+          options: { ...command, ...options },
+        });
+      }
+      if (until !== 'accepted') {
+        throw commandError(receipt.command_id, `Unknown command wait target: ${until}`, {
+          code: 'invalid_transition',
+          retryable: false,
+        });
+      }
+      return waitForCommandState({
+        db,
+        sync,
+        commandId: receipt.command_id,
+        until,
+        options: { ...command, ...options },
+      });
     },
   };
 }
 
 // §9.1 capability token: the native side authorizes commands from a signed
-// token rather than the (spoofable) browser-asserted actor. We fetch a token
-// bound to the logged-in session from the control plane and attach it to every
-// command. Cached until just before expiry; if the control plane is unreachable
-// we dispatch without it (legacy claimed-actor path) so the UI keeps working.
-let capabilityTokenCache = { token: null, expiresAtMs: 0 };
+// token rather than the (spoofable) browser-asserted actor. The generated v2
+// contract currently requires this capability for every mutation and forbids
+// an unauthorised offline intent. Cached until just before expiry.
+let capabilityTokenCache = {
+  token: null,
+  expiresAtMs: 0,
+  failureUntilMs: 0,
+  failureCode: '',
+};
 
-export async function getBusinessOsCapabilityToken() {
+export async function getBusinessOsCapabilityToken({
+  timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
+} = {}) {
   const now = Date.now();
   if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityTokenCache.token;
   }
+  if (now < capabilityTokenCache.failureUntilMs) return null;
   const injected = injectedBusinessOsCapabilityToken(now);
   if (injected?.token) {
     capabilityTokenCache = injected;
     return capabilityTokenCache.token;
   }
+  const abortController = typeof AbortController === 'function' ? new AbortController() : null;
   try {
-    const res = await fetch('/api/business-os/auth/capability', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      cache: 'no-store',
-    });
-    if (!res.ok) return null;
+    const res = await withTimeout(
+      fetch('/api/business-os/auth/capability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: abortController?.signal,
+      }),
+      timeoutMs,
+      {
+        code: 'native_unavailable',
+        message: 'Business OS capability request timed out.',
+        onTimeout: () => abortController?.abort(),
+      },
+    );
+    if (!res.ok) {
+      rememberCapabilityFailure(now, `capability_http_${res.status}`);
+      return null;
+    }
     const data = await res.json();
     if (data && data.capability_token) {
       capabilityTokenCache = {
         token: data.capability_token,
         expiresAtMs: Number(data.expires_at_ms) || now + 11 * 60 * 60 * 1000,
+        failureUntilMs: 0,
+        failureCode: '',
       };
       return capabilityTokenCache.token;
     }
-  } catch {
+    rememberCapabilityFailure(now, 'capability_missing');
+  } catch (error) {
     // control plane unreachable — degrade to the legacy path
+    rememberCapabilityFailure(now, String(error?.code || 'capability_unavailable'));
   }
   return null;
+}
+
+export function resetBusinessOsCapabilityTokenCacheForTests() {
+  capabilityTokenCache = {
+    token: null,
+    expiresAtMs: 0,
+    failureUntilMs: 0,
+    failureCode: '',
+  };
+}
+
+function rememberCapabilityFailure(now, code) {
+  capabilityTokenCache = {
+    token: null,
+    expiresAtMs: 0,
+    failureUntilMs: now + COMMAND_CAPABILITY_NEGATIVE_CACHE_MS,
+    failureCode: code,
+  };
 }
 
 export const getCapabilityToken = getBusinessOsCapabilityToken;
@@ -75,10 +196,26 @@ function injectedBusinessOsCapabilityToken(now = Date.now()) {
   return null;
 }
 
-async function dispatchRxdbCommand({ db, sync, session, command }) {
+async function submitRxdbCommand({ db, sync, session, command }) {
+  const submitStartedAt = Date.now();
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
   const capabilityToken = await getBusinessOsCapabilityToken();
-  const doc = commandDocument(
+  // Every Business OS command mutates native/domain state. Offline reads stay
+  // local-first, but mutation intent without a current server-issued actor
+  // capability would be immutable and can never become authorized later.
+  // Fail before insertion instead of creating a command that is guaranteed to
+  // be rejected after replication.
+  if (
+    CTOX_COMMAND_AUTHORIZATION.defaultRequirement === 'capability'
+    && !CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
+    && !capabilityToken
+  ) {
+    throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
+      code: 'auth_required',
+      retryable: true,
+    });
+  }
+  const doc = await commandDocument(
     command,
     commandId,
     resolveActorContext(command, session),
@@ -91,20 +228,23 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
   const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
   try {
     await flushSyncBridges(syncPlan.beforeCommand);
+    const localWriteStartedAt = Date.now();
     await insertOrPatchCommandDocument(collection, commandId, doc);
+    recordCommandMetric(sync, 'local_submit', commandId, Date.now() - localWriteStartedAt);
     await flushSyncBridges(syncPlan.afterCommand);
-    return await waitForAuthoritativeQueueProjection(
-      currentDb,
-      commandId,
-      commandWaitTimeoutMs(command),
-      syncPlan,
-    );
+    recordCommandMetric(sync, 'submit_receipt', commandId, Date.now() - submitStartedAt);
+    return {
+      ok: true,
+      command_id: commandId,
+      status: 'local',
+      transport: 'rxdb-command-bus',
+    };
   } finally {
     await releaseSyncPlan(syncPlan);
   }
 }
 
-function commandDocument(command, commandId, actor, capabilityToken = null) {
+async function commandDocument(command, commandId, actor, capabilityToken = null) {
   const now = Date.now();
   const commandClientContext = command.client_context && typeof command.client_context === 'object'
     ? command.client_context
@@ -121,6 +261,13 @@ function commandDocument(command, commandId, actor, capabilityToken = null) {
   const inboundChannel = String(command.inbound_channel || command.client_context?.inbound_channel || moduleId).trim();
   if (!commandType) throw commandError(commandId, 'command_type is required.');
   const recordId = command.record_id || '';
+  const dependencies = commandDependencyManifest(command);
+  const commandDeadlineAtMs = Number(
+    command.deadline_at_ms
+      || command.command_deadline_at_ms
+      || command.payload?.command_deadline_at_ms
+      || 0,
+  );
   const clientContext = normalizeCommandClientContext({
     command,
     moduleId,
@@ -132,9 +279,11 @@ function commandDocument(command, commandId, actor, capabilityToken = null) {
   if (capabilityToken) {
     clientContext.capability_token = capabilityToken;
   }
-  return {
+  const doc = {
     id: commandId,
     command_id: commandId,
+    contract_version: 2,
+    idempotency_key: String(command.idempotency_key || commandId),
     module: moduleId,
     command_type: commandType,
     record_id: recordId,
@@ -143,11 +292,17 @@ function commandDocument(command, commandId, actor, capabilityToken = null) {
     payload: {
       ...(command.payload || {}),
       inbound_channel: inboundChannel,
+      ...(dependencies.length > 0 ? { dependencies } : {}),
+      ...(Number.isFinite(commandDeadlineAtMs) && commandDeadlineAtMs > 0
+        ? { command_deadline_at_ms: Math.floor(commandDeadlineAtMs) }
+        : {}),
     },
     client_context: clientContext,
     created_at_ms: now,
     updated_at_ms: now,
   };
+  doc.payload_hash = await payloadHashForCommandDocument(doc);
+  return doc;
 }
 
 export function normalizeCommandClientContext({
@@ -352,6 +507,10 @@ async function releaseSyncLeases(leases) {
 
 function commandDependencySyncCollections(command) {
   const collections = new Set();
+  for (const dependency of commandDependencyManifest(command)) {
+    const normalized = cleanContextText(dependency.collection);
+    if (normalized) collections.add(normalized);
+  }
   for (const collection of command?.sync_collections || []) {
     const normalized = cleanContextText(collection);
     if (normalized && normalized !== 'business_commands' && normalized !== 'ctox_queue_tasks') {
@@ -365,6 +524,73 @@ function commandDependencySyncCollections(command) {
     collections.add('desktop_file_chunks');
   }
   return [...collections];
+}
+
+function commandDependencyManifest(command) {
+  const payload = command?.payload && typeof command.payload === 'object' ? command.payload : {};
+  const explicit = Array.isArray(command?.dependencies)
+    ? command.dependencies
+    : (Array.isArray(payload.dependencies) ? payload.dependencies : []);
+  const dependencies = explicit.map((dependency) => normalizeCommandDependency(dependency)).filter(Boolean);
+  const known = new Set(dependencies.map((dependency) => `${dependency.collection}:${dependency.record_id}`));
+  const add = (dependency) => {
+    const normalized = normalizeCommandDependency(dependency);
+    if (!normalized) return;
+    const key = `${normalized.collection}:${normalized.record_id}`;
+    if (known.has(key)) return;
+    known.add(key);
+    dependencies.push(normalized);
+  };
+  const sourceFileId = cleanContextText(payload.source_file_id || payload.file_id);
+  if (sourceFileId) {
+    add({
+      collection: 'desktop_files',
+      record_id: sourceFileId,
+      generation_id: payload.generation_id,
+      content_hash: payload.content_hash || payload.sha256,
+      required: true,
+    });
+  }
+  for (const attachment of desktopFileAttachmentRefs(payload)) {
+    const fileId = cleanContextText(attachment.file_id || attachment.fileId);
+    if (fileId) {
+      add({
+        collection: 'desktop_files',
+        record_id: fileId,
+        generation_id: attachment.generation_id || attachment.generationId,
+        content_hash: attachment.content_hash || attachment.contentHash || attachment.sha256,
+        required: attachment.required !== false,
+      });
+    }
+    const chunkId = cleanContextText(attachment.chunk_id || attachment.chunkId);
+    if (chunkId) {
+      add({
+        collection: cleanContextText(attachment.chunk_collection || attachment.chunkCollection) || 'desktop_file_chunks',
+        record_id: chunkId,
+        generation_id: attachment.generation_id || attachment.generationId,
+        content_hash: attachment.content_hash || attachment.contentHash || attachment.sha256,
+        required: attachment.required !== false,
+      });
+    }
+  }
+  return dependencies;
+}
+
+function normalizeCommandDependency(dependency) {
+  if (!dependency || typeof dependency !== 'object') return null;
+  const collection = cleanContextText(dependency.collection);
+  const recordId = cleanContextText(dependency.record_id || dependency.recordId || dependency.id);
+  if (!collection || !recordId) return null;
+  const normalized = {
+    collection,
+    record_id: recordId,
+    required: dependency.required !== false,
+  };
+  const generationId = cleanContextText(dependency.generation_id || dependency.generationId);
+  const contentHash = cleanContextText(dependency.content_hash || dependency.contentHash || dependency.sha256);
+  if (generationId) normalized.generation_id = generationId;
+  if (contentHash) normalized.content_hash = contentHash;
+  return normalized;
 }
 
 function commandUsesDesktopFileMetadata(command) {
@@ -413,130 +639,378 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   } catch (error) {
     if (!isRxDbConflictError(error)) throw error;
   }
-  const existing = await collection.findOne(commandId).exec();
-  if (existing) {
-    await existing.incrementalPatch(doc);
-  } else {
+  const existingDoc = await collection.findOne(commandId).exec();
+  const existing = existingDoc?.toJSON?.() || existingDoc || null;
+  if (!existing) {
     await collection.insert(doc);
+    return;
+  }
+  const existingHash = String(existing.payload_hash || await payloadHashForCommandDocument(existing));
+  if (existingHash !== doc.payload_hash) {
+    throw commandError(commandId, 'The command id is already bound to a different immutable payload.', {
+      code: 'idempotency_conflict',
+      retryable: false,
+    });
   }
 }
 
-function commandWaitTimeoutMs(command) {
-  const raw = command?.wait_timeout_ms
-    ?? command?.client_context?.command_wait_timeout_ms
-    ?? command?.client_context?.wait_timeout_ms;
+async function payloadHashForCommandDocument(document) {
+  const clientContext = document?.client_context && typeof document.client_context === 'object'
+    ? { ...document.client_context }
+    : {};
+  delete clientContext.capability_token;
+  const immutable = {
+    command_id: String(document?.command_id || document?.id || ''),
+    idempotency_key: String(document?.idempotency_key || document?.command_id || document?.id || ''),
+    module: String(document?.module || ''),
+    command_type: String(document?.command_type || document?.type || ''),
+    record_id: String(document?.record_id || ''),
+    payload: document?.payload || {},
+    client_context: clientContext,
+  };
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || typeof TextEncoder !== 'function') {
+    throw commandError(immutable.command_id, 'SHA-256 is unavailable for command idempotency.', {
+      code: 'sync_unavailable',
+      retryable: false,
+    });
+  }
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson(immutable)));
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  return `sha256:${hex}`;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function commandWaitTimeoutMs(options) {
+  const raw = options?.timeoutMs
+    ?? options?.timeout_ms
+    ?? options?.wait_timeout_ms
+    ?? options?.client_context?.command_wait_timeout_ms
+    ?? options?.client_context?.wait_timeout_ms;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return COMMAND_ACCEPT_TIMEOUT_MS;
   return Math.min(Math.max(parsed, 1000), 10 * 60 * 1000);
 }
 
-async function waitForAuthoritativeQueueProjection(
-  db,
-  commandId,
-  timeoutMs = COMMAND_ACCEPT_TIMEOUT_MS,
-  syncPlan = null,
-) {
-  const commands = db?.raw?.business_commands;
-  const queue = db?.raw?.ctox_queue_tasks;
-  const deadline = Date.now() + timeoutMs;
-  let lastCommand = null;
-  let nextRefreshAt = Date.now() + 1000;
-  let nextRestartAt = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    lastCommand = await findDoc(commands, commandId);
-    const taskId = String(lastCommand?.task_id || '').trim();
-    const task = taskId ? await findDoc(queue, taskId) : null;
-    if (lastCommand?.status === 'failed') {
-      const outcome = lastCommand.result?.outcome || lastCommand.payload?.outcome || null;
-      throw commandError(
-        commandId,
-        lastCommand.error || outcome?.stderr || outcome?.error || 'CTOX command failed.',
-      );
-    }
-    const directOutcome = lastCommand?.result?.outcome || lastCommand?.payload?.outcome || null;
-    if (!taskId && directOutcome && (directOutcome.ok !== undefined || directOutcome.exit_code !== undefined)) {
-      if (directOutcome.ok === false || Number(directOutcome.exit_code || 0) !== 0) {
-        throw commandError(
-          commandId,
-          lastCommand.error || directOutcome.stderr || directOutcome.error || 'CTOX command failed.',
-        );
+function subscribeToCommand({ db, sync, commandId, observer }) {
+  let closed = false;
+  let subscription = null;
+  const releaseWatcher = reserveCommandWatcher(commandId);
+  recordCommandMetric(sync, 'watcher_started', commandId);
+  const ready = Promise.resolve()
+    .then(() => resolveCommandDb(db))
+    .then((currentDb) => {
+      if (closed) return null;
+      const collection = currentDb?.raw?.business_commands;
+      if (!collection?.findOne) {
+        throw commandError(commandId, 'business_commands collection is required.', {
+          code: 'sync_unavailable',
+          retryable: true,
+        });
       }
-      return {
-        ok: true,
-        command_id: commandId,
-        status: String(lastCommand?.status || 'completed'),
-        task_id: '',
-        task_status: String(lastCommand?.task_status || lastCommand?.status || 'completed'),
-        payload: lastCommand?.payload || null,
-        result: lastCommand?.result || null,
-        transport: 'rxdb-command-bus',
-      };
-    }
-    if (taskId && task) {
-      return {
-        ok: true,
-        command_id: commandId,
-        status: String(lastCommand?.status || 'accepted'),
-        task_id: taskId,
-        task_status: String(task.status || lastCommand?.task_status || 'queued'),
-        payload: lastCommand?.payload || null,
-        result: lastCommand?.result || null,
-        transport: 'rxdb-command-bus',
-      };
-    }
-    // Control commands (ctox.file.materialize, ctox.module.*, ...) are
-    // executed directly by the daemon and acknowledged with a terminal
-    // 'completed' command document that intentionally carries NO queue-task
-    // projection (write_rxdb_control_command_outcome stamps an empty
-    // task_id). That acknowledgement IS the authoritative result — waiting
-    // for a task here timed out after 45s for every control command.
-    // Queue-backed commands always carry a task_id alongside their status.
-    if (!taskId && lastCommand?.status === 'completed') {
-      return {
-        ok: true,
-        command_id: commandId,
-        status: 'completed',
-        task_id: '',
-        task_status: String(lastCommand?.task_status || 'completed'),
-        payload: lastCommand?.payload || null,
-        result: lastCommand?.result || null,
-        transport: 'rxdb-command-bus',
-      };
-    }
-    if (Date.now() >= nextRefreshAt) {
-      nextRefreshAt = Date.now() + 1500;
-      await refreshProjectionBridges(syncPlan?.afterCommand);
-    }
-    if (Date.now() >= nextRestartAt) {
-      nextRestartAt = Date.now() + 10000;
-      const restarted = await restartProjectionCollections(syncPlan?.sync);
-      if (restarted.length && syncPlan) syncPlan.afterCommand = restarted;
-      await refreshProjectionBridges(syncPlan?.afterCommand);
-    }
-    await delay(250);
-  }
-  throw commandError(
-    commandId,
-    'CTOX wartet noch auf die Rueckmeldung. Bitte Status neu laden oder erneut versuchen.',
-    { status: 'projection_pending', transient: true },
-  );
+      const stream = collection.findOne(commandId)?.$;
+      if (!stream?.subscribe) {
+        throw commandError(commandId, 'business_commands does not support reactive tracking.', {
+          code: 'sync_unavailable',
+          retryable: true,
+        });
+      }
+      subscription = stream.subscribe((value) => {
+        if (typeof observer === 'function') observer(value);
+        else observer?.next?.(value);
+        const command = value?.toJSON?.() || value;
+        if (commandIsTerminal(command)) {
+          closed = true;
+          subscription?.unsubscribe?.();
+          releaseWatcher();
+        }
+      });
+      return subscription;
+    })
+    .catch((error) => {
+      releaseWatcher();
+      throw error;
+    });
+  return {
+    ready,
+    unsubscribe() {
+      closed = true;
+      subscription?.unsubscribe?.();
+      releaseWatcher();
+    },
+  };
 }
 
-async function findDoc(collection, id) {
+async function waitForCommandState({ db, sync, commandId, until, options = {} }) {
+  const releaseWatcher = reserveCommandWatcher(commandId);
+  const timeoutMs = commandWaitTimeoutMs(options);
+  let currentDb = null;
+  let syncPlan = null;
+  let lastCommand = null;
+  let subscription = null;
+  let boundRawDb = null;
+  rememberActiveCommandId(commandId);
+  try {
+    currentDb = await resolveCommandDb(db);
+    syncPlan = await prepareCommandSync({ db: currentDb, sync });
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let rebindInFlight = false;
+      const settle = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(rebindTimer);
+        subscription?.unsubscribe?.();
+        if (commandIsTerminal(lastCommand)) forgetActiveCommandId(commandId);
+        handler(value);
+      };
+      const inspect = (value) => {
+        if (settled || !value) return;
+        lastCommand = value?.toJSON?.() || value;
+        if (commandIsFailed(lastCommand)) {
+          const outcome = lastCommand.result?.outcome || lastCommand.payload?.outcome || null;
+          settle(reject, commandError(
+            commandId,
+            lastCommand.error_message || lastCommand.error || outcome?.stderr || outcome?.error || 'CTOX command failed.',
+            {
+              code: lastCommand.error_code || 'command_terminal_failure',
+              retryable: Boolean(lastCommand.retryable),
+            },
+          ));
+          return;
+        }
+        if (!commandHasReached(lastCommand, until)) return;
+        recordObservedCommandMetrics(sync, commandId, lastCommand);
+        settle(resolve, commandReceipt(lastCommand, commandId));
+      };
+      const bind = async () => {
+        if (settled || rebindInFlight) return;
+        rebindInFlight = true;
+        try {
+          currentDb = await resolveCommandDb(db);
+          const commands = currentDb?.raw?.business_commands;
+          if (!commands) throw commandError(commandId, 'business_commands collection is required.', {
+            code: 'sync_unavailable', retryable: true,
+          });
+          if (boundRawDb !== currentDb.raw) {
+            subscription?.unsubscribe?.();
+            boundRawDb = currentDb.raw;
+            const stream = commands.findOne(commandId)?.$;
+            if (!stream?.subscribe) throw commandError(commandId, 'Reactive command tracking is unavailable.', {
+              code: 'sync_unavailable', retryable: true,
+            });
+            subscription = stream.subscribe(inspect);
+            recordCommandMetric(sync, 'watcher_started', commandId);
+          }
+          // Close the subscribe/read race and every data-plane rebind window.
+          inspect(await findDoc(commands, commandId, { swallowErrors: false }));
+        } catch (error) {
+          settle(reject, error);
+        } finally {
+          rebindInFlight = false;
+        }
+      };
+      const timeout = setTimeout(() => {
+        recordCommandMetric(sync, 'wait_timeout', commandId, timeoutMs);
+        settle(reject, commandError(
+          commandId,
+          'CTOX wartet noch auf die Rueckmeldung. Der Vorgang bleibt verfolgbar.',
+          {
+            code: 'projection_delayed',
+            status: 'projection_pending',
+            transient: true,
+            retryable: true,
+            receipt: lastCommand ? commandReceipt(lastCommand, commandId) : { command_id: commandId },
+          },
+        ));
+      }, timeoutMs);
+      const rebindTimer = setInterval(() => {
+        bind();
+        refreshProjectionBridges(syncPlan?.afterCommand).catch(() => {});
+      }, 1500);
+      bind();
+    });
+  } finally {
+    subscription?.unsubscribe?.();
+    releaseWatcher();
+    await releaseSyncPlan(syncPlan);
+  }
+}
+
+function reserveCommandWatcher(commandId) {
+  if (activeCommandWatcherCount >= MAX_SIMULTANEOUS_COMMAND_WATCHERS) {
+    throw commandError(commandId, 'Too many simultaneous command watchers.', {
+      code: 'projection_delayed',
+      transient: true,
+      retryable: true,
+    });
+  }
+  activeCommandWatcherCount += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeCommandWatcherCount = Math.max(0, activeCommandWatcherCount - 1);
+  };
+}
+
+function recordObservedCommandMetrics(sync, commandId, command) {
+  const createdAtMs = Number(command.created_at_ms || 0);
+  if (command.replication_phase === 'native_observed' && createdAtMs > 0) {
+    recordCommandMetric(sync, 'submit_to_native_observed', commandId, Math.max(0, Date.now() - createdAtMs));
+  }
+  if (commandIsTerminal(command)) {
+    const terminalAtMs = Number(command.updated_at_ms || 0);
+    if (terminalAtMs > 0) {
+      recordCommandMetric(sync, 'terminal_to_browser_observed', commandId, Math.max(0, Date.now() - terminalAtMs));
+    }
+  }
+}
+
+const ACTIVE_COMMAND_STORAGE_KEY = 'ctox.businessOs.activeCommandIds.v1';
+const MAX_ACTIVE_COMMAND_IDS = 128;
+
+function readActiveCommandIds() {
+  try {
+    const ids = JSON.parse(globalThis.localStorage?.getItem?.(ACTIVE_COMMAND_STORAGE_KEY) || '[]');
+    return Array.isArray(ids) ? ids.map(String).filter(Boolean).slice(-MAX_ACTIVE_COMMAND_IDS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberActiveCommandId(commandId) {
+  const ids = readActiveCommandIds().filter((id) => id !== commandId);
+  ids.push(commandId);
+  try { globalThis.localStorage?.setItem?.(ACTIVE_COMMAND_STORAGE_KEY, JSON.stringify(ids.slice(-MAX_ACTIVE_COMMAND_IDS))); } catch {}
+}
+
+function forgetActiveCommandId(commandId) {
+  const ids = readActiveCommandIds().filter((id) => id !== commandId);
+  try { globalThis.localStorage?.setItem?.(ACTIVE_COMMAND_STORAGE_KEY, JSON.stringify(ids)); } catch {}
+}
+
+function recordCommandMetric(sync, name, commandId, durationMs) {
+  sync?.recordCommandMetric?.({ name, commandId, durationMs });
+}
+
+function commandHasReached(command, until) {
+  if (until === 'terminal') return commandIsTerminal(command);
+  return commandIsTerminal(command)
+    || command.replication_phase === 'native_observed'
+    || ['accepted', 'waiting_dependencies', 'queued', 'leased', 'running', 'awaiting_review', 'validating', 'retry_wait', 'blocked']
+      .includes(String(command.execution_phase || command.status || ''));
+}
+
+function commandIsTerminal(command) {
+  return command?.execution_phase === 'terminal'
+    || ['completed', 'failed', 'cancelled'].includes(String(command?.terminal_status || command?.status || ''));
+}
+
+function commandIsFailed(command) {
+  if (!command) return false;
+  if (command.terminal_status === 'failed' || command.status === 'failed') return true;
+  const outcome = command.result?.outcome || command.payload?.outcome || null;
+  return outcome?.ok === false || Number(outcome?.exit_code || 0) !== 0;
+}
+
+function commandReceipt(command, commandId) {
+  const executionTaskId = String(command?.execution_task_id || '').trim();
+  const compatibilityTaskId = String(command?.task_id || '').trim();
+  const taskId = executionTaskId || (
+    command?.execution_mode === 'control' || commandIsTerminal(command)
+      ? ''
+      : compatibilityTaskId
+  );
+  return {
+    ok: !commandIsFailed(command),
+    command_id: commandId,
+    status: String(command?.status || command?.execution_phase || 'accepted'),
+    execution_mode: command?.execution_mode || null,
+    execution_task_id: taskId,
+    task_id: taskId,
+    target_task_id: command?.target_task_id || (
+      taskId ? '' : compatibilityTaskId
+    ),
+    target_record_id: command?.target_record_id || command?.record_id || '',
+    task_status: String(command?.task_status || command?.status || ''),
+    payload: command?.payload || null,
+    result: command?.result || null,
+    transport: 'rxdb-command-bus',
+  };
+}
+
+async function findDoc(collection, id, { swallowErrors = true } = {}) {
   if (!collection?.findOne || !id) return null;
-  const doc = await collection.findOne(id).exec().catch(() => null);
+  let doc;
+  try {
+    doc = await collection.findOne(id).exec();
+  } catch (error) {
+    if (swallowErrors) return null;
+    throw error;
+  }
   return doc?.toJSON?.() || doc || null;
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs) {
   const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
-  await Promise.race([
-    Promise.resolve()
-      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
-      .catch(() => {}),
-    delay(timeoutMs),
-  ]);
+  // Command submission needs an authenticated, open native peer so the new
+  // local row can be pushed; it must not wait for the complete historical
+  // pull of business_commands. A mature instance can contain many thousands
+  // of immutable command records, making that cold pull much longer than the
+  // command deadline even though the transport is already usable.
+  if (typeof state.getTransportStatus === 'function' || state.demandStatus) {
+    await withTimeout(
+      async () => {
+        while (!syncBridgePeerConnected(state)) {
+          if (state.cancelled) throw new Error('WebRTC replication cancelled');
+          await delay(50);
+        }
+      },
+      timeoutMs,
+      {
+        code: 'native_unavailable',
+        message: 'CTOX Sync Engine did not become ready before the command deadline.',
+      },
+    );
+    return;
+  }
+  await withTimeout(
+    () => state.awaitInSync?.() || state.awaitInitialReplication?.(),
+    timeoutMs,
+    {
+      code: 'native_unavailable',
+      message: 'CTOX Sync Engine did not become ready before the command deadline.',
+    },
+  );
+}
+
+function syncBridgePeerConnected(state) {
+  if (state?.demandStatus?.peerConnected === true) return true;
+  try {
+    const status = state?.getTransportStatus?.() || {};
+    if (status?.demandLoading?.peerConnected === true) return true;
+    if (status?.peerConnected === true) return true;
+    return Array.isArray(status?.connectionStates)
+      && status.connectionStates.some((connection) => (
+        connection?.open === true
+        || connection?.channelReadyState === 'open'
+        || ['connected', 'completed'].includes(connection?.peerConnectionState)
+      ));
+  } catch {
+    return false;
+  }
 }
 
 async function flushSyncBridges(bridges) {
@@ -546,15 +1020,17 @@ async function flushSyncBridges(bridges) {
 async function flushSyncBridge(bridge) {
   const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
-  await Promise.race([
-    Promise.resolve()
-      .then(() => {
-        if (typeof state.pushToRemotePeers === 'function') return state.pushToRemotePeers();
-        return state.awaitInSync?.();
-      })
-      .catch(() => {}),
-    delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
-  ]);
+  await withTimeout(
+    () => {
+      if (typeof state.pushToRemotePeers === 'function') return state.pushToRemotePeers();
+      return state.awaitInSync?.();
+    },
+    COMMAND_SYNC_FLUSH_TIMEOUT_MS,
+    {
+      code: 'sync_unavailable',
+      message: 'CTOX Sync Engine could not push command dependencies before the deadline.',
+    },
+  );
 }
 
 async function refreshProjectionBridges(bridges) {
@@ -564,43 +1040,17 @@ async function refreshProjectionBridges(bridges) {
 async function refreshProjectionBridge(bridge) {
   const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
-  await Promise.race([
-    Promise.resolve()
-      .then(() => {
-        if (typeof state.pullFromRemotePeers === 'function') return state.pullFromRemotePeers();
-        return state.awaitInSync?.();
-      })
-      .catch(() => {}),
-    delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
-  ]);
-}
-
-async function restartProjectionCollections(sync) {
-  if (!sync) return [];
-  try {
-    if (typeof sync.restartCollections === 'function') {
-      const bridges = await sync.restartCollections(['business_commands', 'ctox_queue_tasks']);
-      return Array.isArray(bridges) ? bridges.filter(Boolean) : [];
-    }
-    const bridges = await Promise.all([
-      restartProjectionCollection(sync, 'business_commands'),
-      restartProjectionCollection(sync, 'ctox_queue_tasks'),
-    ]);
-    return bridges.filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-async function restartProjectionCollection(sync, collection) {
-  try {
-    if (typeof sync.restartCollection === 'function') {
-      return await sync.restartCollection(collection);
-    }
-    return await sync.startCollection?.(collection);
-  } catch {
-    return null;
-  }
+  await withTimeout(
+    () => {
+      if (typeof state.pullFromRemotePeers === 'function') return state.pullFromRemotePeers();
+      return state.awaitInSync?.();
+    },
+    COMMAND_SYNC_FLUSH_TIMEOUT_MS,
+    {
+      code: 'projection_delayed',
+      message: 'CTOX command projection refresh exceeded its deadline.',
+    },
+  );
 }
 
 function syncBridgeFromHandle(handle) {
@@ -610,8 +1060,11 @@ function syncBridgeFromHandle(handle) {
 function commandError(commandId, message, options = {}) {
   const error = new Error(message);
   error.command_id = commandId;
+  error.code = options.code || 'command_terminal_failure';
   error.status = options.status || 'failed';
   error.transient = Boolean(options.transient);
+  error.retryable = Boolean(options.retryable);
+  if (options.receipt) error.receipt = options.receipt;
   return error;
 }
 
