@@ -341,6 +341,12 @@ impl ContextManager {
     /// 2. every output has a corresponding call entry
     /// 3. when images are unsupported, image content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        // CTOX rebuilds its runtime context on every durable worker turn. Keep
+        // the latest marked developer section model-visible and remove only
+        // superseded CTOX sections from the request clone. Other developer
+        // guidance and the persisted rollout remain untouched.
+        retain_latest_ctox_runtime_context(&mut self.items);
+
         // all function/tool calls must have a corresponding output
         normalize::ensure_call_outputs_present(&mut self.items);
 
@@ -386,6 +392,49 @@ impl ContextManager {
             | ResponseItem::Other => item.clone(),
         }
     }
+}
+
+const CTOX_RUNTIME_CONTEXT_PREFIX: &str = "<ctox_runtime_context ";
+
+fn retain_latest_ctox_runtime_context(items: &mut Vec<ResponseItem>) {
+    let latest = items.iter().enumerate().rev().find_map(|(item_index, item)| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return None;
+        };
+        if role != "developer" {
+            return None;
+        }
+        content
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, item)| {
+                matches!(item, ContentItem::InputText { text } if text.starts_with(CTOX_RUNTIME_CONTEXT_PREFIX))
+            })
+            .map(|(content_index, _)| (item_index, content_index))
+    });
+    let Some(latest) = latest else {
+        return;
+    };
+
+    for (item_index, item) in items.iter_mut().enumerate() {
+        let ResponseItem::Message { role, content, .. } = item else {
+            continue;
+        };
+        if role != "developer" {
+            continue;
+        }
+        let mut content_index = 0usize;
+        content.retain(|item| {
+            let keep = !matches!(item, ContentItem::InputText { text } if text.starts_with(CTOX_RUNTIME_CONTEXT_PREFIX))
+                || (item_index, content_index) == latest;
+            content_index += 1;
+            keep
+        });
+    }
+    items.retain(|item| {
+        !matches!(item, ResponseItem::Message { role, content, .. } if role == "developer" && content.is_empty())
+    });
 }
 
 fn truncate_function_output_payload(

@@ -2872,6 +2872,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
 fn op_kind_distinguishes_turn_ops() {
     assert_eq!(
         Op::OverrideTurnContext {
+            developer_instructions: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

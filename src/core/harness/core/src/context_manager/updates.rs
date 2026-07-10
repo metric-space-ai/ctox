@@ -50,6 +50,20 @@ fn build_permissions_update_item(
     ))
 }
 
+fn build_developer_instructions_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<DeveloperInstructions> {
+    let previous = previous?;
+    if previous.developer_instructions == next.developer_instructions {
+        return None;
+    }
+
+    next.developer_instructions
+        .clone()
+        .map(DeveloperInstructions::new)
+}
+
 fn build_collaboration_mode_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -197,6 +211,7 @@ pub(crate) fn build_settings_update_items(
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
+        build_developer_instructions_update_item(previous, next),
         build_permissions_update_item(previous, next, exec_policy),
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),

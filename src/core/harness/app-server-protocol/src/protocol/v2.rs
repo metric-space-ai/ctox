@@ -3776,6 +3776,12 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Replace the session's model-visible developer instructions for this
+    /// turn and subsequent turns. CTOX uses this existing turn-context lane
+    /// for its freshly rebuilt runtime context so the actual user input stays
+    /// a single, unwrapped message.
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -7740,20 +7746,32 @@ mod tests {
         let params: TurnStartParams = serde_json::from_value(json!({
             "threadId": "thread_123",
             "input": [],
+            "developerInstructions": "<ctox_runtime_context version=\"1\">current</ctox_runtime_context>",
             "serviceTier": null
         }))
         .expect("params should deserialize");
         assert_eq!(params.service_tier, Some(None));
+        assert_eq!(
+            params.developer_instructions.as_deref(),
+            Some("<ctox_runtime_context version=\"1\">current</ctox_runtime_context>")
+        );
 
         let serialized = serde_json::to_value(&params).expect("params should serialize");
         assert_eq!(
             serialized.get("serviceTier"),
             Some(&serde_json::Value::Null)
         );
+        assert_eq!(
+            serialized.get("developerInstructions"),
+            Some(&serde_json::Value::String(
+                "<ctox_runtime_context version=\"1\">current</ctox_runtime_context>".to_string()
+            ))
+        );
 
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            developer_instructions: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

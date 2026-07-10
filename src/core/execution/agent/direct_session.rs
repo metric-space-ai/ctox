@@ -2,11 +2,12 @@
 // License: AGPL-3.0-only
 //
 // Direct session: in-process ctox-core integration via InProcessAppServerClient.
-// One persistent client per CTOX mission-turn-loop. Multiple sequential turns
-// (main turn + continuity refreshes) reuse the same client and thread.
+// One persistent client for the normal CTOX worker lane. Sequential work
+// slices and their continuity refreshes reuse the same durable thread.
 
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,7 +22,9 @@ use ctox_app_server_client::{
 };
 use ctox_app_server_protocol::{
     ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
+    ThreadCompactStartResponse, ThreadListParams, ThreadListResponse, ThreadResumeParams,
+    ThreadResumeResponse, ThreadSetNameParams, ThreadSetNameResponse, ThreadSortKey,
+    ThreadSourceKind, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
     TurnInterruptResponse, TurnStartParams, TurnStartResponse,
 };
 use ctox_arg0::Arg0DispatchPaths;
@@ -58,8 +61,19 @@ const DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS: u64 = 90;
 const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
+const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
 #[cfg(test)]
 static DIRECT_SESSION_EVENT_DESERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn persistent_worker_thread_name(root: &Path) -> String {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
+    let suffix = digest[..6].iter().fold(String::new(), |mut value, byte| {
+        value.push_str(&format!("{byte:02x}"));
+        value
+    });
+    format!("{CTOX_PERSISTENT_WORKER_THREAD_NAME}-{}", suffix)
+}
 
 fn create_reviewer_scratch_workspace() -> Result<PathBuf> {
     let unique = SystemTime::now()
@@ -373,13 +387,12 @@ fn direct_session_deadline_capped_timeout(
 }
 
 // ---------------------------------------------------------------------------
-// PersistentSession — lives across turns within a mission-turn-loop iteration
+// PersistentSession — lives across normal worker turns and bounded helper turns
 // ---------------------------------------------------------------------------
 
-/// Holds a running InProcessAppServerClient + thread. Created once per
-/// mission-turn-loop iteration, reused for the main turn AND all continuity
-/// refresh calls. Solves the resource-exhaustion hang that occurred when
-/// spawning a new client per call.
+/// Holds a running InProcessAppServerClient + thread. Normal service work keeps
+/// one instance across slices and resumes its rollout after restart. Isolated
+/// reviewer/summarizer/special-profile callers still create bounded instances.
 pub(crate) struct PersistentSession {
     runtime: Option<tokio::runtime::Runtime>,
     // These are wrapped in Option so we can take() them in shutdown.
@@ -398,14 +411,16 @@ pub(crate) struct PersistentSession {
     disable_active_tools: bool,
     disable_mcp_servers: bool,
     read_only_sandbox: bool,
+    persistent_worker: bool,
     reviewer_scratch_workspace: Option<PathBuf>,
 }
 
 impl PersistentSession {
-    /// Start a persistent session: creates tokio runtime, app-server client,
-    /// and thread. Call this ONCE per mission-turn-loop iteration.
+    /// Start or resume the normal persistent worker session.
     pub fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
-        Self::start_with_instructions(root, settings, None, false)
+        Self::start_with_instructions_and_tool_mode(
+            root, settings, None, false, false, false, false, true,
+        )
     }
 
     /// Start a worker session without configured MCP/plugin tool servers.
@@ -425,6 +440,7 @@ impl PersistentSession {
             false,
             true,
             false,
+            false,
         )
     }
 
@@ -433,6 +449,36 @@ impl PersistentSession {
     /// session-level preflight will count (base instructions + prompt).
     pub(crate) fn base_instructions(&self) -> &str {
         &self.base_instructions
+    }
+
+    /// Return whether stable instructions/model still match the durable
+    /// runtime contract. A mismatch requires rebuilding the process-local
+    /// client; startup then resumes the rollout with the new typed contract.
+    pub(crate) fn matches_current_worker_contract(
+        &self,
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+    ) -> Result<bool> {
+        let base_instructions = compose_base_instructions(root, settings, None)?;
+        let runtime_model = runtime_kernel::InferenceRuntimeKernel::resolve(root)
+            .ok()
+            .and_then(|runtime| {
+                let state = runtime.state;
+                state
+                    .active_model
+                    .clone()
+                    .or_else(|| state.requested_model.clone())
+                    .or_else(|| state.base_model.clone())
+            });
+        let model = direct_session_selected_model(settings, runtime_model);
+        Ok(self.base_instructions == base_instructions && self.model == model)
+    }
+
+    /// Update the tool/sandbox working directory carried by the next turn.
+    /// The thread remains the same; the existing typed turn-context override
+    /// records the cwd change in rollout state for restart-safe resume.
+    pub(crate) fn set_turn_cwd(&mut self, cwd: &Path) {
+        self.cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     }
 
     /// Start a persistent session with explicit base instructions and optional
@@ -452,6 +498,7 @@ impl PersistentSession {
             base_instructions,
             disable_compaction,
             disable_compaction,
+            false,
             false,
             false,
         )
@@ -476,6 +523,7 @@ impl PersistentSession {
             false, // disable_active_tools
             true,  // disable_mcp_servers
             true,  // read_only_sandbox
+            false, // persistent_worker
         )
     }
 
@@ -487,6 +535,7 @@ impl PersistentSession {
         disable_active_tools: bool,
         disable_mcp_servers: bool,
         read_only_sandbox: bool,
+        persistent_worker: bool,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -509,6 +558,7 @@ impl PersistentSession {
                 disable_active_tools,
                 disable_mcp_servers,
                 read_only_sandbox,
+                persistent_worker,
             )
             .await
         });
@@ -589,6 +639,7 @@ impl PersistentSession {
             disable_active_tools,
             disable_mcp_servers,
             read_only_sandbox,
+            persistent_worker,
             reviewer_scratch_workspace,
         })
     }
@@ -612,6 +663,16 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
+        self.run_turn_inner_with_context(prompt, None, timeout, exact_prompt_preflight)
+    }
+
+    pub(crate) fn run_turn_inner_with_context(
+        &mut self,
+        prompt: &str,
+        developer_instructions: Option<&str>,
+        timeout: Option<Duration>,
+        exact_prompt_preflight: Option<ExactPromptTokenCount>,
+    ) -> Result<String> {
         let client = self
             .client
             .as_mut()
@@ -623,11 +684,13 @@ impl PersistentSession {
         let api_provider = self.api_provider.clone();
         let reasoning_effort = self.reasoning_effort;
         let prompt = prompt.to_string();
+        let developer_instructions = developer_instructions.map(str::to_string);
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
         let disable_active_tools = self.disable_active_tools;
         let disable_mcp_servers = self.disable_mcp_servers;
         let read_only_sandbox = self.read_only_sandbox;
+        let persistent_worker = self.persistent_worker;
         self.ctx_log.log(
             "turn_request",
             &format!("\"prompt_len\":{},\"timeout\":{:?}", prompt.len(), timeout),
@@ -648,6 +711,7 @@ impl PersistentSession {
                 reasoning_effort,
                 &root,
                 &prompt,
+                developer_instructions.as_deref(),
                 &base_instructions,
                 timeout,
                 &mut self.seq,
@@ -656,6 +720,7 @@ impl PersistentSession {
                 disable_active_tools,
                 disable_mcp_servers,
                 read_only_sandbox,
+                persistent_worker,
                 exact_prompt_preflight,
             )
             .await
@@ -682,6 +747,7 @@ impl PersistentSession {
         disable_active_tools: bool,
         disable_mcp_servers: bool,
         read_only_sandbox: bool,
+        persistent_worker: bool,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -930,33 +996,114 @@ impl PersistentSession {
         };
 
         eprintln!("[ctox direct-session] starting InProcessAppServerClient...");
-        let client = InProcessAppServerClient::start(start_args)
+        let mut client = InProcessAppServerClient::start(start_args)
             .await
             .map_err(|err| anyhow::anyhow!("client start: {err}"))?;
         eprintln!("[ctox direct-session] client started");
 
         let mut seq = RequestIdSeq::new();
-        let thread_resp: ThreadStartResponse = client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: seq.next(),
-                params: ThreadStartParams {
-                    model: Some(model.clone()),
-                    model_provider: selected_provider_id.clone(),
-                    cwd: Some(cwd.to_string_lossy().to_string()),
-                    approval_policy: Some(AskForApproval::Never.into()),
-                    sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-                    base_instructions: Some(base_instructions.to_string()),
-                    dynamic_tools: disable_active_tools.then(Vec::new),
-                    disable_mcp_servers: Some(disable_mcp_servers),
-                    ephemeral: Some(true),
-                    ..ThreadStartParams::default()
-                },
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("thread/start: {err}"))?;
+        let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let persistent_thread_name = persistent_worker.then(|| persistent_worker_thread_name(root));
+        let resumable_thread_id = if let Some(persistent_thread_name) =
+            persistent_thread_name.as_deref()
+        {
+            match client
+                .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
+                    request_id: seq.next(),
+                    params: ThreadListParams {
+                        cursor: None,
+                        limit: Some(20),
+                        sort_key: Some(ThreadSortKey::UpdatedAt),
+                        model_providers: None,
+                        source_kinds: Some(vec![ThreadSourceKind::Exec]),
+                        archived: Some(false),
+                        cwd: None,
+                        search_term: Some(persistent_thread_name.to_string()),
+                    },
+                })
+                .await
+            {
+                Ok(response) => response
+                    .data
+                    .into_iter()
+                    .find(|thread| {
+                        !thread.ephemeral && thread.name.as_deref() == Some(persistent_thread_name)
+                    })
+                    .map(|thread| thread.id),
+                Err(err) => {
+                    eprintln!(
+                        "[ctox direct-session] persistent thread lookup failed; starting fresh: {err}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-        let thread_id = thread_resp.thread.id.clone();
-        eprintln!("[ctox direct-session] thread started: {}", thread_id);
+        let thread_id = if let Some(thread_id) = resumable_thread_id {
+            match client
+                .request_typed::<ThreadResumeResponse>(ClientRequest::ThreadResume {
+                    request_id: seq.next(),
+                    params: ThreadResumeParams {
+                        thread_id: thread_id.clone(),
+                        history: None,
+                        path: None,
+                        model: Some(model.clone()),
+                        model_provider: selected_provider_id.clone(),
+                        service_tier: None,
+                        cwd: Some(canonical_cwd.to_string_lossy().to_string()),
+                        approval_policy: Some(AskForApproval::Never.into()),
+                        approvals_reviewer: None,
+                        sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+                        config: None,
+                        base_instructions: Some(base_instructions.to_string()),
+                        developer_instructions: None,
+                        personality: None,
+                        persist_extended_history: true,
+                    },
+                })
+                .await
+            {
+                Ok(response) => {
+                    let resumed_id = response.thread.id;
+                    eprintln!("[ctox direct-session] thread resumed: {resumed_id}");
+                    resumed_id
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[ctox direct-session] thread/resume failed for {thread_id}; starting fresh: {err}"
+                    );
+                    start_session_thread(
+                        &mut client,
+                        &mut seq,
+                        &model,
+                        selected_provider_id.as_deref(),
+                        &canonical_cwd,
+                        base_instructions,
+                        disable_active_tools,
+                        disable_mcp_servers,
+                        persistent_worker,
+                        persistent_thread_name.as_deref(),
+                    )
+                    .await?
+                }
+            }
+        } else {
+            start_session_thread(
+                &mut client,
+                &mut seq,
+                &model,
+                selected_provider_id.as_deref(),
+                &canonical_cwd,
+                base_instructions,
+                disable_active_tools,
+                disable_mcp_servers,
+                persistent_worker,
+                persistent_thread_name.as_deref(),
+            )
+            .await?
+        };
 
         Ok((
             client,
@@ -980,6 +1127,7 @@ impl PersistentSession {
         reasoning_effort: Option<ReasoningEffort>,
         root: &Path,
         prompt: &str,
+        developer_instructions: Option<&str>,
         base_instructions: &str,
         timeout: Option<Duration>,
         seq: &mut RequestIdSeq,
@@ -988,6 +1136,7 @@ impl PersistentSession {
         disable_active_tools: bool,
         disable_mcp_servers: bool,
         read_only_sandbox: bool,
+        persistent_worker: bool,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
         // Reuse the session's thread across turns. The previous fresh-thread-
@@ -1002,7 +1151,55 @@ impl PersistentSession {
         // missing.
         let thread_id = session_thread_id.clone();
 
-        let preflight_text = format!("{base_instructions}\n\n{prompt}");
+        // The old preflight only counted base instructions plus the new
+        // prompt. That was sufficient while every service slice used a fresh
+        // thread, but it undercounts a reused thread by its complete active
+        // history. TokenCount events give us the last real model input size;
+        // conservatively add the incoming prompt and compact the live thread
+        // before starting the next turn when that projected request crosses
+        // the same safe-input boundary as the exact tokenizer path.
+        let incoming_prompt_text = match developer_instructions {
+            Some(instructions) => format!("{instructions}\n\n{prompt}"),
+            None => prompt.to_string(),
+        };
+        let incoming_prompt_tokens =
+            i64::try_from(crate::lcm::estimate_tokens(&incoming_prompt_text)).unwrap_or(i64::MAX);
+        let projected_history_tokens = policy
+            .last_call_input_tokens
+            .saturating_add(incoming_prompt_tokens);
+        let history_safe_budget = exact_prompt_safe_input_budget(policy.context_window);
+        if policy.last_call_input_tokens > 0 && projected_history_tokens > history_safe_budget {
+            ctx_log.log(
+                "history_prompt_preflight",
+                &format!(
+                    "\"last_input_tokens\":{},\"incoming_prompt_tokens\":{},\"projected_tokens\":{},\"safe_budget\":{},\"context_limit\":{}",
+                    policy.last_call_input_tokens,
+                    incoming_prompt_tokens,
+                    projected_history_tokens,
+                    history_safe_budget,
+                    policy.context_window
+                ),
+            );
+            client
+                .request_typed::<ThreadCompactStartResponse>(ClientRequest::ThreadCompactStart {
+                    request_id: seq.next(),
+                    params: ThreadCompactStartParams {
+                        thread_id: thread_id.clone(),
+                    },
+                })
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!("history-aware pre-turn compaction failed: {err}")
+                })?;
+            policy.note_compacted();
+            // A successful compact replaced the active history. The next
+            // TokenCount event supplies the authoritative post-compact size;
+            // do not reuse the stale pre-compact observation meanwhile.
+            policy.last_call_input_tokens = 0;
+            ctx_log.log("history_prompt_preflight_compact_ok", "\"compacted\":true");
+        }
+
+        let preflight_text = format!("{base_instructions}\n\n{incoming_prompt_text}");
         if let Some(count) = exact_prompt_token_count_with_precomputed(
             root,
             &preflight_text,
@@ -1039,6 +1236,7 @@ impl PersistentSession {
                 text_elements: Vec::new(),
             }
             .into()],
+            developer_instructions: developer_instructions.map(str::to_string),
             cwd: Some(cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never.into()),
             approvals_reviewer: None,
@@ -1075,25 +1273,22 @@ impl PersistentSession {
                 eprintln!(
                     "[ctox direct-session] turn/start on session thread {thread_id} failed ({err}); rotating thread"
                 );
-                let thread_resp: ThreadStartResponse = client
-                    .request_typed(ClientRequest::ThreadStart {
-                        request_id: seq.next(),
-                        params: ThreadStartParams {
-                            model: Some(model.to_string()),
-                            model_provider: model_provider.map(str::to_string),
-                            cwd: Some(cwd.to_string_lossy().to_string()),
-                            approval_policy: Some(AskForApproval::Never.into()),
-                            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-                            base_instructions: Some(base_instructions.to_string()),
-                            dynamic_tools: disable_active_tools.then(Vec::new),
-                            disable_mcp_servers: Some(disable_mcp_servers),
-                            ephemeral: Some(true),
-                            ..ThreadStartParams::default()
-                        },
-                    })
-                    .await
-                    .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
-                let rotated_thread_id = thread_resp.thread.id.to_string();
+                let rotated_thread_id = start_session_thread(
+                    client,
+                    seq,
+                    model,
+                    model_provider,
+                    cwd,
+                    base_instructions,
+                    disable_active_tools,
+                    disable_mcp_servers,
+                    persistent_worker,
+                    persistent_worker
+                        .then(|| persistent_worker_thread_name(root))
+                        .as_deref(),
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
                 eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
                 *session_thread_id = rotated_thread_id.clone();
                 client
@@ -1381,6 +1576,17 @@ impl PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persistent_worker_thread_name_is_stable_and_root_scoped() {
+        let first = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
+        let same = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
+        let other = persistent_worker_thread_name(Path::new("/tmp/ctox-b"));
+
+        assert_eq!(first, same);
+        assert_ne!(first, other);
+        assert!(first.starts_with(CTOX_PERSISTENT_WORKER_THREAD_NAME));
+    }
 
     #[test]
     fn openai_subscription_auth_only_applies_to_openai_provider() {
@@ -1736,6 +1942,54 @@ impl RequestIdSeq {
         self.next += 1;
         RequestId::Integer(id)
     }
+}
+
+async fn start_session_thread(
+    client: &mut InProcessAppServerClient,
+    seq: &mut RequestIdSeq,
+    model: &str,
+    model_provider: Option<&str>,
+    cwd: &Path,
+    base_instructions: &str,
+    disable_active_tools: bool,
+    disable_mcp_servers: bool,
+    persistent_worker: bool,
+    persistent_thread_name: Option<&str>,
+) -> Result<String> {
+    let response: ThreadStartResponse = client
+        .request_typed(ClientRequest::ThreadStart {
+            request_id: seq.next(),
+            params: ThreadStartParams {
+                model: Some(model.to_string()),
+                model_provider: model_provider.map(str::to_string),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                approval_policy: Some(AskForApproval::Never.into()),
+                sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+                base_instructions: Some(base_instructions.to_string()),
+                dynamic_tools: disable_active_tools.then(Vec::new),
+                disable_mcp_servers: Some(disable_mcp_servers),
+                ephemeral: Some(!persistent_worker),
+                persist_extended_history: persistent_worker,
+                ..ThreadStartParams::default()
+            },
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("thread/start: {err}"))?;
+    let thread_id = response.thread.id;
+    if let Some(persistent_thread_name) = persistent_thread_name {
+        client
+            .request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
+                request_id: seq.next(),
+                params: ThreadSetNameParams {
+                    thread_id: thread_id.clone(),
+                    name: persistent_thread_name.to_string(),
+                },
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("thread/name/set: {err}"))?;
+    }
+    eprintln!("[ctox direct-session] thread started: {thread_id}");
+    Ok(thread_id)
 }
 
 fn try_extract_event_msg(notif: &JSONRPCNotification) -> Option<EventMsg> {

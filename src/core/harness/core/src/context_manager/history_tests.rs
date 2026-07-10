@@ -70,6 +70,67 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_input_text_msg(texts: &[&str]) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: texts
+            .iter()
+            .map(|text| ContentItem::InputText {
+                text: (*text).to_string(),
+            })
+            .collect(),
+        end_turn: None,
+        phase: None,
+    }
+}
+
+#[test]
+fn for_prompt_keeps_only_latest_ctox_runtime_context() {
+    let history = create_history_with_items(vec![
+        developer_input_text_msg(&[
+            "persistent developer policy",
+            "<ctox_runtime_context version=\"1\">old</ctox_runtime_context>",
+        ]),
+        user_input_text_msg("first task"),
+        assistant_msg("first result"),
+        developer_input_text_msg(&[
+            "<ctox_runtime_context version=\"1\">new</ctox_runtime_context>",
+        ]),
+        user_input_text_msg("second task"),
+    ]);
+
+    let prompt = history.for_prompt(&default_input_modalities());
+    let visible_text = prompt
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|item| match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text),
+            _ => None,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        visible_text
+            .iter()
+            .any(|text| text == "persistent developer policy")
+    );
+    assert!(!visible_text.iter().any(|text| text.contains(">old<")));
+    assert_eq!(
+        visible_text
+            .iter()
+            .filter(|text| text.starts_with("<ctox_runtime_context "))
+            .count(),
+        1
+    );
+    assert!(visible_text.iter().any(|text| text.contains(">new<")));
+}
+
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),

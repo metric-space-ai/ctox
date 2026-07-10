@@ -112,11 +112,14 @@ async fn run_compact_task_inner(
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
     let history_snapshot = sess.clone_history().await;
+    let compaction_prompt_items = history_snapshot
+        .clone()
+        .for_prompt(&turn_context.model_info.input_modalities);
     let history_items = history_snapshot.raw_items();
     let controller_output = match run_compaction_controller(
         sess.as_ref(),
         turn_context.as_ref(),
-        history_items,
+        &compaction_prompt_items,
         &input,
         trigger,
     )
@@ -182,7 +185,7 @@ async fn run_compact_task_inner(
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;
     let warning = EventMsg::Warning(WarningEvent {
-        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
+        message: "Older thread detail was compacted. Treat the compacted summary and current turn context as the active working set, and retrieve source detail when exact evidence is required.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
     Ok(())

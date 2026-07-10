@@ -899,6 +899,27 @@ enum ServiceIpcResponse {
     },
 }
 
+struct WorkerSessionSlot {
+    session: Mutex<Option<turn_loop::PersistentSession>>,
+}
+
+impl std::fmt::Debug for WorkerSessionSlot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkerSessionSlot")
+            .field("session", &"<persistent worker session>")
+            .finish()
+    }
+}
+
+impl Default for WorkerSessionSlot {
+    fn default() -> Self {
+        Self {
+            session: Mutex::new(None),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SharedState {
     busy: bool,
@@ -916,6 +937,7 @@ struct SharedState {
     last_completed_at: Option<String>,
     last_reply_chars: Option<usize>,
     last_progress_epoch_secs: u64,
+    worker_session: Arc<WorkerSessionSlot>,
 }
 
 impl Default for SharedState {
@@ -936,6 +958,7 @@ impl Default for SharedState {
             last_completed_at: None,
             last_reply_chars: None,
             last_progress_epoch_secs: current_epoch_secs(),
+            worker_session: Arc::new(WorkerSessionSlot::default()),
         }
     }
 }
@@ -5662,20 +5685,66 @@ fn start_prompt_worker(
             .map(|prompt| outbound_email_first_execution_prompt(&job, prompt));
             let session_options = chat_turn_session_options_for_queue_job(&job);
             let result = execution_prompt.and_then(|execution_prompt| {
-                turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
-                    &root,
-                    &db_path,
-                    &execution_prompt,
-                    workspace_root,
-                    conversation_id,
-                    job.suggested_skill.as_deref(),
-                    force_continuity_refresh,
-                    None, // TUI service: per-turn clients (persistent session TODO)
-                    session_options,
-                    |event| {
-                        push_event(&event_state, format!("phase {} {}", event_source, event));
-                    },
-                )
+                if queue_job_reuses_persistent_session(&session_options) {
+                    let session_slot = {
+                        let shared = lock_shared_state(&state);
+                        Arc::clone(&shared.worker_session)
+                    };
+                    let mut session = session_slot
+                        .session
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("persistent worker session lock poisoned"))?;
+                    let settings =
+                        runtime_env::effective_operator_env_map(&root).unwrap_or_default();
+                    if session
+                        .as_ref()
+                        .map(|session| session.matches_current_worker_contract(&root, &settings))
+                        .transpose()?
+                        == Some(false)
+                    {
+                        *session = None;
+                    }
+                    if session.is_none() {
+                        *session = Some(turn_loop::PersistentSession::start(&root, &settings)?);
+                    }
+                    let result = turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
+                        &root,
+                        &db_path,
+                        &execution_prompt,
+                        workspace_root,
+                        conversation_id,
+                        job.suggested_skill.as_deref(),
+                        force_continuity_refresh,
+                        session.as_mut(),
+                        session_options,
+                        |event| {
+                            push_event(&event_state, format!("phase {} {}", event_source, event));
+                        },
+                    );
+                    if result.is_err() {
+                        // Recreate the in-process client after any failed
+                        // slice. The next job resumes the same durable rollout
+                        // instead of trusting possibly broken process-local
+                        // transport state.
+                        *session = None;
+                    }
+                    result
+                } else {
+                    turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
+                        &root,
+                        &db_path,
+                        &execution_prompt,
+                        workspace_root,
+                        conversation_id,
+                        job.suggested_skill.as_deref(),
+                        force_continuity_refresh,
+                        None,
+                        session_options,
+                        |event| {
+                            push_event(&event_state, format!("phase {} {}", event_source, event));
+                        },
+                    )
+                }
             });
             let timeout_follow_up_outcome = match &result {
                 Err(err) => maybe_enqueue_timeout_continuation(&root, &job, &err.to_string())
@@ -9768,6 +9837,10 @@ fn chat_turn_session_options_for_queue_job(
         };
     }
     turn_loop::ChatTurnSessionOptions::default()
+}
+
+fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
+    !options.disable_mcp_servers && options.base_instructions.is_none() && !options.plain_prompt
 }
 
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
@@ -17235,8 +17308,7 @@ fn escalate_exhausted_founder_communication(
     state: &Arc<Mutex<SharedState>>,
     message: &channels::RoutedInboundMessage,
 ) -> Result<usize> {
-    let close_reason =
-        "Founder communication was escalated in-thread after the finite rework budget was exhausted.";
+    let close_reason = "Founder communication was escalated in-thread after the finite rework budget was exhausted.";
     if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
         let mut repaired = channels::ack_leased_messages(
             root,
@@ -28069,6 +28141,7 @@ Business OS command:
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(options.disable_mcp_servers);
         assert!(options.plain_prompt);
+        assert!(!queue_job_reuses_persistent_session(&options));
         let base_instructions = options
             .base_instructions
             .expect("app queue job should use short app authoring instructions");
@@ -28086,6 +28159,7 @@ Business OS command:
         assert!(!options.disable_mcp_servers);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
+        assert!(queue_job_reuses_persistent_session(&options));
         assert_eq!(options.turn_timeout_secs_override, None);
     }
 

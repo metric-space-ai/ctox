@@ -299,6 +299,11 @@ pub enum Op {
     /// turns that rely on persistent session-level context (for example,
     /// [`Op::UserInput`]).
     OverrideTurnContext {
+        /// Updated model-visible developer instructions. CTOX rebuilds these
+        /// from durable runtime context before each normal worker turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        developer_instructions: Option<String>,
+
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,

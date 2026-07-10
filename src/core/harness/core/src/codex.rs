@@ -1093,6 +1093,9 @@ impl SessionConfiguration {
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
+        if let Some(developer_instructions) = updates.developer_instructions.clone() {
+            next_configuration.developer_instructions = Some(developer_instructions);
+        }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
         }
@@ -1141,6 +1144,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
+    pub(crate) developer_instructions: Option<String>,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
@@ -4171,6 +4175,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     false
                 }
                 Op::OverrideTurnContext {
+                    developer_instructions,
                     cwd,
                     approval_policy,
                     approvals_reviewer,
@@ -4197,6 +4202,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         &sess,
                         sub.id.clone(),
                         SessionSettingsUpdate {
+                            developer_instructions,
                             cwd,
                             approval_policy,
                             approvals_reviewer,
@@ -4487,6 +4493,7 @@ mod handlers {
                 (
                     items,
                     SessionSettingsUpdate {
+                        developer_instructions: None,
                         cwd: Some(cwd),
                         approval_policy: Some(approval_policy),
                         approvals_reviewer: None,

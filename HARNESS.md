@@ -115,9 +115,14 @@ execution:
 7. Call `turn_loop::run_chat_turn_with_events_extended_guarded(...)`.
 
 Plan-step messages force continuity refresh because they are task boundaries.
-The service passes `None` for the per-turn session today, so the turn loop
-creates a local `PersistentSession` for that slice. The main turn and any
-continuity refresh calls in that slice still share the same in-process runtime.
+Normal worker slices reuse one named, non-ephemeral harness thread. Its rollout
+is resumed after a service restart. Jobs with a replacement base prompt or a
+narrow no-MCP profile remain deliberately isolated sessions because they have a
+different capability/instruction contract. A queue job's workspace is applied
+as the typed per-turn cwd rather than encoded only in prompt prose.
+Before reuse, the worker compares the current composed base instructions and
+model with the live session contract. A mismatch rebuilds the process-local
+client and resumes the durable thread with the new contract.
 
 ## Inner Agent Turn
 
@@ -131,10 +136,12 @@ continuity refresh calls in that slice still share the same in-process runtime.
    threshold.
 6. Render live context from messages, continuity, mission state, assurance,
    governance, and context-health evidence.
-7. Invoke the model through the persistent session.
-8. Persist the assistant turn.
-9. Detect durable state transitions caused by tool calls.
-10. Refresh continuity if forced by a task boundary/state transition or by the
+7. Send the exact current task as the user input and the freshly rebuilt CTOX
+   runtime context as marked developer instructions.
+8. Invoke the model through the persistent session.
+9. Persist the assistant turn.
+10. Detect durable state transitions caused by tool calls.
+11. Refresh continuity if forced by a task boundary/state transition or by the
     configured legacy interval.
 
 Direct-session model events write token and timing forensics to
@@ -157,6 +164,18 @@ There are two context-protection mechanisms in the current code:
   per-call input reaches 75 percent of the context window. Adaptive compaction
   defaults to a 15 percent visible-output/read-input drift threshold, with a
   minimum of 4096 visible output tokens.
+
+Before every model request, history normalization keeps only the newest marked
+`<ctox_runtime_context ...>` developer section. It does not delete real user
+turns, assistant/tool history, or unrelated developer policy. This gives the
+per-turn context replace semantics without introducing a second history type or
+making LCM and the harness compete as memory owners. The exact preflight counts
+base instructions, the current runtime context, and the user input; on a reused
+thread it also projects from the last model-reported input usage and compacts
+before the safe boundary is crossed.
+
+The build order, contribution contract, omission rules, and audit checks for
+every context component are documented in `docs/context-build.md`.
 
 The default context window is 262144 tokens (256k) when no runtime/model value
 overrides it. 256k is the only supported chat-context choice; the retired 128k

@@ -528,6 +528,13 @@
         "null"
       ]
     },
+    "developerInstructions": {
+      "description": "Replace the session's model-visible developer instructions for this turn and subsequent turns. CTOX uses this existing turn-context lane for its freshly rebuilt runtime context so the actual user input stays a single, unwrapped message.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "effort": {
       "anyOf": [
         {

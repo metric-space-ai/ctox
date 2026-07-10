@@ -18,6 +18,21 @@ Attribution rule:
 
 - When a file under this subtree differs from the imported snapshot, describe it as a CTOX fork delta, not as an ambiguous upstream version.
 
+## 2026-07 Persistent CTOX Runtime Context
+
+CTOX uses the existing turn-context and rollout machinery for a durable normal
+worker thread. The app-server `turn/start` request accepts an optional
+`developer_instructions` override, persists it in `TurnContextItem`, and emits a
+developer update only when it changes. CTOX runtime context is wrapped in the
+reserved `<ctox_runtime_context ...>` marker. Request normalization retains only
+the newest marked section while preserving all non-CTOX history. This is a
+model-request projection rule; the rollout remains an append-only audit source.
+
+This delta deliberately does not add a second scheduler, memory store, or
+CTOX-specific response-item type. Resume and compaction continue to use the
+fork's existing thread, rollout, `TurnContextItem`, and `ContextManager`
+contracts.
+
 ## Backport Notes
 
 ### 2026-04 Subagents Backport

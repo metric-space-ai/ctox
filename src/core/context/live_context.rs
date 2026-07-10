@@ -58,6 +58,9 @@ pub struct LivePromptArtifact {
     pub conversation_id: i64,
     pub model: String,
     pub system_prompt: String,
+    pub user_input: String,
+    pub runtime_context: String,
+    /// Legacy combined diagnostic view; not the physical turn input shape.
     pub runtime_prompt: String,
     pub combined_review_prompt: String,
     pub breakdown: PromptContextBreakdown,
@@ -66,7 +69,7 @@ pub struct LivePromptArtifact {
 impl LivePromptArtifact {
     pub fn to_review_markdown(&self) -> String {
         format!(
-            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- strategy_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- prompt_scaffold_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Runtime Prompt\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
+            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- strategy_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- prompt_scaffold_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Actual User Input\n```md\n{}\n```\n\n## Actual Runtime Context\n```md\n{}\n```\n\n## Legacy Combined Runtime View\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
             self.conversation_id,
             self.model,
             self.breakdown.system_prompt_chars,
@@ -85,6 +88,8 @@ impl LivePromptArtifact {
             self.breakdown.omitted_context_items,
             self.breakdown.total_ctox_prompt_chars,
             self.system_prompt,
+            self.user_input,
+            self.runtime_context,
             self.runtime_prompt,
             self.combined_review_prompt
         )
@@ -93,8 +98,11 @@ impl LivePromptArtifact {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderedRuntimePrompt {
+    /// Combined diagnostic/export view. The live model request sends the
+    /// fields below through their native user and developer lanes.
     pub prompt: String,
     pub latest_user_prompt: String,
+    pub context_instructions: String,
     pub rendered_context_items: usize,
     pub omitted_context_items: usize,
 }
@@ -184,6 +192,7 @@ pub fn render_runtime_prompt(
         &prompt_view.snapshot,
         prompt_view.latest_user_message_id,
         prompt_view.mission_start_seq,
+        &latest_user_prompt,
     );
     let prompt = render_chat_prompt(
         root,
@@ -194,9 +203,21 @@ pub fn render_runtime_prompt(
         &rendered_context,
         suggested_skill,
     );
+    let context_instructions = format!(
+        "<ctox_runtime_context version=\"1\">\n{}\n</ctox_runtime_context>",
+        render_chat_context(
+            root,
+            &runtime_blocks,
+            governance_snapshot,
+            health,
+            &rendered_context,
+            suggested_skill,
+        )
+    );
     Ok(RenderedRuntimePrompt {
         prompt,
         latest_user_prompt,
+        context_instructions,
         rendered_context_items: rendered_context.entries.len(),
         omitted_context_items: rendered_context.omitted_items,
     })
@@ -228,19 +249,33 @@ pub fn prompt_context_breakdown(
         &prompt_view.snapshot,
         prompt_view.latest_user_message_id,
         prompt_view.mission_start_seq,
+        latest_user_prompt,
     );
     let focus_block = runtime_blocks.focus.clone();
-    let anchors_block = runtime_blocks.anchors.clone();
-    let narrative_block = runtime_blocks.narrative.clone();
-    let verified_evidence_block = runtime_blocks.verified_evidence.clone();
-    let workflow_state_block = runtime_blocks.workflow_state.clone();
-    let strategy_block = runtime_blocks.strategy.clone();
-    let governance_block = governance::render_prompt_block(governance_snapshot);
-    let health_block = context_health::render_prompt_block(health);
-    let latest_user_turn = format!(
-        "Latest user turn:\ncontent: {}",
-        sanitize_context_message(latest_user_prompt)
-    );
+    let anchors_block = runtime_block_has_payload(&runtime_blocks.anchors)
+        .then(|| runtime_blocks.anchors.clone())
+        .unwrap_or_default();
+    let narrative_block = runtime_block_has_payload(&runtime_blocks.narrative)
+        .then(|| runtime_blocks.narrative.clone())
+        .unwrap_or_default();
+    let verified_evidence_block = runtime_block_has_payload(&runtime_blocks.verified_evidence)
+        .then(|| runtime_blocks.verified_evidence.clone())
+        .unwrap_or_default();
+    let workflow_state_block = workflow_state_has_signal(&runtime_blocks.workflow_state)
+        .then(|| runtime_blocks.workflow_state.clone())
+        .unwrap_or_default();
+    let strategy_block = strategy_block_has_payload(&runtime_blocks.strategy)
+        .then(|| runtime_blocks.strategy.clone())
+        .unwrap_or_default();
+    let governance_block = (!governance_snapshot.recent_events.is_empty())
+        .then(|| governance::render_prompt_block(governance_snapshot))
+        .unwrap_or_default();
+    let health_block = (health.status != context_health::ContextHealthStatus::Healthy
+        || health.repair_recommended
+        || !health.warnings.is_empty())
+    .then(|| context_health::render_prompt_block(health))
+    .unwrap_or_default();
+    let latest_user_turn_chars = latest_user_prompt.len();
     let context_notice_chars = render_context_notice(rendered_context.omitted_items)
         .map(|line| line.len() + 1)
         .unwrap_or(0);
@@ -251,14 +286,16 @@ pub fn prompt_context_breakdown(
         .sum::<usize>()
         + rendered_context.entries.len().saturating_sub(1)
         + context_notice_chars;
-    let rendered_prompt = render_chat_prompt(
-        root,
-        &runtime_blocks,
-        governance_snapshot,
-        health,
-        latest_user_prompt,
-        &rendered_context,
-        None,
+    let rendered_context_instructions = format!(
+        "<ctox_runtime_context version=\"1\">\n{}\n</ctox_runtime_context>",
+        render_chat_context(
+            root,
+            &runtime_blocks,
+            governance_snapshot,
+            health,
+            &rendered_context,
+            None,
+        )
     );
     let known_dynamic_chars = narrative_block.len()
         + anchors_block.len()
@@ -268,8 +305,7 @@ pub fn prompt_context_breakdown(
         + strategy_block.len()
         + governance_block.len()
         + health_block.len()
-        + rendered_context_chars
-        + latest_user_turn.len();
+        + rendered_context_chars;
     Ok(PromptContextBreakdown {
         system_prompt_chars: system_prompt.len(),
         focus_chars: focus_block.len(),
@@ -281,11 +317,15 @@ pub fn prompt_context_breakdown(
         governance_chars: governance_block.len(),
         context_health_chars: health_block.len(),
         conversation_chars: rendered_context_chars,
-        latest_user_turn_chars: latest_user_turn.len(),
-        scaffold_chars: rendered_prompt.len().saturating_sub(known_dynamic_chars),
+        latest_user_turn_chars,
+        scaffold_chars: rendered_context_instructions
+            .len()
+            .saturating_sub(known_dynamic_chars),
         rendered_context_items: rendered_context.entries.len(),
         omitted_context_items: rendered_context.omitted_items,
-        total_ctox_prompt_chars: system_prompt.len() + rendered_prompt.len(),
+        total_ctox_prompt_chars: system_prompt.len()
+            + rendered_context_instructions.len()
+            + latest_user_turn_chars,
     })
 }
 
@@ -349,13 +389,15 @@ pub fn build_live_prompt_artifact(
         health,
     )?;
     let combined_review_prompt = format!(
-        "<SYSTEM_PROMPT>\n{}\n</SYSTEM_PROMPT>\n\n<RUNTIME_PROMPT>\n{}\n</RUNTIME_PROMPT>",
-        system_prompt, runtime_prompt.prompt
+        "<SYSTEM_PROMPT>\n{}\n</SYSTEM_PROMPT>\n\n<DEVELOPER_RUNTIME_CONTEXT>\n{}\n</DEVELOPER_RUNTIME_CONTEXT>\n\n<USER_INPUT>\n{}\n</USER_INPUT>",
+        system_prompt, runtime_prompt.context_instructions, runtime_prompt.latest_user_prompt
     );
     Ok(LivePromptArtifact {
         conversation_id: snapshot.conversation_id,
         model: model.to_string(),
         system_prompt: system_prompt.to_string(),
+        user_input: runtime_prompt.latest_user_prompt,
+        runtime_context: runtime_prompt.context_instructions,
         runtime_prompt: runtime_prompt.prompt,
         combined_review_prompt,
         breakdown,
@@ -421,46 +463,127 @@ pub(crate) fn render_chat_prompt(
             "- User asked: {}",
             sanitize_latest_prompt(latest_user_prompt)
         ),
-        String::new(),
-        runtime_blocks.verified_evidence.clone(),
-        String::new(),
-        runtime_blocks.strategy.clone(),
-        String::new(),
-        runtime_blocks.anchors.clone(),
-        String::new(),
-        runtime_blocks.focus.clone(),
-        String::new(),
-        render_execution_contract_block(
-            &runtime_blocks.focus,
-            runtime_blocks.workspace_root.as_deref(),
-            &runtime_blocks.workflow_state,
-        ),
-        String::new(),
-        runtime_blocks.workflow_state.clone(),
-        String::new(),
-        runtime_blocks.narrative.clone(),
-        String::new(),
-        governance::render_prompt_block(governance_snapshot),
-        String::new(),
-        render_autonomy_policy_block(root),
-        String::new(),
-        context_health::render_prompt_block(health),
-        String::new(),
-        "RECENT CONVERSATION EVIDENCE".to_string(),
     ];
-    if let Some(skill_block) = render_skill_dispatch_block(root, suggested_skill) {
-        lines.splice(3..3, [skill_block, String::new()]);
-    }
-    for entry in &rendered_context.entries {
-        lines.push(format!("- {entry}"));
-    }
-    if rendered_context.entries.is_empty() {
-        lines.push("- none".to_string());
-    }
-    if let Some(notice) = render_context_notice(rendered_context.omitted_items) {
-        lines.push(notice);
+    let context = render_chat_context(
+        root,
+        runtime_blocks,
+        governance_snapshot,
+        health,
+        rendered_context,
+        suggested_skill,
+    );
+    if !context.is_empty() {
+        lines.push(String::new());
+        lines.push(context);
     }
     lines.join("\n")
+}
+
+fn render_chat_context(
+    root: &Path,
+    runtime_blocks: &PromptRuntimeBlocks,
+    governance_snapshot: &governance::GovernancePromptSnapshot,
+    health: &context_health::ContextHealthSnapshot,
+    rendered_context: &RenderedContextSelection,
+    suggested_skill: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(skill_block) = render_skill_dispatch_block(root, suggested_skill) {
+        lines.push(skill_block);
+    }
+    push_runtime_block_if(
+        &mut lines,
+        runtime_block_has_payload(&runtime_blocks.verified_evidence),
+        &runtime_blocks.verified_evidence,
+    );
+    push_runtime_block_if(
+        &mut lines,
+        strategy_block_has_payload(&runtime_blocks.strategy),
+        &runtime_blocks.strategy,
+    );
+    push_runtime_block_if(
+        &mut lines,
+        runtime_block_has_payload(&runtime_blocks.anchors),
+        &runtime_blocks.anchors,
+    );
+    push_runtime_block_if(&mut lines, true, &runtime_blocks.focus);
+    let execution_contract = render_execution_contract_block(
+        &runtime_blocks.focus,
+        runtime_blocks.workspace_root.as_deref(),
+        &runtime_blocks.workflow_state,
+    );
+    push_runtime_block_if(&mut lines, true, &execution_contract);
+    push_runtime_block_if(
+        &mut lines,
+        workflow_state_has_signal(&runtime_blocks.workflow_state),
+        &runtime_blocks.workflow_state,
+    );
+    push_runtime_block_if(
+        &mut lines,
+        runtime_block_has_payload(&runtime_blocks.narrative),
+        &runtime_blocks.narrative,
+    );
+    if !governance_snapshot.recent_events.is_empty() {
+        let governance_block = governance::render_prompt_block(governance_snapshot);
+        push_runtime_block_if(&mut lines, true, &governance_block);
+    }
+    if crate::autonomy::AutonomyLevel::from_root(root) != crate::autonomy::AutonomyLevel::Balanced {
+        let autonomy_block = render_autonomy_policy_block(root);
+        push_runtime_block_if(&mut lines, true, &autonomy_block);
+    }
+    if health.status != context_health::ContextHealthStatus::Healthy
+        || health.repair_recommended
+        || !health.warnings.is_empty()
+    {
+        let health_block = context_health::render_prompt_block(health);
+        push_runtime_block_if(&mut lines, true, &health_block);
+    }
+    if !rendered_context.entries.is_empty() || rendered_context.omitted_items > 0 {
+        lines.push(String::new());
+        lines.push("RECENT CONVERSATION EVIDENCE".to_string());
+        for entry in &rendered_context.entries {
+            lines.push(format!("- {entry}"));
+        }
+        if let Some(notice) = render_context_notice(rendered_context.omitted_items) {
+            lines.push(notice);
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn push_runtime_block_if(lines: &mut Vec<String>, include: bool, block: &str) {
+    if !include || block.trim().is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(block.to_string());
+}
+
+fn runtime_block_has_payload(block: &str) -> bool {
+    !block.lines().skip(1).all(|line| {
+        let value = line.trim();
+        value.is_empty()
+            || matches!(
+                value,
+                "items: []" | "- none" | "none" | "warnings: []" | "recent_events:"
+            )
+    })
+}
+
+fn strategy_block_has_payload(block: &str) -> bool {
+    block.lines().any(|line| {
+        let value = line.trim();
+        (value.starts_with("- vision:") && !value.ends_with("not set"))
+            || (value.starts_with("- mission:") && !value.ends_with("not set"))
+            || value.starts_with("- directive (")
+    })
+}
+
+fn workflow_state_has_signal(block: &str) -> bool {
+    workflow_state_has_open_runtime_work(block)
+        || block.contains("workflow_state_unavailable")
+        || block.contains("blocked_queue_items:\n-")
+        || block.contains("failed_queue_items:\n-")
 }
 
 /// Runtime block injected into every chat turn to tell the model how
@@ -916,6 +1039,7 @@ pub(crate) fn select_rendered_context(
     snapshot: &lcm::LcmSnapshot,
     latest_user_message_id: Option<i64>,
     mission_start_seq: Option<i64>,
+    latest_user_prompt: &str,
 ) -> RenderedContextSelection {
     let mut summary_lines = Vec::new();
     let mut message_lines = Vec::new();
@@ -966,14 +1090,13 @@ pub(crate) fn select_rendered_context(
         }
     }
 
-    let summary_start = summary_lines
-        .len()
-        .saturating_sub(MAX_RENDERED_SUMMARY_ITEMS);
-    // Summaries respect the same overall char budget as messages: keep the
-    // most recent ones that fit instead of admitting all eight unbudgeted.
+    let summary_lines = rank_context_lines(summary_lines, latest_user_prompt);
+    let message_lines = rank_context_lines(message_lines, latest_user_prompt);
+    // Summaries respect the same overall char budget as messages. Exact
+    // request/entity overlap outranks recency; recency remains the tie-break.
     let mut selected_summaries = Vec::new();
     let mut summary_chars = 0usize;
-    for line in summary_lines[summary_start..].iter().rev() {
+    for line in summary_lines.iter().take(MAX_RENDERED_SUMMARY_ITEMS) {
         if summary_chars + line.len() > MAX_RENDERED_CONTEXT_CHARS && !selected_summaries.is_empty()
         {
             break;
@@ -981,14 +1104,14 @@ pub(crate) fn select_rendered_context(
         summary_chars += line.len();
         selected_summaries.push(line.clone());
     }
-    selected_summaries.reverse();
+    let omitted_summaries = summary_lines.len().saturating_sub(selected_summaries.len());
     let mut entries = selected_summaries.clone();
     let mut seen = BTreeSet::new();
     let mut selected_messages = Vec::new();
     let mut total_chars = entries.iter().map(|line| line.len()).sum::<usize>();
     let mut omitted_messages = 0usize;
 
-    for line in message_lines.iter().rev() {
+    for line in &message_lines {
         if selected_messages.len() >= MAX_RENDERED_MESSAGE_ITEMS {
             omitted_messages += 1;
             continue;
@@ -1005,10 +1128,8 @@ pub(crate) fn select_rendered_context(
         total_chars = projected;
         selected_messages.push(line.clone());
     }
-    selected_messages.reverse();
     entries.extend(selected_messages);
 
-    let omitted_summaries = summary_start;
     if entries.is_empty() {
         let fallback = continuity_floor_context(snapshot, latest_user_message_id);
         if !fallback.entries.is_empty() {
@@ -1022,6 +1143,39 @@ pub(crate) fn select_rendered_context(
         entries,
         omitted_items: omitted_summaries + omitted_messages,
     }
+}
+
+fn rank_context_lines(lines: Vec<String>, latest_user_prompt: &str) -> Vec<String> {
+    let query_terms = context_relevance_terms(latest_user_prompt);
+    let mut ranked = lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let lower = line.to_ascii_lowercase();
+            let relevance = query_terms
+                .iter()
+                .map(|term| usize::from(lower.contains(term)))
+                .sum::<usize>();
+            (relevance, index, line)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    ranked.into_iter().map(|(_, _, line)| line).collect()
+}
+
+fn context_relevance_terms(prompt: &str) -> BTreeSet<String> {
+    prompt
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-' && ch != '/')
+        .map(str::trim)
+        .filter(|term| term.chars().count() >= 4)
+        .map(str::to_ascii_lowercase)
+        .filter(|term| {
+            !matches!(
+                term.as_str(),
+                "this" | "that" | "with" | "from" | "eine" | "einen" | "diese" | "dieser"
+            )
+        })
+        .collect()
 }
 
 fn continuity_floor_context(
@@ -1922,7 +2076,7 @@ mod tests {
             summary_messages: Vec::new(),
         };
 
-        let rendered = select_rendered_context(&snapshot, Some(3), Some(3));
+        let rendered = select_rendered_context(&snapshot, Some(3), Some(3), "new task");
 
         assert!(!rendered.entries.is_empty());
         assert!(rendered
@@ -1933,6 +2087,30 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.contains("new task")));
+    }
+
+    #[test]
+    fn rendered_context_prioritizes_entity_relevance_before_recency() {
+        let snapshot = lcm::LcmSnapshot {
+            conversation_id: 7,
+            messages: vec![
+                test_message(1, 1, "assistant", "ticket CASE-778 requires approval"),
+                test_message(2, 2, "assistant", "recent unrelated weather note"),
+                test_message(3, 3, "user", "continue CASE-778"),
+            ],
+            summaries: Vec::new(),
+            context_items: vec![
+                test_message_item(1, 1, 1),
+                test_message_item(2, 2, 2),
+                test_message_item(3, 3, 3),
+            ],
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+
+        let rendered = select_rendered_context(&snapshot, Some(3), None, "continue CASE-778");
+
+        assert!(rendered.entries[0].contains("CASE-778"));
     }
 
     #[test]
@@ -2040,6 +2218,47 @@ mod tests {
         assert!(prompt.contains("Suggested skill dispatch:"));
         assert!(prompt.contains("required_skill: $system-onboarding"));
         assert!(prompt.contains("load this skill before acting"));
+    }
+
+    #[test]
+    fn runtime_context_excludes_generated_current_request_wrapper() {
+        let runtime_blocks = PromptRuntimeBlocks {
+            focus: "FOCUS\n- Main task: inspect CASE-778".to_string(),
+            anchors: "ANCHORS\nitems: []".to_string(),
+            narrative: "NARRATIVE\nitems: []".to_string(),
+            verified_evidence: "VERIFIED EVIDENCE\nitems: []".to_string(),
+            workflow_state: "WORKFLOW STATE\nqueue_items: []".to_string(),
+            strategy: "STRATEGY\n- vision: not set\n- mission: not set\n- directives: none"
+                .to_string(),
+            workspace_root: None,
+        };
+        let health = context_health::ContextHealthSnapshot {
+            conversation_id: 0,
+            overall_score: 100,
+            status: context_health::ContextHealthStatus::Healthy,
+            summary: "healthy".to_string(),
+            repair_recommended: false,
+            dimensions: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let context = render_chat_context(
+            Path::new("/tmp/ctox"),
+            &runtime_blocks,
+            &governance::GovernancePromptSnapshot::default(),
+            &health,
+            &RenderedContextSelection {
+                entries: Vec::new(),
+                omitted_items: 0,
+            },
+            None,
+        );
+
+        assert!(context.contains("FOCUS"));
+        assert!(context.contains("EXECUTION CONTRACT"));
+        assert!(!context.contains("CURRENT REQUEST"));
+        assert!(!context.contains("User asked:"));
+        assert!(!context.contains("VERIFIED EVIDENCE"));
+        assert!(!context.contains("NARRATIVE"));
     }
 
     #[test]
@@ -2266,5 +2485,34 @@ mod tests {
                 "system prompt references retired/nonexistent: {stale}"
             );
         }
+    }
+
+    #[test]
+    fn empty_optional_runtime_blocks_do_not_claim_prompt_budget() {
+        assert!(!runtime_block_has_payload("Verified evidence:\nitems: []"));
+        assert!(!runtime_block_has_payload("Anchors:\nitems: []"));
+        assert!(!runtime_block_has_payload("Narrative:\n- none"));
+        assert!(!strategy_block_has_payload(
+            "Strategy:\n- vision: not set\n- mission: not set\n- directives: none"
+        ));
+        assert!(!workflow_state_has_signal(
+            "Open CTOX work that counts right now:\nqueue_items: []\nplan_items: []\nschedule_items: []"
+        ));
+    }
+
+    #[test]
+    fn optional_runtime_blocks_render_when_they_carry_signal() {
+        assert!(runtime_block_has_payload(
+            "Verified evidence:\nlatest_run_result: tests passed"
+        ));
+        assert!(strategy_block_has_payload(
+            "Strategy:\n- mission: Ship reliable context — preserve task binding"
+        ));
+        assert!(workflow_state_has_signal(
+            "Open CTOX work that counts right now:\ncurrent_queue_item_id: task-7"
+        ));
+        assert!(workflow_state_has_signal(
+            "Open CTOX work that counts right now:\nworkflow_state_unavailable: database locked"
+        ));
     }
 }

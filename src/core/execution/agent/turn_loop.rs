@@ -648,7 +648,7 @@ pub(crate) fn run_chat_turn_with_events_extended<F>(
     root: &Path,
     db_path: &Path,
     prompt: &str,
-    _workspace_root: Option<&Path>,
+    workspace_root: Option<&Path>,
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
@@ -662,7 +662,7 @@ where
         root,
         db_path,
         prompt,
-        _workspace_root,
+        workspace_root,
         conversation_id,
         suggested_skill,
         force_continuity_refresh,
@@ -703,7 +703,7 @@ pub(crate) fn run_chat_turn_with_events_extended_guarded_with_options<F>(
     root: &Path,
     db_path: &Path,
     prompt: &str,
-    _workspace_root: Option<&Path>,
+    workspace_root: Option<&Path>,
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
@@ -740,6 +740,13 @@ where
     } else {
         None
     };
+    if let Some(workspace_root) = workspace_root {
+        if let Some(session) = session.as_deref_mut() {
+            session.set_turn_cwd(workspace_root);
+        } else if let Some(session) = owned_session.as_mut() {
+            session.set_turn_cwd(workspace_root);
+        }
+    }
     emit("session-ready");
     let default_turn_timeout_secs = if runtime.state.source.is_local() {
         DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS
@@ -919,8 +926,8 @@ where
     let mut exact_prompt_preflight: Option<super::direct_session::ExactPromptTokenCount> = None;
     for exact_preflight_round in 0..=2 {
         let preflight_text = format!(
-            "{preflight_base_instructions}\n\n{}",
-            rendered_prompt.prompt
+            "{preflight_base_instructions}\n\n{}\n\n{}",
+            rendered_prompt.context_instructions, rendered_prompt.latest_user_prompt
         );
         let Some(count) = super::direct_session::exact_prompt_token_count(root, &preflight_text)?
         else {
@@ -1037,8 +1044,8 @@ where
     // `hard_runtime_blocker_retry_cooldown_secs`.
     if !runtime.state.source.is_local() {
         let heuristic_text = format!(
-            "{preflight_base_instructions}\n\n{}",
-            rendered_prompt.prompt
+            "{preflight_base_instructions}\n\n{}\n\n{}",
+            rendered_prompt.context_instructions, rendered_prompt.latest_user_prompt
         );
         let estimated_tokens = lcm::estimate_tokens(&heuristic_text) as i64;
         let context_limit = config.max_context_tokens.max(1);
@@ -1063,16 +1070,18 @@ where
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = match session.as_deref_mut() {
-        Some(sess) => sess.run_turn_inner(
-            &rendered_prompt.prompt,
+        Some(sess) => sess.run_turn_inner_with_context(
+            &rendered_prompt.latest_user_prompt,
+            Some(&rendered_prompt.context_instructions),
             Some(Duration::from_secs(config.turn_timeout_secs)),
             exact_prompt_preflight.clone(),
         )?,
         None => owned_session
             .as_mut()
             .expect("owned persistent session should exist when no session was supplied")
-            .run_turn_inner(
-                &rendered_prompt.prompt,
+            .run_turn_inner_with_context(
+                &rendered_prompt.latest_user_prompt,
+                Some(&rendered_prompt.context_instructions),
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 exact_prompt_preflight.clone(),
             )?,
@@ -2172,6 +2181,7 @@ mod tests {
         let rendered = live_context::RenderedRuntimePrompt {
             prompt: "CURRENT REQUEST (authoritative)\nDo the queued work.".to_string(),
             latest_user_prompt: "Do the queued work.".to_string(),
+            context_instructions: String::new(),
             rendered_context_items: 0,
             omitted_context_items: 0,
         };
@@ -2180,6 +2190,7 @@ mod tests {
         let empty = live_context::RenderedRuntimePrompt {
             prompt: "CURRENT REQUEST\n".to_string(),
             latest_user_prompt: "   ".to_string(),
+            context_instructions: String::new(),
             rendered_context_items: 0,
             omitted_context_items: 0,
         };
@@ -2197,6 +2208,7 @@ mod tests {
         let mut rendered = live_context::RenderedRuntimePrompt {
             prompt: format!("CURRENT REQUEST\n- User asked: {rendered_echo}\n"),
             latest_user_prompt: oversized.clone(),
+            context_instructions: String::new(),
             rendered_context_items: 1,
             omitted_context_items: 0,
         };
@@ -2239,6 +2251,7 @@ mod tests {
         let make_rendered = || live_context::RenderedRuntimePrompt {
             prompt: format!("CURRENT REQUEST\n- User asked: {rendered_echo}\n"),
             latest_user_prompt: prompt.to_string(),
+            context_instructions: String::new(),
             rendered_context_items: 1,
             omitted_context_items: 0,
         };

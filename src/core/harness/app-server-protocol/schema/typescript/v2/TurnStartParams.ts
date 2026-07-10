@@ -13,6 +13,12 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+ * Replace the session's model-visible developer instructions for this
+ * turn and subsequent turns. CTOX uses this existing turn-context lane
+ * for its freshly rebuilt runtime context so the actual user input stays
+ * a single, unwrapped message.
+ */
+developerInstructions?: string | null, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

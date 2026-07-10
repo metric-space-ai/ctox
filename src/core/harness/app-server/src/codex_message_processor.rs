@@ -5423,6 +5423,7 @@ impl CodexMessageProcessor {
             .collect();
 
         let has_any_overrides = params.cwd.is_some()
+            || params.developer_instructions.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -5440,6 +5441,7 @@ impl CodexMessageProcessor {
                     &request_id,
                     thread.as_ref(),
                     Op::OverrideTurnContext {
+                        developer_instructions: params.developer_instructions,
                         cwd: params.cwd,
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
                         approvals_reviewer: params
