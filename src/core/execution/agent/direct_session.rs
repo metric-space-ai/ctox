@@ -36,7 +36,7 @@ use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
 use ctox_protocol::protocol::{
-    AskForApproval, EventMsg, ReadOnlyAccess, SandboxPolicy, SessionSource,
+    AskForApproval, EventMsg, ReadOnlyAccess, SandboxPolicy, SessionSource, SubAgentSource,
 };
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
@@ -60,6 +60,21 @@ const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 #[cfg(test)]
 static DIRECT_SESSION_EVENT_DESERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn create_reviewer_scratch_workspace() -> Result<PathBuf> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ctox-review-scratch-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path)
+        .with_context(|| format!("failed to create reviewer scratch at {}", path.display()))?;
+    Ok(path)
+}
+
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
 
 Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
@@ -383,6 +398,7 @@ pub(crate) struct PersistentSession {
     disable_active_tools: bool,
     disable_mcp_servers: bool,
     read_only_sandbox: bool,
+    reviewer_scratch_workspace: Option<PathBuf>,
 }
 
 impl PersistentSession {
@@ -443,22 +459,10 @@ impl PersistentSession {
 
     /// Start a review session that can inspect context with tools.
     ///
-    /// Originally this ran the reviewer under a read-only sandbox to enforce
-    /// "control-plane reader" semantics. In practice that turned the reviewer
-    /// into dead weight: across 250 review sessions the reviewer LLM
-    /// (Qwen3.6-35B-A3B) issued **zero** shell tool calls and instead
-    /// hallucinated a blanket `"sandbox blocks all filesystem inspection"`
-    /// excuse on every verdict — even though `SandboxPolicy::ReadOnly` grants
-    /// `ReadOnlyAccess::FullAccess`, i.e. blanket read access. The model
-    /// equates "read-only" with "do nothing", so wrapping the session in a
-    /// read-only sandbox was preventing tool use rather than constraining it.
-    ///
-    /// We now give the reviewer the same DangerFullAccess sandbox as the
-    /// worker. The reviewer is still constrained by its prompt
-    /// (`skills/system/review/external-review/SKILL.md`) which spells out
-    /// that it must use read-only inspection, must not send messages, and
-    /// must not mutate state. That constraint is documented and enforced at
-    /// the prompt layer where the model can actually understand it.
+    /// Reviewers receive shell/read tools under a read-only sandbox. The tool
+    /// registry removes patch, channel-send/ack/take, meeting mutation,
+    /// collaboration, artifact, and agent-job tools for every read-only
+    /// session, so the boundary is enforced below the prompt layer.
     pub fn start_review_with_read_only_tools(
         root: &Path,
         settings: &BTreeMap<String, String>,
@@ -470,8 +474,8 @@ impl PersistentSession {
             base_instructions,
             true,  // disable_compaction
             false, // disable_active_tools
-            false, // disable_mcp_servers
-            false, // read_only_sandbox: dropped — was 100% a tool-use blocker
+            true,  // disable_mcp_servers
+            true,  // read_only_sandbox
         )
     }
 
@@ -492,18 +496,32 @@ impl PersistentSession {
 
         let composed_base_instructions =
             compose_base_instructions(root, settings, base_instructions)?;
+        let reviewer_scratch_workspace = read_only_sandbox
+            .then(create_reviewer_scratch_workspace)
+            .transpose()?;
+        let session_cwd = reviewer_scratch_workspace.as_deref().unwrap_or(root);
+        let start_result = rt.block_on(async {
+            Self::start_client_and_thread(
+                root,
+                session_cwd,
+                settings,
+                &composed_base_instructions,
+                disable_active_tools,
+                disable_mcp_servers,
+                read_only_sandbox,
+            )
+            .await
+        });
         let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
-            rt.block_on(async {
-                Self::start_client_and_thread(
-                    root,
-                    settings,
-                    &composed_base_instructions,
-                    disable_active_tools,
-                    disable_mcp_servers,
-                    read_only_sandbox,
-                )
-                .await
-            })?;
+            match start_result {
+                Ok(started) => started,
+                Err(err) => {
+                    if let Some(scratch) = reviewer_scratch_workspace.as_ref() {
+                        let _ = std::fs::remove_dir_all(scratch);
+                    }
+                    return Err(err);
+                }
+            };
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -571,6 +589,7 @@ impl PersistentSession {
             disable_active_tools,
             disable_mcp_servers,
             read_only_sandbox,
+            reviewer_scratch_workspace,
         })
     }
 
@@ -657,6 +676,7 @@ impl PersistentSession {
 
     async fn start_client_and_thread(
         root: &Path,
+        cwd: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: &str,
         disable_active_tools: bool,
@@ -713,7 +733,7 @@ impl PersistentSession {
                 (explicit_api_source || engine::is_api_chat_model(&model))
                     .then(|| engine::default_api_provider_for_model(&model).to_string())
             });
-        let cwd: PathBuf = root.to_path_buf();
+        let cwd = cwd.to_path_buf();
 
         let codex_home =
             find_codex_home().map_err(|err| anyhow::anyhow!("find_codex_home: {err}"))?;
@@ -840,11 +860,10 @@ impl PersistentSession {
             model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
-            sandbox_mode: Some(if read_only_sandbox {
-                SandboxMode::ReadOnly
-            } else {
-                SandboxMode::DangerFullAccess
-            }),
+            // Reviewers write only inside their disposable scratch cwd. The
+            // authoritative workspace and runtime tree are outside the cwd
+            // and therefore read-only under WorkspaceWrite.
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             include_apply_patch_tool: Some(true),
             ephemeral: Some(true),
             disable_mcp_servers,
@@ -879,10 +898,15 @@ impl PersistentSession {
                 .await
                 .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
         );
+        let session_source = if read_only_sandbox {
+            SessionSource::SubAgent(SubAgentSource::Review)
+        } else {
+            SessionSource::Exec
+        };
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
-            SessionSource::Exec,
+            session_source.clone(),
             CollaborationModesConfig::default(),
         ));
 
@@ -896,7 +920,7 @@ impl PersistentSession {
             thread_manager: Some(thread_manager),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
-            session_source: SessionSource::Exec,
+            session_source,
             enable_ctox_api_key_env: false,
             client_name: "ctox-direct".to_string(),
             client_version: env!("CTOX_BUILD_VERSION").to_string(),
@@ -920,11 +944,7 @@ impl PersistentSession {
                     model_provider: selected_provider_id.clone(),
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
-                    sandbox: Some(if read_only_sandbox {
-                        ctox_app_server_protocol::SandboxMode::ReadOnly
-                    } else {
-                        ctox_app_server_protocol::SandboxMode::DangerFullAccess
-                    }),
+                    sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
                     base_instructions: Some(base_instructions.to_string()),
                     dynamic_tools: disable_active_tools.then(Vec::new),
                     disable_mcp_servers: Some(disable_mcp_servers),
@@ -1023,13 +1043,15 @@ impl PersistentSession {
             approval_policy: Some(AskForApproval::Never.into()),
             approvals_reviewer: None,
             sandbox_policy: Some(
-                if read_only_sandbox {
-                    SandboxPolicy::ReadOnly {
-                        access: ReadOnlyAccess::FullAccess,
-                        network_access: true,
-                    }
-                } else {
-                    SandboxPolicy::DangerFullAccess
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    read_only_access: ReadOnlyAccess::FullAccess,
+                    network_access: true,
+                    // Reviewer scratch lives under the temp directory, but cwd
+                    // remains explicitly writable. Do not grant the rest of
+                    // the host temp tree as an additional writable surface.
+                    exclude_tmpdir_env_var: read_only_sandbox,
+                    exclude_slash_tmp: read_only_sandbox,
                 }
                 .into(),
             ),
@@ -1061,11 +1083,7 @@ impl PersistentSession {
                             model_provider: model_provider.map(str::to_string),
                             cwd: Some(cwd.to_string_lossy().to_string()),
                             approval_policy: Some(AskForApproval::Never.into()),
-                            sandbox: Some(if read_only_sandbox {
-                                ctox_app_server_protocol::SandboxMode::ReadOnly
-                            } else {
-                                ctox_app_server_protocol::SandboxMode::DangerFullAccess
-                            }),
+                            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
                             base_instructions: Some(base_instructions.to_string()),
                             dynamic_tools: disable_active_tools.then(Vec::new),
                             disable_mcp_servers: Some(disable_mcp_servers),
@@ -1466,6 +1484,19 @@ mod tests {
     }
 
     #[test]
+    fn reviewer_scratch_workspaces_are_unique_and_removable() {
+        let first = create_reviewer_scratch_workspace().expect("create first scratch");
+        let second = create_reviewer_scratch_workspace().expect("create second scratch");
+        assert_ne!(first, second);
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+        std::fs::remove_dir_all(&first).expect("remove first scratch");
+        std::fs::remove_dir_all(&second).expect("remove second scratch");
+        assert!(!first.exists());
+        assert!(!second.exists());
+    }
+
+    #[test]
     fn exact_prompt_budget_keeps_generation_headroom() {
         assert_eq!(exact_prompt_safe_input_budget(131_072), 98_304);
         assert_eq!(exact_prompt_safe_input_budget(1), 1);
@@ -1669,16 +1700,23 @@ impl Drop for PersistentSession {
 
 impl PersistentSession {
     fn shutdown_inner(&mut self, action: &str) {
-        let Some(runtime) = self.runtime.take() else {
-            return;
-        };
-        if let Some(client) = self.client.take() {
-            let tid = self.thread_id.clone();
-            eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
-            client.abort_now();
-            eprintln!("[ctox direct-session] persistent session aborted thread_id={tid}");
+        if let Some(runtime) = self.runtime.take() {
+            if let Some(client) = self.client.take() {
+                let tid = self.thread_id.clone();
+                eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
+                client.abort_now();
+                eprintln!("[ctox direct-session] persistent session aborted thread_id={tid}");
+            }
+            runtime.shutdown_timeout(Duration::from_secs(2));
         }
-        runtime.shutdown_timeout(Duration::from_secs(2));
+        if let Some(scratch) = self.reviewer_scratch_workspace.take() {
+            if let Err(err) = std::fs::remove_dir_all(&scratch) {
+                eprintln!(
+                    "[ctox direct-session] failed to remove reviewer scratch {}: {err}",
+                    scratch.display()
+                );
+            }
+        }
     }
 }
 

@@ -1047,9 +1047,10 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
-    for subdir in &[".agents", ".codex"] {
+    // Protect agent configuration plus CTOX's durable runtime/evidence store.
+    // Workspace workers must mutate state through typed server-side commands,
+    // never by shell-writing these paths directly.
+    for subdir in &[".agents", ".codex", ".ctox", "runtime"] {
         #[allow(clippy::expect_used)]
         let top_level_codex = writable_root.join(subdir).expect("valid relative path");
         if top_level_codex.as_path().is_dir() {

@@ -76,7 +76,7 @@ pub fn analyze_harness_subagent_spawn_model() -> HarnessSubagentSpawnModelReport
         ok: violations.is_empty(),
         contracts,
         violations,
-        proof: "Harness subagents are modeled as leaf thread-control children. Thread-spawn children consume the depth rank depth_remaining = max_depth - depth, so recursive spawning is rejected once the rank reaches zero. All subagent sessions have collaboration and agent-job spawning tools removed, so a child cannot create another child through the public tool surface. Agent-job workers are finite because they are spawned from a finite item table, concurrency is capped by agents.max_threads, depth is checked before dispatch, and workers retain only report_agent_job_result. Therefore every accepted harness subagent path is either a bounded leaf execution, a finite agent-job row execution, or a rejected spawn with no recursive child-producing intervention."
+        proof: "Harness subagents are modeled as leaf thread-control children. Thread-spawn children consume the depth rank depth_remaining = max_depth - depth, so recursive spawning is rejected once the rank reaches zero. All subagent sessions have collaboration and agent-job spawning tools removed, so a child cannot create another child through the public tool surface. Agent-job workers are finite because they are spawned from a finite item table, concurrency is capped by agents.max_threads, depth is checked before dispatch, and their leaf surface contains workspace execution tools plus report_agent_job_result while excluding spawn, channel, meeting, and control-plane mutation tools. Therefore every accepted harness subagent path is either a bounded leaf execution, a finite agent-job row execution, or a rejected spawn with no recursive child-producing intervention."
             .to_string(),
         recommended_gate: "Run as a release/CI gate together with cargo test, cargo check, and process-mining spawn-liveness. Keep the static analyzer as a unit test so normal test builds fail on invariant drift; do not put this into every rustc compile via build.rs because it is a repository-conformance proof, not type checking."
             .to_string(),
@@ -259,7 +259,7 @@ fn harness_subagent_spawn_contracts() -> &'static [HarnessSubagentSpawnContract]
             ranking_function: "pending_agent_job_items",
             finite_bound: "finite persisted job item table and agents.max_threads concurrency",
             recursion_guard: "agent_job workers omit collab and spawn_agents_on_csv tools",
-            worker_tool_surface: "report_agent_job_result only",
+            worker_tool_surface: "workspace tools plus report_agent_job_result; no spawn/channel/meeting/control-plane mutation tools",
         },
         HarnessSubagentSpawnContract {
             pattern: "internal-subagent",

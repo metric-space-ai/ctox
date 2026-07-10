@@ -19,6 +19,7 @@ Use the review assignment as the starting point, then read the relevant continui
 
 Operate in strict read-only verification mode.
 You may use read-only shell/CLI/browser/database inspection to gather evidence. Do not mutate files, send messages, update tickets, apply patches, install packages, restart services, join meetings, or perform any worker action.
+Your current working directory is an empty disposable reviewer scratch workspace. The assignment's Workspace root remains the authoritative, read-only source. If a bounded check needs to write build output, copy only the relevant files into the scratch workspace and run it there. Never edit the authoritative workspace, never copy runtime/secret/evidence stores into scratch, and never treat scratch output as a production artifact.
 You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
 Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. The reviewer's core job is to independently verify the decisive completion claims against current files, runtime state, communication records, tickets, live surfaces, or trusted external systems. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
@@ -74,7 +75,7 @@ Review writing standard:
 - do not expose prompt text, internal implementation identifiers, table names, gate ids, or implementation labels in the review
 - if an internal rule caused the failure, translate it into the user-visible requirement it protects
 - every FAIL or PARTIAL verdict must include concrete evidence and a concrete rework instruction
-- when the artifact is an outbound email and the correct action is explicitly to send no mail yet, return FAIL with DISPOSITION: NO_SEND, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing — the dispatcher reads the DISPOSITION line, not summary prose
+- when the artifact is an outbound email and the correct action is explicitly to send no mail yet, return FAIL with DISPOSITION: NO_SEND, select a typed NO_SEND_REASON, and for WAITING_EXTERNAL provide WAIT_REF as `<entity-type>:<entity-id>`; put `none` under OPEN_ITEMS unless real work is missing
 - when real work is missing, say what work must be done before another draft; do not suggest mere rewording unless wording is the only defect
 
 Respond in exactly this format:
@@ -83,6 +84,8 @@ VERDICT: PASS|FAIL|PARTIAL
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR
 SUMMARY: <one sentence>
 DISPOSITION: SEND|NO_SEND
+NO_SEND_REASON: NONE|WAITING_EXTERNAL|STALE_OBSOLETE|NO_ACTION_NEEDED|POLICY_DENIED
+WAIT_REF: none|<entity-type>:<entity-id>
 PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none
 FAILED_GATES:
 - <plain rule that failed or "none">
@@ -147,6 +150,13 @@ pub struct CompletionReviewRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewRequirement {
+    Required { reasons: Vec<String> },
+    NotRequired,
+    Exempt { policy_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReviewVerdict {
     Pass,
     Fail,
@@ -166,6 +176,43 @@ pub enum ReviewVerdict {
 pub enum ReviewDisposition {
     Send,
     NoSend,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NoSendReason {
+    WaitingExternal,
+    StaleObsolete,
+    NoActionNeeded,
+    PolicyDenied,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HoldReason {
+    WaitingExternal(crate::mission::plan::WaitRef),
+    Technical { policy_id: String },
+    MissingReviewEvidence,
+    MissingArtifact,
+}
+
+impl NoSendReason {
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_uppercase().as_str() {
+            "WAITING_EXTERNAL" => Some(Self::WaitingExternal),
+            "STALE_OBSOLETE" => Some(Self::StaleObsolete),
+            "NO_ACTION_NEEDED" => Some(Self::NoActionNeeded),
+            "POLICY_DENIED" => Some(Self::PolicyDenied),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitingExternal => "WAITING_EXTERNAL",
+            Self::StaleObsolete => "STALE_OBSOLETE",
+            Self::NoActionNeeded => "NO_ACTION_NEEDED",
+            Self::PolicyDenied => "POLICY_DENIED",
+        }
+    }
 }
 
 impl Default for ReviewDisposition {
@@ -423,6 +470,25 @@ impl ReviewOutcome {
         self.required && matches!(self.verdict, ReviewVerdict::Fail | ReviewVerdict::Partial)
     }
 
+    pub fn no_send_reason(&self) -> Option<NoSendReason> {
+        parse_prefixed_line(&self.canonical_report(), "NO_SEND_REASON:")
+            .and_then(|value| NoSendReason::parse(&value))
+    }
+
+    pub fn no_send_wait_ref(&self) -> Option<crate::mission::plan::WaitRef> {
+        let raw = parse_prefixed_line(&self.canonical_report(), "WAIT_REF:")?;
+        let (entity_type, entity_id) = raw.split_once(':')?;
+        let entity_type = entity_type.trim();
+        let entity_id = entity_id.trim();
+        if entity_type.is_empty() || entity_id.is_empty() {
+            return None;
+        }
+        Some(crate::mission::plan::WaitRef {
+            entity_type: entity_type.to_string(),
+            entity_id: entity_id.to_string(),
+        })
+    }
+
     pub fn pass_proof_kind(&self) -> Option<ReviewPassProofKind> {
         parse_pass_proof(&self.canonical_report())
     }
@@ -627,184 +693,46 @@ fn run_external_review_leg_with_wall_timeout(
 
 fn assess_review_requirement(
     request: &CompletionReviewRequest,
-    result_text: &str,
+    _result_text: &str,
 ) -> (bool, u8, Vec<String>) {
-    let combined = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        request.task_goal, request.task_prompt, request.preview, request.source_label, result_text
-    );
-    let lowered = combined.to_ascii_lowercase();
-    let mut score = 0u8;
+    let source = request.source_label.trim().to_ascii_lowercase();
+    let durable_work = source == "queue"
+        || source.starts_with("queue:")
+        || source == "ticket"
+        || source.starts_with("ticket:")
+        || source == "internal-work"
+        || source.starts_with("internal-work:");
+    let external_effect = request.owner_visible
+        || request.artifact_action.is_some()
+        || !request.artifact_channel.trim().is_empty()
+        || !request.artifact_to.is_empty()
+        || !request.artifact_cc.is_empty()
+        || !request.artifact_attachments.is_empty()
+        || matches!(
+            source.as_str(),
+            "email:owner" | "email:founder" | "email:admin"
+        );
     let mut reasons = Vec::new();
-    if is_business_os_outbound_background_command(request, &lowered) {
-        push_unique_reason(&mut reasons, "business_os_outbound_background_command");
-        return (false, 0, reasons);
+    if durable_work {
+        reasons.push("durable_queue_or_ticket_work".to_string());
     }
-    let founder_or_owner_email = matches!(
-        request.source_label.to_ascii_lowercase().as_str(),
-        "email:owner" | "email:founder" | "email:admin"
-    ) || request
-        .artifact_action
-        .as_deref()
-        .map(|value| value.to_ascii_lowercase().contains("founder"))
-        .unwrap_or(false);
-    let external_chat_quick_response = request
-        .artifact_action
-        .as_deref()
-        .map(|value| {
-            value
-                .to_ascii_lowercase()
-                .contains("external_chat_quick_response")
-        })
-        .unwrap_or(false);
-    let internal_artifact_slice = !founder_or_owner_email
-        && !request.owner_visible
-        && request.artifact_action.is_none()
-        && contains_any(
-            &lowered,
-            &[
-                "required artifact",
-                "required artifacts",
-                "required file",
-                "required files",
-                "durable artifact",
-                "durable file",
-                "initialisiere die datei",
-                "create and verify the smoke artifact",
-            ],
-        );
-    if internal_artifact_slice {
-        push_unique_reason(&mut reasons, "internal_artifact_slice");
+    if external_effect {
+        reasons.push("external_effect".to_string());
     }
-    let internal_smoke_artifact_slice = internal_artifact_slice
-        && contains_any(
-            &lowered,
-            &["smoke", "qwen36-local", "response adapter", "local backend"],
-        );
-    let workspace_backed_queue_task = request.source_label.eq_ignore_ascii_case("queue")
-        && !request.workspace_root.trim().is_empty()
-        && request.artifact_action.is_none()
-        && !founder_or_owner_email;
-    if workspace_backed_queue_task && !internal_smoke_artifact_slice {
-        score = score.saturating_add(3);
-        push_unique_reason(&mut reasons, "workspace_backed_queue_task");
+    let requirement = if reasons.is_empty() {
+        ReviewRequirement::NotRequired
+    } else {
+        ReviewRequirement::Required { reasons }
+    };
+    match requirement {
+        ReviewRequirement::Required { reasons } => (true, 3, reasons),
+        ReviewRequirement::Exempt { policy_id } => (
+            false,
+            0,
+            vec![format!("review_exemption_policy:{policy_id}")],
+        ),
+        ReviewRequirement::NotRequired => (false, 0, Vec::new()),
     }
-
-    let closure_claim = contains_any(
-        &lowered,
-        &[
-            "done",
-            "completed",
-            "finished",
-            "verified",
-            "works now",
-            "fixed",
-            "installed",
-            "configured",
-            "rolled out",
-            "deploy",
-            "smoke test",
-            "tests pass",
-            "validated",
-        ],
-    );
-    if closure_claim {
-        if internal_smoke_artifact_slice {
-            push_unique_reason(&mut reasons, "smoke_artifact_witnessed");
-        } else {
-            score = score.saturating_add(1);
-            push_unique_reason(&mut reasons, "closure_claim");
-        }
-    }
-
-    let runtime_or_infra_change = contains_any(
-        &lowered,
-        &[
-            "deploy",
-            "rollout",
-            "install",
-            "migration",
-            "database",
-            "schema",
-            "service",
-            "systemd",
-            "restart",
-            "http",
-            "api",
-            "endpoint",
-            "config",
-            "nginx",
-            "docker",
-            "compose",
-            "secret",
-            "credential",
-            "runtime failure",
-            "without assistant message",
-            "api is still unavailable",
-        ],
-    );
-    if runtime_or_infra_change {
-        if internal_smoke_artifact_slice {
-            push_unique_reason(&mut reasons, "smoke_runtime_feedback_ignored");
-        } else {
-            score = score.saturating_add(2);
-            push_unique_reason(&mut reasons, "runtime_or_infra_change");
-        }
-    }
-
-    let code_or_artifact_change = contains_any(
-        &lowered,
-        &[
-            "patch",
-            "refactor",
-            "updated",
-            "changed",
-            "edit",
-            "helper",
-            "skill",
-            "contract",
-            "src/",
-            ".rs",
-            ".ts",
-            ".py",
-            "cargo.toml",
-            "package.json",
-        ],
-    );
-    if code_or_artifact_change {
-        if internal_smoke_artifact_slice {
-            push_unique_reason(&mut reasons, "smoke_contract_feedback_ignored");
-        } else {
-            score = score.saturating_add(1);
-            push_unique_reason(&mut reasons, "code_or_artifact_change");
-        }
-    }
-
-    if combined.chars().count() > 900 {
-        if internal_artifact_slice {
-            // Internal file-artifact slices are guarded by the outcome
-            // witness; length alone must not send them into external review.
-        } else {
-            score = score.saturating_add(1);
-            push_unique_reason(&mut reasons, "long_complex_slice");
-        }
-    }
-
-    if founder_or_owner_email {
-        score = score.saturating_add(3);
-        push_unique_reason(&mut reasons, "founder_communication");
-    }
-    if external_chat_quick_response {
-        score = score.saturating_add(3);
-        push_unique_reason(&mut reasons, "external_chat_quick_response");
-    }
-
-    if request.owner_visible && (closure_claim || runtime_or_infra_change) {
-        score = score.saturating_add(1);
-        push_unique_reason(&mut reasons, "owner_visible_claim");
-    }
-
-    (score >= 3, score, reasons)
 }
 
 fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) -> String {
@@ -1090,6 +1018,8 @@ EVIDENCE:\n\
 HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n\
 DISPOSITION: SEND|NO_SEND\n\
+NO_SEND_REASON: NONE|WAITING_EXTERNAL|STALE_OBSOLETE|NO_ACTION_NEEDED|POLICY_DENIED\n\
+WAIT_REF: none|<entity-type>:<entity-id>\n\
 \n\
 The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
 \n\
@@ -1208,7 +1138,9 @@ EVIDENCE:\n\
 - source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
 HANDOFF:\n\
 - none\n\
-DISPOSITION: SEND|NO_SEND\n",
+DISPOSITION: SEND|NO_SEND\n\
+NO_SEND_REASON: NONE|WAITING_EXTERNAL|STALE_OBSOLETE|NO_ACTION_NEEDED|POLICY_DENIED\n\
+WAIT_REF: none|<entity-type>:<entity-id>\n",
         clip_text(prior, 2_000)
     )
 }
@@ -1697,6 +1629,8 @@ fn parse_handoff_block(report: &str) -> Option<String> {
                 || trimmed.starts_with("EVIDENCE:")
                 || trimmed.starts_with("CATEGORIZED_FINDINGS:")
                 || trimmed.starts_with("DISPOSITION:")
+                || trimmed.starts_with("NO_SEND_REASON:")
+                || trimmed.starts_with("WAIT_REF:")
             {
                 break;
             }
@@ -1727,21 +1661,25 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
             continue;
         }
         if collecting {
-            if matches!(
-                trimmed,
-                "VERDICT:"
-                    | "MISSION_STATE:"
-                    | "SUMMARY:"
-                    | "FAILED_GATES:"
-                    | "FINDINGS:"
-                    | "CATEGORIZED_FINDINGS:"
-                    | "OPEN_ITEMS:"
-                    | "PASS_PROOF:"
-                    | "PIPELINE_RESOLUTION:"
-                    | "EVIDENCE:"
-                    | "HANDOFF:"
-                    | "DISPOSITION:"
-            ) {
+            if [
+                "VERDICT:",
+                "MISSION_STATE:",
+                "SUMMARY:",
+                "FAILED_GATES:",
+                "FINDINGS:",
+                "CATEGORIZED_FINDINGS:",
+                "OPEN_ITEMS:",
+                "PASS_PROOF:",
+                "PIPELINE_RESOLUTION:",
+                "EVIDENCE:",
+                "HANDOFF:",
+                "DISPOSITION:",
+                "NO_SEND_REASON:",
+                "WAIT_REF:",
+            ]
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+            {
                 break;
             }
             if let Some(item) = trimmed.strip_prefix("- ") {
@@ -1856,35 +1794,6 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-fn is_business_os_outbound_background_command(
-    request: &CompletionReviewRequest,
-    lowered: &str,
-) -> bool {
-    request.source_label.eq_ignore_ascii_case("queue")
-        && contains_any(
-            lowered,
-            &[
-                "business os command:",
-                "\"business_os_command_id\"",
-                "business_os_command_id",
-            ],
-        )
-        && contains_any(
-            lowered,
-            &[
-                "outbound.company.research",
-                "outbound.pipeline.contact_research",
-                "outbound.pipeline.lead_qualification",
-            ],
-        )
-}
-
-fn push_unique_reason(reasons: &mut Vec<String>, candidate: &str) {
-    if !reasons.iter().any(|existing| existing == candidate) {
-        reasons.push(candidate.to_string());
-    }
-}
-
 fn push_unique_item(items: &mut Vec<String>, candidate: &str) {
     if !items.iter().any(|existing| existing == candidate) {
         items.push(candidate.to_string());
@@ -1924,11 +1833,11 @@ mod tests {
         assert!(score >= 3);
         assert!(reasons
             .iter()
-            .any(|reason| reason == "runtime_or_infra_change"));
+            .any(|reason| reason == "durable_queue_or_ticket_work"));
     }
 
     #[test]
-    fn skips_review_for_short_explanatory_slice() {
+    fn owner_visible_slice_requires_review_independent_of_wording() {
         let request = CompletionReviewRequest {
             preview: "Queue summary".to_string(),
             source_label: "tui".to_string(),
@@ -1939,11 +1848,11 @@ mod tests {
             &request,
             "Explained the current queue backlog and highlighted the blocked task.",
         );
-        assert!(!required);
+        assert!(required);
     }
 
     #[test]
-    fn skips_review_for_internal_smoke_artifact_slice() {
+    fn durable_smoke_artifact_slice_still_requires_review() {
         let request = CompletionReviewRequest {
             preview: "Qwen smoke".to_string(),
             source_label: "queue".to_string(),
@@ -1954,15 +1863,15 @@ mod tests {
             &request,
             "Created and verified the smoke artifact. Required file exists and contains qwen36-local-tool-ok.",
         );
-        assert!(!required);
-        assert!(score < 3);
+        assert!(required);
+        assert!(score >= 3);
         assert!(reasons
             .iter()
-            .any(|reason| reason == "internal_artifact_slice"));
+            .any(|reason| reason == "durable_queue_or_ticket_work"));
     }
 
     #[test]
-    fn skips_review_for_internal_smoke_retry_feedback() {
+    fn durable_smoke_retry_feedback_still_requires_review() {
         let request = CompletionReviewRequest {
             preview: "qwen36-local-smoke".to_string(),
             source_label: "queue".to_string(),
@@ -1973,11 +1882,11 @@ mod tests {
             &request,
             "Execution contract: use shell tools. HARNESS FEEDBACK: runtime failure; turn completed without assistant message. Required artifact result.txt exists. This is a smoke test for the response adapter and local backend. Verified qwen36-local-tool-ok.",
         );
-        assert!(!required);
-        assert!(score < 3);
+        assert!(required);
+        assert!(score >= 3);
         assert!(reasons
             .iter()
-            .any(|reason| reason == "smoke_runtime_feedback_ignored"));
+            .any(|reason| reason == "durable_queue_or_ticket_work"));
     }
 
     #[test]
@@ -1997,11 +1906,11 @@ mod tests {
         assert!(score >= 3);
         assert!(reasons
             .iter()
-            .any(|reason| reason == "workspace_backed_queue_task"));
+            .any(|reason| reason == "durable_queue_or_ticket_work"));
     }
 
     #[test]
-    fn skips_review_for_business_os_outbound_research_writeback() {
+    fn business_os_queue_work_requires_review_without_registered_exemption() {
         let request = CompletionReviewRequest {
             task_goal: "Unternehmensdaten recherchieren".to_string(),
             task_prompt: "Recherchiere nur Unternehmensdaten und schreibe das Ergebnis in Knowledge.\n\nBusiness OS command:\n- command_id: cmd_run_aesolar\n- module: outbound\n- type: outbound.company.research\n- record_id: co_aesolar\n\nPayload JSON:\n{}".to_string(),
@@ -2015,11 +1924,11 @@ mod tests {
             &request,
             "Company-only research appended to outbound/campaign_default_companies; required Knowledge DataFrame row verified.",
         );
-        assert!(!required);
-        assert_eq!(score, 0);
+        assert!(required);
+        assert_eq!(score, 3);
         assert!(reasons
             .iter()
-            .any(|reason| reason == "business_os_outbound_background_command"));
+            .any(|reason| reason == "durable_queue_or_ticket_work"));
     }
 
     #[test]
@@ -2036,7 +1945,7 @@ mod tests {
         );
         assert!(required);
         assert!(score >= 3);
-        assert!(reasons.iter().any(|reason| reason == "owner_visible_claim"));
+        assert!(reasons.iter().any(|reason| reason == "external_effect"));
     }
 
     #[test]
@@ -2056,9 +1965,19 @@ mod tests {
         );
         assert!(required);
         assert!(score >= 3);
-        assert!(reasons
-            .iter()
-            .any(|reason| reason == "founder_communication"));
+        assert!(reasons.iter().any(|reason| reason == "external_effect"));
+    }
+
+    #[test]
+    fn review_requirement_is_language_independent_for_same_durable_work() {
+        let request = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            owner_visible: false,
+            ..CompletionReviewRequest::default()
+        };
+        let english = assess_review_requirement(&request, "Done and verified.");
+        let german = assess_review_requirement(&request, "Erledigt und geprüft.");
+        assert_eq!(english, german);
     }
 
     #[test]
@@ -2231,9 +2150,7 @@ mod tests {
             "Verstanden, ich lege das als Aufgabe an und prüfe die Seite.",
         );
         assert!(required);
-        assert!(reasons
-            .iter()
-            .any(|reason| reason == "external_chat_quick_response"));
+        assert!(reasons.iter().any(|reason| reason == "external_effect"));
         let rendered = build_review_prompt(&request, &reasons);
         assert!(rendered.contains("Artifact kind: external_chat_quick_response"));
         assert!(rendered.contains("Artifact channel: teams"));

@@ -38,6 +38,16 @@ Runtime invariants:
   parallel subagent work.
 - The review state machine must see one parent result, not one independent
   review gate per subagent.
+- Agent-job leaves expose workspace tools plus `report_agent_job_result`; they
+  do not expose recursive spawn, channels, meetings, acknowledgement, or
+  control-plane mutations. “Report-only” is not the fork contract.
+- Session metadata records the typed capability profile. Explicit
+  `dynamic_tools: []` is an authoritative no-tools contract and must not be
+  repopulated from persisted thread state.
+- Reviewer sessions are tagged `SubAgentSource::Review`. Their authoritative
+  workspace/runtime stays read-only while a disposable scratch CWD can host
+  copied inputs for write-producing checks; the reviewer tag keeps mutating
+  tools unavailable even though that scratch CWD is writable.
 - CTOX shell calls from subagents must carry thread/agent/turn identifiers so
   forensics can attribute nested CLI activity.
 

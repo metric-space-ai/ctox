@@ -3862,14 +3862,11 @@ fn handle_continuity_update(args: &[String]) -> anyhow::Result<()> {
     let db_path = find_flag_value(args, "--db")
         .map(str::to_string)
         .or(default_db)
-        .context("usage: ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff> [--conversation-id <id>] [--db <path>] [--find <text>] [--replace <text>]")?;
-    // conversation_id is optional: defaults to the constant CTOX chat
-    // conversation id used by the service daemon. Codex-exec children
-    // never need to know it explicitly.
-    let conversation_id: i64 = match find_flag_value(args, "--conversation-id") {
-        Some(v) => v.parse().context("failed to parse --conversation-id")?,
-        None => inference::turn_loop::CHAT_CONVERSATION_ID,
-    };
+        .context("usage: ctox continuity-update --conversation-id <id> --kind <narrative|anchors|focus> --mode <full|replace|diff> [--db <path>] [--find <text>] [--replace <text>]")?;
+    let conversation_id: i64 = find_flag_value(args, "--conversation-id")
+        .context("missing required --conversation-id")?
+        .parse()
+        .context("failed to parse --conversation-id")?;
     let kind =
         find_flag_value(args, "--kind").context("missing --kind (narrative|anchors|focus)")?;
     let mode = find_flag_value(args, "--mode").context("missing --mode (full|replace|diff)")?;
@@ -4479,17 +4476,37 @@ mod tests {
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
         appsec_command_unresolved_placeholders, browser_automation_source_from_stage_command,
         chat_status_has_completed_since, execute_appsec_stage_commands,
-        find_ctox_root_from_ancestors, handle_appsec_pipeline_work, looks_like_ctox_root,
-        openrouter_tool_smoke_summary, persist_appsec_command_expected_artifact,
-        persist_runtime_turn_timeout, record_appsec_stage_artifact_bindings,
-        resolve_appsec_stage_command_placeholders, resolve_chat_attachment_paths,
-        resolve_runtime_ctox_root, run_projected_appsec_command, validated_workspace_root_override,
-        AppsecStageExecutionContext,
+        find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
+        looks_like_ctox_root, openrouter_tool_smoke_summary,
+        persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
+        record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
+        resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
+        validated_workspace_root_override, AppsecStageExecutionContext,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn continuity_update_rejects_missing_conversation_id() {
+        let args = [
+            "--db",
+            "/tmp/ctox-continuity-missing-conversation.sqlite",
+            "--kind",
+            "focus",
+            "--mode",
+            "full",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let error = handle_continuity_update(&args)
+            .expect_err("continuity update must require explicit conversation id");
+        assert!(error
+            .to_string()
+            .contains("missing required --conversation-id"));
+    }
 
     #[test]
     fn finds_ctox_root_from_nested_workspace_directory() {

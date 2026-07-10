@@ -34,6 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::communication::adapters as communication_adapters;
 use crate::communication::adapters::CommunicationTransportAdapter;
 use crate::communication::gateway as communication_gateway;
+use crate::mission::review::HoldReason;
 use crate::secrets;
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
@@ -2715,6 +2716,7 @@ pub fn lease_pending_inbound_messages(
     limit: usize,
     lease_owner: &str,
 ) -> Result<Vec<RoutedInboundMessage>> {
+    refresh_inbound_priority_credits(root)?;
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     let leased = take_messages(&mut conn, None, limit, lease_owner)?;
@@ -2750,7 +2752,7 @@ pub fn lease_pending_inbound_messages(
 /// router-4: read-only, NON-leasing peek at the inbound messages the serial
 /// router would lease this tick. Mirrors `take_messages` (no channel filter) — the
 /// same eligibility `lease_pending_inbound_messages` uses (direction='inbound',
-/// route_status pending|leased, `not_before` elapsed, our-own/free lease, one row
+/// route_status pending, `not_before` elapsed, one row
 /// per thread) — but performs NO lease UPDATE. Lets the router consult
 /// `source_label_dispatch_rank` at the durable-queue-vs-inbound boundary without
 /// consuming the message it is only inspecting.
@@ -2759,6 +2761,7 @@ pub fn peek_leasable_inbound_messages(
     limit: usize,
     lease_owner: &str,
 ) -> Result<Vec<RoutedInboundMessage>> {
+    refresh_inbound_priority_credits(root)?;
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
@@ -2770,14 +2773,15 @@ pub fn peek_leasable_inbound_messages(
                 m.subject, m.preview, m.body_text, m.status, m.seen,
                 m.external_created_at, m.observed_at, m.metadata_json,
                 r.route_status, r.lease_owner, r.leased_at, r.acked_at, r.updated_at,
+                MIN(COALESCE(r.first_pending_at, m.external_created_at)) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_pending_since,
+                MIN(r.priority_time_credit_hours) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_priority_credit_hours,
                 ROW_NUMBER() OVER (
                     PARTITION BY m.thread_key
                     ORDER BY
-                        CASE
-                            WHEN r.route_status = 'pending' THEN 0
-                            WHEN r.route_status = 'leased' THEN 1
-                            ELSE 2
-                        END ASC,
                         CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
                         CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
                         CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
@@ -2787,17 +2791,12 @@ pub fn peek_leasable_inbound_messages(
             FROM communication_messages m
             JOIN communication_routing_state r ON r.message_key = m.message_key
             WHERE m.direction = 'inbound'
-              AND r.route_status IN ('pending', 'leased')
+              AND r.route_status = 'pending'
+              AND (r.retry_not_before IS NULL OR datetime(r.retry_not_before) <= datetime('now'))
               AND (
                     json_extract(m.metadata_json, '$.not_before') IS NULL
                  OR json_extract(m.metadata_json, '$.not_before') = ''
                  OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              )
-              AND (
-                    r.route_status = 'pending'
-                    OR r.lease_owner IS NULL
-                    OR r.lease_owner = ''
-                    OR r.lease_owner = ?1
               )
         )
         SELECT
@@ -2809,9 +2808,9 @@ pub fn peek_leasable_inbound_messages(
         WHERE thread_rank = 1
         ORDER BY
             CASE
-                WHEN route_status = 'pending' THEN 0
-                WHEN route_status = 'leased' THEN 1
-                ELSE 2
+                WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
+                WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
+                ELSE datetime(thread_pending_since, printf('%+d hours', thread_priority_credit_hours))
             END ASC,
             CASE WHEN channel = 'queue' THEN external_created_at END ASC,
             CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
@@ -2830,6 +2829,42 @@ pub fn peek_leasable_inbound_messages(
                 .map(routed_inbound_message_from_view)
                 .collect()
         })
+}
+
+fn refresh_inbound_priority_credits(root: &Path) -> Result<()> {
+    let settings = runtime_settings_with_owner_profiles(
+        root,
+        communication_gateway::CommunicationAdapterKind::Email,
+    );
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key, m.sender_address
+        FROM communication_messages m
+        JOIN communication_routing_state r ON r.message_key=m.message_key
+        WHERE m.direction='inbound' AND m.channel='email' AND r.route_status='pending'
+        "#,
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (message_key, sender_address) in rows {
+        let policy = classify_email_sender(&settings, &sender_address);
+        let credit =
+            if policy.allowed && matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
+                -24
+            } else {
+                0
+            };
+        conn.execute(
+            "UPDATE communication_routing_state SET priority_time_credit_hours=?2 WHERE message_key=?1 AND priority_time_credit_hours!=?2",
+            params![message_key, credit],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn list_stalled_inbound_messages(
@@ -3015,14 +3050,169 @@ pub fn ack_leased_messages_with_failure_reason(
     ack_messages(&mut conn, message_keys, status, Some(failure_reason), None)
 }
 
+/// Persist a typed completion hold without allowing an unbounded
+/// pending→leased→pending loop. External waits become dormant `blocked` rows;
+/// technical/evidence/artifact holds consume the existing five-attempt review
+/// budget with exponential backoff and terminalize when exhausted.
+pub fn hold_leased_messages(
+    root: &Path,
+    message_keys: &[String],
+    reason: &HoldReason,
+    summary: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let now = now_iso_string();
+    let mut updated = 0usize;
+    for message_key in message_keys {
+        match reason {
+            HoldReason::WaitingExternal(wait_ref) => {
+                updated += ack_messages(
+                    &mut conn,
+                    std::slice::from_ref(message_key),
+                    "blocked",
+                    None,
+                    Some("waiting_external"),
+                )?;
+                conn.execute(
+                    r#"
+                    UPDATE communication_routing_state
+                    SET hold_reason='waiting_external', wait_entity_type=?2,
+                        wait_entity_id=?3, retry_not_before=NULL,
+                        lease_expires_at=NULL, last_error=?4, updated_at=?5
+                    WHERE message_key=?1
+                    "#,
+                    params![
+                        message_key,
+                        wait_ref.entity_type,
+                        wait_ref.entity_id,
+                        summary.trim(),
+                        now,
+                    ],
+                )?;
+            }
+            HoldReason::Technical { .. }
+            | HoldReason::MissingReviewEvidence
+            | HoldReason::MissingArtifact => {
+                let previous_attempts: i64 = conn
+                    .query_row(
+                        "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+                        params![message_key],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                let attempts = previous_attempts.saturating_add(1);
+                let exhausted = attempts >= 5;
+                let failure_class = match reason {
+                    HoldReason::Technical { .. } => "technical",
+                    HoldReason::MissingReviewEvidence => "missing_review_evidence",
+                    HoldReason::MissingArtifact => "missing_artifact",
+                    HoldReason::WaitingExternal(_) => unreachable!(),
+                };
+                let hold_reason = match reason {
+                    HoldReason::Technical { policy_id } => format!("technical:{policy_id}"),
+                    HoldReason::MissingReviewEvidence => "missing_review_evidence".to_string(),
+                    HoldReason::MissingArtifact => "missing_artifact".to_string(),
+                    HoldReason::WaitingExternal(_) => unreachable!(),
+                };
+                let next_status = if exhausted { "failed" } else { "pending" };
+                let retry_not_before = (!exhausted).then(|| {
+                    let exponent = u32::try_from(attempts.saturating_sub(1))
+                        .unwrap_or(16)
+                        .min(16);
+                    let seconds = 300_i64
+                        .saturating_mul(2_i64.saturating_pow(exponent))
+                        .min(3_600);
+                    (Utc::now() + Duration::seconds(seconds)).to_rfc3339()
+                });
+                updated += ack_messages(
+                    &mut conn,
+                    std::slice::from_ref(message_key),
+                    next_status,
+                    exhausted.then_some(summary.trim()),
+                    (!exhausted).then_some("budgeted_completion_hold"),
+                )?;
+                conn.execute(
+                    r#"
+                    UPDATE communication_routing_state
+                    SET failure_class=?2, failure_attempt_count=?3,
+                        retry_not_before=?4, hold_reason=?5,
+                        wait_entity_type=NULL, wait_entity_id=NULL,
+                        lease_expires_at=NULL, last_error=?6, updated_at=?7
+                    WHERE message_key=?1
+                    "#,
+                    params![
+                        message_key,
+                        failure_class,
+                        attempts,
+                        retry_not_before,
+                        hold_reason,
+                        summary.trim(),
+                        now,
+                    ],
+                )?;
+            }
+        }
+    }
+    Ok(updated)
+}
+
+pub fn wake_messages_waiting_for(root: &Path, entity_type: &str, entity_id: &str) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let tx = conn.unchecked_transaction()?;
+    let now = now_iso_string();
+    let message_keys = {
+        let mut statement = tx.prepare(
+            r#"
+            SELECT message_key
+            FROM communication_routing_state
+            WHERE route_status='blocked'
+              AND hold_reason='waiting_external'
+              AND LOWER(wait_entity_type)=LOWER(?1)
+              AND wait_entity_id=?2
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![entity_type.trim(), entity_id.trim()], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut updated = 0usize;
+    for message_key in message_keys {
+        let changed = tx.execute(
+            r#"UPDATE communication_routing_state
+               SET route_status='pending', hold_reason=NULL, wait_entity_type=NULL,
+                   wait_entity_id=NULL, retry_not_before=NULL, first_pending_at=?2, updated_at=?2
+               WHERE message_key=?1 AND route_status='blocked' AND hold_reason='waiting_external'"#,
+            params![message_key, now],
+        )?;
+        if changed != 0 {
+            enforce_queue_route_status_transition(
+                &tx,
+                &message_key,
+                "blocked",
+                "pending",
+                "ctox-wait-wakeup",
+                "wake_messages_waiting_for",
+            )?;
+            updated += changed;
+        }
+    }
+    tx.commit()?;
+    Ok(updated)
+}
+
 pub fn set_queue_task_route_status(
     root: &Path,
     message_key: &str,
     route_status: &str,
 ) -> Result<bool> {
     let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    ensure_queue_account(&mut conn)?;
+    let conn = open_channel_db(&db_path)?;
     if load_queue_message_from_conn(&conn, message_key)?.is_none() {
         return Ok(false);
     }
@@ -3368,14 +3558,24 @@ fn queue_task_deferred_until_from_conn(
 ) -> Result<Option<String>> {
     conn.query_row(
         r#"
-        SELECT json_extract(metadata_json, '$.not_before')
-        FROM communication_messages
-        WHERE message_key = ?1
-          AND channel = ?2
-          AND direction = 'inbound'
-          AND json_extract(metadata_json, '$.not_before') IS NOT NULL
-          AND json_extract(metadata_json, '$.not_before') <> ''
-          AND json_extract(metadata_json, '$.not_before') > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        SELECT CASE
+            WHEN COALESCE(json_extract(m.metadata_json, '$.not_before'), '') = ''
+                THEN r.retry_not_before
+            WHEN COALESCE(r.retry_not_before, '') = ''
+                THEN json_extract(m.metadata_json, '$.not_before')
+            WHEN datetime(r.retry_not_before) > datetime(json_extract(m.metadata_json, '$.not_before'))
+                THEN r.retry_not_before
+            ELSE json_extract(m.metadata_json, '$.not_before')
+        END
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key=m.message_key
+        WHERE m.message_key = ?1
+          AND m.channel = ?2
+          AND m.direction = 'inbound'
+          AND (
+                datetime(json_extract(m.metadata_json, '$.not_before')) > datetime('now')
+             OR datetime(r.retry_not_before) > datetime('now')
+          )
         LIMIT 1
         "#,
         params![message_key, QUEUE_CHANNEL_NAME],
@@ -3603,6 +3803,7 @@ pub fn lease_queue_task(
     let current =
         load_queue_message_from_conn(&conn, message_key)?.context("queue task not found")?;
     let now = now_iso_string();
+    let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     // Hold a write lock across the read-modify-write so a concurrent leaser on
     // a separate connection cannot overwrite our lease_owner (lost-update).
     {
@@ -3615,41 +3816,30 @@ pub fn lease_queue_task(
         // Check-and-set: only lease a row that is free, ours already, or
         // pending. A losing racer flips 0 rows and must NOT load a task it
         // does not own.
+        // Record the core-transition proof only after the CAS actually flips
+        // the row, so a losing racer never writes a phantom proof.
         let updated = tx.execute(
-            r#"
-            INSERT INTO communication_routing_state (
-                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
-            )
-            VALUES (?1, 'leased', ?2, ?3, NULL, NULL, ?3)
-            ON CONFLICT(message_key) DO UPDATE SET
-                route_status='leased',
-                lease_owner=excluded.lease_owner,
-                leased_at=excluded.leased_at,
-                acked_at=NULL,
-                updated_at=excluded.updated_at
-            WHERE communication_routing_state.lease_owner IS NULL
-               OR communication_routing_state.lease_owner = ''
-               OR communication_routing_state.lease_owner = ?2
-               OR communication_routing_state.route_status = 'pending'
-            "#,
-            params![message_key, normalized_owner, now],
+            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
+               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, acked_at=NULL, updated_at=excluded.updated_at
+               WHERE communication_routing_state.route_status = 'pending'"#,
+            params![message_key, normalized_owner, now, lease_expires_at],
         )?;
-        if updated == 0 {
+        if updated != 0 {
+            enforce_queue_route_status_transition(
+                &tx,
+                message_key,
+                &previous_route_status,
+                "leased",
+                "ctox-queue-lease",
+                "lease_queue_task",
+            )?;
+        } else {
             anyhow::bail!(
                 "queue task {} lease lost: already leased by another owner",
                 message_key
             );
         }
-        // Record the core-transition proof only after the CAS actually flipped
-        // the row, so a losing racer never writes a phantom proof.
-        enforce_queue_route_status_transition(
-            &tx,
-            message_key,
-            &previous_route_status,
-            "leased",
-            "ctox-queue-lease",
-            "lease_queue_task",
-        )?;
         tx.commit()?;
     }
     refresh_thread(&mut conn, &current.thread_key)?;
@@ -3698,7 +3888,7 @@ pub fn list_stale_queue_task_leases(root: &Path, lease_owner: &str) -> Result<Ve
 
 pub fn release_stale_queue_task_leases(
     root: &Path,
-    lease_owner: &str,
+    _lease_owner: &str,
     active_message_keys: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let db_path = resolve_db_path(root, None);
@@ -3708,15 +3898,15 @@ pub fn release_stale_queue_task_leases(
         SELECT m.message_key
         FROM communication_messages m
         JOIN communication_routing_state r ON r.message_key = m.message_key
-        WHERE m.channel = 'queue'
-          AND m.direction = 'inbound'
+        WHERE m.direction = 'inbound'
           AND r.route_status = 'leased'
-          AND r.lease_owner = ?1
+          AND r.lease_expires_at IS NOT NULL
+          AND datetime(r.lease_expires_at) <= datetime('now')
         ORDER BY r.leased_at ASC, r.updated_at ASC
         LIMIT 128
         "#,
     )?;
-    let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
 
@@ -3731,7 +3921,7 @@ pub fn release_stale_queue_task_leases(
             &message_key,
             "leased",
             "pending",
-            "ctox-queue-lease-repair",
+            "ctox-communication-lease-repair",
             "release_stale_queue_task_leases",
         )?;
         conn.execute(
@@ -3740,6 +3930,7 @@ pub fn release_stale_queue_task_leases(
             SET route_status='pending',
                 lease_owner=NULL,
                 leased_at=NULL,
+                lease_expires_at=NULL,
                 acked_at=NULL,
                 last_error=NULL,
                 updated_at=?2
@@ -3751,6 +3942,31 @@ pub fn release_stale_queue_task_leases(
         released.push(message_key);
     }
     Ok(released)
+}
+
+pub fn renew_message_leases(
+    root: &Path,
+    lease_owner: &str,
+    message_keys: &[String],
+) -> Result<usize> {
+    if message_keys.is_empty() {
+        return Ok(0);
+    }
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+    let now = now_iso_string();
+    let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+    let mut renewed = 0usize;
+    for message_key in message_keys {
+        renewed += conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET lease_expires_at=?3, updated_at=?4
+            WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2
+            "#,
+            params![message_key, lease_owner, lease_expires_at, now],
+        )?;
+    }
+    Ok(renewed)
 }
 
 pub fn ingest_cron_message(
@@ -8300,6 +8516,15 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             route_status TEXT NOT NULL,
             lease_owner TEXT,
             leased_at TEXT,
+            first_pending_at TEXT,
+            lease_expires_at TEXT,
+            failure_class TEXT,
+            failure_attempt_count INTEGER NOT NULL DEFAULT 0,
+            retry_not_before TEXT,
+            priority_time_credit_hours INTEGER NOT NULL DEFAULT 0,
+            hold_reason TEXT,
+            wait_entity_type TEXT,
+            wait_entity_id TEXT,
             acked_at TEXT,
             last_error TEXT,
             updated_at TEXT NOT NULL
@@ -8490,6 +8715,59 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     ))
     .context("failed to ensure channel schema")?;
     ensure_terminal_no_send_column(conn)?;
+    ensure_routing_state_hardening_columns(conn)?;
+    Ok(())
+}
+
+fn ensure_routing_state_hardening_columns(conn: &Connection) -> Result<()> {
+    for (column, definition) in [
+        ("first_pending_at", "TEXT"),
+        ("lease_expires_at", "TEXT"),
+        ("failure_class", "TEXT"),
+        ("failure_attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("retry_not_before", "TEXT"),
+        ("priority_time_credit_hours", "INTEGER NOT NULL DEFAULT 0"),
+        ("hold_reason", "TEXT"),
+        ("wait_entity_type", "TEXT"),
+        ("wait_entity_id", "TEXT"),
+    ] {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('communication_routing_state') WHERE name=?1)",
+            params![column],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            if let Err(err) = conn.execute_batch(&format!(
+                "ALTER TABLE communication_routing_state ADD COLUMN {column} {definition};"
+            )) {
+                if !is_duplicate_column_error(&err) {
+                    return Err(err).with_context(|| {
+                        format!("failed to add communication_routing_state.{column}")
+                    });
+                }
+            }
+        }
+    }
+    conn.execute(
+        r#"
+        UPDATE communication_routing_state
+        SET first_pending_at=COALESCE(
+                first_pending_at,
+                (SELECT COALESCE(m.external_created_at, m.observed_at)
+                 FROM communication_messages m
+                 WHERE m.message_key=communication_routing_state.message_key),
+                updated_at
+            ),
+            lease_expires_at=CASE
+                WHEN route_status='leased' AND lease_expires_at IS NULL
+                THEN datetime(leased_at, '+15 minutes')
+                ELSE lease_expires_at
+            END
+        WHERE first_pending_at IS NULL
+           OR (route_status='leased' AND lease_expires_at IS NULL)
+        "#,
+        [],
+    )?;
     Ok(())
 }
 
@@ -8860,14 +9138,15 @@ fn take_messages(
                 r.leased_at,
                 r.acked_at,
                 r.updated_at,
+                MIN(COALESCE(r.first_pending_at, m.external_created_at)) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_pending_since,
+                MIN(r.priority_time_credit_hours) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_priority_credit_hours,
                 ROW_NUMBER() OVER (
                     PARTITION BY m.thread_key
                     ORDER BY
-                        CASE
-                            WHEN r.route_status = 'pending' THEN 0
-                            WHEN r.route_status = 'leased' THEN 1
-                            ELSE 2
-                        END ASC,
                         CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
                         CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
                         CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
@@ -8878,17 +9157,12 @@ fn take_messages(
             JOIN communication_routing_state r ON r.message_key = m.message_key
             WHERE m.direction = 'inbound'
               AND m.channel = ?1
-              AND r.route_status IN ('pending', 'leased')
+              AND r.route_status = 'pending'
+              AND (r.retry_not_before IS NULL OR datetime(r.retry_not_before) <= datetime('now'))
               AND (
                     json_extract(m.metadata_json, '$.not_before') IS NULL
                  OR json_extract(m.metadata_json, '$.not_before') = ''
                  OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              )
-              AND (
-                    r.route_status = 'pending'
-                    OR r.lease_owner IS NULL
-                    OR r.lease_owner = ''
-                    OR r.lease_owner = ?2
               )
         )
         SELECT
@@ -8918,9 +9192,9 @@ fn take_messages(
         WHERE thread_rank = 1
         ORDER BY
             CASE
-                WHEN route_status = 'pending' THEN 0
-                WHEN route_status = 'leased' THEN 1
-                ELSE 2
+                WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
+                WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
+                ELSE datetime(thread_pending_since, printf('%+d hours', thread_priority_credit_hours))
             END ASC,
             CASE WHEN channel = 'queue' THEN external_created_at END ASC,
             CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
@@ -8955,14 +9229,15 @@ fn take_messages(
                 r.leased_at,
                 r.acked_at,
                 r.updated_at,
+                MIN(COALESCE(r.first_pending_at, m.external_created_at)) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_pending_since,
+                MIN(r.priority_time_credit_hours) OVER (
+                    PARTITION BY m.thread_key
+                ) AS thread_priority_credit_hours,
                 ROW_NUMBER() OVER (
                     PARTITION BY m.thread_key
                     ORDER BY
-                        CASE
-                            WHEN r.route_status = 'pending' THEN 0
-                            WHEN r.route_status = 'leased' THEN 1
-                            ELSE 2
-                        END ASC,
                         CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
                         CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
                         CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
@@ -8972,17 +9247,12 @@ fn take_messages(
             FROM communication_messages m
             JOIN communication_routing_state r ON r.message_key = m.message_key
             WHERE m.direction = 'inbound'
-              AND r.route_status IN ('pending', 'leased')
+              AND r.route_status = 'pending'
+              AND (r.retry_not_before IS NULL OR datetime(r.retry_not_before) <= datetime('now'))
               AND (
                     json_extract(m.metadata_json, '$.not_before') IS NULL
                  OR json_extract(m.metadata_json, '$.not_before') = ''
                  OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              )
-              AND (
-                    r.route_status = 'pending'
-                    OR r.lease_owner IS NULL
-                    OR r.lease_owner = ''
-                    OR r.lease_owner = ?1
               )
         )
         SELECT
@@ -9012,9 +9282,9 @@ fn take_messages(
         WHERE thread_rank = 1
         ORDER BY
             CASE
-                WHEN route_status = 'pending' THEN 0
-                WHEN route_status = 'leased' THEN 1
-                ELSE 2
+                WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
+                WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
+                ELSE datetime(thread_pending_since, printf('%+d hours', thread_priority_credit_hours))
             END ASC,
             CASE WHEN channel = 'queue' THEN external_created_at END ASC,
             CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
@@ -9046,41 +9316,32 @@ fn take_messages(
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let leased_at = now_iso_string();
+    let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     let mut taken = Vec::new();
     for mut item in rows {
         let updated = tx.execute(
-            r#"
-            INSERT INTO communication_routing_state (
-                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
-            )
-            VALUES (?1, 'leased', ?2, ?3, NULL, NULL, ?3)
-            ON CONFLICT(message_key) DO UPDATE SET
-                route_status='leased',
-                lease_owner=excluded.lease_owner,
-                leased_at=excluded.leased_at,
-                acked_at=NULL,
-                updated_at=excluded.updated_at
-            WHERE communication_routing_state.lease_owner IS NULL
-               OR communication_routing_state.lease_owner = ''
-               OR communication_routing_state.lease_owner = ?2
-               OR communication_routing_state.route_status = 'pending'
-            "#,
-            params![item.message_key, lease_owner, leased_at],
+            r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
+               VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, acked_at=NULL, updated_at=excluded.updated_at
+               WHERE communication_routing_state.route_status = 'pending'"#,
+            params![item.message_key, lease_owner, leased_at, lease_expires_at],
         )?;
+        if updated != 0 {
+            enforce_queue_route_status_transition(
+                &tx,
+                &item.message_key,
+                &item.routing.route_status,
+                "leased",
+                lease_owner,
+                "lease_messages",
+            )?;
+        }
         if updated == 0 {
             // Lost the race: another owner leased this key between our SELECT
             // and UPDATE. Skip the core-transition proof and the push so we
             // never return a message we did not actually lease.
             continue;
         }
-        enforce_queue_route_status_transition(
-            &tx,
-            &item.message_key,
-            &item.routing.route_status,
-            "leased",
-            lease_owner,
-            "lease_messages",
-        )?;
         item.routing.route_status = "leased".to_string();
         item.routing.lease_owner = Some(lease_owner.to_string());
         item.routing.leased_at = Some(leased_at.clone());
@@ -9949,7 +10210,7 @@ fn ensure_queue_account(conn: &mut Connection) -> Result<()> {
 }
 
 fn set_routing_status(
-    conn: &mut Connection,
+    conn: &Connection,
     message_key: &str,
     route_status: &str,
     now: &str,
@@ -12071,6 +12332,13 @@ mod tests {
         .expect("failed to create queue task");
         lease_queue_task(&root, &created.message_key, "ctox-service")
             .expect("failed to lease queue task");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+            params![created.message_key],
+        )
+        .expect("expire queue lease");
+        drop(conn);
 
         let released = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
             .expect("failed to release stale queue lease");
@@ -12080,6 +12348,109 @@ mod tests {
             .expect("missing queue task");
         assert_eq!(reloaded.route_status, "pending");
         assert!(reloaded.lease_owner.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn typed_holds_block_on_wait_ref_and_budget_technical_retries() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-typed-hold-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
+
+        let waiting = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "wait for approval".to_string(),
+                prompt: "Wait without running the model.".to_string(),
+                thread_key: "queue/wait-ref".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create waiting task");
+        lease_queue_task(&root, &waiting.message_key, "ctox-test").expect("lease waiting task");
+        hold_leased_messages(
+            &root,
+            std::slice::from_ref(&waiting.message_key),
+            &HoldReason::WaitingExternal(crate::mission::plan::WaitRef {
+                entity_type: "approval-gate".to_string(),
+                entity_id: "gate-42".to_string(),
+            }),
+            "approval is still open",
+        )
+        .expect("block waiting task");
+        assert_eq!(
+            load_queue_task(&root, &waiting.message_key)
+                .expect("load waiting task")
+                .expect("waiting task exists")
+                .route_status,
+            "blocked"
+        );
+        assert!(lease_queue_task(&root, &waiting.message_key, "ctox-test").is_err());
+        assert_eq!(
+            wake_messages_waiting_for(&root, "approval-gate", "gate-42")
+                .expect("wake waiting task"),
+            1
+        );
+        assert_eq!(
+            load_queue_task(&root, &waiting.message_key)
+                .expect("load woken task")
+                .expect("woken task exists")
+                .route_status,
+            "pending"
+        );
+
+        let technical = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "bounded technical hold".to_string(),
+                prompt: "Retry with a finite budget.".to_string(),
+                thread_key: "queue/technical-hold".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create technical task");
+        for attempt in 1..=5 {
+            lease_queue_task(&root, &technical.message_key, "ctox-test")
+                .expect("lease technical task");
+            hold_leased_messages(
+                &root,
+                std::slice::from_ref(&technical.message_key),
+                &HoldReason::MissingReviewEvidence,
+                "review evidence unavailable",
+            )
+            .expect("persist technical hold");
+            let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+            let (status, attempts): (String, i64) = conn
+                .query_row(
+                    "SELECT route_status, failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+                    params![technical.message_key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("load hold state");
+            assert_eq!(attempts, attempt);
+            assert_eq!(status, if attempt == 5 { "failed" } else { "pending" });
+            if attempt < 5 {
+                conn.execute(
+                    "UPDATE communication_routing_state SET retry_not_before='2000-01-01T00:00:00Z' WHERE message_key=?1",
+                    params![technical.message_key],
+                )
+                .expect("expire hold backoff");
+            }
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -13142,7 +13513,7 @@ mod tests {
             .expect_err("queue-backed acknowledgement must still require review");
         assert!(err
             .to_string()
-            .contains("has not passed external chat review"));
+            .contains("has not passed communication review"));
 
         let reviewed_request = ChannelSendRequest {
             reviewed_founder_send: true,
@@ -14118,6 +14489,105 @@ mod tests {
             .expect("take messages should succeed");
         assert_eq!(taken.len(), 1);
         assert_eq!(taken[0].message_key, "thread-msg-new");
+
+        let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn take_messages_ages_threads_while_using_latest_message_within_thread() {
+        let db_path = unique_test_db_path("ctox-channel-take-thread-aging");
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        for (message_key, thread_key, external_created_at) in [
+            ("old-thread-first", "thread-old", "2026-04-24T08:00:00Z"),
+            ("old-thread-latest", "thread-old", "2026-04-24T10:00:00Z"),
+            ("new-thread-latest", "thread-new", "2026-04-24T11:00:00Z"),
+        ] {
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key,
+                    channel: "email",
+                    account_key: "email:aging@example.com",
+                    thread_key,
+                    remote_id: message_key,
+                    direction: "inbound",
+                    folder_hint: "INBOX",
+                    sender_display: "Customer",
+                    sender_address: "customer@example.com",
+                    recipient_addresses_json: "[]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Aging",
+                    preview: message_key,
+                    body_text: message_key,
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "trusted",
+                    status: "received",
+                    seen: false,
+                    has_attachments: false,
+                    external_created_at,
+                    observed_at: external_created_at,
+                    metadata_json: "{}",
+                },
+            )
+            .expect("message upsert");
+        }
+        ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+
+        let taken = take_messages(&mut conn, Some("email"), 1, "ctox-service")
+            .expect("take messages should succeed");
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].message_key, "old-thread-latest");
+
+        let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn take_messages_does_not_retake_same_owner_lease() {
+        let db_path = unique_test_db_path("ctox-channel-no-same-owner-retake");
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: "single-message",
+                channel: "email",
+                account_key: "email:single@example.com",
+                thread_key: "single-thread",
+                remote_id: "single-message",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Customer",
+                sender_address: "customer@example.com",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Single",
+                preview: "single",
+                body_text: "single",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-24T08:00:00Z",
+                observed_at: "2026-04-24T08:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+        ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+
+        assert_eq!(
+            take_messages(&mut conn, Some("email"), 1, "ctox-service")
+                .expect("first take")
+                .len(),
+            1
+        );
+        assert!(take_messages(&mut conn, Some("email"), 1, "ctox-service")
+            .expect("second take")
+            .is_empty());
 
         let _ = fs::remove_file(&db_path);
     }

@@ -17,10 +17,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde_json::json;
 
-use crate::mission::channels::{create_queue_task, QueueTaskCreateRequest};
+use crate::mission::channels::{
+    create_queue_task, update_queue_task, QueueTaskCreateRequest, QueueTaskUpdateRequest,
+};
 use crate::paths;
 use crate::persistence;
 
@@ -141,27 +143,16 @@ pub fn dequeue_oldest(root: &Path) -> Result<Option<QueuedReportTask>> {
 /// would normally do this after [`crate::report::manager::run_manager`]
 /// returns.
 pub fn complete_task(root: &Path, message_key: &str, outcome: &str) -> Result<()> {
-    let conn = open_consolidated_db(root)?;
-    let updated = conn
-        .execute(
-            "UPDATE communication_routing_state
-             SET route_status = 'handled', last_error = ?1, updated_at = ?2
-             WHERE message_key = ?3",
-            params![outcome, chrono::Utc::now().to_rfc3339(), message_key,],
-        )
-        .with_context(|| format!("failed to complete queue task {message_key}"))?;
-    if updated == 0 {
-        // Best-effort fallback: write a status note onto the message
-        // itself; if the routing-state row is missing the daemon will
-        // pick up the canonical status from the message's `status`
-        // column instead.
-        let _ = conn.execute(
-            "UPDATE communication_messages
-             SET status = 'handled'
-             WHERE message_key = ?1 AND channel = 'queue'",
-            params![message_key],
-        );
-    }
+    update_queue_task(
+        root,
+        QueueTaskUpdateRequest {
+            message_key: message_key.to_string(),
+            route_status: Some("handled".to_string()),
+            status_note: Some(outcome.to_string()),
+            ..Default::default()
+        },
+    )
+    .with_context(|| format!("failed to complete queue task {message_key}"))?;
     Ok(())
 }
 

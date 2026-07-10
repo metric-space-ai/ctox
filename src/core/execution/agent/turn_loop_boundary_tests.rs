@@ -62,14 +62,17 @@ fn production_turn_loop_stays_model_agnostic() {
 }
 
 #[test]
-fn production_review_sessions_use_unsandboxed_tools_with_prompt_guardrails() {
+fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
     let production = production_source(include_str!("direct_session.rs"));
 
     assert!(
         production.contains("start_review_with_read_only_tools")
-            && production.contains("read_only_sandbox: dropped")
-            && production.contains("SandboxMode::DangerFullAccess")
+            && production.contains("create_reviewer_scratch_workspace")
+            && production.contains("SessionSource::SubAgent(SubAgentSource::Review)")
+            && production.contains("SandboxMode::WorkspaceWrite")
+            && production.contains("SandboxPolicy::WorkspaceWrite")
+            && production.contains("exclude_slash_tmp: read_only_sandbox")
             && production.contains("dynamic_tools: disable_active_tools.then(Vec::new)"),
-        "review sessions must expose inspection tools without the read-only sandbox that blocked review evidence collection"
+        "reviewers must write only in disposable scratch while authoritative workspace/runtime stay read-only"
     );
 }

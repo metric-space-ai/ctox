@@ -488,6 +488,13 @@ impl Codex {
                 .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?
         };
 
+        let history_tools_contract = conversation_history.get_dynamic_tools();
+        if history_tools_contract
+            .as_ref()
+            .is_some_and(|tools| tools.is_empty())
+        {
+            config.disable_active_tools = true;
+        }
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
             SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
@@ -518,7 +525,8 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
+        let history_tools = history_tools_contract;
+        let persisted_tools = if dynamic_tools.is_empty() && history_tools.is_none() {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
@@ -536,9 +544,7 @@ impl Codex {
             None
         };
         let dynamic_tools = if dynamic_tools.is_empty() {
-            persisted_tools
-                .or_else(|| conversation_history.get_dynamic_tools())
-                .unwrap_or_default()
+            history_tools.or(persisted_tools).unwrap_or_default()
         } else {
             dynamic_tools
         };
@@ -888,6 +894,7 @@ impl TurnContext {
         .with_ctox_web_stack_enabled(self.tools_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(self.tools_config.ctox_doc_stack_enabled)
         .with_lean_tool_surface(self.tools_config.lean_tool_surface)
+        .with_no_tools_surface(config.disable_active_tools)
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
@@ -1330,6 +1337,7 @@ impl Session {
         .with_ctox_web_stack_enabled(per_turn_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(per_turn_config.ctox_doc_stack_enabled)
         .with_lean_tool_surface(per_turn_config.disable_mcp_servers)
+        .with_no_tools_surface(per_turn_config.disable_active_tools)
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
@@ -5189,6 +5197,7 @@ async fn spawn_review_thread(
     .with_web_search_config(/*web_search_config*/ None)
     .with_ctox_web_stack_enabled(false)
     .with_ctox_doc_stack_enabled(false)
+    .with_no_tools_surface(config.disable_active_tools)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 

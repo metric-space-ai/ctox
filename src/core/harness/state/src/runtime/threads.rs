@@ -457,6 +457,10 @@ ON CONFLICT(id) DO UPDATE SET
             return Ok(());
         };
         if tools.is_empty() {
+            sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?;
             return Ok(());
         }
         let thread_id = thread_id.to_string();
@@ -834,6 +838,7 @@ mod tests {
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,
+                capability_profile: None,
                 memory_mode: Some("polluted".to_string()),
             },
             git: None,
@@ -888,6 +893,7 @@ mod tests {
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,
+                capability_profile: None,
                 memory_mode: None,
             },
             git: Some(GitInfo {

@@ -11,6 +11,7 @@ use ctox_app_server_protocol::AppInfo;
 use ctox_protocol::openai_models::InputModality;
 use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ModelsResponse;
+use ctox_protocol::protocol::ReadOnlyAccess;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -96,6 +97,43 @@ fn channel_tools_are_registered_in_default_tool_router() {
             "channel_ack",
             "channel_send",
         ],
+    );
+}
+
+#[test]
+fn explicit_no_tools_surface_restores_neither_builtin_nor_dynamic_tools() {
+    let model_info = model_info_from_models_json("gpt-5-codex");
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::FullAccess,
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        },
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_no_tools_surface(true);
+    let dynamic = DynamicToolSpec {
+        name: "persisted_dynamic_mutator".to_string(),
+        description: "must not be restored".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        defer_loading: false,
+    };
+    let (tools, _) = build_specs(&config, None, None, &[dynamic]).build();
+    assert!(
+        tools.is_empty(),
+        "explicit no-tools contract leaked {} tool(s)",
+        tools.len()
     );
 }
 
@@ -852,6 +890,103 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         assert_lacks_tool_name(&tools, tool_name);
     }
     assert_lacks_tool_name(&tools, "request_user_input");
+    for tool_name in [
+        "channel_sync",
+        "channel_take",
+        "channel_ack",
+        "channel_send",
+        "meeting_status",
+        "meeting_get_transcript",
+        "meeting_send_chat",
+        "meeting_join",
+        "meeting_schedule",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
+}
+
+#[test]
+fn read_only_sessions_omit_mutating_builtin_tools() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::Collab);
+    features.enable(Feature::SpawnCsv);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let policy = SandboxPolicy::new_read_only_policy();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &policy,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_contains_tool_names(&tools, &["context_retrieve"]);
+    for tool_name in [
+        "apply_patch",
+        "update_plan",
+        "artifacts",
+        "spawn_agent",
+        "spawn_agents_on_csv",
+        "channel_sync",
+        "channel_take",
+        "channel_ack",
+        "channel_send",
+        "meeting_send_chat",
+        "meeting_join",
+        "meeting_schedule",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
+}
+
+#[test]
+fn reviewer_scratch_session_keeps_read_only_tool_surface() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::Collab);
+    features.enable(Feature::SpawnCsv);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        read_only_access: ReadOnlyAccess::FullAccess,
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::SubAgent(SubAgentSource::Review),
+        sandbox_policy: &policy,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_contains_tool_names(&tools, &["context_retrieve"]);
+    for tool_name in [
+        "apply_patch",
+        "update_plan",
+        "spawn_agent",
+        "spawn_agents_on_csv",
+        "channel_take",
+        "channel_ack",
+        "channel_send",
+        "meeting_send_chat",
+        "meeting_join",
+        "meeting_schedule",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
 }
 
 #[test]

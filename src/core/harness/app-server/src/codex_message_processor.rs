@@ -1693,6 +1693,8 @@ impl CodexMessageProcessor {
             personality,
         );
         typesafe_overrides.disable_mcp_servers = disable_mcp_servers.unwrap_or(false);
+        typesafe_overrides.disable_active_tools =
+            dynamic_tools.as_ref().is_some_and(|tools| tools.is_empty());
         typesafe_overrides.ephemeral = ephemeral;
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();

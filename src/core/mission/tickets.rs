@@ -197,6 +197,22 @@ pub struct TicketEventView {
     pub observed_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketEventFailureClass {
+    Retryable,
+    Terminal,
+}
+
+impl TicketEventFailureClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RoutedTicketEvent {
     pub event_key: String,
@@ -357,6 +373,14 @@ pub struct TicketEventRoutingView {
     pub route_status: String,
     pub lease_owner: Option<String>,
     pub leased_at: Option<String>,
+    pub lease_expires_at: Option<String>,
+    pub failure_class: Option<String>,
+    pub failure_attempt_count: i64,
+    pub retry_not_before: Option<String>,
+    pub failure_proof: Option<String>,
+    pub hold_reason: Option<String>,
+    pub wait_entity_type: Option<String>,
+    pub wait_entity_id: Option<String>,
     pub acked_at: Option<String>,
     pub updated_at: String,
 }
@@ -2890,6 +2914,7 @@ pub(crate) fn put_ticket_self_work_item(
             } else {
                 None
             },
+            None,
         );
         if let Err(transition_err) = transition_result {
             anyhow::bail!(
@@ -2993,7 +3018,19 @@ fn enforce_ticket_self_work_spawn(conn: &Connection, item: &TicketSelfWorkItemVi
 fn ticket_self_work_spawn_budget(kind: &str, thread_key: &str, metadata: &Value) -> (String, i64) {
     let lowered = kind.to_ascii_lowercase();
     if lowered.contains("review") {
-        return (format!("review-spawn:{kind}:{thread_key}"), 5);
+        // A communication thread can carry many independent durable work
+        // episodes over its lifetime. Spend the finite review budget against
+        // the current parent episode, while leaving all historical spawn
+        // edges untouched for audit.
+        let episode = metadata_string_value(metadata, "work_episode_id")
+            .or_else(|| metadata_string_value(metadata, "parent_work_id"))
+            .or_else(|| metadata_string_value(metadata, "ticket_self_work_id"))
+            .or_else(|| metadata_string_value(metadata, "queue_message_key"))
+            .or_else(|| metadata_string_value(metadata, "parent_message_key"))
+            .or_else(|| metadata_string_value(metadata, "inbound_message_key"))
+            .or_else(|| metadata_string_value(metadata, "dedupe_key"))
+            .unwrap_or_else(|| thread_key.to_string());
+        return (format!("review-spawn:{kind}:episode:{episode}"), 5);
     }
     if kind == "founder-communication-rework" {
         let key = metadata_string_value(metadata, "inbound_message_key")
@@ -4305,6 +4342,79 @@ pub(crate) fn set_ticket_self_work_state_with_failure_reason(
     Ok(item)
 }
 
+pub(crate) fn set_ticket_approval_gate_state_from_authorized_reply(
+    root: &Path,
+    work_id: &str,
+    state: &str,
+    approval_message_key: &str,
+) -> Result<TicketSelfWorkItemView> {
+    let mut conn = open_ticket_db(root)?;
+    let existing = load_ticket_self_work_item_raw(&conn, work_id)?
+        .context("approval gate internal work item not found")?;
+    if existing.kind != "approval-gate" {
+        anyhow::bail!("authorized approval reply target is not an approval gate");
+    }
+    let expected_action = match state {
+        "closed" => "approve",
+        "failed" => "reject",
+        _ => anyhow::bail!("authorized approval reply target state must be closed or failed"),
+    };
+    let ledger: Option<(String, String, String)> = conn
+        .query_row(
+            r#"
+            SELECT action, sender_address, body_sha256
+            FROM ticket_approval_reply_ledger
+            WHERE message_key=?1 AND work_id=?2
+              AND decision_status IN ('observed', 'applied')
+            LIMIT 1
+            "#,
+            params![approval_message_key, work_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let (action, sender_address, body_sha256) =
+        ledger.context("authorized approval reply is missing its durable ledger proof")?;
+    if action != expected_action
+        || sender_address.trim().is_empty()
+        || body_sha256.trim().is_empty()
+    {
+        anyhow::bail!("authorized approval reply ledger proof does not match the requested state");
+    }
+    let terminal_policy_proof = format!(
+        "policy:authorized-approval-reply:{}:{}",
+        approval_message_key,
+        body_sha256.chars().take(16).collect::<String>()
+    );
+    let failure_reason =
+        (state == "failed").then_some("authorized approval reply rejected the internal work item");
+    let item = set_ticket_self_work_state_internal_with_policy(
+        &mut conn,
+        work_id,
+        state,
+        failure_reason,
+        Some(&terminal_policy_proof),
+    )?;
+    record_audit(
+        &mut conn,
+        AuditRequest {
+            ticket_key: &format!("*self-work:{}*", item.source_system),
+            case_id: None,
+            actor_type: "control_plane",
+            action_type: "approval_reply_state_set",
+            label: None,
+            bundle_label: None,
+            bundle_version: None,
+            details: json!({
+                "work_id": item.work_id,
+                "state": item.state,
+                "approval_message_key": approval_message_key,
+                "terminal_policy_proof": terminal_policy_proof,
+            }),
+        },
+    )?;
+    Ok(item)
+}
+
 fn list_ticket_self_work_assignments(
     root: &Path,
     work_id: &str,
@@ -4503,6 +4613,7 @@ fn enforce_ticket_self_work_state_transition(
     actor: &str,
     reason: &str,
     failure_reason: Option<&str>,
+    terminal_policy_proof: Option<&str>,
 ) -> Result<()> {
     let from_core = ticket_self_work_core_state(from_state)?;
     let to_core = ticket_self_work_core_state(to_state)?;
@@ -4516,6 +4627,15 @@ fn enforce_ticket_self_work_state_transition(
     metadata.insert("from_state".to_string(), from_state.to_string());
     metadata.insert("to_state".to_string(), to_state.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if let Some(policy_proof) = terminal_policy_proof
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert(
+            "terminal_policy_proof".to_string(),
+            policy_proof.to_string(),
+        );
+    }
     if to_core == CoreState::Failed {
         let failure_reason = failure_reason
             .map(str::trim)
@@ -4636,6 +4756,16 @@ fn set_ticket_self_work_state_internal(
     state: &str,
     failure_reason: Option<&str>,
 ) -> Result<TicketSelfWorkItemView> {
+    set_ticket_self_work_state_internal_with_policy(conn, work_id, state, failure_reason, None)
+}
+
+fn set_ticket_self_work_state_internal_with_policy(
+    conn: &mut Connection,
+    work_id: &str,
+    state: &str,
+    failure_reason: Option<&str>,
+    terminal_policy_proof: Option<&str>,
+) -> Result<TicketSelfWorkItemView> {
     let existing = load_ticket_self_work_item_raw(conn, work_id)?
         .context("ticket internal work item not found")?;
     enforce_ticket_self_work_state_transition(
@@ -4646,6 +4776,7 @@ fn set_ticket_self_work_state_internal(
         "ctox-ticket",
         "set_ticket_self_work_state",
         failure_reason,
+        terminal_policy_proof,
     )?;
     let now = now_iso_string();
     conn.execute(
@@ -4845,6 +4976,7 @@ fn upsert_ticket_self_work_item_internal(
             "ctox-ticket",
             "self_work_item_upsert",
             None,
+            None,
         )?;
     }
     conn.execute(
@@ -4903,6 +5035,7 @@ fn mark_ticket_self_work_published(
         "published",
         "ctox-ticket",
         "mark_ticket_self_work_published",
+        None,
         None,
     )?;
     let now = now_iso_string();
@@ -5058,8 +5191,8 @@ pub(crate) fn lease_pending_ticket_events_for_sources(
         FROM ticket_events e
         JOIN ticket_event_routing_state r ON r.event_key = e.event_key
         WHERE e.direction = 'inbound'
-          AND r.route_status IN ('pending', 'leased')
-          AND (r.lease_owner IS NULL OR r.lease_owner = '' OR r.lease_owner = ?1)
+          AND r.route_status = 'pending'
+          AND (r.retry_not_before IS NULL OR r.retry_not_before='' OR r.retry_not_before<=?3)
         ORDER BY e.external_created_at ASC, e.observed_at ASC
         LIMIT ?2
         "#
@@ -5078,12 +5211,16 @@ pub(crate) fn lease_pending_ticket_events_for_sources(
         );
     }
     let mut statement = conn.prepare(&sql)?;
-    let rows = statement.query_map(params![lease_owner, limit as i64], map_ticket_event_row)?;
+    let rows = statement.query_map(
+        params![lease_owner, limit as i64, now_iso_string()],
+        map_ticket_event_row,
+    )?;
     let events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
 
     let tx = conn.unchecked_transaction()?;
     let leased_at = now_iso_string();
+    let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     for event in &events {
         let previous_route_status = current_ticket_event_route_status(&tx, &event.event_key)?;
         enforce_ticket_event_route_status_transition(
@@ -5093,19 +5230,23 @@ pub(crate) fn lease_pending_ticket_events_for_sources(
             "leased",
             lease_owner,
             "lease_pending_ticket_events",
+            None,
         )?;
         tx.execute(
             r#"
             INSERT INTO ticket_event_routing_state (
-                event_key, route_status, lease_owner, leased_at, acked_at, updated_at
-            ) VALUES (?1, 'leased', ?2, ?3, NULL, ?3)
+                event_key, route_status, lease_owner, leased_at, lease_expires_at,
+                acked_at, updated_at
+            ) VALUES (?1, 'leased', ?2, ?3, ?4, NULL, ?3)
             ON CONFLICT(event_key) DO UPDATE SET
                 route_status='leased',
                 lease_owner=excluded.lease_owner,
                 leased_at=excluded.leased_at,
+                lease_expires_at=excluded.lease_expires_at,
                 updated_at=excluded.updated_at
+            WHERE ticket_event_routing_state.route_status='pending'
             "#,
-            params![event.event_key, lease_owner, leased_at],
+            params![event.event_key, lease_owner, leased_at, lease_expires_at],
         )?;
     }
     tx.commit()?;
@@ -5118,6 +5259,14 @@ pub(crate) fn ack_leased_ticket_events(
     status: &str,
 ) -> Result<usize> {
     let canonical_status = canonical_ticket_event_route_status(status)?;
+    if canonical_status == "failed" {
+        return fail_ticket_events(
+            root,
+            event_keys,
+            TicketEventFailureClass::Terminal,
+            "terminal ticket-event failure acknowledged by policy/review path",
+        );
+    }
     let conn = open_ticket_db(root)?;
     let tx = conn.unchecked_transaction()?;
     let now = now_iso_string();
@@ -5131,6 +5280,7 @@ pub(crate) fn ack_leased_ticket_events(
             canonical_status,
             "ctox-ticket-ack",
             "ack_leased_ticket_events",
+            None,
         )?;
         updated += tx.execute(
             r#"
@@ -5156,9 +5306,165 @@ pub(crate) fn ack_leased_ticket_events(
     Ok(updated)
 }
 
+pub(crate) fn block_ticket_events_for_wait(
+    root: &Path,
+    event_keys: &[String],
+    wait_ref: &crate::mission::plan::WaitRef,
+    summary: &str,
+) -> Result<usize> {
+    let updated = ack_leased_ticket_events(root, event_keys, "blocked")?;
+    let conn = open_ticket_db(root)?;
+    let now = now_iso_string();
+    for event_key in event_keys {
+        conn.execute(
+            r#"
+            UPDATE ticket_event_routing_state
+            SET hold_reason='waiting_external', wait_entity_type=?2,
+                wait_entity_id=?3, retry_not_before=NULL,
+                failure_proof=?4, lease_expires_at=NULL, updated_at=?5
+            WHERE event_key=?1 AND route_status='blocked'
+            "#,
+            params![
+                event_key,
+                wait_ref.entity_type,
+                wait_ref.entity_id,
+                summary.trim(),
+                now,
+            ],
+        )?;
+    }
+    Ok(updated)
+}
+
+pub(crate) fn wake_ticket_events_waiting_for(
+    root: &Path,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<usize> {
+    let conn = open_ticket_db(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let now = now_iso_string();
+    let event_keys = {
+        let mut statement = tx.prepare(
+            r#"
+            SELECT event_key
+            FROM ticket_event_routing_state
+            WHERE route_status='blocked'
+              AND hold_reason='waiting_external'
+              AND LOWER(wait_entity_type)=LOWER(?1)
+              AND wait_entity_id=?2
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![entity_type.trim(), entity_id.trim()], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut updated = 0usize;
+    for event_key in event_keys {
+        let changed = tx.execute(
+            r#"UPDATE ticket_event_routing_state
+               SET route_status='pending', hold_reason=NULL, wait_entity_type=NULL,
+                   wait_entity_id=NULL, retry_not_before=NULL, acked_at=NULL, updated_at=?2
+               WHERE event_key=?1 AND route_status='blocked' AND hold_reason='waiting_external'"#,
+            params![event_key, now],
+        )?;
+        if changed != 0 {
+            enforce_ticket_event_route_status_transition(
+                &tx,
+                &event_key,
+                "blocked",
+                "pending",
+                "ctox-wait-wakeup",
+                "wake_ticket_events_waiting_for",
+                None,
+            )?;
+            updated += changed;
+        }
+    }
+    tx.commit()?;
+    Ok(updated)
+}
+
+pub(crate) fn fail_ticket_events(
+    root: &Path,
+    event_keys: &[String],
+    failure_class: TicketEventFailureClass,
+    reason: &str,
+) -> Result<usize> {
+    let conn = open_ticket_db(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let now = now_iso_string();
+    let mut updated = 0usize;
+    for event_key in event_keys {
+        let previous_attempts: i64 = tx
+            .query_row(
+                "SELECT failure_attempt_count FROM ticket_event_routing_state WHERE event_key=?1",
+                params![event_key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let attempts = previous_attempts.saturating_add(1);
+        let exhausted = matches!(failure_class, TicketEventFailureClass::Terminal) || attempts >= 3;
+        let next_status = if exhausted { "failed" } else { "pending" };
+        let retry_not_before = if exhausted {
+            None
+        } else {
+            let exponent = u32::try_from(attempts.saturating_sub(1))
+                .unwrap_or(16)
+                .min(16);
+            let seconds = 300_i64
+                .saturating_mul(2_i64.saturating_pow(exponent))
+                .min(3_600);
+            Some((chrono::Utc::now() + chrono::Duration::seconds(seconds)).to_rfc3339())
+        };
+        let failure_proof = exhausted.then(|| {
+            format!(
+                "ticket-event-terminal-failure class={} attempts={} reason={}",
+                failure_class.as_str(),
+                attempts,
+                reason.trim()
+            )
+        });
+        let previous_status = current_ticket_event_route_status(&tx, event_key)?;
+        enforce_ticket_event_route_status_transition(
+            &tx,
+            event_key,
+            &previous_status,
+            next_status,
+            "ctox-ticket-failure-classifier",
+            reason,
+            Some(failure_class.as_str()),
+        )?;
+        updated += tx.execute(
+            r#"
+            UPDATE ticket_event_routing_state
+            SET route_status=?2, lease_owner=NULL, leased_at=NULL, lease_expires_at=NULL,
+                failure_class=?3, failure_attempt_count=?4, retry_not_before=?5,
+                failure_proof=?6, updated_at=?7
+            WHERE event_key=?1
+            "#,
+            params![
+                event_key,
+                next_status,
+                failure_class.as_str(),
+                attempts,
+                retry_not_before,
+                failure_proof,
+                now,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(updated)
+}
+
 pub(crate) fn release_stale_ticket_event_leases(
     root: &Path,
-    lease_owner: &str,
+    _lease_owner: &str,
     active_event_keys: &HashSet<String>,
 ) -> Result<Vec<String>> {
     with_reconcile_ticket_db(root, |conn| {
@@ -5167,12 +5473,13 @@ pub(crate) fn release_stale_ticket_event_leases(
         SELECT event_key
         FROM ticket_event_routing_state
         WHERE route_status = 'leased'
-          AND lease_owner = ?1
+          AND lease_expires_at IS NOT NULL
+          AND datetime(lease_expires_at) <= datetime('now')
         ORDER BY leased_at ASC, updated_at ASC
         LIMIT 128
         "#,
         )?;
-        let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
 
@@ -5188,8 +5495,9 @@ pub(crate) fn release_stale_ticket_event_leases(
                 &event_key,
                 &previous_route_status,
                 "pending",
-                lease_owner,
+                "ctox-ticket-reconcile",
                 "release_stale_ticket_event_leases",
+                None,
             )?;
             conn.execute(
                 r#"
@@ -5197,6 +5505,7 @@ pub(crate) fn release_stale_ticket_event_leases(
             SET route_status='pending',
                 lease_owner=NULL,
                 leased_at=NULL,
+                lease_expires_at=NULL,
                 acked_at=NULL,
                 updated_at=?2
             WHERE event_key = ?1
@@ -5208,6 +5517,31 @@ pub(crate) fn release_stale_ticket_event_leases(
         }
         Ok(released)
     })
+}
+
+pub(crate) fn renew_ticket_event_leases(
+    root: &Path,
+    lease_owner: &str,
+    event_keys: &[String],
+) -> Result<usize> {
+    if event_keys.is_empty() {
+        return Ok(0);
+    }
+    let conn = open_ticket_db(root)?;
+    let now = now_iso_string();
+    let expires = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+    let mut renewed = 0usize;
+    for event_key in event_keys {
+        renewed += conn.execute(
+            r#"
+            UPDATE ticket_event_routing_state
+            SET lease_expires_at=?3, updated_at=?4
+            WHERE event_key=?1 AND route_status='leased' AND lease_owner=?2
+            "#,
+            params![event_key, lease_owner, expires, now],
+        )?;
+    }
+    Ok(renewed)
 }
 
 pub(crate) fn release_ready_blocked_ticket_events(
@@ -5223,6 +5557,7 @@ pub(crate) fn release_ready_blocked_ticket_events(
         JOIN ticket_event_routing_state r ON r.event_key = e.event_key
         WHERE e.direction = 'inbound'
           AND r.route_status = 'blocked'
+          AND COALESCE(r.hold_reason, '') != 'waiting_external'
         ORDER BY e.external_created_at ASC, e.observed_at ASC
         LIMIT ?1
         "#,
@@ -5245,6 +5580,7 @@ pub(crate) fn release_ready_blocked_ticket_events(
                 "pending",
                 "ctox-ticket-router",
                 "release_ready_blocked_ticket_events",
+                None,
             )?;
             conn.execute(
                 r#"
@@ -7259,6 +7595,7 @@ fn force_ticket_event_routed_state_at(
         route_status,
         "ctox-ticket-routing",
         "force_ticket_event_routed_state",
+        None,
     )?;
     conn.execute(
         r#"
@@ -7303,6 +7640,7 @@ fn enforce_ticket_event_route_status_transition(
     to_status: &str,
     actor: &str,
     reason: &str,
+    failure_class: Option<&str>,
 ) -> Result<()> {
     let from_status = canonical_ticket_event_route_status(from_status)?;
     let to_status = canonical_ticket_event_route_status(to_status)?;
@@ -7320,6 +7658,13 @@ fn enforce_ticket_event_route_status_transition(
     metadata.insert("from_route_status".to_string(), from_status.to_string());
     metadata.insert("to_route_status".to_string(), to_status.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if to_core == CoreState::Failed {
+        metadata.insert("failure_reason".to_string(), reason.trim().to_string());
+        metadata.insert(
+            "failure_class".to_string(),
+            failure_class.unwrap_or("terminal").to_string(),
+        );
+    }
     if to_core == CoreState::Completed {
         if let Some(policy_proof) = ticket_event_terminal_policy_proof(actor, reason) {
             metadata.insert("terminal_policy_proof".to_string(), policy_proof);
@@ -7749,7 +8094,10 @@ fn list_ticket_event_routing_for_business_os(
 ) -> Result<Vec<Value>> {
     let mut statement = conn.prepare(
         r#"
-        SELECT event_key, route_status, lease_owner, leased_at, acked_at, updated_at
+        SELECT event_key, route_status, lease_owner, leased_at, acked_at, updated_at,
+               lease_expires_at, failure_class, failure_attempt_count,
+               retry_not_before, failure_proof, hold_reason,
+               wait_entity_type, wait_entity_id
         FROM ticket_event_routing_state
         ORDER BY updated_at DESC
         LIMIT ?1
@@ -7765,6 +8113,14 @@ fn list_ticket_event_routing_for_business_os(
             "lease_owner": row.get::<_, Option<String>>(2)?,
             "leased_at": row.get::<_, Option<String>>(3)?,
             "acked_at": row.get::<_, Option<String>>(4)?,
+            "lease_expires_at": row.get::<_, Option<String>>(6)?,
+            "failure_class": row.get::<_, Option<String>>(7)?,
+            "failure_attempt_count": row.get::<_, i64>(8)?,
+            "retry_not_before": row.get::<_, Option<String>>(9)?,
+            "failure_proof": row.get::<_, Option<String>>(10)?,
+            "hold_reason": row.get::<_, Option<String>>(11)?,
+            "wait_entity_type": row.get::<_, Option<String>>(12)?,
+            "wait_entity_id": row.get::<_, Option<String>>(13)?,
             "updated_at": updated_at,
             "updated_at_ms": iso_to_epoch_ms(&updated_at),
             "is_deleted": false
@@ -10750,6 +11106,14 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             route_status TEXT NOT NULL,
             lease_owner TEXT,
             leased_at TEXT,
+            lease_expires_at TEXT,
+            failure_class TEXT,
+            failure_attempt_count INTEGER NOT NULL DEFAULT 0,
+            retry_not_before TEXT,
+            failure_proof TEXT,
+            hold_reason TEXT,
+            wait_entity_type TEXT,
+            wait_entity_id TEXT,
             acked_at TEXT,
             updated_at TEXT NOT NULL
         );
@@ -11139,7 +11503,49 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             ON ticket_audit_log(ticket_key, created_at DESC);
         "#,
     ))?;
+    ensure_ticket_event_recovery_columns(conn)?;
     ensure_ticket_event_routing_rows(conn)?;
+    Ok(())
+}
+
+fn ensure_ticket_event_recovery_columns(conn: &Connection) -> Result<()> {
+    for (column, definition) in [
+        ("lease_expires_at", "TEXT"),
+        ("failure_class", "TEXT"),
+        ("failure_attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("retry_not_before", "TEXT"),
+        ("failure_proof", "TEXT"),
+        ("hold_reason", "TEXT"),
+        ("wait_entity_type", "TEXT"),
+        ("wait_entity_id", "TEXT"),
+    ] {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ticket_event_routing_state') WHERE name=?1)",
+            params![column],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            match conn.execute_batch(&format!(
+                "ALTER TABLE ticket_event_routing_state ADD COLUMN {column} {definition};"
+            )) {
+                Ok(()) => {}
+                Err(err)
+                    if err
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("duplicate column name") => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+    conn.execute(
+        r#"
+        UPDATE ticket_event_routing_state
+        SET lease_expires_at=datetime(leased_at, '+15 minutes')
+        WHERE route_status='leased' AND lease_expires_at IS NULL
+        "#,
+        [],
+    )?;
     Ok(())
 }
 
@@ -11925,6 +12331,8 @@ fn print_json(value: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: migration tests below construct historical
+    // table layouts directly and verify lossless schema conversion/rollback.
     use super::*;
     use crate::mission::ticket_local_native;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -12227,11 +12635,112 @@ mod tests {
 
         let leased = lease_pending_ticket_events(&root, 1, "ctox-service")?;
         assert_eq!(leased.len(), 1);
+        let conn = open_ticket_db(&root)?;
+        conn.execute(
+            "UPDATE ticket_event_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE event_key=?1",
+            params![leased[0].event_key],
+        )?;
+        drop(conn);
         let released = release_stale_ticket_event_leases(&root, "ctox-service", &HashSet::new())?;
 
         assert_eq!(released, vec![leased[0].event_key.clone()]);
         let leased_again = lease_pending_ticket_events(&root, 1, "ctox-service")?;
         assert_eq!(leased_again[0].event_key, leased[0].event_key);
+        Ok(())
+    }
+
+    #[test]
+    fn retryable_ticket_event_terminalizes_after_three_failures() -> Result<()> {
+        let root = temp_root("ticket-event-retry-budget");
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Retry me",
+            "Initial baseline",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        ticket_local_native::add_local_comment(&root, &remote.ticket_id, "Fresh update")?;
+        sync_ticket_system(&root, "local")?;
+
+        let event_key = lease_pending_ticket_events(&root, 1, "ctox-service")?[0]
+            .event_key
+            .clone();
+        for attempt in 1..=3 {
+            fail_ticket_events(
+                &root,
+                &[event_key.clone()],
+                TicketEventFailureClass::Retryable,
+                "transient runtime failure",
+            )?;
+            let conn = open_ticket_db(&root)?;
+            let row: (String, i64, Option<String>, Option<String>) = conn.query_row(
+                "SELECT route_status, failure_attempt_count, retry_not_before, failure_proof FROM ticket_event_routing_state WHERE event_key=?1",
+                params![event_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+            assert_eq!(row.1, attempt);
+            if attempt < 3 {
+                assert_eq!(row.0, "pending");
+                assert!(row.2.is_some());
+                conn.execute(
+                    "UPDATE ticket_event_routing_state SET retry_not_before='2000-01-01T00:00:00Z' WHERE event_key=?1",
+                    params![event_key],
+                )?;
+                drop(conn);
+                assert_eq!(
+                    lease_pending_ticket_events(&root, 1, "ctox-service")?[0].event_key,
+                    event_key
+                );
+            } else {
+                assert_eq!(row.0, "failed");
+                assert!(row.2.is_none());
+                assert!(row.3.is_some());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn waiting_external_ticket_event_only_wakes_for_matching_reference() -> Result<()> {
+        let root = temp_root("ticket-event-wait-ref");
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Wait for approval",
+            "Initial baseline",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        ticket_local_native::add_local_comment(&root, &remote.ticket_id, "Approval needed")?;
+        sync_ticket_system(&root, "local")?;
+
+        let event_key = lease_pending_ticket_events(&root, 1, "ctox-service")?[0]
+            .event_key
+            .clone();
+        block_ticket_events_for_wait(
+            &root,
+            std::slice::from_ref(&event_key),
+            &crate::mission::plan::WaitRef {
+                entity_type: "approval-gate".to_string(),
+                entity_id: "work-release".to_string(),
+            },
+            "release approval is open",
+        )?;
+
+        assert!(lease_pending_ticket_events(&root, 1, "ctox-service")?.is_empty());
+        assert_eq!(
+            wake_ticket_events_waiting_for(&root, "approval-gate", "other-work")?,
+            0
+        );
+        assert_eq!(
+            wake_ticket_events_waiting_for(&root, "approval-gate", "work-release")?,
+            1
+        );
+        assert_eq!(
+            lease_pending_ticket_events(&root, 1, "ctox-service")?[0].event_key,
+            event_key
+        );
         Ok(())
     }
 
@@ -13678,6 +14187,34 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    #[test]
+    fn review_spawn_budget_is_scoped_to_parent_work_episode() {
+        let first = json!({
+            "thread_key": "email/shared-thread",
+            "parent_work_id": "work-episode-1"
+        });
+        let second = json!({
+            "thread_key": "email/shared-thread",
+            "parent_work_id": "work-episode-2"
+        });
+        let (first_key, first_budget) = ticket_self_work_spawn_budget(
+            "completion-review-rework",
+            "email/shared-thread",
+            &first,
+        );
+        let (second_key, second_budget) = ticket_self_work_spawn_budget(
+            "completion-review-rework",
+            "email/shared-thread",
+            &second,
+        );
+
+        assert_ne!(first_key, second_key);
+        assert!(first_key.ends_with("episode:work-episode-1"));
+        assert!(second_key.ends_with("episode:work-episode-2"));
+        assert_eq!(first_budget, 5);
+        assert_eq!(second_budget, 5);
     }
 
     #[test]

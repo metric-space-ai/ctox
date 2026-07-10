@@ -1106,6 +1106,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
                 dynamic_tools: None,
+                capability_profile: None,
                 memory_mode: None,
             },
             git: None,

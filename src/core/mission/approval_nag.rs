@@ -29,6 +29,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::HashSet;
 #[cfg(unix)]
@@ -39,11 +40,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::inference::runtime_env;
-use crate::mission::tickets;
+use crate::mission::{channels, plan, tickets};
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::governance;
 
 const DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 
@@ -101,7 +103,8 @@ pub fn sweep(root: &Path) -> Result<NagSweepSummary> {
     summary.completed = mark_closed_gates_completed(root)?;
     summary.scheduled = schedule_new_gates(root)?;
     summary.sent = send_due_nags(root)?;
-    summary.replies_processed = parse_inbound_approval_replies(root)?;
+    let settings = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
+    summary.replies_processed = process_inbound_approval_replies(root, &settings)?;
     Ok(summary)
 }
 
@@ -199,13 +202,53 @@ fn ensure_schema_on_conn(conn: &Connection) -> Result<()> {
             last_nag_at TEXT,
             next_nag_at TEXT NOT NULL,
             last_channel TEXT,
-            completed_at TEXT
+            completed_at TEXT,
+            exhausted_at TEXT,
+            escalated_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_ticket_approval_nag_state_due
             ON ticket_approval_nag_state(next_nag_at)
             WHERE completed_at IS NULL;
+
+        CREATE TABLE IF NOT EXISTS ticket_approval_reply_ledger (
+            message_key TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            sender_address TEXT NOT NULL,
+            body_sha256 TEXT NOT NULL,
+            residual_text TEXT NOT NULL,
+            decision_status TEXT NOT NULL,
+            followup_message_key TEXT,
+            observed_at TEXT NOT NULL,
+            applied_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ticket_approval_reply_work
+            ON ticket_approval_reply_ledger(work_id, observed_at DESC);
         "#,
     )?;
+    ensure_nag_state_column(conn, "exhausted_at", "TEXT")?;
+    ensure_nag_state_column(conn, "escalated_at", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_nag_state_column(conn: &Connection, column: &str, sql_type: &str) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ticket_approval_nag_state') WHERE name = ?1)",
+        params![column],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    if !exists {
+        let sql = format!("ALTER TABLE ticket_approval_nag_state ADD COLUMN {column} {sql_type}");
+        if let Err(err) = conn.execute(&sql, []) {
+            if !err
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("duplicate column name")
+            {
+                return Err(err).with_context(|| format!("add approval nag column {column}"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -423,10 +466,30 @@ fn send_due_nags(root: &Path) -> Result<usize> {
                     sent += 1;
                     let next_attempt = attempt + 1;
                     let next_iso = if next_attempt >= nag_schedule(root).len() {
-                        // Stop nagging. Mark as completed so we stop re-sending.
+                        // Stop email nagging, but keep the approval gate open and
+                        // surface the exhausted wait as durable operator evidence.
                         let _ = conn.execute(
-                            "UPDATE ticket_approval_nag_state SET completed_at = ?1, attempt_count = ?2, last_nag_at = ?1, last_channel = ?3 WHERE work_id = ?4",
+                            "UPDATE ticket_approval_nag_state
+                             SET completed_at = ?1, exhausted_at = ?1, escalated_at = COALESCE(escalated_at, ?1),
+                                 attempt_count = ?2, last_nag_at = ?1, last_channel = ?3
+                             WHERE work_id = ?4",
                             params![&now, next_attempt as i64, &channel, &work_id],
+                        );
+                        governance::record_event_or_count(
+                            root,
+                            governance::GovernanceEventRequest {
+                                mechanism_id: "approval_nag_exhausted",
+                                conversation_id: None,
+                                severity: "warning",
+                                reason: "approval reminder cadence exhausted while the gate remains open",
+                                action_taken: "stopped repeated email reminders and escalated the open gate for operator attention",
+                                details: serde_json::json!({
+                                    "work_id": work_id,
+                                    "attempt_count": next_attempt,
+                                    "last_channel": channel,
+                                }),
+                                idempotence_key: Some(&format!("approval-nag-exhausted:{work_id}")),
+                            },
                         );
                         continue;
                     } else {
@@ -511,8 +574,9 @@ fn compose_body(
         ApprovalModality::EmailReply => {
             out.push_str(
                 "How to respond:\n\
-                 - To approve, simply reply to this email with the word APPROVE on its own line (or anywhere in the body).\n\
-                 - To reject, reply with REJECT on its own line.\n\
+                 - To approve, reply with APPROVE on a separate, unquoted line.\n\
+                 - To reject, reply with REJECT on a separate, unquoted line.\n\
+                 - YES, OK, NO and words inside quoted reply history are ignored.\n\
                  - To do nothing, ignore this email; you will be reminded a few more times and then left alone.\n\n\
                  The subject's [ctox-approve:...] tag is how CTOX matches your reply to this gate — please keep it intact.\n"
             );
@@ -623,7 +687,10 @@ fn send_via_channel(
 /// tag. If the body contains APPROVE / REJECT on its own and the gate is
 /// still open and is not `tui-only`, close / fail the gate and mark the
 /// nag state complete. Returns the number of replies processed.
-fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
+pub(crate) fn process_inbound_approval_replies(
+    root: &Path,
+    settings: &std::collections::BTreeMap<String, String>,
+) -> Result<usize> {
     // Look back 7 days to catch delayed replies.
     let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
     let cutoff_iso = cutoff.to_rfc3339();
@@ -631,44 +698,68 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
     with_db(root, |conn| {
         let mut statement = conn.prepare(
             r#"
-        SELECT message_key, subject, body_text, channel
-        FROM communication_messages
-        WHERE direction = 'inbound'
-          AND (observed_at IS NULL OR observed_at > ?1)
-          AND subject LIKE '%[ctox-approve:%'
-          AND (
-            SELECT route_status FROM communication_routing_state
-            WHERE communication_routing_state.message_key = communication_messages.message_key
-          ) IS NOT 'approval-nag-handled'
-        ORDER BY rowid DESC
+        SELECT m.message_key, m.subject, m.body_text, m.channel,
+               m.sender_address, m.thread_key
+        FROM communication_messages m
+        JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.direction = 'inbound'
+          AND (m.observed_at IS NULL OR m.observed_at > ?1)
+          AND m.subject LIKE '%[ctox-approve:%'
+          AND r.route_status = 'pending'
+        ORDER BY m.rowid DESC
         LIMIT 32
         "#,
         )?;
 
-        let rows: Vec<(String, String, String, String)> = statement
+        let rows: Vec<(String, String, String, String, String, String)> = statement
             .query_map(params![&cutoff_iso], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
         drop(statement);
 
         let mut processed = 0usize;
-        for (message_key, subject, body, _channel) in rows {
+        for (message_key, subject, body, _channel, sender_address, thread_key) in rows {
             let work_id = match extract_work_id(&subject) {
                 Some(id) => id,
                 None => continue,
             };
-            let action = classify_reply_action(&body);
-            let Some(action) = action else {
+            let Some(parsed) = parse_reply_action(&body) else {
                 continue;
             };
+            let policy = channels::classify_email_sender(settings, &sender_address);
+            if !policy.allowed
+                || !policy.allow_admin_actions
+                || !matches!(policy.role.as_str(), "owner" | "founder" | "admin")
+            {
+                governance::record_event_or_count(
+                    root,
+                    governance::GovernanceEventRequest {
+                        mechanism_id: "sender_authority_boundary",
+                        conversation_id: None,
+                        severity: "warning",
+                        reason: "unauthorized sender attempted to resolve an approval gate",
+                        action_taken: "ignored the approval token and left the message for normal sender-policy routing",
+                        details: serde_json::json!({
+                            "message_key": message_key,
+                            "work_id": work_id,
+                            "sender_address": sender_address,
+                            "sender_role": policy.role,
+                        }),
+                        idempotence_key: Some(&format!("unauthorized-approval:{message_key}")),
+                    },
+                );
+                continue;
+            }
             let item = match tickets::load_ticket_self_work_item(root, &work_id)? {
-                Some(i) if i.kind == "approval-gate" && i.state == "open" => i,
+                Some(i) if i.kind == "approval-gate" => i,
                 _ => continue,
             };
             let modality = ApprovalModality::from_item(&item);
@@ -678,22 +769,69 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
                 let _ = mark_reply_handled(conn, &message_key);
                 continue;
             }
-            let new_state = match action {
-                ReplyAction::Approve => "closed",
-                ReplyAction::Reject => "failed",
-            };
-            let transition_result = if matches!(action, ReplyAction::Reject) {
-                tickets::set_ticket_self_work_state_with_failure_reason(
+            let body_sha256 = format!("{:x}", Sha256::digest(body.as_bytes()));
+            let now = now_rfc3339();
+            conn.execute(
+                r#"
+                INSERT INTO ticket_approval_reply_ledger (
+                    message_key, work_id, action, sender_address, body_sha256,
+                    residual_text, decision_status, followup_message_key,
+                    observed_at, applied_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', NULL, ?7, NULL)
+                ON CONFLICT(message_key) DO NOTHING
+                "#,
+                params![
+                    message_key,
+                    work_id,
+                    parsed.action.as_str(),
+                    policy.normalized_email,
+                    body_sha256,
+                    parsed.residual_text,
+                    now,
+                ],
+            )?;
+            let new_state = parsed.action.target_state();
+            let transition_result = if item.state == new_state {
+                Ok(item.clone())
+            } else if item.state != "open" {
+                continue;
+            } else {
+                tickets::set_ticket_approval_gate_state_from_authorized_reply(
                     root,
                     &work_id,
                     new_state,
-                    Some("approval reply rejected the internal work item"),
+                    &message_key,
                 )
-            } else {
-                tickets::set_ticket_self_work_state(root, &work_id, new_state)
             };
             match transition_result {
                 Ok(_) => {
+                    conn.execute(
+                        "UPDATE ticket_approval_reply_ledger
+                         SET decision_status='applied', applied_at=?2
+                         WHERE message_key=?1",
+                        params![message_key, now_rfc3339()],
+                    )?;
+                    persist_approval_reply_followup(
+                        root,
+                        conn,
+                        &message_key,
+                        &work_id,
+                        &thread_key,
+                        &item.title,
+                        &parsed.residual_text,
+                    )?;
+                    let _ = plan::satisfy_wait_for_work_item(root, &work_id, new_state)?;
+                    if new_state == "closed" {
+                        for entity_type in ["approval", "approval-gate", "ticket-self-work"] {
+                            let _ =
+                                channels::wake_messages_waiting_for(root, entity_type, &work_id)?;
+                            let _ = tickets::wake_ticket_events_waiting_for(
+                                root,
+                                entity_type,
+                                &work_id,
+                            )?;
+                        }
+                    }
                     processed += 1;
                     let _ = mark_reply_handled(conn, &message_key);
                 }
@@ -709,32 +847,113 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReplyAction {
     Approve,
     Reject,
 }
 
-fn classify_reply_action(body: &str) -> Option<ReplyAction> {
-    // Look at the first ~30 lines; owners sometimes write their answer
-    // above the quoted original. Case-insensitive token match on isolated
-    // words.
-    let lines_to_scan: Vec<&str> = body.lines().take(40).collect();
-    for line in lines_to_scan {
-        let trimmed = line.trim_start_matches(|c: char| c == '>' || c.is_whitespace());
-        let upper = trimmed.to_uppercase();
-        for token in upper.split(|c: char| !c.is_ascii_alphabetic()) {
-            match token {
-                "APPROVE" | "APPROVED" | "YES" | "OK" => {
-                    return Some(ReplyAction::Approve);
-                }
-                "REJECT" | "REJECTED" | "NO" | "DECLINE" | "DECLINED" => {
-                    return Some(ReplyAction::Reject);
-                }
-                _ => {}
-            }
+impl ReplyAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Reject => "reject",
         }
     }
-    None
+
+    fn target_state(self) -> &'static str {
+        match self {
+            Self::Approve => "closed",
+            Self::Reject => "failed",
+        }
+    }
+}
+
+struct ParsedApprovalReply {
+    action: ReplyAction,
+    residual_text: String,
+}
+
+fn parse_reply_action(body: &str) -> Option<ParsedApprovalReply> {
+    let mut action = None;
+    let mut residual = Vec::new();
+    for line in body.lines().take(80) {
+        let trimmed = line.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+        if trimmed.starts_with('>')
+            || lowered.starts_with("-----original message-----")
+            || (lowered.starts_with("on ") && lowered.ends_with(" wrote:"))
+        {
+            break;
+        }
+        let candidate = match trimmed.to_ascii_uppercase().as_str() {
+            "APPROVE" => Some(ReplyAction::Approve),
+            "REJECT" => Some(ReplyAction::Reject),
+            _ => None,
+        };
+        if let Some(candidate) = candidate {
+            if action.is_some_and(|existing| existing != candidate) {
+                return None;
+            }
+            action = Some(candidate);
+        } else if !trimmed.is_empty() {
+            residual.push(trimmed.to_string());
+        }
+    }
+    Some(ParsedApprovalReply {
+        action: action?,
+        residual_text: residual.join("\n"),
+    })
+}
+
+fn persist_approval_reply_followup(
+    root: &Path,
+    conn: &Connection,
+    message_key: &str,
+    work_id: &str,
+    thread_key: &str,
+    gate_title: &str,
+    residual_text: &str,
+) -> Result<()> {
+    if residual_text.trim().is_empty() {
+        return Ok(());
+    }
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT followup_message_key FROM ticket_approval_reply_ledger WHERE message_key=?1",
+            params![message_key],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if existing.is_some() {
+        return Ok(());
+    }
+    let followup = channels::create_queue_task(
+        root,
+        channels::QueueTaskCreateRequest {
+            title: format!("Follow-up from approval reply: {gate_title}"),
+            prompt: format!(
+                "The authorized approval reply for gate `{work_id}` also contained follow-up work. Handle this text in the original thread without repeating the approval action:\n\n{}",
+                residual_text.trim()
+            ),
+            thread_key: thread_key.to_string(),
+            workspace_root: None,
+            priority: "high".to_string(),
+            suggested_skill: None,
+            parent_message_key: Some(message_key.to_string()),
+            extra_metadata: Some(serde_json::json!({
+                "idempotency_key": format!("approval-followup:{message_key}"),
+                "source": "approval-reply-residual",
+                "approval_work_id": work_id,
+            })),
+        },
+    )?;
+    conn.execute(
+        "UPDATE ticket_approval_reply_ledger SET followup_message_key=?2 WHERE message_key=?1",
+        params![message_key, followup.message_key],
+    )?;
+    Ok(())
 }
 
 fn extract_work_id(subject: &str) -> Option<String> {
@@ -812,3 +1031,152 @@ fn approval_nag_route_core_state(route_status: &str) -> CoreState {
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 struct _UnusedMarker;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn approval_reply_requires_exact_unquoted_action_line() {
+        assert!(parse_reply_action("OK").is_none());
+        assert!(parse_reply_action("Please APPROVE this").is_none());
+        assert!(parse_reply_action("> APPROVE\n> quoted instructions").is_none());
+
+        let parsed = parse_reply_action("APPROVE\nPlease correct the invoice date.\n\n> REJECT")
+            .expect("exact unquoted action should parse");
+        assert_eq!(parsed.action, ReplyAction::Approve);
+        assert_eq!(parsed.residual_text, "Please correct the invoice date.");
+    }
+
+    #[test]
+    fn approval_reply_rejects_conflicting_action_lines() {
+        assert!(parse_reply_action("APPROVE\nREJECT").is_none());
+    }
+
+    #[test]
+    fn approval_reply_authority_ledger_and_followup_are_end_to_end_idempotent() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-approval-reply-e2e-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let thread_key = "email/approval-reply-e2e";
+        let gate = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "internal".to_string(),
+                kind: "approval-gate".to_string(),
+                title: "Approve the tested action".to_string(),
+                body_text: "Exercise the durable approval control plane.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": thread_key,
+                    "dedupe_key": "approval-reply-e2e-gate",
+                }),
+            },
+            false,
+        )?;
+        let subject = format!("Re: [ctox-approve:{}]", gate.work_id);
+        let create_email = |sender: &str, body: &str, suffix: &str| -> Result<String> {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: subject.clone(),
+                    prompt: body.to_string(),
+                    thread_key: thread_key.to_string(),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(serde_json::json!({
+                        "idempotency_key": format!("approval-reply-e2e:{suffix}"),
+                    })),
+                },
+            )?;
+            let conn = open_db(&root)?;
+            conn.execute(
+                "UPDATE communication_messages SET channel='email', sender_address=?2 WHERE message_key=?1",
+                params![task.message_key, sender],
+            )?;
+            Ok(task.message_key)
+        };
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "owner@example.com".to_string(),
+        );
+
+        create_email("outsider@example.net", "APPROVE", "unauthorized")?;
+        assert_eq!(process_inbound_approval_replies(&root, &settings)?, 0);
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &gate.work_id)?
+                .expect("gate after unauthorized reply")
+                .state,
+            "open"
+        );
+
+        create_email(
+            "owner@example.com",
+            "> APPROVE\n> quoted approval instructions",
+            "quoted",
+        )?;
+        assert_eq!(process_inbound_approval_replies(&root, &settings)?, 0);
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &gate.work_id)?
+                .expect("gate after quoted reply")
+                .state,
+            "open"
+        );
+
+        let authorized_key = create_email(
+            "owner@example.com",
+            "APPROVE\nPlease verify the invoice date.",
+            "authorized",
+        )?;
+        assert_eq!(process_inbound_approval_replies(&root, &settings)?, 1);
+        assert_eq!(process_inbound_approval_replies(&root, &settings)?, 0);
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &gate.work_id)?
+                .expect("gate after authorized reply")
+                .state,
+            "closed"
+        );
+
+        let conn = open_db(&root)?;
+        let ledger: (i64, String, String, String, Option<String>) = conn.query_row(
+            r#"
+            SELECT COUNT(*), action, sender_address, decision_status, followup_message_key
+            FROM ticket_approval_reply_ledger
+            WHERE message_key=?1
+            "#,
+            params![authorized_key],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+        assert_eq!(ledger.0, 1);
+        assert_eq!(ledger.1, "approve");
+        assert_eq!(ledger.2, "owner@example.com");
+        assert_eq!(ledger.3, "applied");
+        let followup_key = ledger.4.expect("residual text creates follow-up work");
+        let followup_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM communication_messages WHERE message_key=?1 AND thread_key=?2",
+            params![followup_key, thread_key],
+            |row| row.get(0),
+        )?;
+        assert_eq!(followup_count, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+}

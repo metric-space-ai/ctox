@@ -82,6 +82,8 @@ pub(crate) fn apply_ticket_sync_batch(
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: this module deliberately writes legacy
+    // routing states to prove sync ingestion preserves progressed fixtures.
     use super::apply_ticket_sync_batch;
     use crate::mission::ticket_protocol::TicketEventRecord;
     use crate::mission::ticket_protocol::TicketMirrorRecord;

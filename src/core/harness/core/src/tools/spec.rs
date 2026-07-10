@@ -326,6 +326,9 @@ pub(crate) struct ToolsConfig {
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
     pub lean_tool_surface: bool,
+    pub read_only_surface: bool,
+    pub agent_job_leaf_surface: bool,
+    pub no_tools_surface: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -430,6 +433,14 @@ impl ToolsConfig {
         };
 
         let agent_jobs_worker_tools = include_agent_job_worker_tools;
+        // Review sessions may use a WorkspaceWrite sandbox whose cwd is an
+        // isolated scratch directory. Their authoritative workspace remains
+        // outside that cwd and read-only, so the role — not only the raw
+        // sandbox enum — must keep the reviewer tool surface non-mutating.
+        let read_only_surface = matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::Review)
+        ) || matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
         Self {
             available_models: available_models_ref.to_vec(),
@@ -462,11 +473,19 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             lean_tool_surface: false,
+            read_only_surface,
+            agent_job_leaf_surface: include_agent_job_worker_tools,
+            no_tools_surface: false,
         }
     }
 
     pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
         self.agent_roles = agent_roles;
+        self
+    }
+
+    pub fn with_no_tools_surface(mut self, no_tools_surface: bool) -> Self {
+        self.no_tools_surface = no_tools_surface;
         self
     }
 
@@ -3794,6 +3813,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
+    if config.no_tools_surface {
+        return builder;
+    }
 
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
@@ -3818,6 +3840,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
     let add_apply_patch_tool = |builder: &mut ToolRegistryBuilder| {
+        if config.read_only_surface {
+            return;
+        }
         if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
             match apply_patch_tool_type {
                 ApplyPatchToolType::Freeform => {
@@ -3971,13 +3996,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("read_mcp_resource", mcp_resource_handler);
     }
 
-    push_tool_spec(
-        &mut builder,
-        PLAN_TOOL.clone(),
-        /*supports_parallel_tool_calls*/ false,
-        config.code_mode_enabled,
-    );
-    builder.register_handler("update_plan", plan_handler);
+    if !config.read_only_surface {
+        push_tool_spec(
+            &mut builder,
+            PLAN_TOOL.clone(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("update_plan", plan_handler);
+    }
 
     if config.js_repl_enabled && !config.ctox_web_stack_enabled {
         push_tool_spec(
@@ -4263,8 +4290,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("ctox_doc_read", ctox_doc_handler);
     }
 
-    // Meeting tools — always registered so the agent can respond to meeting @mentions
-    {
+    // Agent-job leaves have no meeting surface; parent sessions own communication.
+    if !config.agent_job_leaf_surface {
         let meeting_handler = Arc::new(MeetingHandler);
         push_tool_spec(
             &mut builder,
@@ -4274,72 +4301,76 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
-            create_meeting_send_chat_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
             create_meeting_get_transcript_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        push_tool_spec(
-            &mut builder,
-            create_meeting_join_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_meeting_schedule_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
         builder.register_handler("meeting_status", meeting_handler.clone());
-        builder.register_handler("meeting_send_chat", meeting_handler.clone());
         builder.register_handler("meeting_get_transcript", meeting_handler.clone());
-        builder.register_handler("meeting_join", meeting_handler.clone());
-        builder.register_handler("meeting_schedule", meeting_handler);
+        if !config.read_only_surface {
+            push_tool_spec(
+                &mut builder,
+                create_meeting_send_chat_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_meeting_join_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_meeting_schedule_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("meeting_send_chat", meeting_handler.clone());
+            builder.register_handler("meeting_join", meeting_handler.clone());
+            builder.register_handler("meeting_schedule", meeting_handler);
+        }
     }
 
-    push_tool_spec(
-        &mut builder,
-        create_channel_sync_tool(),
-        /*supports_parallel_tool_calls*/ false,
-        config.code_mode_enabled,
-    );
-    push_tool_spec(
-        &mut builder,
-        create_channel_take_tool(),
-        /*supports_parallel_tool_calls*/ false,
-        config.code_mode_enabled,
-    );
-    push_tool_spec(
-        &mut builder,
-        create_channel_ack_tool(),
-        /*supports_parallel_tool_calls*/ false,
-        config.code_mode_enabled,
-    );
-    push_tool_spec(
-        &mut builder,
-        create_channel_send_tool(),
-        /*supports_parallel_tool_calls*/ false,
-        config.code_mode_enabled,
-    );
+    if !config.read_only_surface && !config.agent_job_leaf_surface {
+        push_tool_spec(
+            &mut builder,
+            create_channel_sync_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_channel_take_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_channel_ack_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_channel_send_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("channel_sync", channel_handler.clone());
+        builder.register_handler("channel_take", channel_handler.clone());
+        builder.register_handler("channel_ack", channel_handler.clone());
+        builder.register_handler("channel_send", channel_handler);
+    }
     push_tool_spec(
         &mut builder,
         create_context_retrieve_tool(),
         /*supports_parallel_tool_calls*/ false,
         config.code_mode_enabled,
     );
-    builder.register_handler("channel_sync", channel_handler.clone());
-    builder.register_handler("channel_take", channel_handler.clone());
-    builder.register_handler("channel_ack", channel_handler.clone());
-    builder.register_handler("channel_send", channel_handler);
     builder.register_handler("context_retrieve", context_retrieve_handler);
 
-    if config.artifact_tools {
+    if config.artifact_tools && !config.read_only_surface {
         push_tool_spec(
             &mut builder,
             create_artifacts_tool(),
@@ -4349,7 +4380,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("artifacts", artifacts_handler);
     }
 
-    if config.collab_tools {
+    if config.collab_tools && !config.read_only_surface {
         push_tool_spec(
             &mut builder,
             create_spawn_agent_tool(config),
@@ -4394,7 +4425,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
-    if config.agent_jobs_tools {
+    if config.agent_jobs_tools && !config.read_only_surface {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         push_tool_spec(
             &mut builder,
@@ -4404,7 +4435,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
     }
-    if config.agent_jobs_worker_tools {
+    if config.agent_jobs_worker_tools && !config.read_only_surface {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         push_tool_spec(
             &mut builder,

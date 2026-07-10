@@ -52,9 +52,12 @@ use ctox_protocol::protocol::InitialHistory;
 use ctox_protocol::protocol::ResumedHistory;
 use ctox_protocol::protocol::RolloutItem;
 use ctox_protocol::protocol::RolloutLine;
+use ctox_protocol::protocol::SandboxPolicy;
+use ctox_protocol::protocol::SessionCapabilityProfile;
 use ctox_protocol::protocol::SessionMeta;
 use ctox_protocol::protocol::SessionMetaLine;
 use ctox_protocol::protocol::SessionSource;
+use ctox_protocol::protocol::SubAgentSource;
 use ctox_state::StateRuntime;
 use ctox_state::ThreadMetadataBuilder;
 
@@ -395,6 +398,33 @@ impl RolloutRecorder {
                         .to_offset(time::UtcOffset::UTC)
                         .format(timestamp_format)
                         .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+                    let capability_profile = match &source {
+                        SessionSource::SubAgent(SubAgentSource::Other(label))
+                            if label.starts_with("agent_job:") =>
+                        {
+                            SessionCapabilityProfile::AgentJobLeaf
+                        }
+                        SessionSource::SubAgent(SubAgentSource::Review) => {
+                            SessionCapabilityProfile::Reviewer
+                        }
+                        _ if config.disable_active_tools
+                            && matches!(
+                                &*config.permissions.sandbox_policy,
+                                SandboxPolicy::ReadOnly { .. }
+                            ) =>
+                        {
+                            SessionCapabilityProfile::Planner
+                        }
+                        _ if matches!(
+                            &*config.permissions.sandbox_policy,
+                            SandboxPolicy::ReadOnly { .. }
+                        ) =>
+                        {
+                            SessionCapabilityProfile::Reviewer
+                        }
+                        _ if config.disable_active_tools => SessionCapabilityProfile::Summarizer,
+                        _ => SessionCapabilityProfile::WorkspaceWorker,
+                    };
 
                     let session_meta = SessionMeta {
                         id: session_id,
@@ -408,11 +438,18 @@ impl RolloutRecorder {
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
-                        dynamic_tools: if dynamic_tools.is_empty() {
+                        // `Some([])` is an explicit no-tools contract. A
+                        // normal session with no custom dynamic tools remains
+                        // `None`, so it does not accidentally become a
+                        // no-builtins session on resume.
+                        dynamic_tools: if config.disable_active_tools {
+                            Some(Vec::new())
+                        } else if dynamic_tools.is_empty() {
                             None
                         } else {
                             Some(dynamic_tools)
                         },
+                        capability_profile: Some(capability_profile),
                         memory_mode: (!config.memories.generate_memories)
                             .then_some("disabled".to_string()),
                     };

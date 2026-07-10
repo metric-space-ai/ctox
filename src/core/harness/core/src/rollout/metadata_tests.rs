@@ -43,6 +43,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         model_provider: Some("openai".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        capability_profile: None,
         memory_mode: None,
     };
     let session_meta_line = SessionMetaLine {
@@ -93,6 +94,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         model_provider: Some("openai".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        capability_profile: None,
         memory_mode: None,
     };
     let polluted_meta = SessionMeta {
@@ -360,6 +362,7 @@ fn write_rollout_in_sessions_with_cwd(
         model_provider: Some("test-provider".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        capability_profile: None,
         memory_mode: None,
     };
     let session_meta_line = SessionMetaLine {

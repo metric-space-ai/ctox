@@ -1432,6 +1432,83 @@ impl LcmEngine {
         })
     }
 
+    /// Bounded live-turn view. Full history remains available through
+    /// `snapshot` for audit/retrieval/maintenance commands, but the agent turn
+    /// only materializes current context items and their referenced records.
+    pub fn working_set_snapshot(
+        &self,
+        conversation_id: i64,
+        max_context_items: usize,
+    ) -> Result<LcmSnapshot> {
+        let limit = max_context_items.max(1).min(2_048) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT ci.ordinal, ci.item_type, ci.message_id, ci.summary_id,
+                   COALESCE(m.seq, ci.ordinal), COALESCE(s.depth, 0),
+                   COALESCE(m.token_count, s.token_count, 0)
+            FROM context_items ci
+            LEFT JOIN messages m ON m.message_id=ci.message_id
+            LEFT JOIN summaries s ON s.summary_id=ci.summary_id
+            WHERE ci.conversation_id=?1
+            ORDER BY ci.ordinal DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let mut entries = stmt
+            .query_map(rusqlite::params![conversation_id, limit], |row| {
+                Ok(ContextEntry {
+                    ordinal: row.get(0)?,
+                    item_type: match row.get::<_, String>(1)?.as_str() {
+                        "message" => ContextItemType::Message,
+                        _ => ContextItemType::Summary,
+                    },
+                    message_id: row.get(2)?,
+                    summary_id: row.get(3)?,
+                    seq: row.get(4)?,
+                    depth: row.get(5)?,
+                    token_count: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        entries.reverse();
+        let mut messages = Vec::new();
+        let mut summaries = Vec::new();
+        for entry in &entries {
+            if let Some(message_id) = entry.message_id {
+                messages.push(self.get_message(message_id)?);
+            }
+            if let Some(summary_id) = entry.summary_id.as_deref() {
+                if let Some(mut summary) = self.get_summary(summary_id)? {
+                    summary.content = format!(
+                        "[summary_id={} source_tokens={} omissions=possible]\n{}",
+                        summary.summary_id, summary.source_message_token_count, summary.content
+                    );
+                    summaries.push(summary);
+                }
+            }
+        }
+        let context_items = entries
+            .into_iter()
+            .map(|entry| ContextItemSnapshot {
+                ordinal: entry.ordinal,
+                item_type: entry.item_type,
+                message_id: entry.message_id,
+                summary_id: entry.summary_id,
+                seq: entry.seq,
+                depth: entry.depth,
+                token_count: entry.token_count,
+            })
+            .collect();
+        Ok(LcmSnapshot {
+            conversation_id,
+            messages,
+            summaries,
+            context_items,
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        })
+    }
+
     pub fn refresh_continuity(&self, conversation_id: i64) -> Result<ContinuityRevision> {
         let _ = self.continuity_init_documents(conversation_id)?;
         self.latest_continuity(conversation_id)?
@@ -2575,20 +2652,68 @@ impl LcmEngine {
         Ok(out)
     }
 
+    pub fn continuity_forgotten_recent(
+        &self,
+        conversation_id: i64,
+        kind: Option<ContinuityKind>,
+        limit: usize,
+    ) -> Result<Vec<ContinuityForgottenEntry>> {
+        let limit = limit.max(1).min(512) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT c.commit_id, d.kind, c.diff_text, c.created_at
+            FROM continuity_commits c
+            JOIN continuity_documents d ON d.document_id=c.document_id
+            WHERE d.conversation_id=?1
+              AND (?2 IS NULL OR d.kind=?2)
+            ORDER BY c.created_at DESC, c.commit_id DESC
+            LIMIT ?3
+            "#,
+        )?;
+        let kind_filter = kind.map(|value| value.as_str().to_string());
+        let rows = stmt
+            .query_map(
+                rusqlite::params![conversation_id, kind_filter, limit],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut out = Vec::new();
+        for (commit_id, kind, diff_text, created_at) in rows {
+            let kind = ContinuityKind::parse(&kind)?;
+            for line in removed_lines_from_diff(&diff_text) {
+                out.push(ContinuityForgottenEntry {
+                    commit_id: commit_id.clone(),
+                    conversation_id,
+                    kind,
+                    line,
+                    created_at: created_at.clone(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
     pub fn continuity_build_prompt(
         &self,
         conversation_id: i64,
         kind: ContinuityKind,
     ) -> Result<ContinuityPromptPayload> {
         let document = self.ensure_continuity_document(conversation_id, kind)?;
-        let snapshot = self.snapshot(conversation_id)?;
+        let snapshot = self.working_set_snapshot(conversation_id, 512)?;
         let explicit_anchor_literals = if kind == ContinuityKind::Anchors {
             collect_explicit_anchor_literals(&snapshot.messages)
         } else {
             Vec::new()
         };
         let forgotten = self
-            .continuity_forgotten(conversation_id, Some(kind), None)?
+            .continuity_forgotten_recent(conversation_id, Some(kind), 64)?
             .into_iter()
             .rev()
             .take(8)
@@ -2657,13 +2782,13 @@ impl LcmEngine {
         conversation_id: i64,
     ) -> Result<Option<ContinuityDocumentState>> {
         let document = self.ensure_continuity_document(conversation_id, ContinuityKind::Anchors)?;
-        let snapshot = self.snapshot(conversation_id)?;
+        let snapshot = self.working_set_snapshot(conversation_id, 512)?;
         let mut literals = collect_explicit_anchor_literals(&snapshot.messages);
         // Respect deliberate deletions: a literal whose anchor entry was
         // removed by a refresh sits in the forgotten ledger — re-adding it
         // here would resurrect what the refresh just deleted.
         let forgotten =
-            self.continuity_forgotten(conversation_id, Some(ContinuityKind::Anchors), None)?;
+            self.continuity_forgotten_recent(conversation_id, Some(ContinuityKind::Anchors), 256)?;
         literals.retain(|literal| {
             !forgotten
                 .iter()
@@ -6253,6 +6378,95 @@ mod tests {
 
         let expanded = engine.expand(&result.created_summary_ids[0], 1, true, 10_000)?;
         assert!(!expanded.messages.is_empty());
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn live_working_set_is_bounded_with_large_message_and_continuity_history() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let conversation_id = 50_000;
+        let _ = engine.continuity_init_documents(conversation_id)?;
+        let tx = engine.conn.unchecked_transaction()?;
+        {
+            let mut message = tx.prepare(
+                "INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at) VALUES (?1, ?2, ?3, 'user', ?4, 4, ?5)",
+            )?;
+            let mut context = tx.prepare(
+                "INSERT INTO context_items (conversation_id, ordinal, item_type, message_id, summary_id, created_at) VALUES (?1, ?2, 'message', ?3, NULL, ?4)",
+            )?;
+            for seq in 1_i64..=50_000 {
+                let created_at = format!(
+                    "2026-01-01T00:{:02}:{:02}.{:05}Z",
+                    (seq / 60) % 60,
+                    seq % 60,
+                    seq
+                );
+                message.execute(rusqlite::params![
+                    seq,
+                    conversation_id,
+                    seq,
+                    format!("historical message {seq}"),
+                    created_at,
+                ])?;
+                context.execute(rusqlite::params![conversation_id, seq, seq, created_at])?;
+            }
+        }
+        let narrative_document: String = tx.query_row(
+            "SELECT document_id FROM continuity_documents WHERE conversation_id=?1 AND kind='narrative'",
+            rusqlite::params![conversation_id],
+            |row| row.get(0),
+        )?;
+        {
+            let mut commit = tx.prepare(
+                "INSERT INTO continuity_commits (commit_id, document_id, parent_commit_id, diff_text, rendered_text, created_at) VALUES (?1, ?2, NULL, ?3, ?4, ?5)",
+            )?;
+            for idx in 0_i64..10_000 {
+                commit.execute(rusqlite::params![
+                    format!("stress-commit-{idx:05}"),
+                    narrative_document,
+                    format!("- forgotten line {idx}\n+ replacement {idx}"),
+                    format!("historical rendered document {idx}"),
+                    format!("2026-02-01T00:00:{:02}.{:05}Z", idx % 60, idx),
+                ])?;
+            }
+        }
+        tx.commit()?;
+
+        let working = engine.working_set_snapshot(conversation_id, 512)?;
+        assert_eq!(working.context_items.len(), 512);
+        assert_eq!(working.messages.len(), 512);
+        assert_eq!(
+            working.messages.first().map(|message| message.seq),
+            Some(49_489)
+        );
+        assert_eq!(
+            working.messages.last().map(|message| message.seq),
+            Some(50_000)
+        );
+        let forgotten = engine.continuity_forgotten_recent(
+            conversation_id,
+            Some(ContinuityKind::Narrative),
+            128,
+        )?;
+        assert!(forgotten.len() <= 128);
+        assert!(forgotten
+            .iter()
+            .all(|entry| entry.line.contains("forgotten line")));
+        let message_count: i64 = engine.conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=?1",
+            rusqlite::params![conversation_id],
+            |row| row.get(0),
+        )?;
+        let commit_count: i64 = engine.conn.query_row(
+            "SELECT COUNT(*) FROM continuity_commits c JOIN continuity_documents d ON d.document_id=c.document_id WHERE d.conversation_id=?1",
+            rusqlite::params![conversation_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(message_count, 50_000);
+        assert!(commit_count >= 10_000);
 
         let _ = std::fs::remove_file(db_path);
         Ok(())

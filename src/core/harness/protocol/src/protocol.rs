@@ -1035,9 +1035,10 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
-    for subdir in &[".agents", ".codex"] {
+    // Make agent configuration and CTOX's durable runtime/evidence store
+    // read-only by default. Worker state transitions must pass through typed
+    // server-side CTOX commands rather than direct shell/patch writes.
+    for subdir in &[".agents", ".codex", ".ctox", "runtime"] {
         #[allow(clippy::expect_used)]
         let top_level_codex = writable_root.join(subdir).expect("valid relative path");
         if top_level_codex.as_path().is_dir() {
@@ -2368,6 +2369,16 @@ impl fmt::Display for SubAgentSource {
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
 /// now save that on TurnContext. base_instructions stores the base instructions for the session,
 /// and should be used when there is no config override.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCapabilityProfile {
+    WorkspaceWorker,
+    Reviewer,
+    Planner,
+    Summarizer,
+    AgentJobLeaf,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
@@ -2392,6 +2403,8 @@ pub struct SessionMeta {
     pub base_instructions: Option<BaseInstructions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_profile: Option<SessionCapabilityProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
 }
@@ -2411,6 +2424,7 @@ impl Default for SessionMeta {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            capability_profile: None,
             memory_mode: None,
         }
     }
@@ -3720,6 +3734,7 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
+        std::fs::create_dir_all(cwd.path().join("runtime")).expect("create runtime");
         let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
@@ -3731,6 +3746,8 @@ mod tests {
             .expect("canonical .agents");
         let expected_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
+        let expected_runtime = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("runtime"))
+            .expect("canonical runtime");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -3782,6 +3799,12 @@ mod tests {
                 .read_only_subpaths
                 .iter()
                 .any(|path| path.as_path() == expected_codex.as_path())
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == expected_runtime.as_path())
         );
     }
 

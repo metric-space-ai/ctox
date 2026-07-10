@@ -35,6 +35,11 @@ ts-rs = { workspace = true, features = [
 ] }
 uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
 [package.metadata.cargo-shear]
 # Required because:
 # `icu_provider`: contains a required `sync` feature for `icu_decimal`

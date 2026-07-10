@@ -3,6 +3,7 @@ use anyhow::Result;
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -15,29 +16,20 @@ use toml::Value as TomlValue;
 
 use crate::inference::supervisor;
 
-/// Per-conversation refresh accounting since the last continuity refresh.
-/// Lives in process memory so that restarts do not preserve it — that is
-/// fine: a restart always starts a fresh budget window.
+/// Process-local display telemetry only. Refresh control flow is owned by the
+/// durable `continuity_refresh_status` rows below.
 #[derive(Default, Clone)]
-struct RefreshState {
+struct RefreshTelemetry {
     /// Cumulative assistant reply characters since the last refresh.
     /// This is telemetry only. It must never be converted into token counts
     /// for control flow; compaction decisions use reported TokenCount events.
     output_chars_since_refresh: u64,
-    /// Turns since the last refresh (used only by the optional legacy
-    /// interval trigger when the operator explicitly sets one).
+    /// Turns observed by this process since the last durable refresh.
     turns_since_refresh: u64,
-    /// RFC3339 start of the window in which durable internal-work/knowledge
-    /// transitions count as unprocessed task boundaries. The service closes
-    /// internal work items AFTER the turn (post completion review), outside the
-    /// turn's own bracket — so this window spans from the last refresh, not
-    /// from the current turn start. In-memory: a daemon restart starts a
-    /// fresh window (conservative; at worst one boundary refresh is missed).
-    boundary_window_start: Option<String>,
 }
 
-fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
-    static COUNTERS: OnceLock<Mutex<HashMap<i64, RefreshState>>> = OnceLock::new();
+fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshTelemetry>> {
+    static COUNTERS: OnceLock<Mutex<HashMap<i64, RefreshTelemetry>>> = OnceLock::new();
     COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -49,45 +41,90 @@ pub(crate) struct ChatTurnSessionOptions {
     pub(crate) turn_timeout_secs_override: Option<u64>,
 }
 
-/// Decide whether the current turn should run a continuity refresh.
-///
-/// New adaptive model — two passive triggers plus one hard safety net:
-///
-/// 1. `force_task_boundary` — durable state transition (plan step closed,
-///    internal work closed, focus replace). Refreshes immediately and resets
-///    all counters. This is the state-transition trigger.
-///
-/// 2. Legacy interval trigger (`legacy_every_n_turns`) — optional,
-///    disabled by default (0). Preserves backward compatibility for
-///    operators who explicitly set `CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS`.
-///
-/// When none of the triggers fire, the turn runs without a continuity
-/// refresh. Token-window safety is handled independently by the compact
-/// policy from actual TokenCount telemetry.
-fn should_refresh_continuity(
+struct ToolFreeSemanticSummarizer {
+    session: Mutex<PersistentSession>,
+}
+
+impl ToolFreeSemanticSummarizer {
+    fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
+        let session = PersistentSession::start_with_instructions(
+            root,
+            settings,
+            Some(
+                "You are a semantic continuity summarizer. Use no tools. Preserve decisions, constraints, identifiers, unresolved work, evidence references, and changes of state. Omit conversational filler and do not invent facts. Return only the compact summary.",
+            ),
+            true,
+        )?;
+        Ok(Self {
+            session: Mutex::new(session),
+        })
+    }
+}
+
+impl lcm::Summarizer for ToolFreeSemanticSummarizer {
+    fn summarize(
+        &self,
+        kind: lcm::SummaryKind,
+        depth: i64,
+        lines: &[String],
+        target_tokens: usize,
+    ) -> Result<String> {
+        let source = lines.join("\n");
+        let prompt = format!(
+            "Create a semantic {:?} summary at depth {} in at most {} tokens. Preserve durable facts and explicit omissions.\n\nSOURCE:\n{}",
+            kind, depth, target_tokens, source
+        );
+        let result = self
+            .session
+            .lock()
+            .map_err(|_| anyhow::anyhow!("semantic summarizer session lock poisoned"))?
+            .run_turn(&prompt, Some(Duration::from_secs(90)), None, Some(false), 0);
+        match result {
+            Ok(summary) if !summary.trim().is_empty() => Ok(summary.trim().to_string()),
+            Ok(_) | Err(_) => <lcm::HeuristicSummarizer as lcm::Summarizer>::summarize(
+                &lcm::HeuristicSummarizer,
+                kind,
+                depth,
+                lines,
+                target_tokens,
+            ),
+        }
+    }
+}
+
+fn compact_with_semantic_summarizer(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    engine: &lcm::LcmEngine,
     conversation_id: i64,
-    reply_output_chars: u64,
-    legacy_every_n_turns: u64,
-    force_task_boundary: bool,
-) -> bool {
+    max_context_tokens: i64,
+    force: bool,
+) -> Result<lcm::CompactionResult> {
+    match ToolFreeSemanticSummarizer::start(root, settings) {
+        Ok(summarizer) => engine.compact(conversation_id, max_context_tokens, &summarizer, force),
+        Err(_) => engine.compact(
+            conversation_id,
+            max_context_tokens,
+            &lcm::HeuristicSummarizer,
+            force,
+        ),
+    }
+}
+
+fn record_refresh_telemetry(conversation_id: i64, reply_output_chars: u64, refresh_due: bool) {
     let mut counters = turn_counters().lock().expect("turn_counters poisoned");
     let state = counters
         .entry(conversation_id)
-        .or_insert(RefreshState::default());
+        .or_insert(RefreshTelemetry::default());
     state.output_chars_since_refresh = state
         .output_chars_since_refresh
         .saturating_add(reply_output_chars);
     state.turns_since_refresh = state.turns_since_refresh.saturating_add(1);
 
-    let interval_hit =
-        legacy_every_n_turns > 0 && state.turns_since_refresh >= legacy_every_n_turns;
-    let should_refresh = force_task_boundary || interval_hit;
-
-    if should_refresh {
+    if refresh_due {
         state.output_chars_since_refresh = 0;
         state.turns_since_refresh = 0;
     }
-    should_refresh
 }
 
 /// Current wall-clock time as an RFC3339 string, matching the format used
@@ -116,25 +153,231 @@ pub fn refresh_budget_snapshot(conversation_id: i64) -> RefreshBudgetSnapshot {
     }
 }
 
+const COMMUNICATION_REFRESH_TURN_LIMIT: i64 = 8;
+
+fn record_durable_refresh_demand(
+    db_path: &Path,
+    conversation_id: i64,
+    force_boundary: bool,
+    legacy_every_n_turns: u64,
+    reply_output_chars: u64,
+    source_ref: &str,
+) -> Result<HashSet<String>> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS continuity_refresh_status (
+            conversation_id INTEGER NOT NULL,
+            continuity_kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'idle',
+            successful_turn_count INTEGER NOT NULL DEFAULT 0,
+            output_chars_since_refresh INTEGER NOT NULL DEFAULT 0,
+            trigger_source_ref TEXT,
+            observed_head_commit_id TEXT,
+            consumed_head_commit_id TEXT,
+            failure_attempt_count INTEGER NOT NULL DEFAULT 0,
+            retry_not_before TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(conversation_id, continuity_kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_continuity_refresh_due
+            ON continuity_refresh_status(status, retry_not_before, updated_at);
+        "#,
+    )?;
+    let has_output_chars: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('continuity_refresh_status') WHERE name='output_chars_since_refresh')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_output_chars == 0 {
+        conn.execute_batch(
+            "ALTER TABLE continuity_refresh_status ADD COLUMN output_chars_since_refresh INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    let now = current_rfc3339_timestamp();
+    for kind in ["narrative", "anchors", "focus"] {
+        conn.execute(
+            r#"
+            INSERT INTO continuity_refresh_status (
+                conversation_id, continuity_kind, status, successful_turn_count,
+                output_chars_since_refresh, trigger_source_ref,
+                observed_head_commit_id, consumed_head_commit_id,
+                failure_attempt_count, retry_not_before, last_error, created_at, updated_at
+            ) VALUES (?1, ?2, 'idle', 0, 0, NULL, NULL, NULL, 0, NULL, NULL, ?3, ?3)
+            ON CONFLICT(conversation_id, continuity_kind) DO NOTHING
+            "#,
+            rusqlite::params![conversation_id, kind, now],
+        )?;
+        let previous_turns: i64 = conn.query_row(
+            "SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
+            rusqlite::params![conversation_id, kind],
+            |row| row.get(0),
+        )?;
+        let turns = previous_turns.saturating_add(1);
+        let previous_output_chars: i64 = conn.query_row(
+            "SELECT output_chars_since_refresh FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
+            rusqlite::params![conversation_id, kind],
+            |row| row.get(0),
+        )?;
+        let output_chars = previous_output_chars
+            .saturating_add(i64::try_from(reply_output_chars).unwrap_or(i64::MAX));
+        let interval_boundary = legacy_every_n_turns > 0
+            && u64::try_from(turns).unwrap_or(u64::MAX) >= legacy_every_n_turns;
+        let communication_boundary =
+            matches!(kind, "narrative" | "anchors") && turns >= COMMUNICATION_REFRESH_TURN_LIMIT;
+        let pending = force_boundary || interval_boundary || communication_boundary;
+        conn.execute(
+            r#"
+            UPDATE continuity_refresh_status
+            SET successful_turn_count=?3,
+                output_chars_since_refresh=?4,
+                status=CASE WHEN ?5=1 THEN 'pending' ELSE status END,
+                trigger_source_ref=CASE WHEN ?5=1 THEN ?6 ELSE trigger_source_ref END,
+                retry_not_before=CASE WHEN ?5=1 AND status!='pending' THEN NULL ELSE retry_not_before END,
+                updated_at=?7
+            WHERE conversation_id=?1 AND continuity_kind=?2
+            "#,
+            rusqlite::params![
+                conversation_id,
+                kind,
+                turns,
+                output_chars,
+                if pending { 1 } else { 0 },
+                source_ref,
+                now,
+            ],
+        )?;
+    }
+    due_refresh_kinds(&conn, conversation_id, &now)
+}
+
+fn due_refresh_kinds(
+    conn: &rusqlite::Connection,
+    conversation_id: i64,
+    now: &str,
+) -> Result<HashSet<String>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT continuity_kind
+        FROM continuity_refresh_status
+        WHERE conversation_id=?1
+          AND status='pending'
+          AND (retry_not_before IS NULL OR retry_not_before='' OR retry_not_before<=?2)
+        "#,
+    )?;
+    let rows = statement.query_map(rusqlite::params![conversation_id, now], |row| {
+        row.get::<_, String>(0)
+    })?;
+    rows.collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn mark_durable_refresh_consumed(
+    db_path: &Path,
+    conversation_id: i64,
+    kind: &str,
+    head_before: &str,
+    head_after: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        !head_after.is_empty() && head_after != head_before,
+        "continuity head did not advance"
+    );
+    let conn = rusqlite::Connection::open(db_path)?;
+    conn.execute(
+        r#"
+        UPDATE continuity_refresh_status
+        SET status='consumed', successful_turn_count=0,
+            output_chars_since_refresh=0,
+            observed_head_commit_id=?3, consumed_head_commit_id=?4,
+            failure_attempt_count=0, retry_not_before=NULL, last_error=NULL,
+            updated_at=?5
+        WHERE conversation_id=?1 AND continuity_kind=?2
+        "#,
+        rusqlite::params![
+            conversation_id,
+            kind,
+            head_before,
+            head_after,
+            current_rfc3339_timestamp()
+        ],
+    )?;
+    Ok(())
+}
+
+fn mark_durable_refresh_failed(
+    db_path: &Path,
+    conversation_id: i64,
+    kind: &str,
+    error: &str,
+) -> Result<()> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    let previous: i64 = conn.query_row(
+        "SELECT failure_attempt_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
+        rusqlite::params![conversation_id, kind],
+        |row| row.get(0),
+    )?;
+    let attempt = previous.saturating_add(1);
+    let exponent = u32::try_from(attempt.saturating_sub(1))
+        .unwrap_or(16)
+        .min(16);
+    let delay = 300_i64
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(3_600);
+    let retry_not_before = (chrono::Utc::now() + chrono::Duration::seconds(delay)).to_rfc3339();
+    conn.execute(
+        r#"
+        UPDATE continuity_refresh_status
+        SET status='pending', failure_attempt_count=?3, retry_not_before=?4,
+            last_error=?5, updated_at=?6
+        WHERE conversation_id=?1 AND continuity_kind=?2
+        "#,
+        rusqlite::params![
+            conversation_id,
+            kind,
+            attempt,
+            retry_not_before,
+            error.chars().take(900).collect::<String>(),
+            current_rfc3339_timestamp()
+        ],
+    )?;
+    Ok(())
+}
+
 /// Start of the boundary-detection window for this conversation: the moment
 /// of the last continuity refresh, or this turn's start on first contact.
 /// Service-side internal work closures land between turns; a turn-local bracket
 /// never sees them.
-fn boundary_window_start(conversation_id: i64, turn_start_ts: &str) -> String {
-    let mut counters = turn_counters().lock().expect("turn_counters poisoned");
-    let state = counters.entry(conversation_id).or_default();
-    state
-        .boundary_window_start
-        .get_or_insert_with(|| turn_start_ts.to_string())
-        .clone()
-}
-
-/// Close the boundary window after a refresh ran (successfully or not):
-/// boundaries observed up to now have been consumed by this refresh pass.
-fn mark_boundary_window_consumed(conversation_id: i64, now_ts: &str) {
-    let mut counters = turn_counters().lock().expect("turn_counters poisoned");
-    let state = counters.entry(conversation_id).or_default();
-    state.boundary_window_start = Some(now_ts.to_string());
+fn durable_boundary_window_start(
+    db_path: &Path,
+    conversation_id: i64,
+    turn_start_ts: &str,
+) -> String {
+    let Ok(conn) = rusqlite::Connection::open(db_path) else {
+        return turn_start_ts.to_string();
+    };
+    let table_exists = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='continuity_refresh_status')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if !table_exists {
+        return turn_start_ts.to_string();
+    }
+    conn.query_row(
+        "SELECT MAX(updated_at) FROM continuity_refresh_status WHERE conversation_id=?1",
+        rusqlite::params![conversation_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| turn_start_ts.to_string())
 }
 
 /// Query the mission and LCM databases for durable state changes written
@@ -592,10 +835,12 @@ where
     let mut compaction_result = None;
     if decision.should_compact {
         emit("compaction-run");
-        let result = engine.compact(
+        let result = compact_with_semantic_summarizer(
+            root,
+            &operator_settings,
+            &engine,
             conversation_id,
             config.max_context_tokens,
-            &lcm::HeuristicSummarizer,
             false,
         )?;
         emit(&format!(
@@ -612,12 +857,12 @@ where
         turn_engine::assess_compaction_guard(&decision, compaction_result.as_ref());
     emit(&format!("compaction-guard {}", compaction_guard.summary));
     emit("snapshot-context");
-    let mut snapshot = engine.snapshot(conversation_id)?;
+    let mut snapshot = engine.working_set_snapshot(conversation_id, 512)?;
     let mut continuity = engine.continuity_show_all(conversation_id)?;
     let mut mission_state = engine.mission_state(conversation_id)?;
     let mut mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
     let mut strategy = engine.active_strategy_snapshot(conversation_id, None)?;
-    let mut forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
+    let mut forgotten_entries = engine.continuity_forgotten_recent(conversation_id, None, 128)?;
     let mut health = context_health::assess_with_forgotten(
         &snapshot,
         &continuity,
@@ -722,10 +967,12 @@ where
             );
         }
         emit("exact-token-preflight-compaction-run");
-        let result = engine.compact(
+        let result = compact_with_semantic_summarizer(
+            root,
+            &operator_settings,
+            &engine,
             conversation_id,
             config.max_context_tokens,
-            &lcm::HeuristicSummarizer,
             true,
         )?;
         emit(&format!(
@@ -736,12 +983,12 @@ where
             result.created_summary_ids.len()
         ));
         compaction_result = Some(result);
-        snapshot = engine.snapshot(conversation_id)?;
+        snapshot = engine.working_set_snapshot(conversation_id, 512)?;
         continuity = engine.continuity_show_all(conversation_id)?;
         mission_state = engine.mission_state(conversation_id)?;
         mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
         strategy = engine.active_strategy_snapshot(conversation_id, None)?;
-        forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
+        forgotten_entries = engine.continuity_forgotten_recent(conversation_id, None, 128)?;
         health = context_health::assess_with_forgotten(
             &snapshot,
             &continuity,
@@ -837,7 +1084,8 @@ where
     // entry added, focus document replaced this turn). These count as task
     // boundaries and force a continuity refresh even if the output budget
     // has not yet been hit.
-    let boundary_window_ts = boundary_window_start(conversation_id, &turn_start_ts);
+    let boundary_window_ts =
+        durable_boundary_window_start(db_path, conversation_id, &turn_start_ts);
     let state_probe = detect_durable_state_transition(
         root,
         db_path,
@@ -869,35 +1117,47 @@ where
         0,
     ) as u64;
     let reply_chars = reply.chars().count() as u64;
-    let refresh_now = should_refresh_continuity(
+    let trigger_reason = if force_continuity_refresh {
+        "state-transition-plan"
+    } else if state_transition_detected {
+        "state-transition-tickets"
+    } else {
+        "durable-turn-budget"
+    };
+    let due_refreshes = record_durable_refresh_demand(
+        db_path,
         conversation_id,
-        reply_chars,
-        refresh_every_n,
         effective_force_refresh,
-    );
+        refresh_every_n,
+        reply_chars,
+        &format!("{trigger_reason}:{boundary_window_ts}"),
+    )?;
+    let refresh_now = !due_refreshes.is_empty();
+    record_refresh_telemetry(conversation_id, reply_chars, refresh_now);
     let continuity_stats = if refresh_now {
-        let reason = if force_continuity_refresh {
-            "state-transition-plan"
-        } else if state_transition_detected {
-            "state-transition-tickets"
-        } else {
-            "turn-interval"
-        };
-        emit(&format!("continuity-refresh reason={}", reason));
+        emit(&format!(
+            "continuity-refresh reason={} kinds={}",
+            trigger_reason,
+            due_refreshes.iter().cloned().collect::<Vec<_>>().join(",")
+        ));
         match session.as_deref_mut() {
             Some(refresh_session) => refresh_continuity_documents(
                 root,
                 &operator_settings,
+                db_path,
                 &engine,
                 conversation_id,
+                &due_refreshes,
                 refresh_session,
                 &mut emit,
             )?,
             None => refresh_continuity_documents(
                 root,
                 &operator_settings,
+                db_path,
                 &engine,
                 conversation_id,
+                &due_refreshes,
                 owned_session
                     .as_mut()
                     .expect("owned persistent session should exist for continuity refresh"),
@@ -908,12 +1168,6 @@ where
         emit("continuity-refresh-skipped");
         Default::default()
     };
-    if refresh_now {
-        // Boundaries observed up to now were consumed by this refresh pass;
-        // without closing the window the same service-side closure would
-        // force a refresh on every following turn.
-        mark_boundary_window_consumed(conversation_id, &current_rfc3339_timestamp());
-    }
     let budget_snapshot = refresh_budget_snapshot(conversation_id);
     emit(&format!(
         "refresh-telemetry output_chars_since_refresh={} turns_since_refresh={}",
@@ -1070,8 +1324,10 @@ mod boundary_tests;
 fn refresh_continuity_documents(
     root: &Path,
     settings: &BTreeMap<String, String>,
+    db_path: &Path,
     engine: &lcm::LcmEngine,
     conversation_id: i64,
+    due_kinds: &HashSet<String>,
     session: &mut PersistentSession,
     emit: &mut impl FnMut(&str),
 ) -> Result<turn_engine::ContinuityRefreshStats> {
@@ -1087,12 +1343,21 @@ fn refresh_continuity_documents(
             lcm::ContinuityKind::Anchors => "anchors",
             lcm::ContinuityKind::Focus => "focus",
         };
+        if !due_kinds.contains(kind_label) {
+            continue;
+        }
         stats.attempted += 1;
         emit(&format!("continuity-{kind_label}-build"));
         let payload = match engine.continuity_build_prompt(conversation_id, kind) {
             Ok(payload) => payload,
             Err(err) => {
                 stats.skipped_prompt_build += 1;
+                let _ = mark_durable_refresh_failed(
+                    db_path,
+                    conversation_id,
+                    kind_label,
+                    &format!("prompt build failed: {err}"),
+                );
                 eprintln!("ctox continuity refresh skipped {kind_label} prompt build: {err}");
                 continue;
             }
@@ -1116,12 +1381,46 @@ fn refresh_continuity_documents(
                         engine.continuity_apply_diff(conversation_id, kind, injected_diff.trim())
                     {
                         stats.skipped_apply += 1;
+                        let _ = mark_durable_refresh_failed(
+                            db_path,
+                            conversation_id,
+                            kind_label,
+                            &format!("fault-injected apply failed: {err}"),
+                        );
                         eprintln!(
                             "ctox continuity refresh skipped invalid injected {kind_label} diff: {err}"
                         );
                     } else {
-                        stats.updated += 1;
+                        let head_after = engine
+                            .continuity_show(conversation_id, kind)
+                            .map(|doc| doc.head_commit_id)
+                            .unwrap_or_default();
+                        if mark_durable_refresh_consumed(
+                            db_path,
+                            conversation_id,
+                            kind_label,
+                            &head_before,
+                            &head_after,
+                        )
+                        .is_ok()
+                        {
+                            stats.updated += 1;
+                        } else {
+                            let _ = mark_durable_refresh_failed(
+                                db_path,
+                                conversation_id,
+                                kind_label,
+                                "fault-injected refresh did not advance the head commit",
+                            );
+                        }
                     }
+                } else {
+                    let _ = mark_durable_refresh_failed(
+                        db_path,
+                        conversation_id,
+                        kind_label,
+                        "fault-injected refresh was empty and did not advance the head commit",
+                    );
                 }
                 if kind == lcm::ContinuityKind::Anchors {
                     let _ = engine.continuity_preserve_recent_anchor_literals(conversation_id);
@@ -1131,6 +1430,12 @@ fn refresh_continuity_documents(
             Ok(None) => {}
             Err(err) => {
                 stats.skipped_invoke += 1;
+                let _ = mark_durable_refresh_failed(
+                    db_path,
+                    conversation_id,
+                    kind_label,
+                    &format!("fault injection lookup failed: {err}"),
+                );
                 eprintln!("ctox continuity refresh skipped {kind_label} fault injection: {err}");
                 continue;
             }
@@ -1147,6 +1452,12 @@ fn refresh_continuity_documents(
             Ok(reply) => reply,
             Err(err) => {
                 stats.skipped_invoke += 1;
+                let _ = mark_durable_refresh_failed(
+                    db_path,
+                    conversation_id,
+                    kind_label,
+                    &format!("model refresh failed: {err}"),
+                );
                 eprintln!("ctox continuity refresh skipped {kind_label} invocation: {err}");
                 continue;
             }
@@ -1167,7 +1478,20 @@ fn refresh_continuity_documents(
                 head_before, head_after
             );
             stats.updated += 1;
+            mark_durable_refresh_consumed(
+                db_path,
+                conversation_id,
+                kind_label,
+                &head_before,
+                &head_after,
+            )?;
         } else {
+            let _ = mark_durable_refresh_failed(
+                db_path,
+                conversation_id,
+                kind_label,
+                "model returned without advancing the continuity head commit",
+            );
             eprintln!(
                 "ctox continuity refresh {kind_label}: no tool-driven change (reply preview: {})",
                 summarize_continuity_diff_for_log(&reply)
@@ -1716,6 +2040,56 @@ mod tests {
     }
 
     #[test]
+    fn communication_refresh_is_durable_due_on_eighth_successful_turn() -> Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "ctox-refresh-eight-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+        for turn in 1..COMMUNICATION_REFRESH_TURN_LIMIT {
+            let due = record_durable_refresh_demand(
+                &db_path,
+                77,
+                false,
+                0,
+                120,
+                &format!("communication-turn:{turn}"),
+            )?;
+            assert!(due.is_empty());
+        }
+        let due =
+            record_durable_refresh_demand(&db_path, 77, false, 0, 120, "communication-turn:8")?;
+        assert!(due.contains("narrative"));
+        assert!(due.contains("anchors"));
+        assert!(!due.contains("focus"));
+
+        mark_durable_refresh_failed(&db_path, 77, "narrative", "model unavailable")?;
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let (status, attempts, error): (String, i64, String) = conn.query_row(
+            "SELECT status, failure_attempt_count, last_error FROM continuity_refresh_status WHERE conversation_id=77 AND continuity_kind='narrative'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(status, "pending");
+        assert_eq!(attempts, 1);
+        assert_eq!(error, "model unavailable");
+        conn.execute(
+            "UPDATE continuity_refresh_status SET retry_not_before='2000-01-01T00:00:00Z' WHERE conversation_id=77 AND continuity_kind='narrative'",
+            [],
+        )?;
+        let due_after_restart = due_refresh_kinds(&conn, 77, &current_rfc3339_timestamp())?;
+        assert!(due_after_restart.contains("narrative"));
+        assert!(
+            mark_durable_refresh_consumed(&db_path, 77, "narrative", "head-a", "head-a").is_err()
+        );
+
+        drop(conn);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
     fn heuristic_api_overflow_marker_gets_a_cooldown() {
         // turnloop-4: the API-runtime heuristic preflight bails with a
         // distinctly-named marker. It must be classified as a hard runtime
@@ -2012,25 +2386,37 @@ mod tests {
     }
 
     #[test]
-    fn boundary_window_spans_turns_until_a_refresh_consumes_it() {
-        // Service-side internal work closures land BETWEEN turns; the detection
-        // window must start at the last refresh, not at the current turn.
+    fn boundary_window_survives_process_local_state_loss() -> Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "ctox-refresh-window-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
         let conversation_id = 991_001;
         let first_turn = "2026-06-10T10:00:00+00:00";
-        let window = boundary_window_start(conversation_id, first_turn);
-        assert_eq!(window, first_turn);
-        // A later turn keeps the original window open...
-        let second_turn = "2026-06-10T11:00:00+00:00";
         assert_eq!(
-            boundary_window_start(conversation_id, second_turn),
+            durable_boundary_window_start(&db_path, conversation_id, first_turn),
             first_turn
         );
-        // ...until a refresh consumes it.
-        mark_boundary_window_consumed(conversation_id, second_turn);
-        let third_turn = "2026-06-10T12:00:00+00:00";
+        record_durable_refresh_demand(
+            &db_path,
+            conversation_id,
+            false,
+            0,
+            10,
+            "communication-turn:first",
+        )?;
+        let persisted =
+            durable_boundary_window_start(&db_path, conversation_id, "2099-01-01T00:00:00+00:00");
+        assert_ne!(persisted, "2099-01-01T00:00:00+00:00");
+        // A second fresh SQLite connection observes the same durable window,
+        // which models a daemon restart without relying on process globals.
         assert_eq!(
-            boundary_window_start(conversation_id, third_turn),
-            second_turn
+            durable_boundary_window_start(&db_path, conversation_id, "2099-02-01T00:00:00+00:00"),
+            persisted
         );
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 }

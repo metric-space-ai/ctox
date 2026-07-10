@@ -7,6 +7,7 @@ use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
@@ -96,6 +97,9 @@ pub struct PlannedGoalView {
     pub next_step_title: Option<String>,
     pub last_emitted_at: Option<String>,
     pub last_completed_at: Option<String>,
+    pub emit_failure_count: i64,
+    pub retry_not_before: Option<String>,
+    pub last_emit_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -122,6 +126,16 @@ pub struct PlannedStepView {
 pub struct EmitDuePlansSummary {
     pub emitted_count: usize,
     pub emitted_steps: Vec<EmittedPlanStepView>,
+    pub failure_count: usize,
+    pub failures: Vec<PlanEmissionFailureView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanEmissionFailureView {
+    pub goal_id: String,
+    pub failure_attempt_count: i64,
+    pub retry_not_before: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +151,55 @@ pub struct EmittedPlanStepView {
 pub struct GoalWithStepsView {
     pub goal: PlannedGoalView,
     pub steps: Vec<PlannedStepView>,
+    pub waits: Vec<PlannedGoalWaitView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaitRef {
+    pub entity_type: String,
+    pub entity_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanWaitCondition {
+    pub wait_ref: WaitRef,
+    pub expected_state: String,
+}
+
+impl PlanWaitCondition {
+    fn parse(raw: &str) -> Result<Self> {
+        let (entity_type, entity_id) = raw
+            .split_once(':')
+            .context("--wait-for must use <entity-type>:<entity-id>")?;
+        let entity_type = entity_type.trim();
+        let entity_id = entity_id.trim();
+        anyhow::ensure!(!entity_type.is_empty(), "--wait-for entity type is empty");
+        anyhow::ensure!(!entity_id.is_empty(), "--wait-for entity id is empty");
+        let expected_state = match entity_type {
+            "approval" | "approval-gate" | "ticket-self-work" => "closed",
+            _ => anyhow::bail!(
+                "unsupported --wait-for entity type '{entity_type}'; supported: approval-gate"
+            ),
+        };
+        Ok(Self {
+            wait_ref: WaitRef {
+                entity_type: entity_type.to_string(),
+                entity_id: entity_id.to_string(),
+            },
+            expected_state: expected_state.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlannedGoalWaitView {
+    pub wait_id: String,
+    pub goal_id: String,
+    pub condition: PlanWaitCondition,
+    pub status: String,
+    pub evidence_ref: Option<String>,
+    pub created_at: String,
+    pub satisfied_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +227,7 @@ struct PlanCreateRequest {
     skill: Option<String>,
     auto_advance: bool,
     emit_now: bool,
+    wait_for: Option<PlanWaitCondition>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +238,7 @@ pub struct PlanIngestRequest {
     pub skill: Option<String>,
     pub auto_advance: bool,
     pub emit_now: bool,
+    pub wait_for: Option<PlanWaitCondition>,
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +356,7 @@ pub fn ingest_goal(root: &Path, request: PlanIngestRequest) -> Result<GoalWithSt
             skill: request.skill,
             auto_advance: request.auto_advance,
             emit_now: request.emit_now,
+            wait_for: request.wait_for,
         },
     )
 }
@@ -366,11 +432,12 @@ pub fn complete_step_by_message_key(
 }
 
 pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
+    let conn = open_plan_db(root)?;
+    let _ = reconcile_satisfied_waits_with_conn(root, &conn)?;
     let now = now_utc();
     if should_skip_emit_due_step_scan(root, &now) {
         return Ok(EmitDuePlansSummary::default());
     }
-    let conn = open_plan_db(root)?;
     let goals = list_goal_ids_with_due_work(&conn)?;
     if goals.is_empty() {
         let next_due_at = load_next_due_step_at(&conn, &now)?;
@@ -380,9 +447,20 @@ pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
     }
     let mut summary = EmitDuePlansSummary::default();
     for goal_id in goals {
-        if let Some(emitted) = emit_next_step_for_goal_with_conn(root, &conn, &goal_id)? {
-            summary.emitted_count += 1;
-            summary.emitted_steps.push(emitted);
+        match emit_next_step_for_goal_with_conn(root, &conn, &goal_id) {
+            Ok(Some(emitted)) => {
+                clear_plan_emission_failure(&conn, &goal_id)?;
+                summary.emitted_count += 1;
+                summary.emitted_steps.push(emitted);
+            }
+            Ok(None) => {
+                clear_plan_emission_failure(&conn, &goal_id)?;
+            }
+            Err(err) => {
+                let failure = record_plan_emission_failure(root, &conn, &goal_id, &err)?;
+                summary.failure_count += 1;
+                summary.failures.push(failure);
+            }
         }
     }
     Ok(summary)
@@ -391,11 +469,7 @@ pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
 fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsView> {
     let conn = open_plan_db(root)?;
     let now = now_iso_string();
-    let approval_wait_goal = goal_waits_for_external_approval(
-        request.title.trim(),
-        request.prompt.trim(),
-        request.thread_key.as_deref(),
-    );
+    let has_wait = request.wait_for.is_some();
     let goal_id = format!(
         "goal_{}",
         stable_digest(&format!(
@@ -445,12 +519,8 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
             request.prompt.trim(),
             thread_key,
             request.skill.as_deref(),
-            if request.auto_advance && !approval_wait_goal {
-                1
-            } else {
-                0
-            },
-            if approval_wait_goal {
+            if request.auto_advance { 1 } else { 0 },
+            if has_wait {
                 GOAL_STATUS_BLOCKED
             } else {
                 GOAL_STATUS_ACTIVE
@@ -479,7 +549,7 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
                 index as i64 + 1,
                 draft.title.trim(),
                 draft.instruction.trim(),
-                if approval_wait_goal && index == 0 {
+                if has_wait && index == 0 {
                     STEP_STATUS_BLOCKED
                 } else {
                     STEP_STATUS_PENDING
@@ -487,19 +557,19 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
                 now,
             ],
         )?;
-        if approval_wait_goal && index == 0 {
+        if has_wait && index == 0 {
             tx.execute(
                 r#"
                 UPDATE planned_steps
                 SET blocked_reason = ?2
                 WHERE step_id = ?1
                 "#,
-                params![
-                    step_id,
-                    "waiting for explicit external approval/access evidence before auto-advance"
-                ],
+                params![step_id, "waiting for a durable planned_goal_wait condition"],
             )?;
         }
+    }
+    if let Some(condition) = request.wait_for.as_ref() {
+        insert_goal_wait_tx(&tx, &goal_id, condition, &now)?;
     }
     tx.commit()?;
     touch_plan_state_stamp(root)?;
@@ -657,7 +727,10 @@ pub fn list_goals(root: &Path) -> Result<Vec<PlannedGoalView>> {
             g.last_emitted_at,
             g.last_completed_at,
             g.created_at,
-            g.updated_at
+            g.updated_at,
+            g.emit_failure_count,
+            g.retry_not_before,
+            g.last_emit_error
         FROM planned_goals g
         ORDER BY
             CASE g.status
@@ -682,7 +755,8 @@ fn load_goal_with_steps(root: &Path, goal_id: &str) -> Result<Option<GoalWithSte
         return Ok(None);
     };
     let steps = list_steps_for_goal(&conn, goal_id)?;
-    Ok(Some(GoalWithStepsView { goal, steps }))
+    let waits = list_waits_for_goal(&conn, goal_id)?;
+    Ok(Some(GoalWithStepsView { goal, steps, waits }))
 }
 
 pub fn emit_next_step_for_goal(root: &Path, goal_id: &str) -> Result<Option<EmittedPlanStepView>> {
@@ -756,15 +830,14 @@ fn prepare_next_step_emission(
 ) -> Result<Option<PendingStepEmission>> {
     let tx = conn.unchecked_transaction()?;
     let goal = load_goal_tx(&tx, goal_id)?.context("planned goal not found")?;
-    if goal.status == GOAL_STATUS_COMPLETED {
+    if matches!(
+        goal.status.as_str(),
+        GOAL_STATUS_COMPLETED | GOAL_STATUS_BLOCKED | GOAL_STATUS_FAILED | GOAL_STATUS_SUPERSEDED
+    ) {
         tx.commit()?;
         return Ok(None);
     }
-    if goal_waits_for_external_approval(
-        goal.title.trim(),
-        goal.source_prompt.trim(),
-        Some(goal.thread_key.as_str()),
-    ) {
+    if goal_has_pending_wait_tx(&tx, goal_id)? {
         tx.commit()?;
         return Ok(None);
     }
@@ -1161,39 +1234,6 @@ fn split_sentence_candidates(prompt: &str) -> Vec<String> {
         .collect()
 }
 
-fn goal_waits_for_external_approval(title: &str, prompt: &str, thread_key: Option<&str>) -> bool {
-    let lowered =
-        format!("{}\n{}\n{}", title, prompt, thread_key.unwrap_or_default()).to_ascii_lowercase();
-    let waits_for_external_input = [
-        "approval",
-        "access-grant",
-        "access grant",
-        "owner approval",
-        "explicit owner",
-        "explicit inbound",
-        "confirmed",
-        "confirmation",
-        "waiting",
-        "blocked until",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle));
-    let monitor_only = [
-        "monitor inbound",
-        "monitor the jami thread",
-        "monitor the email thread",
-        "jami:",
-        "email",
-        "keep the deployment blocked",
-        "after confirmation, deploy",
-        "approval evidence",
-        "vercel approval",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle));
-    waits_for_external_input && monitor_only
-}
-
 fn collapse_ws(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1234,6 +1274,11 @@ fn list_goal_ids_with_due_work(conn: &Connection) -> Result<Vec<String>> {
         JOIN planned_steps s ON s.goal_id = g.goal_id
         WHERE g.auto_advance = 1
           AND g.status = 'active'
+          AND (
+                g.retry_not_before IS NULL
+                OR g.retry_not_before = ''
+                OR g.retry_not_before <= ?1
+          )
           AND s.status = 'pending'
           AND (
                 s.defer_until IS NULL
@@ -1253,15 +1298,32 @@ fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Optio
     let raw: Option<String> = conn
         .query_row(
             r#"
-            SELECT MIN(s.defer_until)
+            SELECT MIN(
+                CASE
+                    WHEN g.retry_not_before IS NOT NULL
+                     AND g.retry_not_before != ''
+                     AND g.retry_not_before > ?1
+                     AND s.defer_until IS NOT NULL
+                     AND s.defer_until != ''
+                     AND s.defer_until > ?1
+                    THEN MAX(g.retry_not_before, s.defer_until)
+                    WHEN g.retry_not_before IS NOT NULL
+                     AND g.retry_not_before != ''
+                     AND g.retry_not_before > ?1
+                    THEN g.retry_not_before
+                    ELSE s.defer_until
+                END
+            )
             FROM planned_goals g
             JOIN planned_steps s ON s.goal_id = g.goal_id
             WHERE g.auto_advance = 1
               AND g.status = 'active'
               AND s.status = 'pending'
-              AND s.defer_until IS NOT NULL
-              AND s.defer_until != ''
-              AND s.defer_until > ?1
+              AND (
+                    (s.defer_until IS NOT NULL AND s.defer_until != '' AND s.defer_until > ?1)
+                    OR
+                    (g.retry_not_before IS NOT NULL AND g.retry_not_before != '' AND g.retry_not_before > ?1)
+              )
             "#,
             params![now.to_rfc3339()],
             |row| row.get(0),
@@ -1269,6 +1331,84 @@ fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Optio
         .optional()?
         .flatten();
     raw.as_deref().map(parse_rfc3339_utc).transpose()
+}
+
+fn clear_plan_emission_failure(conn: &Connection, goal_id: &str) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE planned_goals
+        SET emit_failure_count=0, retry_not_before=NULL, last_emit_error=NULL
+        WHERE goal_id=?1
+          AND (emit_failure_count != 0 OR retry_not_before IS NOT NULL OR last_emit_error IS NOT NULL)
+        "#,
+        params![goal_id],
+    )?;
+    Ok(())
+}
+
+fn record_plan_emission_failure(
+    root: &Path,
+    conn: &Connection,
+    goal_id: &str,
+    err: &anyhow::Error,
+) -> Result<PlanEmissionFailureView> {
+    let previous: i64 = conn.query_row(
+        "SELECT emit_failure_count FROM planned_goals WHERE goal_id=?1",
+        params![goal_id],
+        |row| row.get(0),
+    )?;
+    let failure_attempt_count = previous.saturating_add(1);
+    let exponent = u32::try_from(failure_attempt_count.saturating_sub(1))
+        .unwrap_or(u32::MAX)
+        .min(16);
+    let delay_seconds = 300_i64
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(3_600);
+    let retry_not_before = (now_utc() + Duration::seconds(delay_seconds)).to_rfc3339();
+    let error = clip_text(&format!("{err:#}"), 900);
+    conn.execute(
+        r#"
+        UPDATE planned_goals
+        SET emit_failure_count=?2,
+            retry_not_before=?3,
+            last_emit_error=?4,
+            updated_at=?5
+        WHERE goal_id=?1
+        "#,
+        params![
+            goal_id,
+            failure_attempt_count,
+            retry_not_before,
+            error,
+            now_iso_string()
+        ],
+    )?;
+    touch_plan_state_stamp(root)?;
+    governance::record_event_or_count(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "plan_emit_failure",
+            conversation_id: None,
+            severity: "warning",
+            reason: "one planned goal failed during due-step emission",
+            action_taken: "isolated the goal and scheduled a bounded exponential-backoff retry",
+            details: json!({
+                "goal_id": goal_id,
+                "failure_attempt_count": failure_attempt_count,
+                "retry_not_before": retry_not_before,
+                "error": error,
+            }),
+            idempotence_key: Some(&format!(
+                "plan-emit-failure:{goal_id}:{failure_attempt_count}"
+            )),
+        },
+    );
+    Ok(PlanEmissionFailureView {
+        goal_id: goal_id.to_string(),
+        failure_attempt_count,
+        retry_not_before,
+        error,
+    })
 }
 
 fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
@@ -1356,7 +1496,10 @@ fn load_goal(conn: &Connection, goal_id: &str) -> Result<Option<PlannedGoalView>
             g.last_emitted_at,
             g.last_completed_at,
             g.created_at,
-            g.updated_at
+            g.updated_at,
+            g.emit_failure_count,
+            g.retry_not_before,
+            g.last_emit_error
         FROM planned_goals g
         WHERE g.goal_id = ?1
         LIMIT 1
@@ -1398,7 +1541,10 @@ fn load_goal_tx(tx: &Transaction<'_>, goal_id: &str) -> Result<Option<PlannedGoa
             g.last_emitted_at,
             g.last_completed_at,
             g.created_at,
-            g.updated_at
+            g.updated_at,
+            g.emit_failure_count,
+            g.retry_not_before,
+            g.last_emit_error
         FROM planned_goals g
         WHERE g.goal_id = ?1
         LIMIT 1
@@ -1436,6 +1582,211 @@ fn list_steps_for_goal(conn: &Connection, goal_id: &str) -> Result<Vec<PlannedSt
     let rows = statement.query_map(params![goal_id], map_step_row)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(anyhow::Error::from)
+}
+
+fn list_waits_for_goal(conn: &Connection, goal_id: &str) -> Result<Vec<PlannedGoalWaitView>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT wait_id, goal_id, entity_type, entity_id, expected_state, status,
+               evidence_ref, created_at, satisfied_at
+        FROM planned_goal_waits
+        WHERE goal_id = ?1
+        ORDER BY created_at ASC, wait_id ASC
+        "#,
+    )?;
+    let rows = statement.query_map(params![goal_id], |row| {
+        Ok(PlannedGoalWaitView {
+            wait_id: row.get(0)?,
+            goal_id: row.get(1)?,
+            condition: PlanWaitCondition {
+                wait_ref: WaitRef {
+                    entity_type: row.get(2)?,
+                    entity_id: row.get(3)?,
+                },
+                expected_state: row.get(4)?,
+            },
+            status: row.get(5)?,
+            evidence_ref: row.get(6)?,
+            created_at: row.get(7)?,
+            satisfied_at: row.get(8)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn insert_goal_wait_tx(
+    tx: &Transaction<'_>,
+    goal_id: &str,
+    condition: &PlanWaitCondition,
+    now: &str,
+) -> Result<()> {
+    let wait_id = format!(
+        "wait_{}",
+        stable_digest(&format!(
+            "{}:{}:{}:{}",
+            goal_id,
+            condition.wait_ref.entity_type,
+            condition.wait_ref.entity_id,
+            condition.expected_state
+        ))
+    );
+    tx.execute(
+        r#"
+        INSERT INTO planned_goal_waits (
+            wait_id, goal_id, entity_type, entity_id, expected_state, status,
+            evidence_ref, created_at, satisfied_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', NULL, ?6, NULL)
+        ON CONFLICT(wait_id) DO NOTHING
+        "#,
+        params![
+            wait_id,
+            goal_id,
+            condition.wait_ref.entity_type,
+            condition.wait_ref.entity_id,
+            condition.expected_state,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+fn goal_has_pending_wait_tx(tx: &Transaction<'_>, goal_id: &str) -> Result<bool> {
+    let exists: i64 = tx.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM planned_goal_waits
+            WHERE goal_id = ?1 AND status != 'satisfied'
+        )
+        "#,
+        params![goal_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
+pub(crate) fn satisfy_wait_for_work_item(root: &Path, work_id: &str, state: &str) -> Result<usize> {
+    let conn = open_plan_db(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let updated = satisfy_wait_for_work_item_tx(&tx, work_id, state)?;
+    tx.commit()?;
+    drop(conn);
+    if updated > 0 {
+        touch_plan_state_stamp(root)?;
+        let _ = emit_due_steps(root)?;
+    }
+    Ok(updated)
+}
+
+pub(crate) fn reconcile_satisfied_waits(root: &Path) -> Result<usize> {
+    let conn = open_plan_db(root)?;
+    reconcile_satisfied_waits_with_conn(root, &conn)
+}
+
+fn reconcile_satisfied_waits_with_conn(root: &Path, conn: &Connection) -> Result<usize> {
+    let ticket_table_exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ticket_self_work_items')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ticket_table_exists == 0 {
+        return Ok(0);
+    }
+    let mut statement = conn.prepare(
+        r#"
+        SELECT DISTINCT w.entity_id, i.state
+        FROM planned_goal_waits w
+        JOIN ticket_self_work_items i ON i.work_id = w.entity_id
+        WHERE w.status = 'pending'
+          AND w.entity_type IN ('approval', 'approval-gate', 'ticket-self-work')
+          AND i.state = w.expected_state
+        "#,
+    )?;
+    let ready = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    if ready.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut updated = 0usize;
+    for (work_id, state) in ready {
+        updated += satisfy_wait_for_work_item_tx(&tx, &work_id, &state)?;
+    }
+    tx.commit()?;
+    if updated > 0 {
+        touch_plan_state_stamp(root)?;
+    }
+    Ok(updated)
+}
+
+fn satisfy_wait_for_work_item_tx(
+    tx: &Transaction<'_>,
+    work_id: &str,
+    state: &str,
+) -> Result<usize> {
+    let now = now_iso_string();
+    let mut statement = tx.prepare(
+        r#"
+        SELECT DISTINCT goal_id
+        FROM planned_goal_waits
+        WHERE entity_type IN ('approval', 'approval-gate', 'ticket-self-work')
+          AND entity_id = ?1
+          AND expected_state = ?2
+          AND status = 'pending'
+        "#,
+    )?;
+    let goal_ids = statement
+        .query_map(params![work_id, state], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let updated = tx.execute(
+        r#"
+        UPDATE planned_goal_waits
+        SET status = 'satisfied',
+            evidence_ref = ?3,
+            satisfied_at = ?4
+        WHERE entity_type IN ('approval', 'approval-gate', 'ticket-self-work')
+          AND entity_id = ?1
+          AND expected_state = ?2
+          AND status = 'pending'
+        "#,
+        params![
+            work_id,
+            state,
+            format!("ticket-self-work:{work_id}:{state}"),
+            now
+        ],
+    )?;
+    for goal_id in goal_ids {
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM planned_goal_waits WHERE goal_id=?1 AND status!='satisfied'",
+            params![goal_id],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            tx.execute(
+                r#"
+                UPDATE planned_steps
+                SET status='pending', blocked_reason=NULL, updated_at=?2
+                WHERE step_id = (
+                    SELECT step_id FROM planned_steps
+                    WHERE goal_id=?1 AND status='blocked'
+                    ORDER BY step_order ASC LIMIT 1
+                )
+                "#,
+                params![goal_id, now],
+            )?;
+            tx.execute(
+                "UPDATE planned_goals SET status='active', updated_at=?2 WHERE goal_id=?1 AND status='blocked'",
+                params![goal_id, now],
+            )?;
+        }
+    }
+    Ok(updated)
 }
 
 fn list_completed_steps_tx(tx: &Transaction<'_>, goal_id: &str) -> Result<Vec<PlannedStepView>> {
@@ -1543,9 +1894,10 @@ fn load_last_message_key_for_step_tx(
     tx.query_row(
         "SELECT last_message_key FROM planned_steps WHERE step_id = ?1 LIMIT 1",
         params![step_id],
-        |row| row.get(0),
+        |row| row.get::<_, Option<String>>(0),
     )
     .optional()
+    .map(Option::flatten)
     .map_err(anyhow::Error::from)
 }
 
@@ -1695,6 +2047,9 @@ fn map_goal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlannedGoalView> {
         last_completed_at: row.get(10)?,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
+        emit_failure_count: row.get(13)?,
+        retry_not_before: row.get(14)?,
+        last_emit_error: row.get(15)?,
     })
 }
 
@@ -1824,6 +2179,9 @@ fn ensure_plan_schema(conn: &Connection) -> Result<()> {
             status TEXT NOT NULL,
             last_emitted_at TEXT,
             last_completed_at TEXT,
+            emit_failure_count INTEGER NOT NULL DEFAULT 0,
+            retry_not_before TEXT,
+            last_emit_error TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -1845,14 +2203,90 @@ fn ensure_plan_schema(conn: &Connection) -> Result<()> {
             completed_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS planned_goal_waits (
+            wait_id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            expected_state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            evidence_ref TEXT,
+            created_at TEXT NOT NULL,
+            satisfied_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_planned_goals_status
             ON planned_goals(status, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_planned_steps_goal
             ON planned_steps(goal_id, step_order ASC);
         CREATE INDEX IF NOT EXISTS idx_planned_steps_status_due
             ON planned_steps(status, defer_until, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_planned_goal_waits_entity
+            ON planned_goal_waits(entity_type, entity_id, status);
+        CREATE INDEX IF NOT EXISTS idx_planned_goal_waits_goal
+            ON planned_goal_waits(goal_id, status);
         "#,
     ))?;
+    ensure_plan_column(
+        conn,
+        "planned_goals",
+        "emit_failure_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_plan_column(conn, "planned_goals", "retry_not_before", "TEXT")?;
+    ensure_plan_column(conn, "planned_goals", "last_emit_error", "TEXT")?;
+    conn.execute(
+        r#"
+        INSERT INTO planned_goal_waits (
+            wait_id, goal_id, entity_type, entity_id, expected_state, status,
+            evidence_ref, created_at, satisfied_at
+        )
+        SELECT
+            'wait_legacy_' || g.goal_id,
+            g.goal_id,
+            'legacy_unresolved',
+            g.goal_id,
+            'operator_resolution',
+            'legacy_unresolved',
+            'migration:prompt-derived-approval-wait',
+            g.created_at,
+            NULL
+        FROM planned_goals g
+        WHERE g.status = 'blocked'
+          AND EXISTS (
+              SELECT 1 FROM planned_steps s
+              WHERE s.goal_id = g.goal_id
+                AND s.blocked_reason = 'waiting for explicit external approval/access evidence before auto-advance'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM planned_goal_waits w WHERE w.goal_id = g.goal_id
+          )
+        "#,
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_plan_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        table == "planned_goals",
+        "unsupported plan migration table '{table}'"
+    );
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('planned_goals') WHERE name = ?1)",
+        params![column],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        conn.execute_batch(&format!(
+            "ALTER TABLE planned_goals ADD COLUMN {column} {definition};"
+        ))?;
+    }
     Ok(())
 }
 
@@ -1861,9 +2295,13 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
         conn.query_row("SELECT COUNT(*) FROM planned_goals", [], |row| row.get(0))?;
     let step_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM planned_steps", [], |row| row.get(0))?;
+    let wait_count: i64 = conn.query_row("SELECT COUNT(*) FROM planned_goal_waits", [], |row| {
+        row.get(0)
+    })?;
     Ok(json!({
         "planned_goals": goal_count,
         "planned_steps": step_count,
+        "planned_goal_waits": wait_count,
     }))
 }
 
@@ -1925,6 +2363,9 @@ fn parse_ingest_request(args: &[String]) -> Result<PlanCreateRequest> {
         // explicit approval between every step.
         auto_advance: !args.iter().any(|arg| arg == "--no-auto-advance"),
         emit_now: args.iter().any(|arg| arg == "--emit-now"),
+        wait_for: find_flag_value(args, "--wait-for")
+            .map(PlanWaitCondition::parse)
+            .transpose()?,
     })
 }
 
@@ -1940,6 +2381,7 @@ fn parse_draft_request(args: &[String]) -> Result<PlanCreateRequest> {
         skill: find_flag_value(args, "--skill").map(ToOwned::to_owned),
         auto_advance: false,
         emit_now: false,
+        wait_for: None,
     })
 }
 
@@ -2116,6 +2558,7 @@ mod tests {
                 skill: None,
                 auto_advance: true,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
         ingest_goal(
@@ -2127,6 +2570,7 @@ mod tests {
                 skill: None,
                 auto_advance: true,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
 
@@ -2141,6 +2585,63 @@ mod tests {
     }
 
     #[test]
+    fn one_goal_emission_failure_does_not_block_other_due_goals() -> Result<()> {
+        let root = temp_plan_root("per-goal-failure-isolation");
+        let failing = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Failing due goal".to_string(),
+                prompt: "- emit a deliberately rejected step".to_string(),
+                thread_key: Some("plan/failing-goal".to_string()),
+                skill: None,
+                auto_advance: true,
+                emit_now: false,
+                wait_for: None,
+            },
+        )?;
+        let healthy = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Healthy due goal".to_string(),
+                prompt: "- emit the healthy step".to_string(),
+                thread_key: Some("plan/healthy-goal".to_string()),
+                skill: None,
+                auto_advance: true,
+                emit_now: false,
+                wait_for: None,
+            },
+        )?;
+        drop(crate::mission::channels::open_channel_db(
+            &resolve_db_path(&root),
+        )?);
+        let conn = open_plan_db(&root)?;
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER reject_one_plan_goal
+            BEFORE INSERT ON communication_messages
+            WHEN NEW.thread_key = 'plan/failing-goal'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected per-goal emission failure');
+            END;
+            "#,
+        )?;
+        drop(conn);
+
+        let summary = emit_due_steps(&root)?;
+        assert_eq!(summary.failure_count, 1);
+        assert_eq!(summary.emitted_count, 1);
+        assert_eq!(summary.failures[0].goal_id, failing.goal.goal_id);
+        assert_eq!(summary.emitted_steps[0].goal_id, healthy.goal.goal_id);
+        let failed_view =
+            load_goal_with_steps(&root, &failing.goal.goal_id)?.expect("failing goal reload");
+        assert_eq!(failed_view.goal.emit_failure_count, 1);
+        assert!(failed_view.goal.retry_not_before.is_some());
+
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
     fn decompose_prefers_bullets() {
         let steps = decompose_prompt_into_steps(
             "Release work",
@@ -2149,6 +2650,28 @@ mod tests {
         assert_eq!(steps.len(), 3);
         assert_eq!(steps[0].title, "inspect production issue");
         assert!(steps[1].instruction.contains("patch backend deploy path"));
+    }
+
+    #[test]
+    fn ingest_cli_parses_typed_approval_wait() -> Result<()> {
+        let args = [
+            "ingest",
+            "--title",
+            "Deploy after gate",
+            "--prompt",
+            "Deploy the approved release",
+            "--wait-for",
+            "approval-gate:work_release_42",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let parsed = parse_ingest_request(&args)?;
+        let wait = parsed.wait_for.expect("wait condition");
+        assert_eq!(wait.wait_ref.entity_type, "approval-gate");
+        assert_eq!(wait.wait_ref.entity_id, "work_release_42");
+        assert_eq!(wait.expected_state, "closed");
+        Ok(())
     }
 
     #[test]
@@ -2180,16 +2703,57 @@ mod tests {
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: false,
+                wait_for: Some(PlanWaitCondition {
+                    wait_ref: WaitRef {
+                        entity_type: "approval-gate".to_string(),
+                        entity_id: "work_vercel_access".to_string(),
+                    },
+                    expected_state: "closed".to_string(),
+                }),
             },
         )?;
         let view = load_goal_with_steps(&root, &created.goal.goal_id)?
             .expect("created goal should reload");
-        assert!(!view.goal.auto_advance);
+        assert!(view.goal.auto_advance);
         assert_eq!(view.goal.status, GOAL_STATUS_BLOCKED);
         assert_eq!(view.steps[0].status, STEP_STATUS_BLOCKED);
+        assert_eq!(view.waits.len(), 1);
+        assert_eq!(view.waits[0].status, "pending");
 
         let summary = emit_due_steps(&root)?;
         assert_eq!(summary.emitted_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn satisfying_structured_wait_activates_goal_and_first_step() -> Result<()> {
+        let root = temp_plan_root("approval-wait-satisfied");
+        let created = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Deploy after approval".to_string(),
+                prompt: "Deploy the approved release.".to_string(),
+                thread_key: Some("release/approved".to_string()),
+                skill: None,
+                auto_advance: false,
+                emit_now: false,
+                wait_for: Some(PlanWaitCondition {
+                    wait_ref: WaitRef {
+                        entity_type: "approval-gate".to_string(),
+                        entity_id: "work_release".to_string(),
+                    },
+                    expected_state: "closed".to_string(),
+                }),
+            },
+        )?;
+        assert_eq!(
+            satisfy_wait_for_work_item(&root, "work_release", "closed")?,
+            1
+        );
+        let view = load_goal_with_steps(&root, &created.goal.goal_id)?.expect("goal reload");
+        assert_eq!(view.goal.status, GOAL_STATUS_ACTIVE);
+        assert_eq!(view.steps[0].status, STEP_STATUS_PENDING);
+        assert_eq!(view.waits[0].status, "satisfied");
         Ok(())
     }
 
@@ -2205,6 +2769,7 @@ mod tests {
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
         let step_ids = created
@@ -2238,6 +2803,7 @@ mod tests {
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,
+                wait_for: None,
             },
         )?;
         let emitted = format!(
@@ -2299,6 +2865,7 @@ mod tests {
                 skill: Some("owner-communication".to_string()),
                 auto_advance: false,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
         assert_eq!(older.goal.status, GOAL_STATUS_ACTIVE);
@@ -2313,6 +2880,7 @@ mod tests {
                 skill: Some("owner-communication".to_string()),
                 auto_advance: false,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
 
@@ -2341,6 +2909,7 @@ mod tests {
                 skill: None,
                 auto_advance: false,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
         let unrelated_b = ingest_goal(
@@ -2352,6 +2921,7 @@ mod tests {
                 skill: None,
                 auto_advance: false,
                 emit_now: false,
+                wait_for: None,
             },
         )?;
         let reloaded_a = load_goal_with_steps(&root, &unrelated_a.goal.goal_id)?
@@ -2416,6 +2986,7 @@ mod tests {
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,
+                wait_for: None,
             },
         )?;
         let emitted = format!(

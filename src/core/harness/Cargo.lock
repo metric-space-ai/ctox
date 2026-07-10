@@ -2058,6 +2058,7 @@ dependencies = [
 name = "ctox-protocol"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "ctox-execpolicy",
  "ctox-git",
  "ctox-utils-absolute-path",
@@ -2066,6 +2067,7 @@ dependencies = [
  "icu_locale_core",
  "icu_provider",
  "mime_guess",
+ "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2073,6 +2075,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "sys-locale",
+ "tempfile",
  "tracing",
  "ts-rs",
  "uuid",

@@ -1015,6 +1015,7 @@ enum CompletionReviewDisposition {
         review_audit_key: String,
     },
     Hold {
+        reason: review::HoldReason,
         summary: String,
     },
     NoSend {
@@ -1068,72 +1069,26 @@ fn classify_findings(findings: &[review::CategorizedFinding]) -> ReviewRoutingCl
 }
 
 fn review_outcome_is_terminal_no_send(outcome: &review::ReviewOutcome) -> bool {
-    let mut text = outcome.summary.to_ascii_lowercase();
-    for value in outcome
-        .failed_gates
-        .iter()
-        .chain(outcome.semantic_findings.iter())
-        .chain(outcome.open_items.iter())
-        .chain(outcome.evidence.iter())
+    if !matches!(outcome.disposition, review::ReviewDisposition::NoSend)
+        || !outcome.open_items.is_empty()
+        || outcome.categorized_findings.iter().any(|finding| {
+            matches!(
+                finding.category,
+                review::FindingCategory::Rewrite | review::FindingCategory::Rework
+            )
+        })
     {
-        text.push('\n');
-        text.push_str(&value.to_ascii_lowercase());
+        return false;
     }
-    for finding in &outcome.categorized_findings {
-        text.push('\n');
-        text.push_str(&finding.evidence.to_ascii_lowercase());
-        text.push('\n');
-        text.push_str(&finding.corrective_action.to_ascii_lowercase());
+    match outcome.no_send_reason() {
+        Some(review::NoSendReason::WaitingExternal) => outcome.no_send_wait_ref().is_some(),
+        Some(
+            review::NoSendReason::StaleObsolete
+            | review::NoSendReason::NoActionNeeded
+            | review::NoSendReason::PolicyDenied,
+        ) => true,
+        None => false,
     }
-
-    let says_no_send = contains_any(
-        &text,
-        &[
-            "no-send",
-            "no send",
-            "do not send",
-            "nicht senden",
-            "keine weitere founder-mail",
-            "keine weitere mail",
-            "no further founder",
-            "no founder reply",
-            "no immediate founder reply",
-            "should not be sent",
-            "sollte nicht gesendet",
-        ],
-    );
-    let says_wait = contains_any(
-        &text,
-        &[
-            "wait mode",
-            "wait until",
-            "warte",
-            "warten",
-            "until the founders provide",
-            "until marco",
-            "until michael",
-            "until olaf",
-            "await",
-            "konkrete inputs",
-            "technical inputs",
-            "crm/tool",
-            "sync scope",
-        ],
-    );
-    let says_missing_work = contains_any(
-        &text,
-        &[
-            "missing deliverable",
-            "missing required",
-            "fehlende fachliche arbeit",
-            "must be done before",
-            "muss erledigt werden",
-            "send a corrected",
-            "respond directly",
-        ],
-    );
-
-    says_no_send && says_wait && !says_missing_work
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -5028,6 +4983,8 @@ struct PromptWorkerActivity {
     leased_message_keys: Vec<String>,
     leased_ticket_event_keys: Vec<String>,
     leases_released: bool,
+    lease_heartbeat_stop: Arc<std::sync::atomic::AtomicBool>,
+    lease_heartbeat: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5067,6 +5024,30 @@ impl PromptWorkerActivity {
             }
             shared.last_progress_epoch_secs = current_epoch_secs();
         }
+        let lease_heartbeat_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let heartbeat_root = root.to_path_buf();
+        let heartbeat_keys = job.leased_message_keys.clone();
+        let heartbeat_ticket_keys = job.leased_ticket_event_keys.clone();
+        let heartbeat_stop = lease_heartbeat_stop.clone();
+        let lease_heartbeat = (!heartbeat_keys.is_empty() || !heartbeat_ticket_keys.is_empty())
+            .then(|| {
+                thread::spawn(move || loop {
+                    if heartbeat_stop.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let _ = channels::renew_message_leases(
+                        &heartbeat_root,
+                        CHANNEL_ROUTER_LEASE_OWNER,
+                        &heartbeat_keys,
+                    );
+                    let _ = tickets::renew_ticket_event_leases(
+                        &heartbeat_root,
+                        CHANNEL_ROUTER_LEASE_OWNER,
+                        &heartbeat_ticket_keys,
+                    );
+                    thread::park_timeout(Duration::from_secs(60));
+                })
+            });
         Self {
             root: root.to_path_buf(),
             state: state.clone(),
@@ -5074,6 +5055,8 @@ impl PromptWorkerActivity {
             leased_message_keys: job.leased_message_keys.clone(),
             leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
             leases_released: false,
+            lease_heartbeat_stop,
+            lease_heartbeat,
         }
     }
 
@@ -5095,6 +5078,12 @@ impl PromptWorkerActivity {
 
 impl Drop for PromptWorkerActivity {
     fn drop(&mut self) {
+        self.lease_heartbeat_stop
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(handle) = self.lease_heartbeat.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
         let (leaked_message_keys, leaked_ticket_event_keys) = {
             let mut shared = lock_shared_state(&self.state);
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
@@ -5255,8 +5244,12 @@ impl Drop for PromptWorkerActivity {
         }
 
         if !leaked_ticket_event_keys.is_empty() {
-            let ack_result =
-                tickets::ack_leased_ticket_events(&self.root, &leaked_ticket_event_keys, "failed");
+            let ack_result = tickets::fail_ticket_events(
+                &self.root,
+                &leaked_ticket_event_keys,
+                tickets::TicketEventFailureClass::Retryable,
+                "prompt worker exited before acknowledging the leased ticket event",
+            );
             if let Err(err) = ack_result {
                 let mut shared = lock_shared_state(&self.state);
                 push_event_locked(
@@ -5511,12 +5504,31 @@ fn start_prompt_worker(
             }
         }
         if let Some(reason) = crate::service::working_hours::hold_reason(&root) {
+            let retry_not_before = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+            if !job.leased_message_keys.is_empty() {
+                let _ = channels::defer_messages_until(
+                    &root,
+                    &job.leased_message_keys,
+                    &retry_not_before,
+                    "working-hours technical hold",
+                );
+                let _ = channels::ack_leased_messages(&root, &job.leased_message_keys, "pending");
+            }
+            if !job.leased_ticket_event_keys.is_empty() {
+                let _ = tickets::ack_leased_ticket_events(
+                    &root,
+                    &job.leased_ticket_event_keys,
+                    "pending",
+                );
+            }
             let mut shared = lock_shared_state(&state);
             shared.busy = false;
             shared.current_goal_preview = None;
             shared.active_source_label = None;
             shared.last_progress_epoch_secs = current_epoch_secs();
-            insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
+            if job.leased_message_keys.is_empty() && job.leased_ticket_event_keys.is_empty() {
+                insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
+            }
             // X2-02: this is an intentional after-hours re-queue, not a worker
             // crash. Release the still-inflight leased keys so
             // PromptWorkerActivity::Drop does not treat them as leaked and
@@ -5527,8 +5539,8 @@ fn start_prompt_worker(
             push_event_locked(
                 &mut shared,
                 format!(
-                    "Held {} prompt outside working hours: {}",
-                    job.source_label, reason
+                    "Held {} prompt outside working hours until {}: {}",
+                    job.source_label, retry_not_before, reason
                 ),
             );
             return;
@@ -6026,15 +6038,8 @@ fn start_prompt_worker(
                 worker_activity.release_leased_keys_locked(&mut shared);
                 match result {
                     Ok(reply) => {
-                        let email_reply_key =
-                            inbound_email_reply_message_key(&job).map(ToOwned::to_owned);
                         let founder_reply_key =
                             founder_email_reply_message_key(&job).map(ToOwned::to_owned);
-                        let proactive_founder_action = if email_reply_key.is_none() {
-                            job.outbound_email.clone()
-                        } else {
-                            None
-                        };
                         let mut founder_send_error: Option<String> = None;
                         let mut should_handle_messages =
                             matches!(
@@ -6591,13 +6596,6 @@ fn start_prompt_worker(
                                     ..
                                 }
                             );
-                            let held_founder_review = email_reply_key.is_some()
-                                || proactive_founder_action.is_some()
-                                || is_founder_or_owner_email_job(&job);
-                            let held_completion_review = matches!(
-                                &review_disposition,
-                                CompletionReviewDisposition::Hold { .. }
-                            );
                             let retry_status =
                                 if terminal_queue_failure || app_validation_terminal_failure {
                                     "failed"
@@ -6607,46 +6605,61 @@ fn start_prompt_worker(
                                     "review_rework"
                                 } else if outcome_witness_error.is_some() {
                                     outcome_witness_retry_route_status_for_job(&root, &job)
-                                } else if held_founder_review || held_completion_review {
-                                    "pending"
                                 } else {
                                     "pending"
                                 };
-                            let ack_result = if retry_status == "failed" {
-                                let failure_reason = if app_validation_terminal_failure {
-                                    founder_send_error.as_deref().unwrap_or(
-                                        "Business OS app validation repair attempts exhausted",
+                            let (ack_result, ack_label) =
+                                if let CompletionReviewDisposition::Hold { reason, summary } =
+                                    &review_disposition
+                                {
+                                    (
+                                        channels::hold_leased_messages(
+                                            &root,
+                                            &job.leased_message_keys,
+                                            reason,
+                                            summary,
+                                        ),
+                                        format!("queue lease(s) held ({reason:?})"),
+                                    )
+                                } else if retry_status == "failed" {
+                                    let failure_reason = if app_validation_terminal_failure {
+                                        founder_send_error.as_deref().unwrap_or(
+                                            "Business OS app validation repair attempts exhausted",
+                                        )
+                                    } else {
+                                        match &review_disposition {
+                                            CompletionReviewDisposition::TerminalQueueFailure {
+                                                summary,
+                                            } => summary.as_str(),
+                                            _ => "terminal queue failure",
+                                        }
+                                    };
+                                    (
+                                        channels::ack_leased_messages_with_failure_reason(
+                                            &root,
+                                            &job.leased_message_keys,
+                                            retry_status,
+                                            failure_reason,
+                                        ),
+                                        format!("queue lease(s) ({retry_status})"),
                                     )
                                 } else {
-                                    match &review_disposition {
-                                        CompletionReviewDisposition::TerminalQueueFailure {
-                                            summary,
-                                        } => summary.as_str(),
-                                        _ => "terminal queue failure",
-                                    }
+                                    (
+                                        channels::ack_leased_messages(
+                                            &root,
+                                            &job.leased_message_keys,
+                                            retry_status,
+                                        ),
+                                        format!("queue lease(s) ({retry_status})"),
+                                    )
                                 };
-                                channels::ack_leased_messages_with_failure_reason(
-                                    &root,
-                                    &job.leased_message_keys,
-                                    retry_status,
-                                    failure_reason,
-                                )
-                            } else {
-                                channels::ack_leased_messages(
-                                    &root,
-                                    &job.leased_message_keys,
-                                    retry_status,
-                                )
-                            };
-                            if let Err(ack_err) = ack_result {
-                                push_event_locked(
-                                    &mut shared,
-                                    format!(
-                                        "Failed to update leased queue task(s) after completion review: {}",
-                                        clip_text(&ack_err.to_string(), 180)
-                                    ),
-                                );
-                            }
+                            record_queue_ack_and_refresh_business_os_projections_locked(
+                                &root,
+                                &mut shared,
+                                ack_result,
+                                &ack_label,
+                                &job.leased_message_keys,
+                            );
                         }
                         if !job.leased_ticket_event_keys.is_empty() && should_handle_messages {
                             record_ack_failure_locked(
@@ -6659,26 +6672,56 @@ fn start_prompt_worker(
                                 "handled ticket-event lease(s)",
                             );
                         } else if !job.leased_ticket_event_keys.is_empty() {
-                            let retry_status = if matches!(
+                            let terminal_failure = matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::TerminalQueueFailure { .. }
-                            ) {
-                                "failed"
-                            } else if matches!(
-                                &review_disposition,
-                                CompletionReviewDisposition::Hold { .. }
-                            ) {
-                                "blocked"
+                            );
+                            let (ack_result, retry_status) = if terminal_failure {
+                                (
+                                    tickets::fail_ticket_events(
+                                        &root,
+                                        &job.leased_ticket_event_keys,
+                                        tickets::TicketEventFailureClass::Terminal,
+                                        "terminal completion-review failure",
+                                    ),
+                                    "failed",
+                                )
+                            } else if let CompletionReviewDisposition::Hold { reason, summary } =
+                                &review_disposition
+                            {
+                                match reason {
+                                    review::HoldReason::WaitingExternal(wait_ref) => (
+                                        tickets::block_ticket_events_for_wait(
+                                            &root,
+                                            &job.leased_ticket_event_keys,
+                                            wait_ref,
+                                            summary,
+                                        ),
+                                        "blocked",
+                                    ),
+                                    _ => (
+                                        tickets::fail_ticket_events(
+                                            &root,
+                                            &job.leased_ticket_event_keys,
+                                            tickets::TicketEventFailureClass::Retryable,
+                                            summary,
+                                        ),
+                                        "retryable",
+                                    ),
+                                }
                             } else {
-                                "pending"
+                                (
+                                    tickets::ack_leased_ticket_events(
+                                        &root,
+                                        &job.leased_ticket_event_keys,
+                                        "pending",
+                                    ),
+                                    "pending",
+                                )
                             };
                             record_ack_failure_locked(
                                 &mut shared,
-                                tickets::ack_leased_ticket_events(
-                                    &root,
-                                    &job.leased_ticket_event_keys,
-                                    retry_status,
-                                ),
+                                ack_result,
                                 &format!("ticket-event lease(s) ({retry_status})"),
                             );
                         }
@@ -6755,11 +6798,11 @@ fn start_prompt_worker(
                                         );
                                     }
                                 }
-                                CompletionReviewDisposition::Hold { summary } => {
+                                CompletionReviewDisposition::Hold { reason, summary } => {
                                     push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Review held the slice open without send/closure: {}",
+                                            "Review held the slice open without send/closure ({reason:?}): {}",
                                             clip_text(summary, 180)
                                         ),
                                     );
@@ -7915,10 +7958,12 @@ fn run_completion_review(
                 "Reviewed communication was held because no completion review was produced.";
             push_event(state, summary.to_string());
             return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::MissingReviewEvidence,
                 summary: summary.to_string(),
             };
         }
         return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::MissingReviewEvidence,
             summary: "Completion review did not run; terminal completion is held until review passes or explicit policy resolves it.".to_string(),
         };
     }
@@ -7947,6 +7992,7 @@ fn run_completion_review(
                 ),
             );
             return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::MissingReviewEvidence,
                 summary: format!(
                     "Completion review produced a verdict, but its durable audit record could not be persisted: {err}"
                 ),
@@ -8041,6 +8087,9 @@ fn run_completion_review(
                                 ),
                             );
                             return CompletionReviewDisposition::Hold {
+                                reason: review::HoldReason::Technical {
+                                    policy_id: "reviewed-communication-send".to_string(),
+                                },
                                 summary: err.to_string(),
                             };
                         }
@@ -8069,6 +8118,7 @@ fn run_completion_review(
                                     > 0;
                         if !durable_send_artifact {
                             return CompletionReviewDisposition::Hold {
+                                reason: review::HoldReason::MissingArtifact,
                                 summary: "Communication review passed, but harness auto-send did not produce a durable outbound artifact.".to_string(),
                             };
                         }
@@ -8082,10 +8132,32 @@ fn run_completion_review(
                 if matches!(outcome.disposition, review::ReviewDisposition::NoSend)
                     && review_outcome_is_terminal_no_send(&outcome)
                 {
+                    if matches!(
+                        outcome.no_send_reason(),
+                        Some(review::NoSendReason::WaitingExternal)
+                    ) {
+                        let wait_ref = outcome
+                            .no_send_wait_ref()
+                            .expect("terminal waiting-external NoSend requires WAIT_REF");
+                        push_event(
+                            state,
+                            format!(
+                                "Communication review blocked {} on durable wait {}:{}: {}",
+                                job.source_label,
+                                wait_ref.entity_type,
+                                wait_ref.entity_id,
+                                clip_text(&outcome.summary, 180)
+                            ),
+                        );
+                        return CompletionReviewDisposition::Hold {
+                            reason: review::HoldReason::WaitingExternal(wait_ref),
+                            summary: outcome.summary.clone(),
+                        };
+                    }
                     push_event(
                         state,
                         format!(
-                            "Communication review closed {} without sending because the correct action is to wait: {}",
+                            "Communication review closed {} without sending: {}",
                             job.source_label,
                             clip_text(&outcome.summary, 180)
                         ),
@@ -8129,11 +8201,17 @@ fn run_completion_review(
                     )
                 } else {
                     CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::Technical {
+                            policy_id: "communication-review-rework".to_string(),
+                        },
                         summary: outcome.summary.clone(),
                     }
                 }
             }
             _ => CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "communication-review-outcome".to_string(),
+                },
                 summary: outcome.summary.clone(),
             },
         };
@@ -8164,6 +8242,9 @@ fn run_completion_review(
                         ),
                     );
                     CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::Technical {
+                            policy_id: "reviewed-founder-send".to_string(),
+                        },
                         summary: err.to_string(),
                     }
                 } else {
@@ -8188,6 +8269,9 @@ fn run_completion_review(
                             ),
                         );
                         return CompletionReviewDisposition::Hold {
+                            reason: review::HoldReason::Technical {
+                                policy_id: "outbound-review-retry-exhausted".to_string(),
+                            },
                             summary: format!(
                                 "{}\n\nAutomatic same-work outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
                                 outcome.summary
@@ -8219,6 +8303,9 @@ fn run_completion_review(
                         ),
                     );
                     return CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::Technical {
+                            policy_id: "outbound-review-retry-exhausted".to_string(),
+                        },
                         summary: format!(
                             "{}\n\nAutomatic same-work outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
                             outcome.summary
@@ -8230,6 +8317,9 @@ fn run_completion_review(
                 )
             }
             _ => CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "founder-review-outcome".to_string(),
+                },
                 summary: outcome.summary.clone(),
             },
         };
@@ -8259,6 +8349,9 @@ fn run_completion_review(
                         ),
                     );
                     CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::Technical {
+                            policy_id: "reviewed-external-chat-send".to_string(),
+                        },
                         summary: err.to_string(),
                     }
                 } else {
@@ -8283,6 +8376,9 @@ fn run_completion_review(
                 )
             }
             _ => CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "external-chat-review-outcome".to_string(),
+                },
                 summary: outcome.summary.clone(),
             },
         };
@@ -8298,6 +8394,7 @@ fn run_completion_review(
                 ),
             );
             return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::MissingReviewEvidence,
                 summary: outcome.summary.clone(),
             };
         }
@@ -8316,6 +8413,7 @@ fn run_completion_review(
     match outcome.verdict {
         review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved { review_audit_key },
         review::ReviewVerdict::Skipped => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::MissingReviewEvidence,
             summary:
                 "Completion review was skipped after being required; terminal completion is held."
                     .to_string(),
@@ -8325,6 +8423,9 @@ fn run_completion_review(
         }
         review::ReviewVerdict::Fail | review::ReviewVerdict::Partial => {
             CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "completion-review-outcome".to_string(),
+                },
                 summary: outcome.summary.clone(),
             }
         }
@@ -8341,6 +8442,7 @@ fn completion_review_unavailable_disposition(
             Ok(disposition) => return disposition,
             Err(err) => {
                 return CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::MissingReviewEvidence,
                     summary: format!(
                         "{}\n\nCompletion review is required, but the reviewer did not produce a verdict and the retry checkpoint could not be persisted through the core state machine: {err}",
                         summary.trim()
@@ -8350,6 +8452,7 @@ fn completion_review_unavailable_disposition(
         }
     }
     CompletionReviewDisposition::Hold {
+        reason: review::HoldReason::MissingReviewEvidence,
         summary: format!(
             "{}\n\nCompletion review is required for this slice, but the reviewer did not produce a verdict. The worker result remains open; no terminal completion is allowed without a review verdict.",
             summary.trim()
@@ -10130,6 +10233,7 @@ fn no_cascade_review_block(
             Ok(proof_id) => proof_id,
             Err(err) => {
                 return Some(CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::MissingReviewEvidence,
                     summary: format!(
                         "Review checkpoint rejected by core state machine for `{}`: {}",
                         target_work_id, err
@@ -12735,6 +12839,7 @@ fn queue_review_unavailable_retry_disposition(
         });
     }
     Ok(CompletionReviewDisposition::Hold {
+        reason: review::HoldReason::MissingReviewEvidence,
         summary: format!(
             "{}\n\nCompletion review is required, but the reviewer did not produce a verdict. CTOX persisted a finite retry checkpoint ({}/{threshold}) and will retry; terminal completion remains blocked until review passes or the retry budget is exhausted.",
             summary.trim(),
@@ -12939,6 +13044,9 @@ fn handle_actionable_completion_review_rejection(
             ),
         );
         return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "review-rejection-without-durable-target".to_string(),
+            },
             summary: format!(
                 "{}\n\nReview rejected the worker result, but there is no durable queue item or internal work item to requeue. The harness held the result fail-closed instead of creating an in-memory retry outside the core flow.",
                 outcome.summary
@@ -12957,6 +13065,7 @@ fn handle_actionable_completion_review_rejection(
                 ),
             );
             return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::MissingReviewEvidence,
                 summary: format!(
                     "{}\n\nReview rejected the worker result, but CTOX could not persist the required queue review checkpoint through the core state machine: {err}",
                     outcome.summary
@@ -13785,7 +13894,40 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    if queue_pressure_active(state) {
+    let settings = live_service_settings(root);
+    match crate::mission::approval_nag::process_inbound_approval_replies(root, &settings) {
+        Ok(processed) if processed > 0 => push_event(
+            state,
+            format!(
+                "Processed {processed} authorized approval reply/replies before inbound leasing"
+            ),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Approval reply control-plane pass failed before routing: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
+    if queue_pressure_active(root, state) {
+        match repair_stalled_founder_communications(root, state, &settings) {
+            Ok(repaired) if repaired > 0 => push_event(
+                state,
+                format!(
+                    "Repaired {repaired} stalled founder communication(s) while queue pressure was active"
+                ),
+            ),
+            Ok(_) => {}
+            Err(err) => push_event(
+                state,
+                format!(
+                    "Founder communication repair failed during queue pressure: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+        }
         // router-2: this skip of all downstream router stages was previously a
         // silent early-return. Emit one idempotent governance event so the
         // queue-pressure containment is mineable, not invisible. Behaviour is
@@ -13805,7 +13947,6 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         );
         return Ok(());
     }
-    let settings = live_service_settings(root);
     if should_skip_idle_channel_router_tick(root, &settings) {
         mark_channel_router_preflight_idle(root);
         return Ok(());
@@ -15496,12 +15637,6 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 clip_text(&err.to_string(), 180)
             ),
         ),
-    }
-    let runnable_queue_tasks =
-        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 1)?;
-    if !runnable_queue_tasks.is_empty() {
-        mark_ticket_reconcile_ran(root, &active_keys);
-        return Ok(());
     }
     let released_leases =
         tickets::release_stale_ticket_event_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
@@ -20957,9 +21092,47 @@ fn record_ack_failure_locked<T>(shared: &mut SharedState, result: anyhow::Result
     }
 }
 
-fn queue_pressure_active(state: &Arc<Mutex<SharedState>>) -> bool {
+fn record_queue_ack_and_refresh_business_os_projections_locked<T>(
+    root: &Path,
+    shared: &mut SharedState,
+    result: anyhow::Result<T>,
+    what: &str,
+    message_keys: &[String],
+) {
+    if let Err(err) = result {
+        push_event_locked(
+            shared,
+            format!(
+                "Failed to ack {what} after completion: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        );
+        return;
+    }
+
+    for message_key in message_keys {
+        if let Err(err) = crate::business_os::store::refresh_business_command_queue_task_projection(
+            root,
+            message_key,
+        ) {
+            push_event_locked(
+                shared,
+                format!(
+                    "Failed to refresh Business OS queue projection for {} after ack {what}: {}",
+                    message_key,
+                    clip_text(&err.to_string(), 180)
+                ),
+            );
+        }
+    }
+}
+
+fn queue_pressure_active(root: &Path, state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
-    shared.pending_prompts.len() >= QUEUE_PRESSURE_GUARD_THRESHOLD
+    let in_memory = shared.pending_prompts.len();
+    drop(shared);
+    let durable = channels::pending_queue_task_count_uncached(root).unwrap_or(0);
+    in_memory.max(durable) >= QUEUE_PRESSURE_GUARD_THRESHOLD
 }
 
 fn inflight_leased_message_key(state: &Arc<Mutex<SharedState>>, message_key: &str) -> bool {
@@ -20996,14 +21169,14 @@ fn active_or_pending_leased_message_key(
 fn leased_message_key_has_live_owner_locked(shared: &SharedState, message_key: &str) -> bool {
     let execution_live =
         shared.busy || shared.worker_active_count > 0 || shared.durable_queue_lease_in_progress;
-    execution_live
-        && (shared.leased_message_keys_inflight.contains(message_key)
-            || shared.pending_prompts.iter().any(|prompt| {
-                prompt
-                    .leased_message_keys
-                    .iter()
-                    .any(|key| key == message_key)
-            }))
+    let pending_prompt_owns_key = shared.pending_prompts.iter().any(|prompt| {
+        prompt
+            .leased_message_keys
+            .iter()
+            .any(|key| key == message_key)
+    });
+    pending_prompt_owns_key
+        || (execution_live && shared.leased_message_keys_inflight.contains(message_key))
 }
 
 fn lock_shared_state<'a>(
@@ -21058,8 +21231,9 @@ fn release_leased_keys_locked(
     }
 }
 
-fn queue_guard_needed(shared: &SharedState) -> bool {
-    shared.pending_prompts.len() >= QUEUE_PRESSURE_GUARD_THRESHOLD
+fn queue_guard_needed(root: &Path, shared: &SharedState) -> bool {
+    let durable = channels::pending_queue_task_count_uncached(root).unwrap_or(0);
+    shared.pending_prompts.len().max(durable) >= QUEUE_PRESSURE_GUARD_THRESHOLD
 }
 
 fn queue_guard_present(shared: &SharedState) -> bool {
@@ -21071,10 +21245,13 @@ fn queue_guard_present(shared: &SharedState) -> bool {
 }
 
 fn ensure_queue_guard_locked(root: &Path, shared: &mut SharedState) {
-    if !queue_guard_needed(shared) || queue_guard_present(shared) {
+    if !queue_guard_needed(root, shared) || queue_guard_present(shared) {
         return;
     }
-    let pending = shared.pending_prompts.len();
+    let pending = shared
+        .pending_prompts
+        .len()
+        .max(channels::pending_queue_task_count_uncached(root).unwrap_or(0));
     let guard_prompt = build_queue_guard_prompt(root, pending);
     shared.pending_prompts.push_front(QueuedPrompt {
         prompt: guard_prompt.clone(),
@@ -21462,17 +21639,31 @@ fn apply_review_feedback_to_leased_queue(
     feedback_prompt: &str,
     review_summary: &str,
 ) -> Result<usize> {
+    const REVIEW_FEEDBACK_MARKER: &str = "\n\n==== CTOX review feedback for next attempt ====\n";
     let note = format!(
         "Review feedback applied to same queue task: {}",
         clip_text(review_summary.trim(), 180)
     );
     let mut updated = 0usize;
     for message_key in &job.leased_message_keys {
+        let Some(task) = channels::load_queue_task(root, message_key)? else {
+            continue;
+        };
+        let original_prompt = task
+            .prompt
+            .split_once(REVIEW_FEEDBACK_MARKER)
+            .map(|(original, _)| original)
+            .unwrap_or(task.prompt.as_str())
+            .trim_end();
+        let next_prompt = format!(
+            "{original_prompt}{REVIEW_FEEDBACK_MARKER}{}",
+            feedback_prompt.trim()
+        );
         channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key: message_key.clone(),
-                prompt: Some(feedback_prompt.to_string()),
+                prompt: Some(next_prompt),
                 workspace_root: job.workspace_root.clone(),
                 status_note: Some(note.clone()),
                 ..Default::default()
@@ -24062,6 +24253,7 @@ Business OS command:
                 .to_string(),
         );
         outcome.disposition = review::ReviewDisposition::NoSend;
+        outcome.report = "VERDICT: FAIL\nDISPOSITION: NO_SEND\nNO_SEND_REASON: WAITING_EXTERNAL\nWAIT_REF: approval-gate:crm-input".to_string();
 
         assert!(
             matches!(outcome.disposition, review::ReviewDisposition::NoSend)
@@ -24078,9 +24270,9 @@ Business OS command:
             "No-send: wait until the founders provide concrete technical inputs.".to_string(),
         );
 
-        // The scraper alone still matches the prose, but the structured disposition
-        // defaults to Send, so the terminal no-send gate must not fire.
-        assert!(review_outcome_is_terminal_no_send(&outcome));
+        // Prose alone has no authority; the structured disposition defaults
+        // to Send and no typed reason/ref is present.
+        assert!(!review_outcome_is_terminal_no_send(&outcome));
         assert_eq!(outcome.disposition, review::ReviewDisposition::Send);
         assert!(
             !(matches!(outcome.disposition, review::ReviewDisposition::NoSend)
@@ -24102,6 +24294,7 @@ Business OS command:
             .failed_gates
             .push("No-send: wait for the concrete inputs.".to_string());
         outcome.disposition = review::ReviewDisposition::NoSend;
+        outcome.report = "VERDICT: FAIL\nDISPOSITION: NO_SEND\nNO_SEND_REASON: WAITING_EXTERNAL\nWAIT_REF: approval-gate:concrete-inputs".to_string();
         assert_eq!(outcome.disposition, review::ReviewDisposition::NoSend);
         assert!(
             matches!(outcome.disposition, review::ReviewDisposition::NoSend)
@@ -29688,7 +29881,7 @@ Business OS command:
     }
 
     #[test]
-    fn working_hours_hold_requeues_without_failing_leased_queue_task() {
+    fn working_hours_hold_defers_durable_task_without_duplicate_memory_prompt() {
         // X2-02: a working-hours boundary race can land a freshly-dispatched
         // worker in the after-hours hold with its leased keys still in-flight.
         // The hold re-queues the prompt; it must ALSO release the leases so
@@ -29734,10 +29927,20 @@ Business OS command:
         }
         let mut worker_activity = PromptWorkerActivity::start(&root, &state, &job);
 
-        // The start_prompt_worker working-hours hold block: re-queue + release.
+        // The start_prompt_worker working-hours hold block: durable defer,
+        // pending ack, no second in-memory copy, then release activity keys.
+        let retry_not_before = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        channels::defer_messages_until(
+            &root,
+            &job.leased_message_keys,
+            &retry_not_before,
+            "working-hours technical hold",
+        )
+        .expect("defer queue message");
+        channels::ack_leased_messages(&root, &job.leased_message_keys, "pending")
+            .expect("release durable lease");
         {
             let mut shared = lock_shared_state(&state);
-            insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
             worker_activity.release_leased_keys_locked(&mut shared);
             push_event_locked(
                 &mut shared,
@@ -29749,17 +29952,24 @@ Business OS command:
         }
         drop(worker_activity);
 
-        // The leased queue task is held, not failed.
-        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        // The durable queue task is the sole copy and is not immediately
+        // leasable until its backoff expires.
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
+        assert_eq!(
+            channels::queue_task_deferred_until(&root, &task.message_key)
+                .expect("load durable defer")
+                .as_deref(),
+            Some(retry_not_before.as_str())
+        );
         let shared = lock_shared_state(&state);
-        // Re-queued exactly once for retry.
+        // No duplicate in-memory prompt exists beside the durable pending row.
         assert_eq!(
             shared
                 .pending_prompts
                 .iter()
                 .filter(|prompt| prompt.leased_message_keys == job.leased_message_keys)
                 .count(),
-            1
+            0
         );
         // Drop did not emit the leaked-lease fail-ack.
         assert!(
@@ -29770,6 +29980,32 @@ Business OS command:
             "hold must not fail-ack the lease: {:?}",
             shared.recent_events
         );
+    }
+
+    #[test]
+    fn pending_prompt_owns_message_key_even_while_service_is_idle() {
+        let mut shared = SharedState::default();
+        shared.pending_prompts.push_back(QueuedPrompt {
+            prompt: "reply".to_string(),
+            goal: "reply".to_string(),
+            preview: "reply".to_string(),
+            source_label: "email".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["inbound-held".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("email/thread".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        });
+
+        assert!(!shared.busy);
+        assert_eq!(shared.worker_active_count, 0);
+        assert!(leased_message_key_has_live_owner_locked(
+            &shared,
+            "inbound-held"
+        ));
     }
 
     #[test]
@@ -30540,6 +30776,7 @@ Business OS command:
                 skill: Some("reliability-ops".to_string()),
                 auto_advance: true,
                 emit_now: false,
+                wait_for: None,
             },
         )
         .expect("failed to seed unrelated active plan");
@@ -31160,6 +31397,70 @@ Business OS command:
     }
 
     #[test]
+    fn review_feedback_preserves_prompt_carried_business_command_identity() {
+        let root = temp_root("review-feedback-preserves-business-command-id");
+        let original_prompt = "Execute the command.\n\nBusiness OS command:\n- command_id: cmd-review-preserve\n- module: ctox\n- type: business_os.chat.task";
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Review identity".to_string(),
+                prompt: original_prompt.to_string(),
+                thread_key: "business-os/review-identity".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "source": "business-os",
+                    "business_os_command_id": "cmd-review-preserve"
+                })),
+            },
+        )
+        .expect("create queue task");
+        let job = QueuedPrompt {
+            prompt: original_prompt.to_string(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        apply_review_feedback_to_leased_queue(
+            &root,
+            &job,
+            "Fix the missing durable evidence.",
+            "Evidence missing",
+        )
+        .expect("apply first review feedback");
+        apply_review_feedback_to_leased_queue(
+            &root,
+            &job,
+            "Fix the validation result.",
+            "Validation missing",
+        )
+        .expect("apply replacement review feedback");
+
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert!(reloaded.prompt.starts_with(original_prompt));
+        assert!(reloaded
+            .prompt
+            .contains("- command_id: cmd-review-preserve"));
+        assert!(reloaded.prompt.contains("Fix the validation result."));
+        assert!(!reloaded
+            .prompt
+            .contains("Fix the missing durable evidence."));
+    }
+
+    #[test]
     fn service_self_work_spawn_records_core_parent_child_edges() {
         let root = temp_root("ctox-core-spawn-ledger");
         let task = create_self_work_backed_queue_task(
@@ -31238,6 +31539,7 @@ Business OS command:
                     parent_message_key: None,
                     metadata: json!({
                         "dedupe_key": format!("review-rework:queue/review-spawn-budget:{attempt}"),
+                        "work_episode_id": "review-spawn-budget-episode",
                     }),
                 },
             )
@@ -31257,6 +31559,7 @@ Business OS command:
                 parent_message_key: None,
                 metadata: json!({
                     "dedupe_key": "review-rework:queue/review-spawn-budget:over-budget",
+                    "work_episode_id": "review-spawn-budget-episode",
                 }),
             },
         )
@@ -32558,7 +32861,7 @@ Use shell tools to create or update these files."
             &job,
             "completion review leg did not produce a verdict within 900s",
         ) {
-            CompletionReviewDisposition::Hold { summary } => {
+            CompletionReviewDisposition::Hold { summary, .. } => {
                 assert!(summary.contains("did not produce a verdict"));
                 assert!(summary.contains("finite retry checkpoint"));
             }

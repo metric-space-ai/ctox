@@ -30,7 +30,6 @@ use crate::tickets;
 const DEFAULT_LIST_LIMIT: usize = 20;
 const DEFAULT_CLEANUP_SCAN_LIMIT: usize = 10_000;
 const DEFAULT_TICKET_SYSTEM: &str = "internal";
-const SPILL_RESTORE_LEASE_OWNER: &str = "spill-restore-hold";
 const SPILL_RESTORE_TITLE_PREFIX: &str = "spill restore: ";
 const QUEUE_REPAIR_TIMEOUT_SECS: u64 = 300;
 const QUEUE_REPAIR_SKILL_RELATIVE_PATH: &str =
@@ -1253,7 +1252,7 @@ fn run_queue_repair_agent(
     prompt: &str,
 ) -> Result<String> {
     let mut session =
-        PersistentSession::start_with_instructions(root, settings, Some(system_prompt), true)?;
+        PersistentSession::start_review_with_read_only_tools(root, settings, Some(system_prompt))?;
     let report = session.run_turn(
         prompt,
         Some(Duration::from_secs(QUEUE_REPAIR_TIMEOUT_SECS)),
@@ -1548,7 +1547,7 @@ fn apply_queue_repair_actions(
         }
         match action.action.as_str() {
             "cancel" => {
-                let _ = channels::update_queue_task(
+                channels::update_queue_task(
                     root,
                     channels::QueueTaskUpdateRequest {
                         message_key: action.message_key.clone(),
@@ -1559,7 +1558,7 @@ fn apply_queue_repair_actions(
                 )?;
             }
             "block" => {
-                let _ = channels::update_queue_task(
+                channels::update_queue_task(
                     root,
                     channels::QueueTaskUpdateRequest {
                         message_key: action.message_key.clone(),
@@ -1570,7 +1569,7 @@ fn apply_queue_repair_actions(
                 )?;
             }
             "release" => {
-                let _ = channels::update_queue_task(
+                channels::update_queue_task(
                     root,
                     channels::QueueTaskUpdateRequest {
                         message_key: action.message_key.clone(),
@@ -1584,7 +1583,7 @@ fn apply_queue_repair_actions(
                 let Some(priority) = action.priority.clone() else {
                     continue;
                 };
-                let _ = channels::update_queue_task(
+                channels::update_queue_task(
                     root,
                     channels::QueueTaskUpdateRequest {
                         message_key: action.message_key.clone(),
@@ -1595,7 +1594,7 @@ fn apply_queue_repair_actions(
                 )?;
             }
             "complete" => {
-                let _ = channels::update_queue_task(
+                channels::update_queue_task(
                     root,
                     channels::QueueTaskUpdateRequest {
                         message_key: action.message_key.clone(),
@@ -1860,7 +1859,7 @@ fn restore_spilled_queue_task(
                 bridge.work_id
             )
         });
-    let _ = channels::update_queue_task(
+    channels::update_queue_task(
         root,
         channels::QueueTaskUpdateRequest {
             message_key: message_key.to_string(),
@@ -1872,7 +1871,8 @@ fn restore_spilled_queue_task(
         },
     )?;
     complete_spill_restore_follow_ups(root, message_key)?;
-    let task = channels::lease_queue_task(root, message_key, SPILL_RESTORE_LEASE_OWNER)?;
+    let task =
+        channels::load_queue_task(root, message_key)?.context("restored queue task missing")?;
     let ticket = tickets::set_ticket_self_work_state(root, &bridge.work_id, "restored")?;
     let bridge = upsert_queue_ticket_bridge(
         root,
@@ -1999,7 +1999,7 @@ fn ensure_spill_restore_follow_up(
             },
         )?
     };
-    channels::lease_queue_task(root, &follow_up.message_key, SPILL_RESTORE_LEASE_OWNER)
+    Ok(follow_up)
 }
 
 fn complete_spill_restore_follow_ups(root: &Path, parent_message_key: &str) -> Result<()> {
@@ -2017,7 +2017,7 @@ fn complete_spill_restore_follow_ups(root: &Path, parent_message_key: &str) -> R
                 )
         })
     {
-        let _ = channels::update_queue_task(
+        channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key: follow_up.message_key,
@@ -2670,11 +2670,8 @@ mod tests {
         let open_after_spill =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)?;
         assert_eq!(open_after_spill.len(), 1);
-        assert_eq!(open_after_spill[0].route_status, "leased");
-        assert_eq!(
-            open_after_spill[0].lease_owner.as_deref(),
-            Some(SPILL_RESTORE_LEASE_OWNER)
-        );
+        assert_eq!(open_after_spill[0].route_status, "pending");
+        assert!(open_after_spill[0].lease_owner.is_none());
         assert!(open_after_spill[0].title.starts_with("spill restore:"));
         assert_eq!(spilled.ticket.kind, "queue-overflow");
         assert_eq!(
@@ -2697,11 +2694,8 @@ mod tests {
             Some("resume after ticket review"),
         )?;
         assert_eq!(restored.bridge_state, "restored");
-        assert_eq!(restored.task.route_status, "leased");
-        assert_eq!(
-            restored.task.lease_owner.as_deref(),
-            Some(SPILL_RESTORE_LEASE_OWNER)
-        );
+        assert_eq!(restored.task.route_status, "pending");
+        assert!(restored.task.lease_owner.is_none());
         assert!(restored
             .task
             .title
@@ -2735,7 +2729,7 @@ mod tests {
                 extra_metadata: None,
             },
         )?;
-        let _ = channels::update_queue_task(
+        channels::update_queue_task(
             &root,
             channels::QueueTaskUpdateRequest {
                 message_key: blocked.message_key.clone(),
@@ -3125,6 +3119,7 @@ mod tests {
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,
+                wait_for: None,
             },
         )?;
         let emitted = format!(

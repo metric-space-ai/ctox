@@ -34,6 +34,38 @@ Historical `runtime/cto_agent.db` and `runtime/ctox_lcm.db` paths are migration
 inputs only. Tool-owned stores stay separate when the tool owns the lifecycle,
 for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 
+## Business OS Command Architecture
+
+Lifecycle-v2 command work is gated by three accepted decisions:
+
+1. The canonical command inbox, lifecycle aggregate, command-to-queue link,
+   transition/effect ledgers, and projection outbox belong in
+   `runtime/ctox.sqlite3`. Queue-backed admission and its queue link must share
+   one SQLite unit of work there. `runtime/business-os.sqlite3` remains domain
+   storage plus a compatibility/materialized command view, and
+   `runtime/business-os-rxdb.sqlite3` remains the replicated document store.
+   Until that migration is complete, no path may claim cross-WAL atomicity.
+2. The browser owns immutable command intent until native observation. Native
+   owns lifecycle, result, errors, attempts, and projection version afterward.
+   Whole-document LWW alone is insufficient: the collection must enforce that
+   ownership boundary or split intent and native state. Reusing a command id
+   with a different immutable payload hash is an idempotency conflict.
+3. Lifecycle-v2 fields first travel as shadow fields under the existing
+   `additionalProperties: true` Business OS schemas. No required field, index,
+   or schema-version change is allowed during the mixed-version window. Peers
+   use the optional `ctox-command-lifecycle-v2` handshake capability; a later
+   declared schema change requires a coordinated cutover or a parallel v2
+   collection because schema-hash skew quiesces replication.
+
+The native router is the authoritative command classifier. Explicit control
+arms and registered control-family predicates execute without an execution
+queue task; all other commands pass the policy chokepoint and enter the
+queue-backed `record_command` path. Runtime-installed modules may introduce
+new queue-backed command types, so browser code must not hard-code a complete
+type list or infer command mode from `task_id`. Lifecycle v2 uses
+`execution_task_id` for the executing queue task and `target_task_id` or
+`target_record_id` for domain targets.
+
 ## Service Boot
 
 `run_service` initializes the durable stores, opens the LCM engine on
@@ -113,6 +145,10 @@ Direct-session model events write token and timing forensics to
 
 There are two context-protection mechanisms in the current code:
 
+- Live turns materialize only the current bounded LCM working set (referenced
+  context items, active summaries, and fresh tail). Full message/commit history
+  is reserved for retrieval, audit, and maintenance commands; recent forgotten
+  context reads diff text only.
 - LCM pre-turn compaction, controlled by `src/core/context/lcm.rs`, compacts stored
   conversation history before rendering a prompt when the LCM snapshot crosses
   the configured threshold. The default threshold is 0.75.
@@ -144,13 +180,21 @@ Refresh builds prompts for:
 The model is expected to call:
 
 ```bash
-ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff>
+ctox continuity-update --conversation-id <id> --kind <narrative|anchors|focus> --mode <full|replace|diff>
 ```
 
 The refresh driver verifies the head commit id before and after the model call.
 If the CLI tool did not advance the persisted document, no refresh is counted.
 Anchor refresh also preserves recent anchor literals after the tool-driven
 update path.
+
+Refresh demand and recovery live in `continuity_refresh_status`, keyed by
+conversation and continuity kind. Task/plan/knowledge/focus/communication
+boundaries set idempotent pending triggers; failures retain pending state with
+backoff across restart, and consumption requires an actual head advance.
+Communication-only threads make narrative and anchor refresh due no later than
+their eighth successful turn. Process-local counters are display telemetry
+only and do not decide refresh behavior.
 
 ## Review And Outcome Gates
 
@@ -166,6 +210,11 @@ typed disposition:
 - `FeedbackRetry`
 - `TerminalQueueFailure`
 - `None`
+
+`Hold` always carries a typed `HoldReason`. `WaitingExternal(WaitRef)` is
+persisted as dormant blocked work and can only be woken by its referenced
+event. Technical, missing-review-evidence, and missing-artifact holds consume
+the finite review budget with exponential backoff; they cannot cycle forever.
 
 Only approved work can move into terminal handling. For communication and other
 artifact-producing work, the outcome witness checks that required durable
@@ -234,7 +283,9 @@ Subagents are leaf workers:
   owner-visible claims.
 - Subagent sessions do not get recursive collaboration/spawn tools.
 - `spawn_agents_on_csv` is removed from subagent sessions.
-- Agent-job workers keep only `report_agent_job_result`.
+- Agent-job workers keep workspace tools plus `report_agent_job_result`; they
+  do not receive spawn, channel, meeting, acknowledgement, or control-plane
+  mutation tools.
 - Thread-spawn subagents are bounded by `agents.max_depth` and
   `agents.max_threads`.
 - Local model providers serialize subagent work; API-backed providers may run
@@ -245,6 +296,25 @@ The static liveness analyzer in
 agent-job-worker, and internal-subagent contracts. Its ranking functions are
 `max_depth - child_depth`, `pending_agent_job_items`, and single internal task
 invocation respectively.
+
+## Session Capability Profiles
+
+Every new forked-runtime session records a `SessionCapabilityProfile` in its
+session metadata. The enforced surfaces are:
+
+| Profile | Effective boundary |
+| --- | --- |
+| `WorkspaceWorker` | workspace write, network as configured; `runtime/`, `.ctox`, `.codex`, `.agents`, and Git metadata are read-only sandbox subpaths |
+| `Reviewer` | authoritative workspace/runtime read-only; a disposable scratch CWD is writable for copied build/check inputs; no patch, channel, meeting, artifact, collaboration, or mutating MCP surface |
+| `Planner` | read-only planning surface; no active mutation tools |
+| `Summarizer` | explicit `Some([])` dynamic-tool contract and no active tools |
+| `AgentJobLeaf` | workspace tools plus `report_agent_job_result`; no spawn/channel/meeting/control-plane mutation |
+
+An explicitly persisted empty dynamic-tool list is authoritative and deletes
+older restored dynamic-tool state; it never means “restore defaults”. Durable
+proofs, review evidence, approval decisions, secrets, and queue state live
+under the protected runtime store and are written only by server-side typed
+state-machine commands.
 
 ## Harness Flow Renderer
 

@@ -356,6 +356,11 @@ pub struct Config {
     /// execution surface without configured MCP or plugin MCP tools.
     pub disable_mcp_servers: bool,
 
+    /// Internal session-scoped hard no-tools capability. This is set by an
+    /// explicit `dynamic_tools: []` thread-start contract; it is not a user
+    /// process-environment toggle.
+    pub disable_active_tools: bool,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
@@ -1929,6 +1934,7 @@ pub struct ConfigOverrides {
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
     pub disable_mcp_servers: bool,
+    pub disable_active_tools: bool,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -2153,6 +2159,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
             disable_mcp_servers,
+            disable_active_tools,
             additional_writable_roots,
         } = overrides;
 
@@ -2691,6 +2698,7 @@ impl Config {
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
             mcp_servers,
             disable_mcp_servers,
+            disable_active_tools,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
