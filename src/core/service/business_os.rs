@@ -4790,14 +4790,65 @@ const pageSignals = async () => {
   return { url: page.url(), title, form_state: formState, auth_signals: authSignals };
 };
 const waitForAuthTransition = async (previousUrl, timeoutMs = 12000) => {
-  const waiters = [
-    page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => null),
-    page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs }).catch(() => null),
-    page.waitForTimeout(1200).catch(() => null),
-  ];
-  await Promise.race(waiters).catch(() => null);
-  await page.waitForTimeout(500).catch(() => null);
+  const deadline = Date.now() + timeoutMs;
+  const bounded = async (promise) => promise.catch(() => null);
+  await Promise.race([
+    bounded(page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs })),
+    bounded(page.waitForLoadState("domcontentloaded", { timeout: timeoutMs })),
+    bounded(page.waitForLoadState("networkidle", { timeout: timeoutMs })),
+  ]).catch(() => null);
+  const remaining = Math.max(500, Math.min(2500, deadline - Date.now()));
+  await page.waitForTimeout(remaining).catch(() => null);
   return pageSignals();
+};
+const waitForVerifySelector = async (selector, timeoutMs = 12000) => {
+  if (!selector) return null;
+  try {
+    await page.locator(selector).first().waitFor({ state: "visible", timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const clickLoginEntryPoint = async () => {
+  const entrySelectors = [
+    "a:has-text('Sign in')",
+    "a:has-text('Log in')",
+    "a:has-text('Login')",
+    "a:has-text('Anmelden')",
+    "a:has-text('Einloggen')",
+    "a[href*='login' i]",
+    "a[href*='signin' i]",
+    "a[href*='sign-in' i]",
+    "a[href*='auth' i]",
+    "a[href*='dashboard' i]",
+    "button:has-text('Sign in')",
+    "button:has-text('Log in')",
+    "button:has-text('Login')",
+    "button:has-text('Anmelden')",
+    "button:has-text('Einloggen')",
+    "[role='button']:has-text('Sign in')",
+    "[role='button']:has-text('Log in')",
+    "[role='button']:has-text('Login')",
+    "[role='button']:has-text('Anmelden')",
+    "[role='button']:has-text('Einloggen')",
+  ];
+  for (const selector of entrySelectors) {
+    try {
+      const locator = page.locator(selector).first();
+      if ((await locator.count()) < 1) continue;
+      const href = await locator.getAttribute("href").catch(() => null);
+      if (href) {
+        const hrefUrl = new URL(href, page.url());
+        if (hrefUrl.origin !== targetOrigin) continue;
+      }
+      const previousUrl = page.url();
+      await locator.click({ timeout: 3500 });
+      const signals = await waitForAuthTransition(previousUrl, 12000);
+      return { mode: "click-login-entry", selector, href, after: signals };
+    } catch {}
+  }
+  return null;
 };
 const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
@@ -4808,7 +4859,18 @@ if (loginHint) {
 }
 let credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
 let loginTransition = null;
+let loginEntryTransition = null;
 let afterLoginStepSignals = null;
+if (!credentialField && !loginField) {
+  loginEntryTransition = await clickLoginEntryPoint();
+  if (loginEntryTransition) {
+    afterLoginStepSignals = loginEntryTransition.after || await pageSignals();
+    if (loginHint) {
+      loginField = await fillField("login", loginHint);
+    }
+    credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+  }
+}
 if (!credentialField && loginField) {
   loginTransition = await clickSubmit(loginField);
   if (loginTransition) {
@@ -4828,6 +4890,7 @@ if (!credentialField) {
     credential_ref: credentialRef,
     login_hint_present: !!loginHint,
     login_transition: loginTransition,
+    login_entry_transition: loginEntryTransition,
     mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
     login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
     auth_signals: missingFieldSignals.auth_signals,
@@ -4844,7 +4907,7 @@ const credentialSubmitBaseSignals = await pageSignals();
 const afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
 let verifyFound = null;
 if (configuredVerifySelector) {
-  verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
+  verifyFound = await waitForVerifySelector(configuredVerifySelector, 12000);
 }
 const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
 const urlChanged = afterSignals.url !== beforeSignals.url;
@@ -4887,6 +4950,7 @@ return {
   credential_ref: credentialRef,
   login_hint_present: !!loginHint,
   login_transition: loginTransition,
+  login_entry_transition: loginEntryTransition,
   mfa_required: mfaRequired,
   login_error_detected: loginErrorDetected,
   auth_signals: authSignals,
@@ -5543,7 +5607,10 @@ mod tests {
         assert!(source.contains("login-error-detected"));
         assert!(source.contains("verify-selector-not-found"));
         assert!(source.contains("waitForAuthTransition"));
+        assert!(source.contains("waitForVerifySelector"));
         assert!(source.contains("login_transition"));
+        assert!(source.contains("clickLoginEntryPoint"));
+        assert!(source.contains("login_entry_transition"));
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));
