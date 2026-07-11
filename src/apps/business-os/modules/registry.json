@@ -81,8 +81,8 @@
     },
     {
       "id": "appsec-pentest",
-      "title": "AppSec Pentest",
-      "description": "CTOX-native AppSec assessment console for scanner readiness, coverage, findings, evidence metadata, and active-scan approvals.",
+      "title": "Deployment Audit",
+      "description": "CTOX-native go-live readiness console for scanner readiness, coverage, release blockers, evidence metadata, and active-check approvals.",
       "entry": "modules/appsec-pentest/index.html",
       "collections": [
         "business_commands",
@@ -102,9 +102,9 @@
       "layout": {
         "shell": "full-workspace",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-appsec\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-appsec\" x1=\"2\" y1=\"2\" x2=\"22\" y2=\"22\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#0f766e\"/><stop offset=\"1\" stop-color=\"#dc2626\"/></linearGradient></defs><path d=\"M12 2.75 20 6v5.9c0 4.65-3.25 7.9-8 9.35-4.75-1.45-8-4.7-8-9.35V6l8-3.25Z\" fill=\"url(#grad-appsec)\" fill-opacity=\".12\" stroke=\"url(#grad-appsec)\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/><path d=\"M8 12h8M12 8v8\" stroke=\"url(#grad-appsec)\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"12\" r=\"2.4\" fill=\"#fff\" stroke=\"url(#grad-appsec)\" stroke-width=\"1.4\"/></svg>",
-        "left": "assessment and coverage navigation",
-        "center": "selected assessment evidence workbench",
-        "right": "scanner readiness, active approvals, and command status"
+        "left": "audit and coverage navigation",
+        "center": "selected deployment audit evidence workbench",
+        "right": "scanner readiness, active-check approvals, and command status"
       },
       "category": "Security",
       "version": "v0.1",
@@ -112,13 +112,14 @@
       "license": "AGPL-3.0-only",
       "tags": [
         "appsec",
-        "pentest",
+        "deployment-audit",
+        "go-live",
         "security",
         "scanners",
         "approvals"
       ],
       "store": {
-        "summary": "Native AppSec/Pentest console over CTOX durable AppSec projections and WebRTC-only Business OS data.",
+        "summary": "Native Deployment Audit console over CTOX durable AppSec projections and WebRTC-only Business OS data.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/appsec-pentest",
         "installable": false,

@@ -187,7 +187,7 @@ RUN / EXEC
 CAPABILITIES / WEB STACK
   ctox browser <subcmd>          interactive browser automation
   ctox web <subcmd>              web search/read tooling
-  ctox appsec <subcmd>           application security pentest workflow
+  ctox appsec <subcmd>           deployment audit and go-live readiness workflow
   ctox scrape <subcmd>           scraping and extraction helpers
   ctox doc <subcmd>              document stack helpers
   ctox verification <subcmd>     verification records and evidence checks
@@ -5505,7 +5505,7 @@ mod tests {
         let task = crate::channels::create_queue_task(
             &root,
             crate::channels::QueueTaskCreateRequest {
-                title: "AppSec pentest stage: authz replay".to_string(),
+                title: "Deployment audit stage: authz replay".to_string(),
                 prompt: "Run replay with an existing session.".to_string(),
                 thread_key: "appsec:authz:https-example-test".to_string(),
                 workspace_root: Some(root.to_string_lossy().to_string()),
