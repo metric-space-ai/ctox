@@ -1,6 +1,34 @@
 # CTOX Office-Skills-Adaption: Word, Excel, PDF
 
-Stand: 2026-07-11. Status: Vorschlag, nicht begonnen.
+Stand: 2026-07-11. Status: Phase 1a und 1c umgesetzt, Ebene B zurückgestellt.
+
+Umsetzungsstand:
+
+- `pdf`-Skill v2: portiert (Commit `b7efb183c`).
+- `doc`-Skill v2: portiert inkl. `references/execution-surfaces.md` mit
+  Operation→Fläche→Feature-Gruppe-Mapping (Commit `bcc2d3ac6`).
+- `spreadsheet`-Skill v2: portiert inkl. Gating-Referenz (Commit `e3068225d`).
+- Ebene-B-Ops in `office_engine.rs`: **zurückgestellt** — die Datei ist
+  in-flight beim laufenden Office-Port-Agenten (uncommitted, aktive Edits).
+  Die Op-Spezifikation (Namen, Semantik) steht in den beiden
+  `execution-surfaces.md`-Dateien und wartet auf Koordination.
+
+## Lizenz-Randbedingung (Umsetzungserkenntnis)
+
+Das Codex-Runtime-Plugin-Material (`documents`, `spreadsheets`,
+`template-creator`, neue `pdf`-Fassung) ist „Copyright 2026 OpenAI. All
+rights reserved" (OpenAI-ToS), **nicht** frei lizenziert. Verbatim-Übernahme
+in dieses öffentliche Repo ist damit ausgeschlossen. Konsequenz:
+
+- Die v2-Skills sind **eigenständige Adaptionen in eigenen Worten** (Methodik
+  übernommen, Text neu), keine Kopien; die Repo-Lizenz gilt.
+- Das ursprünglich geplante 1:1-Portieren der 25 Task-Playbooks entfällt;
+  deren Substanz ist in die SKILL.md-Doktrin und die Referenzen eingeflossen.
+- Vorbestehend: `packs/content/doc` enthielt bereits All-rights-reserved-
+  Material im öffentlichen Repo; mit dem v2-Rewrite wurde es entfernt.
+- Gating wurde statt per `requires_features`-Frontmatter (hätte Loader-
+  Änderung gebraucht) über die `references/execution-surfaces.md`-Tabellen
+  gelöst — Statuswechsel in `features.json` werden dort nachgezogen.
 
 Quelle der Skills: Codex-Runtime-Plugins (`documents`, `spreadsheets`, `pdf`,
 Stand 2026-07-10, `~/.cache/codex-runtimes/codex-primary-runtime/plugins/`).
