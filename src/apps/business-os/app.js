@@ -67,6 +67,8 @@ const CTOX_HEALTH_POLL_MS = 10000;
 const CTOX_UPDATE_CHECK_POLL_MS = 30 * 60 * 1000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
+const MODULE_SCRIPT_PRELOAD_STABLE_HEALTH_MS = 10000;
+const MODULE_SCRIPT_PRELOAD_INTERVAL_MS = 250;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 // Shell-critical collections this app eagerly warms at boot. This MUST stay a
 // subset of SHELL_CRITICAL_COLLECTIONS, the single source of truth exported by
@@ -133,6 +135,13 @@ let syncToastWatchdog = 0;
 let moduleResizers = [];
 let syncRecoveryRepairTimer = null;
 let syncRecoveryRepairRunning = false;
+let moduleScriptPreloadPending = false;
+let moduleScriptPreloadHealthySinceMs = 0;
+let moduleScriptPreloadResumeTimer = null;
+let moduleScriptPreloadIdleHandle = null;
+let moduleScriptPreloadGeneration = 0;
+let moduleScriptPreloadPauseReason = '';
+const moduleScriptPreloadTimers = new Set();
 let businessReporterModulePromise = null;
 let businessChatModulePromise = null;
 let shellUiModulesPromise = null;
@@ -2320,6 +2329,7 @@ function shellText(key) {
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
   if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
+  updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
   scheduleSyncRecoveryRepairIfNeeded(snapshot);
   refreshOpenSyncDiagnosticsDrawer();
@@ -4372,19 +4382,132 @@ function isRxDbOpenTimeoutError(error) {
     || message.includes('IndexedDB open blocked');
 }
 
+function hasLiveModulePreloadDataPlane(snapshot = state.syncDiagnostics) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+  if (!snapshot || snapshot.mode !== 'webrtc') return false;
+  return Object.values(snapshot.collections || {}).some((collection) => {
+    const status = collection?.connectionStatus || collection?.status || '';
+    const activePeerCount = Number(collection?.frameTransport?.activePeerCount || 0);
+    return activePeerCount > 0 && ['connected', 'running', 'reused'].includes(status);
+  });
+}
+
+function hasModulePreloadLink(href) {
+  return Array.from(document.head.querySelectorAll('link[rel="modulepreload"]'))
+    .some((link) => link.getAttribute('href') === href);
+}
+
+function hasPendingModuleScriptPreloads() {
+  return state.modules
+    .filter((mod) => mod.id !== state.activeModule?.id)
+    .some((mod) => {
+      const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod)}`;
+      return !hasModulePreloadLink(href);
+    });
+}
+
+function clearModuleScriptPreloadScheduling({ resetHealth = false } = {}) {
+  moduleScriptPreloadGeneration += 1;
+  for (const timer of moduleScriptPreloadTimers) window.clearTimeout(timer);
+  moduleScriptPreloadTimers.clear();
+  if (moduleScriptPreloadResumeTimer) {
+    window.clearTimeout(moduleScriptPreloadResumeTimer);
+    moduleScriptPreloadResumeTimer = null;
+  }
+  if (moduleScriptPreloadIdleHandle !== null && 'cancelIdleCallback' in window) {
+    window.cancelIdleCallback(moduleScriptPreloadIdleHandle);
+  }
+  moduleScriptPreloadIdleHandle = null;
+  if (resetHealth) moduleScriptPreloadHealthySinceMs = 0;
+}
+
+function pauseModuleScriptPreloads(reason = 'data-plane-unavailable') {
+  clearModuleScriptPreloadScheduling({ resetHealth: true });
+  moduleScriptPreloadPending = moduleScriptPreloadPending || hasPendingModuleScriptPreloads();
+  if (moduleScriptPreloadPending && moduleScriptPreloadPauseReason !== reason) {
+    console.debug(`[business-os] module preloads paused (${reason})`);
+  }
+  moduleScriptPreloadPauseReason = reason;
+}
+
+function updateModuleScriptPreloadAvailability(snapshot = state.syncDiagnostics) {
+  if (!hasLiveModulePreloadDataPlane(snapshot)) {
+    pauseModuleScriptPreloads(
+      typeof navigator !== 'undefined' && navigator.onLine === false
+        ? 'browser-offline'
+        : 'webrtc-peer-unavailable',
+    );
+    return;
+  }
+  if (!moduleScriptPreloadPending) return;
+  moduleScriptPreloadPauseReason = '';
+  if (!moduleScriptPreloadHealthySinceMs) moduleScriptPreloadHealthySinceMs = Date.now();
+  armModuleScriptPreloadAfterStableHealth();
+}
+
+function armModuleScriptPreloadAfterStableHealth() {
+  if (!moduleScriptPreloadPending || !hasLiveModulePreloadDataPlane()) return;
+  const healthyForMs = Math.max(0, Date.now() - moduleScriptPreloadHealthySinceMs);
+  const waitMs = Math.max(0, MODULE_SCRIPT_PRELOAD_STABLE_HEALTH_MS - healthyForMs);
+  if (moduleScriptPreloadResumeTimer) window.clearTimeout(moduleScriptPreloadResumeTimer);
+  moduleScriptPreloadResumeTimer = window.setTimeout(() => {
+    moduleScriptPreloadResumeTimer = null;
+    if (!hasLiveModulePreloadDataPlane()) {
+      pauseModuleScriptPreloads('health-lost-before-preload');
+      return;
+    }
+    const run = async () => {
+      moduleScriptPreloadIdleHandle = null;
+      await registerCustomModuleIcons().catch((error) => {
+        console.debug('[business-os] deferred module icon preload skipped:', error?.message || error);
+      });
+      preloadModuleScripts();
+    };
+    if ('requestIdleCallback' in window) {
+      moduleScriptPreloadIdleHandle = window.requestIdleCallback(run, { timeout: 3000 });
+    } else {
+      const timer = window.setTimeout(() => {
+        moduleScriptPreloadTimers.delete(timer);
+        run();
+      }, 0);
+      moduleScriptPreloadTimers.add(timer);
+    }
+  }, waitMs);
+}
+
 function preloadModuleScripts() {
+  if (!hasLiveModulePreloadDataPlane()) {
+    pauseModuleScriptPreloads('health-lost-at-preload');
+    return;
+  }
+  clearModuleScriptPreloadScheduling();
+  const generation = moduleScriptPreloadGeneration;
   const modules = state.modules.filter((mod) => mod.id !== state.activeModule?.id);
   for (const [index, mod] of modules.entries()) {
     const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod)}`;
-    if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) continue;
-    window.setTimeout(() => {
-      if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) return;
+    if (hasModulePreloadLink(href)) continue;
+    const timer = window.setTimeout(() => {
+      moduleScriptPreloadTimers.delete(timer);
+      if (generation !== moduleScriptPreloadGeneration) return;
+      if (!hasLiveModulePreloadDataPlane()) {
+        pauseModuleScriptPreloads('health-lost-during-preload');
+        return;
+      }
+      if (hasModulePreloadLink(href)) return;
       const link = document.createElement('link');
       link.rel = 'modulepreload';
       link.href = href;
       document.head.append(link);
-    }, index * 250);
+    }, index * MODULE_SCRIPT_PRELOAD_INTERVAL_MS);
+    moduleScriptPreloadTimers.add(timer);
   }
+  moduleScriptPreloadPending = false;
+}
+
+function hasStableLiveModulePreloadDataPlane() {
+  return hasLiveModulePreloadDataPlane()
+    && moduleScriptPreloadHealthySinceMs > 0
+    && Date.now() - moduleScriptPreloadHealthySinceMs >= MODULE_SCRIPT_PRELOAD_STABLE_HEALTH_MS;
 }
 
 // Phase 2: renamed from `scheduleBackgroundModuleWork` and stripped of the
@@ -4392,15 +4515,18 @@ function preloadModuleScripts() {
 // render concern now — it warms the module-script HTTP cache so navigation is
 // snappy. It does NOT touch sync; replication is lazy in RxDB.
 function scheduleModuleScriptPreload() {
-  const run = () => {
-    preloadModuleScripts();
-  };
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 3000 });
-  } else {
-    window.setTimeout(run, 1200);
-  }
+  clearModuleScriptPreloadScheduling({ resetHealth: true });
+  moduleScriptPreloadPending = hasPendingModuleScriptPreloads();
+  if (!moduleScriptPreloadPending) return;
+  updateModuleScriptPreloadAvailability(state.syncDiagnostics);
 }
+
+window.addEventListener('offline', () => pauseModuleScriptPreloads('browser-offline'));
+window.addEventListener('online', () => {
+  // Do not trust the pre-offline diagnostics snapshot. The next live WebRTC
+  // diagnostic resumes preloading after a new stable-health window.
+  moduleScriptPreloadHealthySinceMs = 0;
+});
 
 function moduleBasePath(mod) {
   const entry = String(mod.entry || `modules/${mod.id}/index.html`)
@@ -6850,6 +6976,10 @@ async function resolveModuleIconSvg(mod) {
   if (state.moduleIconSvgCache.has(mod.id)) return state.moduleIconSvgCache.get(mod.id);
   const assetPath = moduleIconAssetPath(mod);
   if (!assetPath) return '';
+  // External icon files are optional render assets. Do not start them while
+  // the daemon/network is down or before the WebRTC peer has been stable long
+  // enough; inline manifest icons remain available immediately.
+  if (!hasStableLiveModulePreloadDataPlane()) return '';
   try {
     const response = await fetch(`./${assetPath}?v=${APP_BUILD}${moduleRevisionQuery(mod)}`, { cache: 'force-cache' });
     if (!response.ok) {
