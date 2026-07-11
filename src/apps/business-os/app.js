@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260711-app-runtime-v1';
+const APP_BUILD = '20260711-app-runtime-v2';
 
 ensureShellStylesheets();
 
@@ -1125,16 +1125,17 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
 
     try {
       setStartupProgress(58, shellText('bootDbStructures'));
-      await registerCoreCollections();
+      await registerCoreCollections({ timeoutMs: 12000 });
       return;
     } catch (error) {
-      const retryable = isIndexedDbConnectionClosingError(error) && attempt < maxAttempts;
+      const retryable = (isIndexedDbConnectionClosingError(error) || isCoreCollectionRegistrationTimeout(error))
+        && attempt < maxAttempts;
       try { await state.db?.close?.(); } catch (closeError) {
         console.debug('[business-os] stale IndexedDB close failed during startup retry', closeError);
       }
       state.db = null;
       if (!retryable) throw error;
-      console.warn(`[business-os] IndexedDB closed during schema registration; reopening (${attempt}/${maxAttempts - 1})`, error);
+      console.warn(`[business-os] Core schema registration did not complete; reopening IndexedDB (${attempt}/${maxAttempts - 1})`, error);
       await new Promise((resolve) => window.setTimeout(resolve, attempt * 150));
     }
   }
@@ -1144,6 +1145,10 @@ function isIndexedDbConnectionClosingError(error) {
   const message = String(error?.message || error || '');
   return error?.name === 'InvalidStateError'
     && /IDBDatabase.*closing|database connection is closing/i.test(message);
+}
+
+function isCoreCollectionRegistrationTimeout(error) {
+  return error?.name === 'CtoxCoreCollectionRegistrationTimeout';
 }
 
 function scheduleCatalogRefresh(reason = 'database-sync') {
@@ -1234,7 +1239,7 @@ function isModuleCatalogSyncError(error) {
     || message.includes('module catalog');
 }
 
-async function registerCoreCollections() {
+async function registerCoreCollections({ timeoutMs = 12000 } = {}) {
   const t0 = performance.now();
   setStartupProgress(58, shellText('bootSchemas'));
 
@@ -1248,12 +1253,30 @@ async function registerCoreCollections() {
   };
 
   setStartupProgress(59, shellText('bootSchemasRegister'));
-  await state.db.addCollections(consolidated);
+  await withCoreCollectionRegistrationTimeout(
+    state.db.addCollections(consolidated),
+    timeoutMs
+  );
 
   setStartupProgress(61, shellText('bootSchemasDone'));
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   await primeWindowGeometryCache();
+}
+
+function withCoreCollectionRegistrationTimeout(promise, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => {
+      const error = new Error(`Core collection registration did not finish within ${timeoutMs}ms.`);
+      error.name = 'CtoxCoreCollectionRegistrationTimeout';
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
 }
 
 async function primeWindowGeometryCache() {
