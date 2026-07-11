@@ -1174,7 +1174,10 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
 }
 
 fn handle_appsec_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
-    if matches!(args.first().map(String::as_str), Some("state" | "durable")) {
+    if matches!(
+        appsec_command_pair(args).map(|(command, _)| command),
+        Some("state" | "durable")
+    ) {
         let output = appsec_state::handle_state_command(root, args)
             .context("ctox appsec state command failed")?;
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -1266,19 +1269,10 @@ pub(crate) fn run_projected_appsec_command(root: &Path, args: &[String]) -> anyh
 }
 
 fn append_appsec_credential_proof_arg(root: &Path, args: &[String]) -> anyhow::Result<Vec<String>> {
-    let should_prove = matches!(
-        (
-            args.first().map(String::as_str),
-            args.get(1).map(String::as_str)
-        ),
-        (Some("authz"), Some("run"))
-    ) || (matches!(
-        (
-            args.first().map(String::as_str),
-            args.get(1).map(String::as_str)
-        ),
-        (Some("authz"), Some("preflight"))
-    ) && arg_flag(args, "--require-credentials"));
+    let command_pair = appsec_command_pair(args);
+    let should_prove = matches!(command_pair, Some(("authz", Some("run"))))
+        || (matches!(command_pair, Some(("authz", Some("preflight"))))
+            && arg_flag(args, "--require-credentials"));
     if !should_prove
         || arg_value(args, "--credential-proof").is_some()
         || arg_value(args, "--subjects").is_none()
@@ -1455,22 +1449,37 @@ fn parse_appsec_ctox_secret_ref(value: &str) -> Option<(String, String)> {
 
 fn is_appsec_pipeline_enqueue(args: &[String]) -> bool {
     matches!(
-        (
-            args.first().map(String::as_str),
-            args.get(1).map(String::as_str)
-        ),
-        (Some("pipeline"), Some("enqueue"))
+        appsec_command_pair(args),
+        Some(("pipeline", Some("enqueue")))
     )
 }
 
 fn is_appsec_pipeline_work(args: &[String]) -> bool {
     matches!(
-        (
-            args.first().map(String::as_str),
-            args.get(1).map(String::as_str)
-        ),
-        (Some("pipeline"), Some("work" | "worker" | "run-queue"))
+        appsec_command_pair(args),
+        Some(("pipeline", Some("work" | "worker" | "run-queue")))
     )
+}
+
+fn appsec_command_pair(args: &[String]) -> Option<(&str, Option<&str>)> {
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--state-dir" | "--tools-root" => {
+                index += 2;
+            }
+            "--json" => {
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                index += 1;
+            }
+            command => {
+                return Some((command, args.get(index + 1).map(String::as_str)));
+            }
+        }
+    }
+    None
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -4706,6 +4715,10 @@ mod tests {
         let args = vec![
             "--state-dir".to_string(),
             state.to_string_lossy().to_string(),
+            "--tools-root".to_string(),
+            root.join("runtime/tools/appsec")
+                .to_string_lossy()
+                .to_string(),
             "authz".to_string(),
             "preflight".to_string(),
             "--target".to_string(),
