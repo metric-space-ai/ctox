@@ -19,9 +19,15 @@ Umsetzungsstand:
   verweigert `*PrChange` statt zu raten), `protection-set`, `style-lint`,
   `fields-report`, `table-export` — deterministische OOXML-Transformationen,
   unberührte Parts byte-identisch, CLI-Dispatch in `ctox-office-engine`,
-  29 Tests grün plus Real-Fixture-Smoke. Noch offen aus der Op-Liste:
-  `merge`, `tracked-changes replace`, Style-Normalize, A11y-Safe-Fixes,
-  Feld-Materialisierung, Wasserzeichen, Tabellen-Import.
+  29 Tests grün plus Real-Fixture-Smoke.
+- **Ebene-B-Ops Slice 3 implementiert** (Commit `be5134b58`):
+  `fields-materialize` (REF/PAGEREF/SEQ flatten, PAGE bleibt live),
+  `watermark-audit|remove`, `a11y-fix` (Alt-Text aus Namen,
+  Header-Zeilen), `tracked-changes-replace` (echte del+ins-Revisionspaare
+  mit Run-Splitting; komplexe Runs werden gemeldet, nicht geraten),
+  `merge-append` (Seitenumbruch-getrennt; verweigert Dokumente mit
+  Media/Hyperlink/Kommentar-Relationships). 34 Tests grün. Restliste:
+  Style-Normalize, Watermark-Add, Tabellen-Import.
 - **Gating-Guard** (`src/scripts/check-office-skill-gating.mjs`, Commit
   `e5d0dd216`): diffst die execution-surfaces-Tabellen gegen `features.json`,
   schlägt bei Drift oder unreferenzierten Gruppen fehl. Hat unmittelbar die

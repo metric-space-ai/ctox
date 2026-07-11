@@ -37,7 +37,7 @@ Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 | Export (byte-preserving round-trip/merge) | `export` | available |
 | Accept all tracked changes | `tracked-changes-accept` | **available** |
 | Reject all tracked changes (refuses `*PrChange`) | `tracked-changes-reject` | **available** |
-| Insert tracked replacements | `tracked-changes replace` | planned |
+| Insert tracked replacements (simple runs; complex reported) | `tracked-changes-replace` | **available** |
 | Extract comments (text, author, resolved state) | `comments-extract` | **available** |
 | Add a comment (anchored by paragraph text) | `comments-add` | **available** |
 | Resolve comments (one or all) | `comments-resolve` | **available** |
@@ -45,11 +45,13 @@ Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 | Privacy scrub (authors, rsid, custom props) | `privacy-scrub` | **available** |
 | Layout-preserving redaction (terms, emails, phones) | `redact` | **available** (single-run matches) |
 | Edit protection (readonly/comments/forms/none) | `protection-set` | **available** |
-| Merge/append documents | `merge` | planned |
-| Accessibility audit (alt text, heading ladder, table headers) | `a11y-audit` | **available** (safe fixes planned) |
+| Merge/append documents (refuses media/hyperlink/comment rels) | `merge-append` | **available** |
+| Accessibility audit (alt text, heading ladder, table headers) | `a11y-audit` | **available** |
+| Accessibility safe fixes (alt from name, header rows) | `a11y-fix` | **available** |
 | Style lint (fake bullets, fake headings) | `style-lint` | **available** (normalize planned) |
-| Fields report (instructions + cached results) | `fields-report` | **available** (materialize planned) |
-| Watermark add / audit / remove | `watermark add\|audit\|remove` | planned |
+| Fields report (instructions + cached results) | `fields-report` | **available** |
+| Field materialization (REF/PAGEREF/SEQ; PAGE stays live) | `fields-materialize` | **available** |
+| Watermark audit / remove (VML header objects) | `watermark-audit\|remove` | **available** (add planned) |
 | Table → CSV export | `table-export` | **available** (import planned) |
 
 ## Known coverage gaps fed back to the office port
