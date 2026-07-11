@@ -436,6 +436,8 @@ function bindEvents(root) {
       resetMapView();
     } else if (action === 'run-research') {
       await runSelectedResearch();
+    } else if (action === 'build-knowledge') {
+      await buildKnowledgeFromResearch();
     } else if (action === 'open-knowledge') {
       openKnowledgeTable(target.dataset.tableId || '');
     } else if (action === 'source-detail') {
@@ -1764,6 +1766,7 @@ function renderRight() {
           <h2 class="ctox-pane-title">${escapeHtml(task?.title || 'Research')}</h2>
         </div>
         <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-action="build-knowledge" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${escapeHtml(state.t('buildKnowledge', 'Knowledge aufbauen oder aktualisieren'))}" title="${escapeHtml(state.t('buildKnowledgeHint', 'Aus diesem Research belegtes Knowledge mit Skills, Runbooks und Quellenreferenzen aufbauen oder aktualisieren'))}">${iconSvg('knowledge')}</button>
           <button type="button" class="ctox-pane-icon" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}" title="${escapeHtml(runResearchHint(task, runInfo))}">${iconSvg('play')}</button>
         </div>
       </div>
@@ -1775,6 +1778,7 @@ function renderRight() {
         <p>${escapeHtml(task?.prompt || state.t('defaultTaskDesc', 'Research-Dashboard auf Basis einer vorhandenen Knowledge Base.'))}</p>
         ${task?.criteria ? `<small>${escapeHtml(task.criteria)}</small>` : ''}
         ${task ? `<button type="button" class="ctox-button" data-action="edit-task">${escapeHtml(state.t('editScoring', 'Scoring bearbeiten'))}</button>` : ''}
+        ${task ? `<button type="button" class="ctox-button" data-action="build-knowledge">${escapeHtml(task.payload?.knowledge_refresh?.command_id ? state.t('updateKnowledge', 'Knowledge aktualisieren') : state.t('buildKnowledge', 'Knowledge aufbauen'))}</button>` : ''}
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
@@ -2309,6 +2313,110 @@ async function runSelectedResearch() {
   render();
 }
 
+function knowledgeRefreshPayload(task, base, latestRun) {
+  const tables = base?.tables || [];
+  const tableRefs = Object.fromEntries(tables
+    .filter((table) => table.table_key)
+    .map((table) => [table.table_key, table.id || table.table_id || table.table_key]));
+  const instruction = [
+    `Baue oder aktualisiere die Knowledge Base fuer das abgeschlossene Research "${task.title}".`,
+    `Research Task ID: ${task.id}`,
+    `Research Run ID: ${latestRun?.id || 'latest'}`,
+    `Knowledge domain: ${task.knowledge_domain}`,
+    '',
+    'Erzeuge bzw. aktualisiere einen fachlichen Skill/Skillbook und die dazugehoerigen Runbooks und Ressourcen.',
+    'Verwende die bestehenden stabilen IDs und aktualisiere vorhandene Elemente per Upsert; erzeuge keine parallelen Kopien derselben Knowledge Base.',
+    'Der Skill ist der Wissens- und Arbeits-Hub, aber keine Ersatzquelle: Jede faktische Aussage muss auf die originalen source_id/source_url-Eintraege aus source_catalog und evidence_points zurueckverweisen.',
+    'Uebernimm keine unbelegten Aussagen. Halte Quellen, Evidenz, Tabellen und Ableitungen getrennt nachvollziehbar.',
+    'Erzeuge Runbooks fuer wiederkehrende Analysen und Dokumenttypen, die dieses Knowledge und bei Bedarf die Originalquellen erneut lesen.',
+    'Bewahre die Verbindung zu Research Task, Research Run und Knowledge-Tabellen, damit spaetere Research-Laeufe dieselben Elemente aktualisieren koennen.',
+  ].join('\n');
+  return {
+    title: `Knowledge aktualisieren · ${task.title}`,
+    instruction,
+    prompt: instruction,
+    priority: 'high',
+    required_skills: ['systematic-research', 'knowledge'],
+    update_mode: 'upsert',
+    thread_key: `business-os/research/${task.id}/knowledge`,
+    research_task_id: task.id,
+    research_run_id: latestRun?.id || '',
+    knowledge_domain: task.knowledge_domain,
+    source_tables: tableRefs,
+    knowledge_contract: {
+      domain: task.knowledge_domain,
+      create_or_update: ['skillbook', 'skills', 'runbooks', 'resources'],
+      stable_identity: true,
+      provenance_required: true,
+      source_of_truth: 'original_sources',
+      citations: ['source_id', 'source_url'],
+      refresh_policy: 'update_existing_elements_from_latest_research_run',
+    },
+    writeback_contract: {
+      collections: ['knowledge_items', 'knowledge_runbooks', 'knowledge_tables'],
+      mode: 'upsert',
+      preserve_lineage: true,
+      lineage: {
+        research_task_id: task.id,
+        research_run_id: latestRun?.id || '',
+        knowledge_domain: task.knowledge_domain,
+        table_ids: Object.values(tableRefs),
+      },
+    },
+  };
+}
+
+async function buildKnowledgeFromResearch() {
+  const task = selectedTask();
+  if (!canRunResearchTask(task)) {
+    setStatus(runDisabledReason(task));
+    renderRight();
+    return;
+  }
+  if (!canWriteResearchState()) {
+    setStatus(researchWriteDeniedMessage());
+    renderRight();
+    return;
+  }
+  const base = knowledgeBaseForTask(task);
+  const latestRun = latestRunForTask(task.id);
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const payload = knowledgeRefreshPayload(task, base, latestRun);
+  const result = await state.ctx.commandBus.dispatch({
+    id: commandId,
+    command_id: commandId,
+    module: 'research',
+    command_type: 'research.knowledge.refresh',
+    record_id: task.id,
+    payload,
+    client_context: {
+      action: 'build-or-update-knowledge',
+      module: 'research',
+      source_module: 'research',
+      inbound_channel: 'business_os.research',
+      research_task_id: task.id,
+      research_run_id: latestRun?.id || '',
+      knowledge_domain: task.knowledge_domain,
+    },
+  });
+  const now = Date.now();
+  const knowledgeRefresh = {
+    command_id: result?.command_id || commandId,
+    task_id: result?.task_id || '',
+    status: result?.task_status || result?.status || 'queued',
+    research_run_id: latestRun?.id || '',
+    requested_at_ms: now,
+  };
+  await patchDoc(writableCollection('research_tasks'), task.id, {
+    payload: { ...(task.payload || {}), knowledge_refresh: knowledgeRefresh },
+    updated_at_ms: now,
+  });
+  task.payload = { ...(task.payload || {}), knowledge_refresh: knowledgeRefresh };
+  sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
+  setStatus(state.t('knowledgeQueued', 'Knowledge-Aufbau wurde an CTOX uebergeben.'));
+  render();
+}
+
 function runInfoActionLabel(task) {
   return researchRunInfo(task).hasRun
     ? state.t('researchFortsetzen', 'Research fortsetzen')
@@ -2331,6 +2439,8 @@ async function updateTaskAxis(axis, value) {
 
 function openKnowledgeTable(tableId) {
   if (!tableId) return;
+  const task = selectedTask();
+  if (task?.knowledge_domain) sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
   sessionStorage.setItem('ctox.businessOs.knowledge.openId', tableId);
   location.hash = 'knowledge';
 }
@@ -2800,7 +2910,7 @@ function relativeTime(ms) {
 // ctx.getActionIcon): monochrome stroke glyphs that inherit currentColor.
 // Legacy local names are mapped onto the shared glyph names.
 function iconSvg(name) {
-  const kitNames = { plus: 'add', table: 'columns' };
+  const kitNames = { plus: 'add', table: 'columns', knowledge: 'knowledge' };
   return state.ctx?.getActionIcon?.(kitNames[name] || name, 16, 1.8) || '';
 }
 
@@ -3501,6 +3611,7 @@ export const __researchTestHooks = {
   diagnosticRows,
   disabledTabButton,
   knowledgeBasesFromTables,
+  knowledgeRefreshPayload,
   renderNoTaskCenter,
   researchDomainFromFormValue,
   shouldRetryEmptyKnowledgeTables,

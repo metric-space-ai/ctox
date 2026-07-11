@@ -30357,6 +30357,50 @@ struct DocumentsWritebackResult {
     index_text_chars: usize,
 }
 
+fn document_knowledge_context(command: &BusinessCommand) -> Value {
+    command
+        .payload
+        .get("knowledge_context")
+        .filter(|value| value.is_object())
+        .cloned()
+        .or_else(|| {
+            command
+                .client_context
+                .get("knowledge_context")
+                .filter(|value| value.is_object())
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn document_linked_records(command: &BusinessCommand) -> Vec<Value> {
+    let context = document_knowledge_context(command);
+    let Some(context_object) = context.as_object() else {
+        return Vec::new();
+    };
+    let Some(id) = context_object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+    vec![serde_json::json!({
+        "type": "knowledge",
+        "collection": "knowledge_items",
+        "id": id,
+        "kind": context_object.get("kind").cloned().unwrap_or(Value::Null),
+        "title": context_object.get("title").cloned().unwrap_or(Value::Null),
+        "domain": context_object.get("domain").cloned().unwrap_or(Value::Null),
+        "source_path": context_object.get("source_path").cloned().unwrap_or(Value::Null),
+        "updated_at_ms": context_object.get("updated_at_ms").cloned().unwrap_or(Value::Null),
+        "selection_mode": context_object.get("selection_mode").cloned().unwrap_or(Value::Null),
+        "table_ids": context_object.get("table_ids").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "linked_runbook_ids": context_object.get("linked_runbook_ids").cloned().unwrap_or_else(|| serde_json::json!([])),
+    })]
+}
+
 fn writeback_generated_docx(
     root: &Path,
     conn: &Connection,
@@ -30417,12 +30461,15 @@ fn writeback_generated_docx(
         "checks": ["zip", "[Content_Types].xml", "word/document.xml"]
     }]);
     let status = "Draft";
+    let knowledge_context = document_knowledge_context(command);
+    let linked_records = document_linked_records(command);
     let model_json = serde_json::json!({
         "type": "docx",
         "source_kind": "ctox_generated_docx",
         "filename": filename,
         "title": title,
-        "index_text": index_text
+        "index_text": index_text,
+        "knowledge_context": knowledge_context
     });
     let document_payload = serde_json::json!({
         "id": document_id,
@@ -30438,7 +30485,7 @@ fn writeback_generated_docx(
         "source_sha256": source_sha256,
         "page_count": 0,
         "diagnostics_count": 1,
-        "linked_records": [],
+        "linked_records": linked_records,
         "display_cache": {},
         "tags": tags,
         "index_text": index_text,
@@ -37777,6 +37824,48 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn document_links_preserve_selected_knowledge_snapshot() {
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_knowledge".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "knowledge_context": {
+                    "selection_mode": "auto",
+                    "id": "skill:drone-bearing-loads",
+                    "kind": "skill",
+                    "title": "Drone Bearing Loads",
+                    "domain": "drone_bearing_design",
+                    "updated_at_ms": 42,
+                    "table_ids": ["table:source-catalog", "table:evidence-points"],
+                    "linked_runbook_ids": ["runbook:bearing-report"]
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let linked = document_linked_records(&command);
+        assert_eq!(linked.len(), 1);
+        assert_eq!(
+            linked[0].get("type").and_then(Value::as_str),
+            Some("knowledge")
+        );
+        assert_eq!(
+            linked[0].get("id").and_then(Value::as_str),
+            Some("skill:drone-bearing-loads")
+        );
+        assert_eq!(
+            linked[0]
+                .get("table_ids")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
 
     #[test]
     fn exhausted_intake_failure_creates_durable_canonical_evidence() -> anyhow::Result<()> {

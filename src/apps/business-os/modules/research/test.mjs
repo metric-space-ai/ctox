@@ -52,6 +52,22 @@ test('run button validation requires a selected task with a loaded knowledge dom
   assert.equal(hooks.validateSelectedResearchTask({ id: 'task-1', title: 'Vendor Research', knowledge_domain: bases[0].domain }, bases).valid, true);
 });
 
+test('knowledge refresh contract preserves living research lineage and source provenance', () => {
+  const task = { id: 'task-1', title: 'Bearing loads', knowledge_domain: 'drone_bearing_design' };
+  const base = { tables: [
+    { id: 'table:sources', table_key: 'source_catalog' },
+    { id: 'table:evidence', table_key: 'evidence_points' },
+  ] };
+  const payload = hooks.knowledgeRefreshPayload(task, base, { id: 'run-7' });
+
+  assert.equal(payload.update_mode, 'upsert');
+  assert.equal(payload.research_run_id, 'run-7');
+  assert.equal(payload.knowledge_contract.provenance_required, true);
+  assert.equal(payload.knowledge_contract.source_of_truth, 'original_sources');
+  assert.deepEqual(payload.writeback_contract.lineage.table_ids, ['table:sources', 'table:evidence']);
+  assert.match(payload.instruction, /source_id\/source_url/);
+});
+
 test('diagnostic rows distinguish sync failures from local no-data', () => {
   const rows = hooks.collectionDiagnosticRows(['research_runs', 'research_notes', 'knowledge_tables'], {
     research_runs: { sync: { kind: 'failed', message: 'WebRTC replication failed' } },

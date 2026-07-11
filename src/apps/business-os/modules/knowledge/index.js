@@ -4,6 +4,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
 const KNOWLEDGE_SYNC_START_WAIT_MS = 1500;
 const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
+const KNOWLEDGE_OPEN_DOMAIN_KEY = 'ctox.businessOs.knowledge.openDomain';
 const KNOWLEDGE_DATA_COLLECTIONS = Object.freeze([
   'knowledge_items',
   'knowledge_runbooks',
@@ -333,6 +334,21 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
       state.openGroups.add(group.id);
     }
   }
+  const requestedDomain = sessionStorage.getItem(KNOWLEDGE_OPEN_DOMAIN_KEY) || '';
+  const requestedGroup = requestedDomain
+    ? state.groups.find((group) => knowledgeGroupMatchesDomain(group, requestedDomain))
+    : null;
+  if (requestedGroup) {
+    sessionStorage.removeItem(KNOWLEDGE_OPEN_DOMAIN_KEY);
+    state.selectedGroupId = requestedGroup.id;
+    state.openGroups.add(requestedGroup.id);
+    state.selectedSkillbookId = firstSkillbookForGroup(requestedGroup)?.id || '';
+    const context = skillbookContext(requestedGroup, state.selectedSkillbookId);
+    state.selectedId = context.skill?.id || requestedGroup.primaryItemId || requestedGroup.entries[0]?.id || '';
+    state.selectedTableId = context.tables[0]?.id || requestedGroup.tableIds?.[0] || '';
+    state.selectedRunbookId = normaliseRunbookId(context.runbooks[0]?.id || context.runbookItems[0]?.id || '');
+    return;
+  }
   const selectedStillExists = state.items.some((item) => item.id === state.selectedId);
   if (selectedStillExists) return;
   const firstGroup = state.groups[0];
@@ -343,6 +359,20 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   state.selectedId = firstContext.skill?.id || firstGroup?.primaryItemId || state.items[0]?.id || '';
   state.selectedTableId = firstContext.tables[0]?.id || firstGroup?.tableIds?.[0] || '';
   state.selectedRunbookId = normaliseRunbookId(firstContext.runbooks[0]?.id || firstContext.runbooks[0]?.runbook_id || state.runbooks[0]?.id || '');
+}
+
+function knowledgeGroupMatchesDomain(group, domain) {
+  const target = normaliseName(domain);
+  if (!target || !group) return false;
+  const candidates = [
+    group.domain,
+    group.id,
+    ...group.entries.flatMap((entry) => [entry.domain, entry.knowledge_domain, entry.payload?.domain, entry.payload?.knowledge_domain]),
+  ];
+  return candidates.some((value) => {
+    const normalized = normaliseName(value || '');
+    return Boolean(normalized) && (normalized === target || normalized.includes(target) || target.includes(normalized));
+  });
 }
 
 async function readLocalKnowledgeSnapshot() {
@@ -2711,6 +2741,7 @@ export const __knowledgeTestHooks = {
   isKnowledgeActionFormReady,
   isKnowledgeTabDisabled,
   knowledgeItemsFromTables,
+  knowledgeGroupMatchesDomain,
   knowledgeEmptyStateMessage,
   localDataFrameRows,
   localDataFrameSchema,

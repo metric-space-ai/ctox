@@ -25,6 +25,7 @@ const {
   isKnowledgeActionFormReady,
   isKnowledgeTabDisabled,
   knowledgeItemsFromTables,
+  knowledgeGroupMatchesDomain,
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,
@@ -77,6 +78,16 @@ test('projects knowledge table records into visible dataframe entries', () => {
   assert.equal(groups[0].entries[0].id, 'table:load-points');
   assert.equal(groups[0].entries[0].has_table, true);
   assert.deepEqual(groups[0].tableIds, ['table:load-points']);
+});
+
+test('matches a Research handoff to a Knowledge group by entry domain', () => {
+  const group = {
+    id: 'research/drone-design/drone-bearing-loads',
+    domain: 'drone_design',
+    entries: [{ id: 'table:loads', payload: { domain: 'drone_bearing_design' } }],
+  };
+  assert.equal(knowledgeGroupMatchesDomain(group, 'drone_bearing_design'), true);
+  assert.equal(knowledgeGroupMatchesDomain(group, 'unrelated_domain'), false);
 });
 
 test('normalizes RxDB payload records without dropping table rows or schema', () => {

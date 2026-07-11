@@ -102,12 +102,34 @@ const documentRunbookSchema = {
   additionalProperties: true
 };
 
+const knowledgeRecordSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    kind: { type: 'string' },
+    title: { type: 'string' },
+    subtitle: { type: 'string' },
+    summary: { type: 'string' },
+    source_path: { type: 'string' },
+    updated_at: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    updated_at_ms: { type: 'number' }
+  },
+  required: ['id', 'kind', 'title', 'updated_at_ms'],
+  additionalProperties: true
+};
+
 export const collections = {
   business_commands: commandSchema,
   documents: documentSchema,
   document_versions: documentVersionSchema,
   document_blob_chunks: documentBlobChunkSchema,
-  document_runbooks: documentRunbookSchema
+  document_runbooks: documentRunbookSchema,
+  knowledge_items: knowledgeRecordSchema,
+  knowledge_runbooks: knowledgeRecordSchema,
+  knowledge_tables: knowledgeRecordSchema
 };
 
 export const migrationStrategies = {

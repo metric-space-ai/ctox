@@ -272,7 +272,10 @@
         "documents",
         "document_versions",
         "document_blob_chunks",
-        "document_runbooks"
+        "document_runbooks",
+        "knowledge_items",
+        "knowledge_runbooks",
+        "knowledge_tables"
       ],
       "source": "local",
       "core": false,

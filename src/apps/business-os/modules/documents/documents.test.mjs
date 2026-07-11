@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
 import { build } from 'esbuild';
 
@@ -24,6 +25,19 @@ test('document records without is_deleted are active', () => {
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1' }), true);
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1', is_deleted: false }), true);
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1', is_deleted: true }), false);
+});
+
+test('documents module declares the shared Knowledge collections', async () => {
+  const moduleJson = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
+  const registryJson = JSON.parse(await readFile(new URL('../registry.json', import.meta.url), 'utf8'));
+  const collectionSchema = JSON.parse(await readFile(new URL('./collections.schema.json', import.meta.url), 'utf8'));
+  const registryModule = registryJson.modules.find((item) => item.id === 'documents');
+  const required = ['knowledge_items', 'knowledge_runbooks', 'knowledge_tables'];
+  for (const name of required) {
+    assert.ok(moduleJson.collections.includes(name));
+    assert.ok(registryModule.collections.includes(name));
+    assert.ok(collectionSchema.collections[name]);
+  }
 });
 
 test('only superseded draft blobs are reclaimed, never the original or current blob', () => {
@@ -78,6 +92,36 @@ test('new document validation requires title, runbook, and prompt', () => {
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: 'research.report.auto', prompt: '' }).valid, false);
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: '', prompt: 'Analyse' }).valid, false);
   assert.equal(hooks.validateNewDocumentInput({ title: 'Report', runbookId: 'research.report.auto', prompt: 'Analyse' }).valid, true);
+});
+
+test('knowledge selection supports explicit skills and automatic topic matching', () => {
+  const state = {
+    knowledgeItems: [
+      hooks.normalizeKnowledgeRecord({ id: 'skill:bearings', kind: 'skill', title: 'Drone Bearing Loads', summary: 'Propeller torque and bearing force', payload: { domain: 'drone_bearing_design' }, updated_at_ms: 20 }),
+      hooks.normalizeKnowledgeRecord({ id: 'skill:markets', kind: 'skill', title: 'Market Research', summary: 'Vendors and pricing', payload: { domain: 'market' }, updated_at_ms: 30 }),
+    ],
+    knowledgeRunbooks: [{ id: 'runbook:bearing-report', kind: 'runbook', payload: { domain: 'drone_bearing_design' } }],
+    knowledgeTables: [{ id: 'table:bearing-loads', kind: 'dataframe', payload: { domain: 'drone_bearing_design' } }],
+  };
+
+  const automatic = hooks.resolveKnowledgeContext(state, 'auto', 'Analyse propeller torque for drone bearings');
+  assert.equal(automatic.id, 'skill:bearings');
+  assert.equal(automatic.selection_mode, 'auto');
+  assert.deepEqual(automatic.table_ids, ['table:bearing-loads']);
+  assert.deepEqual(automatic.linked_runbook_ids, ['runbook:bearing-report']);
+
+  const manual = hooks.resolveKnowledgeContext(state, 'skill:markets', 'bearing loads');
+  assert.equal(manual.id, 'skill:markets');
+  assert.equal(manual.selection_mode, 'manual');
+});
+
+test('documents become stale when their linked knowledge item is newer', () => {
+  const record = { linked_records: [{ type: 'knowledge', id: 'skill:bearings', title: 'Bearing Loads', updated_at_ms: 100 }] };
+  const state = { knowledgeItems: [{ id: 'skill:bearings', updated_at_ms: 101 }] };
+  assert.equal(hooks.documentKnowledgeLink(record).id, 'skill:bearings');
+  assert.equal(hooks.isDocumentKnowledgeStale(state, record), true);
+  state.knowledgeItems[0].updated_at_ms = 100;
+  assert.equal(hooks.isDocumentKnowledgeStale(state, record), false);
 });
 
 test('import validation requires a supported file', () => {

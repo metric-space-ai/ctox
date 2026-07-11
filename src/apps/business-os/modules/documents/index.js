@@ -130,6 +130,9 @@ export async function mount(ctx) {
     superdocModule: null,
     documents: [],
     runbooks: [],
+    knowledgeItems: [],
+    knowledgeRunbooks: [],
+    knowledgeTables: [],
     selectedId: '',
     selectedVersion: null,
     editorHandle: null,
@@ -155,8 +158,7 @@ export async function mount(ctx) {
   state.contextMenuCleanup = initDocumentsContextMenu(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
   await ensureSeedRunbooks(ctx);
-  await refreshRunbooks(state);
-  await refreshDocuments(state);
+  await Promise.all([refreshRunbooks(state), refreshKnowledge(state), refreshDocuments(state)]);
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
@@ -387,7 +389,7 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
 }
 
 function wireLocalRealtime(state) {
-  const collections = ['documents', 'document_versions', 'document_runbooks', 'document_blob_chunks'];
+  const collections = ['documents', 'document_versions', 'document_runbooks', 'document_blob_chunks', 'knowledge_items', 'knowledge_runbooks', 'knowledge_tables'];
   let timer = null;
   const schedule = () => {
     if (timer) return;
@@ -418,6 +420,7 @@ async function refreshDocumentsFromLocal(state) {
   const previousSelectedVersionId = state.selectedVersion?.id || '';
   await Promise.all([
     refreshRunbooks(state),
+    refreshKnowledge(state),
     refreshDocuments(state),
   ]);
   if (state.selectedId && previousSelectedVersionId !== selectedRecord(state)?.current_version_id) {
@@ -449,6 +452,20 @@ async function refreshRunbooks(state) {
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
   state.runbooks = mergeDocumentRunbooks(storedRunbooks);
+}
+
+async function refreshKnowledge(state) {
+  const read = async (name) => {
+    const collection = documentCollection(state.ctx, name);
+    if (!collection) return [];
+    const docs = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
+    return docs.map((doc) => normalizeKnowledgeRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+  };
+  [state.knowledgeItems, state.knowledgeRunbooks, state.knowledgeTables] = await Promise.all([
+    read('knowledge_items'),
+    read('knowledge_runbooks'),
+    read('knowledge_tables'),
+  ]);
 }
 
 async function createMarkdownDocument(state, input = {}) {
@@ -931,6 +948,11 @@ function openNewDocumentDrawer(state) {
         <select name="runbook">${runbookOptions(state, 'research.report.auto')}</select>
       </label>
       <label>
+        <span>${escapeHtml(state.t('knowledgeBasis', 'Knowledge-Basis'))}</span>
+        <select name="knowledge">${knowledgeOptions(state, 'auto')}</select>
+        <small>${escapeHtml(state.t('knowledgeBasisHint', 'CTOX nutzt den Skill als Wissens-Hub und liest die verknüpften Originalquellen für Nachweise.'))}</small>
+      </label>
+      <label>
         <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
         <input name="tags" placeholder="angebot, vertrag, kunde-a">
       </label>
@@ -966,6 +988,7 @@ function openNewDocumentDrawer(state) {
       await dispatchNewDocumentReport(state, {
         title: form.get('title')?.toString() || '',
         runbookId: form.get('runbook')?.toString() || '',
+        knowledgeId: form.get('knowledge')?.toString() || 'auto',
         prompt: form.get('prompt')?.toString() || '',
         tags: form.get('tags')?.toString() || '',
       });
@@ -1167,6 +1190,10 @@ function renderWorkflowPanel(state) {
         <span>${escapeHtml(state.t('title', 'Titel'))}</span>
         <input type="text" value="${escapeHtml(flow.title || '')}" placeholder="${escapeHtml(state.t('title', 'Titel'))}" data-documents-new-title>
       </label>
+      <label class="documents-workflow-field">
+        <span>${escapeHtml(state.t('knowledgeBasis', 'Knowledge-Basis'))}</span>
+        <select data-documents-workflow-knowledge>${knowledgeOptions(state, flow.knowledgeId || 'auto')}</select>
+      </label>
     `}
     <label class="documents-workflow-field" data-documents-runbook-field>
       <span>${isImport ? escapeHtml(state.t('runbook', 'Runbook')) : escapeHtml(state.t('documentType', 'Dokumenttyp'))}</span>
@@ -1182,7 +1209,7 @@ function renderWorkflowPanel(state) {
       <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
       <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import')) : escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}">${escapeHtml(flow.prompt || '')}</textarea>
     </label>
-    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
+    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('openKnowledge', 'Knowledge öffnen'))}</button>
     <div class="documents-workflow-actions">
       <button type="button" data-documents-workflow-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
       <button type="submit">${isImport ? escapeHtml(state.t('import', 'Importieren')) : escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
@@ -1208,6 +1235,7 @@ function bindWorkflowControls(state, wrap) {
     state.workflowPanel.prompt = workflow.querySelector('[data-documents-workflow-prompt]')?.value || '';
     state.workflowPanel.runbookId = workflow.querySelector('[data-documents-workflow-runbook]')?.value || defaultRunbookId(state);
     state.workflowPanel.tags = workflow.querySelector('[data-documents-workflow-tags]')?.value || '';
+    state.workflowPanel.knowledgeId = workflow.querySelector('[data-documents-workflow-knowledge]')?.value || 'auto';
     renderLeft(state);
   });
   workflow.querySelector('[data-documents-workflow-file]')?.addEventListener('change', (event) => {
@@ -1219,6 +1247,7 @@ function bindWorkflowControls(state, wrap) {
     const prompt = workflow.querySelector('[data-documents-workflow-prompt]')?.value || '';
     const runbookId = workflow.querySelector('[data-documents-workflow-runbook]')?.value || defaultRunbookId(state);
     const tags = workflow.querySelector('[data-documents-workflow-tags]')?.value || '';
+    const knowledgeId = workflow.querySelector('[data-documents-workflow-knowledge]')?.value || 'auto';
     try {
       if (flow.mode === 'import') {
         const file = flow.file || workflow.querySelector('[data-documents-workflow-file]')?.files?.[0];
@@ -1229,6 +1258,7 @@ function bindWorkflowControls(state, wrap) {
         await importDocumentFile(state, file, {
           applyRunbook: flow.importMode === 'runbook',
           runbookId,
+          knowledgeId,
           prompt,
           tags,
           sourceAction: flow.importMode === 'runbook' ? 'import_with_runbook' : 'direct_import',
@@ -1237,6 +1267,7 @@ function bindWorkflowControls(state, wrap) {
         await dispatchNewDocumentReport(state, {
           title: workflow.querySelector('[data-documents-new-title]')?.value || flow.title,
           runbookId,
+          knowledgeId,
           prompt,
           tags,
         });
@@ -1266,6 +1297,107 @@ function normalizeDocumentRecord(record = {}) {
   };
 }
 
+function normalizeKnowledgeRecord(record = {}) {
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : {};
+  return {
+    ...payload,
+    ...record,
+    id: String(record.id || payload.id || '').trim(),
+    kind: String(record.kind || payload.kind || '').trim().toLowerCase(),
+    title: String(record.title || payload.title || record.id || '').trim(),
+    summary: String(record.summary || record.description || payload.summary || payload.description || '').trim(),
+    source_path: String(record.source_path || payload.source_path || '').trim(),
+    domain: String(record.domain || record.knowledge_domain || payload.domain || payload.knowledge_domain || '').trim(),
+    updated_at_ms: Number(record.updated_at_ms ?? payload.updated_at_ms ?? 0),
+    payload,
+  };
+}
+
+function knowledgeCandidates(state) {
+  const active = state.knowledgeItems.filter((item) => item.id && item.is_deleted !== true && item._deleted !== true);
+  const preferred = active.filter((item) => ['skillbook', 'skill'].includes(item.kind));
+  return preferred.length ? preferred : active.filter((item) => item.kind !== 'dataframe');
+}
+
+function knowledgeSearchTokens(value) {
+  return new Set(String(value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2));
+}
+
+function scoreKnowledgeCandidate(candidate, query) {
+  const queryTokens = knowledgeSearchTokens(query);
+  if (!queryTokens.size) return 0;
+  const candidateTokens = knowledgeSearchTokens(`${candidate.title} ${candidate.summary} ${candidate.domain} ${candidate.source_path}`);
+  let score = 0;
+  for (const token of queryTokens) if (candidateTokens.has(token)) score += 1;
+  if (candidate.kind === 'skillbook') score += 0.25;
+  return score;
+}
+
+function resolveKnowledgeContext(state, requestedId = '', query = '') {
+  const candidates = knowledgeCandidates(state);
+  const manual = requestedId && requestedId !== 'auto'
+    ? candidates.find((candidate) => candidate.id === requestedId)
+    : null;
+  const selected = manual || [...candidates]
+    .sort((left, right) => scoreKnowledgeCandidate(right, query) - scoreKnowledgeCandidate(left, query)
+      || right.updated_at_ms - left.updated_at_ms)[0] || null;
+  if (!selected) return null;
+  const domain = selected.domain;
+  const relatedTables = state.knowledgeTables.filter((table) => (
+    domain && [table.domain, table.payload?.domain, table.knowledge_domain, table.payload?.knowledge_domain].includes(domain)
+  ));
+  const linkedRunbookIds = new Set([
+    ...(Array.isArray(selected.linked_runbook_ids) ? selected.linked_runbook_ids : []),
+    ...(Array.isArray(selected.payload?.linked_runbook_ids) ? selected.payload.linked_runbook_ids : []),
+  ].map(String));
+  const relatedRunbooks = state.knowledgeRunbooks.filter((runbook) => (
+    linkedRunbookIds.has(runbook.id)
+    || (domain && [runbook.domain, runbook.payload?.domain, runbook.knowledge_domain, runbook.payload?.knowledge_domain].includes(domain))
+  ));
+  const sourceReferences = [selected.source_references, selected.payload?.source_references, selected.sources, selected.payload?.sources]
+    .find(Array.isArray) || [];
+  return {
+    selection_mode: manual ? 'manual' : 'auto',
+    id: selected.id,
+    kind: selected.kind || 'skill',
+    title: selected.title,
+    summary: selected.summary,
+    domain,
+    source_path: selected.source_path,
+    updated_at_ms: selected.updated_at_ms,
+    linked_runbook_ids: relatedRunbooks.map((runbook) => runbook.id),
+    table_ids: relatedTables.map((table) => table.id),
+    source_references: sourceReferences.slice(0, 200),
+  };
+}
+
+function knowledgeOptions(state, selectedId = 'auto') {
+  const candidates = knowledgeCandidates(state);
+  const automatic = `<option value="auto" ${!selectedId || selectedId === 'auto' ? 'selected' : ''}>${escapeHtml(state.t('knowledgeAuto', 'Automatisch passend wählen'))}</option>`;
+  return automatic + candidates.map((item) => (
+    `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${escapeHtml(item.title)}${item.domain ? ` · ${escapeHtml(item.domain)}` : ''}</option>`
+  )).join('');
+}
+
+function documentKnowledgeLink(record) {
+  return (Array.isArray(record?.linked_records) ? record.linked_records : [])
+    .find((link) => link?.type === 'knowledge' || link?.collection === 'knowledge_items') || null;
+}
+
+function isDocumentKnowledgeStale(state, record) {
+  const link = documentKnowledgeLink(record);
+  if (!link?.id) return false;
+  const current = state.knowledgeItems.find((item) => item.id === link.id);
+  return Boolean(current && Number(current.updated_at_ms || 0) > Number(link.updated_at_ms || 0));
+}
+
 function stateLessTitleFallback(record = {}) {
   return String(record.id || '').trim() || 'Neues Dokument';
 }
@@ -1284,6 +1416,7 @@ function readNewDocumentInput(form) {
   return {
     title: formData.get('title')?.toString() || '',
     runbookId: formData.get('runbook')?.toString() || '',
+    knowledgeId: formData.get('knowledge')?.toString() || 'auto',
     prompt: formData.get('prompt')?.toString() || '',
     tags: formData.get('tags')?.toString() || '',
   };
@@ -1442,6 +1575,8 @@ function visibleDocuments(state) {
 function renderRight(state) {
   const record = selectedRecord(state);
   const selectedRunbook = defaultRunbookId(state);
+  const knowledgeLink = documentKnowledgeLink(record);
+  const knowledgeStale = isDocumentKnowledgeStale(state, record);
   const canRunbook = Boolean(record?.id && selectedRunbook && (record.current_version_id || state.selectedVersion?.id));
   const wrap = document.createElement('div');
   wrap.className = 'documents-runbooks';
@@ -1458,25 +1593,46 @@ function renderRight(state) {
       </div>
     </header>
     <form class="documents-runbook-form" data-documents-runbook-form>
+      <label class="documents-runbook-field">
+        <span>${escapeHtml(state.t('knowledgeBasis', 'Knowledge-Basis'))}</span>
+        <select data-documents-knowledge ${record ? '' : 'disabled'}>
+          ${knowledgeOptions(state, knowledgeLink?.id || 'auto')}
+        </select>
+      </label>
+      ${knowledgeLink ? `<div class="documents-knowledge-status${knowledgeStale ? ' is-stale' : ''}"><strong>${escapeHtml(knowledgeLink.title || knowledgeLink.id)}</strong><span>${knowledgeStale ? escapeHtml(state.t('knowledgeNewer', 'Knowledge wurde aktualisiert. Dokument kann neu abgeleitet werden.')) : escapeHtml(state.t('knowledgeCurrent', 'Dokument ist mit diesem Knowledge-Stand verknüpft.'))}</span></div>` : ''}
       <select data-documents-runbook ${record ? '' : 'disabled'}>
         ${runbookOptions(state, selectedRunbook)}
       </select>
       <textarea data-documents-prompt ${record ? '' : 'disabled'} placeholder="${escapeHtml(state.t('promptPlaceholder', 'Prompt für dieses Dokument'))}"></textarea>
       <button type="submit" ${canRunbook ? '' : 'disabled aria-disabled="true"'}>${escapeHtml(state.t('runbookStart', 'Runbook starten'))}</button>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
+      ${record && knowledgeLink ? `<button type="button" data-documents-refresh-from-knowledge>${escapeHtml(knowledgeStale ? state.t('refreshDocumentKnowledge', 'Mit aktuellem Knowledge aktualisieren') : state.t('rebuildDocumentKnowledge', 'Aus Knowledge neu ableiten'))}</button>` : ''}
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${actionIcon(state, 'knowledge')} ${escapeHtml(state.t('openKnowledge', 'Knowledge öffnen'))}</button>
     </form>
   `;
   wrap.querySelector('[data-documents-runbook-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!canRunbook) return;
     const runbook = wrap.querySelector('[data-documents-runbook]')?.value || defaultRunbookId(state);
+    const knowledgeId = wrap.querySelector('[data-documents-knowledge]')?.value || knowledgeLink?.id || 'auto';
     const prompt = wrap.querySelector('[data-documents-prompt]')?.value || '';
     await dispatchDocumentRunbook(state, {
       record,
       versionId: state.selectedVersion?.id || record.current_version_id,
       runbookId: runbook,
+      knowledgeId,
       prompt,
       sourceAction: 'manual_runbook',
+    });
+  });
+  wrap.querySelector('[data-documents-refresh-from-knowledge]')?.addEventListener('click', async () => {
+    const knowledgeId = wrap.querySelector('[data-documents-knowledge]')?.value || knowledgeLink?.id || 'auto';
+    await dispatchNewDocumentReport(state, {
+      title: record.title,
+      targetDocumentId: record.id,
+      runbookId: selectedRunbook,
+      knowledgeId,
+      prompt: `Aktualisiere das bestehende Dokument "${record.title}" aus dem aktuellsten Stand des verknuepften Knowledge. Bewahre den Dokumentzweck, aktualisiere Fakten, Tabellen, Ableitungen und Quellen und kennzeichne wesentliche Aenderungen nachvollziehbar.`,
+      tags: record.tags,
     });
   });
   wrap.querySelector('[data-documents-open-knowledge]')?.addEventListener('click', () => openKnowledgeRunbooks(state));
@@ -1487,6 +1643,7 @@ async function dispatchDocumentRunbook(state, input) {
   const runbookId = input.runbookId || defaultRunbookId(state);
   if (!runbookId && !String(input.prompt || '').trim()) return null;
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId);
+  const knowledgeContext = resolveKnowledgeContext(state, input.knowledgeId, `${input.record.title} ${input.prompt || ''}`);
   return state.ctx.commandBus.dispatch({
     module: 'documents',
     type: runbook?.command_type || runbookId || 'document.summarize',
@@ -1498,12 +1655,15 @@ async function dispatchDocumentRunbook(state, input) {
       runbook_id: runbook?.id || runbookId,
       prompt_template: runbook?.prompt_template || '',
       source_action: input.sourceAction || 'document_runbook',
+      knowledge_context: knowledgeContext,
     },
     client_context: {
       surface: 'business-os-documents',
       filename: input.record.filename,
       document_type: input.record.document_type,
       action: input.sourceAction || 'document_runbook',
+      knowledge_context_id: knowledgeContext?.id || '',
+      knowledge_domain: knowledgeContext?.domain || '',
     },
   });
 }
@@ -1518,6 +1678,7 @@ async function dispatchNewDocumentReport(state, input = {}) {
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId)
     || SYSTEMATIC_REPORT_RUNBOOKS[0];
   const reportType = runbook.report_type || (runbook.id || '').replace(/^research\.report\./, '') || 'auto';
+  const knowledgeContext = resolveKnowledgeContext(state, input.knowledgeId, `${title} ${prompt}`);
   const filename = ensureExtension(slugFilename(title), '.docx');
   const outputPath = `runtime/business-os/documents/generated/${filename}`;
   const commandId = `cmd_${crypto.randomUUID()}`;
@@ -1527,7 +1688,11 @@ async function dispatchNewDocumentReport(state, input = {}) {
     `Nutzerauftrag: ${prompt}`,
     '',
     'Nutze den systematic-research Skill, die CTOX Report-Pipeline und den doc/Documents Word-Produktionsskill.',
-    'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein.',
+    knowledgeContext
+      ? `Verwende als Knowledge-Hub ${knowledgeContext.kind} "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}). Lies den aktuellen Skill-Inhalt und seine verknuepften Ressourcen/Tabellen.`
+      : 'Waehle automatisch den fachlich passendsten aktuellen Skill oder Skillbook aus CTOX Knowledge.',
+    'Der Skill strukturiert die Ableitung, ist aber keine Primaerquelle. Lies fuer faktische Aussagen die darin referenzierten Originalquellen und zitiere diese, nicht den Skill als Ersatzquelle.',
+    'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein und verwende immer den neuesten verfuegbaren Knowledge-Stand.',
     reportType && reportType !== 'auto'
       ? `Verwende report_type_id=${reportType}.`
       : 'Wähle den passenden report_type_id aus den CTOX Report-Blueprints.',
@@ -1541,7 +1706,7 @@ async function dispatchNewDocumentReport(state, input = {}) {
     id: commandId,
     module: 'documents',
     type: runbook.command_type || 'research.systematic.report.create',
-    record_id: '',
+    record_id: input.targetDocumentId || '',
     inbound_channel: 'business_os.documents',
     payload: {
       title,
@@ -1553,7 +1718,8 @@ async function dispatchNewDocumentReport(state, input = {}) {
       desired_format: 'docx',
       output_filename: filename,
       output_path: outputPath,
-      required_skills: ['systematic-research', 'doc'],
+      required_skills: ['systematic-research', 'knowledge', 'doc'],
+      knowledge_context: knowledgeContext,
       tags: normalizeTags(input.tags),
       thread_key: 'business-os/documents',
       required_artifacts: [outputPath],
@@ -1572,6 +1738,8 @@ async function dispatchNewDocumentReport(state, input = {}) {
         title,
         filename,
         output_path: outputPath,
+        document_id: input.targetDocumentId || '',
+        preserve_knowledge_lineage: true,
       },
     },
     client_context: {
@@ -1585,6 +1753,9 @@ async function dispatchNewDocumentReport(state, input = {}) {
       document_type: 'word_document',
       filename,
       output_path: outputPath,
+      knowledge_context_id: knowledgeContext?.id || '',
+      knowledge_domain: knowledgeContext?.domain || '',
+      knowledge_selection_mode: knowledgeContext?.selection_mode || 'auto',
     },
   };
   const result = await dispatchDocumentCommandWithBackendFallback(state, command, commandId, startedAtMs);
@@ -1677,39 +1848,16 @@ function defaultRunbookId(state) {
   return state.runbooks[0]?.id || state.runbooks[0]?.command_type || 'research.report.auto';
 }
 
-async function openKnowledgeRunbooks(state) {
-  const result = await state.ctx.commandBus.dispatch({
-    module: 'ctox',
-    type: 'ctox.knowledge.runbooks.manage',
-    payload: {
-      title: state.t('manageDocumentRunbooksTitle', 'Document runbooks verwalten'),
-      instruction: state.t('manageDocumentRunbooksInstruction', 'Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.'),
-      knowledge_scope: {
-        form: 'procedural',
-        cli_namespace: 'ctox knowledge skill',
-        related_tables: ['knowledge_main_skills', 'knowledge_skillbooks', 'knowledge_runbooks', 'knowledge_runbook_items'],
-        module_local_seed_collection: 'document_runbooks',
-      },
-      current_document_runbooks: state.runbooks.map((runbook) => ({
-        id: runbook.id,
-        command_type: runbook.command_type,
-        title: state.t(`runbooks.${runbook.id}.title`, runbook.title || runbook.command_type),
-        prompt_template: runbook.prompt_template,
-      })),
-    },
-    client_context: {
-      module: 'documents',
-      surface: 'documents-runbook-navigation',
-      target: 'ctox-knowledge-system',
-    },
-  });
-  sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-    commandId: result.command_id || '',
-    taskId: result.task_id || '',
-    taskStatus: result.task_status || result.status || 'queued',
-  }));
-  location.hash = 'ctox?focus=knowledge-runbooks';
-  document.querySelector('[data-module="ctox"]')?.click();
+function openKnowledgeRunbooks(state) {
+  const recordLink = documentKnowledgeLink(selectedRecord(state));
+  const candidate = recordLink?.id
+    ? state.knowledgeItems.find((item) => item.id === recordLink.id)
+    : knowledgeCandidates(state)[0];
+  if (candidate?.id) sessionStorage.setItem('ctox.businessOs.knowledge.openId', candidate.id);
+  const domain = candidate?.domain || recordLink?.domain || '';
+  if (domain) sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', domain);
+  location.hash = 'knowledge';
+  document.querySelector('[data-module="knowledge"]')?.click();
 }
 
 function renderCenter(state) {
@@ -2421,8 +2569,13 @@ function ensureSuperDocStyles() {
 }
 
 export const __documentsTestHooks = {
+  documentKnowledgeLink,
+  isDocumentKnowledgeStale,
   isActiveDocumentRecord,
+  knowledgeCandidates,
   normalizeDocumentRecord,
+  normalizeKnowledgeRecord,
+  resolveKnowledgeContext,
   validateImportInput,
   validateNewDocumentInput,
   visibleDocuments,

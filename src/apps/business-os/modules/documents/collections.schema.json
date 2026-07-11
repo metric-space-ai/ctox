@@ -270,6 +270,60 @@
       ],
       "type": "object",
       "version": 0
+    },
+    "knowledge_items": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": { "maxLength": 180, "type": "string" },
+        "kind": { "type": "string" },
+        "payload": { "additionalProperties": true, "type": "object" },
+        "source_path": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "summary": { "type": "string" },
+        "title": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "updated_at_ms": { "type": "number" }
+      },
+      "required": ["id", "kind", "title", "updated_at_ms"],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_runbooks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": { "maxLength": 180, "type": "string" },
+        "kind": { "type": "string" },
+        "payload": { "additionalProperties": true, "type": "object" },
+        "source_path": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "summary": { "type": "string" },
+        "title": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "updated_at_ms": { "type": "number" }
+      },
+      "required": ["id", "kind", "title", "updated_at_ms"],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_tables": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": { "maxLength": 180, "type": "string" },
+        "kind": { "type": "string" },
+        "payload": { "additionalProperties": true, "type": "object" },
+        "source_path": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "summary": { "type": "string" },
+        "title": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "updated_at_ms": { "type": "number" }
+      },
+      "required": ["id", "kind", "title", "updated_at_ms"],
+      "type": "object",
+      "version": 0
     }
   },
   "migration_strategies": {
