@@ -19,6 +19,8 @@ const { spawn, execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../../../..');
 const matrixPath = path.join(__dirname, 'browser_rust_smoke_matrix.js');
+const smokeBinaryPath = process.env.CTOX_BIN
+  || path.join(root, 'runtime/build/core-rxdb-integration-target/debug/ctox');
 const defaultSoakModes = [
   'browser-to-rust',
   'command-browser-to-rust',
@@ -363,7 +365,8 @@ function sourceEvidence() {
     dirty: Boolean(status),
     artifactHashes: {
       browserBundleSha256: sha256File(path.join(root, 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs')),
-      smokeBinarySha256: sha256File(path.join(root, 'runtime/build/core-rxdb-integration-target/debug/ctox')),
+      smokeBinaryPath,
+      smokeBinarySha256: sha256File(smokeBinaryPath),
     },
   };
 }
