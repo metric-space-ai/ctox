@@ -9,6 +9,14 @@
 //
 // All operations preserve untouched package parts byte-identically: the zip
 // is re-emitted entry by entry and only explicitly transformed parts change.
+//
+// NOTE for the office-port agent: these ops still need their
+// `business_commands` surface (suggested family: business_os.office.*) once
+// your server wave lands — registration spec and asks are in the handoff
+// section of docs/ctox-office-skills-adaptation-plan.md. The CLI verbs in
+// main.rs are referenced by the doc/spreadsheet skill packs; renaming them
+// requires updating the execution-surfaces.md tables (CI guard:
+// src/scripts/check-office-skill-gating.mjs).
 
 use anyhow::{bail, Context};
 use quick_xml::events::{BytesStart, Event};

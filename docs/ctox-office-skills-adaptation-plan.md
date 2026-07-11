@@ -256,3 +256,46 @@ Kandidaten für neue Feature-Gruppen oder explizite Ebene-B-Entscheidungen:
   bis dahin bleibt das bestehende `slides`-Skill unverändert
 - `template-creator`: erneut prüfen, wenn der Template-Store
   (`src/apps/business-os/template-store/`) im Port stabil ist
+
+## Handoff an den Office-Port-Agenten
+
+Direkte Bitten des Skills-/Ops-Strangs an den Strang, der `office_engine.rs`,
+`business_os/server.rs` und `features.json` besitzt. Die Batch-Ops in
+`src/core/office-engine/src/ops.rs` sind zustandslose reine Funktionen über
+Paket-Bytes und vollständig getestet — sie warten nur auf deine Flächen.
+
+1. **`business_commands`-Registrierung der Batch-Ops** (bitte in deiner
+   nächsten Server-Welle): Vorschlag Command-Familie `business_os.office.*`
+   mit 1:1-Mapping auf die `ops.rs`-Funktionen, z. B.
+   `office.comments_extract`, `office.tracked_changes_accept`,
+   `office.privacy_scrub`, `office.redact`, `office.a11y_audit`,
+   `office.merge_append` usw. (vollständige Liste + Semantik:
+   `src/skills/packs/content/doc/references/execution-surfaces.md`).
+   Payload: Referenz auf Desktop-File/Record + Op-Parameter; Ergebnis als
+   neues Desktop-File/Record plus JSON-Report im Command-Status. Policy:
+   Modul-/Collection-Write-Grant des Ziel-Records, Audit-Reason pro Op;
+   Einträge in `business_command_inventory.json` nicht vergessen. Ausführung
+   bounded + persisted (kein Hintergrundprozess).
+2. **`features.json`-Disziplin:** Nach jedem Statuswechsel bitte
+   `node src/scripts/check-office-skill-gating.mjs` laufen lassen (läuft
+   jetzt auch als eigener CI-Workflow `office-skill-gating`). Der Guard
+   erwartet, dass die Gating-Tabellen der Skills jedem Statuswechsel folgen —
+   bei deiner Re-Baseline heute hat er korrekt angeschlagen. Wenn du Gruppen
+   umbenennst oder ergänzt, schlagen unreferenzierte Gruppen ebenfalls auf.
+3. **Feature-Matrix-Lücken, Entscheidung bei dir:** Content Controls (SDTs)
+   und Fußnoten/Endnoten fehlen als Editor-Feature-Gruppen. Protection,
+   Merge, Wasserzeichen und A11y sind inzwischen auf Paket-Ebene abgedeckt
+   und brauchen m. E. keine eigenen Editor-Gruppen mehr.
+4. **Phase-2-Bedarf der Skills (Render-Evidenz):** Die Render-Verify-Schleife
+   der doc/spreadsheet-Skills braucht eine headless aufrufbare
+   Render-Fläche (Seiten/Ranges → PNG) auf demselben Codepfad wie
+   `document.open-render-zoom` / `spreadsheet.open-render-sheets`, plus einen
+   Weg, die finalen Renders als Prozess-Evidenz zu persistieren. Die
+   Oracle-Flow-Infrastruktur (`fake-runtime.mjs`, `oracle/flows/*`) scheint
+   dafür der richtige Generalisierungspunkt. Sobald das existiert, schalten
+   die Skills ihr Render-Gate von "Fallback: strukturell prüfen und
+   Limitation nennen" auf verpflichtend.
+5. **Stabilitätszusage erbeten:** Die CLI-Verben von `ctox-office-engine`
+   (inspect|export|…|table-import) sind in den Skill-Texten referenziert.
+   Bitte nicht umbenennen ohne die beiden `execution-surfaces.md` und die
+   SKILL.md-Zeilen mitzuziehen.

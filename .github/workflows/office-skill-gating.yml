@@ -1,0 +1,32 @@
+name: office-skill-gating
+
+# The office skill gating tables must match the engine feature matrix.
+# See docs/ctox-office-skills-adaptation-plan.md (Handoff section).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/apps/business-os/office-engine/features.json"
+      - "src/skills/packs/content/doc/references/execution-surfaces.md"
+      - "src/skills/packs/content/spreadsheet/references/execution-surfaces.md"
+      - "src/scripts/check-office-skill-gating.mjs"
+      - ".github/workflows/office-skill-gating.yml"
+  pull_request:
+    paths:
+      - "src/apps/business-os/office-engine/features.json"
+      - "src/skills/packs/content/doc/references/execution-surfaces.md"
+      - "src/skills/packs/content/spreadsheet/references/execution-surfaces.md"
+      - "src/scripts/check-office-skill-gating.mjs"
+      - ".github/workflows/office-skill-gating.yml"
+
+jobs:
+  gating:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check office skill gating tables against features.json
+        run: node src/scripts/check-office-skill-gating.mjs
