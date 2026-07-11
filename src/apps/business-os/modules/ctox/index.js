@@ -3647,6 +3647,8 @@ function branchText(record) {
 
 function eventToNodeId(kind, title) {
   const value = `${kind} ${title}`.toLowerCase();
+  if (value.includes('work.outcome') && /\b(success|succeeded|completed|done|passed)\b/.test(value)) return 'passed';
+  if (value.includes('work.outcome') && /\b(failed|failure|error|blocked)\b/.test(value)) return 'model-failed';
   if (/\b(workerfinished|worker_finished|worker finished)\b/.test(value)) return 'awaiting-review';
   if (/\b(workerfailed|worker_failed|worker failed)\b/.test(value)) return 'model-failed';
   if (/\b(infraerror|infra_error|infra error)\b/.test(value)) return 'infra-failed';
@@ -3664,7 +3666,6 @@ function eventToNodeId(kind, title) {
   if (/\b(validatorfail|validator_fail|validator fail)\b/.test(value)) return 'rework-required';
   if (/\b(validatorreworkexhausted|validator_rework_exhausted|validator rework exhausted)\b/.test(value)) return 'model-failed';
   if (/\b(validatorinfraerror|validator_infra_error|validator infra error)\b/.test(value)) return 'infra-failed';
-  if (value.includes('worker.token_usage')) return 'running';
   return null;
 }
 
