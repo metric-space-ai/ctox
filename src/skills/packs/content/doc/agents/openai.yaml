@@ -1,7 +1,0 @@
-interface:
-  display_name: "Word Documents"
-  short_description: "Create and edit Word and Google Docs files"
-  icon_small: "./assets/file-document.png"
-  icon_large: "./assets/file-document.png"
-  brand_color: "#2563EB"
-  default_prompt: "Use $doc to create, edit, redline, or review a Word file or Google Doc."
