@@ -2606,10 +2606,11 @@ pub fn browser_session_automation(
         let session_id = request.session_id.trim().to_string();
         let output = browser_session_automation_with_database(root, &database, request).await;
         browser_runtime_manager().stop(&session_id).await;
-        database
-            .close()
-            .await
-            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        // This CLI fallback is short-lived. Awaiting RxDB close here can leave
+        // browser-automation commands stuck after evidence is already produced,
+        // which blocks deployment-audit task execution. Let process teardown
+        // reclaim the temporary handle instead of making CLI completion depend
+        // on close liveness.
         output
     })
 }

@@ -1487,9 +1487,8 @@ impl PersistentBrowserHandle {
     /// Ask the runtime to close gracefully, then ensure the process is gone and
     /// the generated runner file is cleaned up. Never panics; best effort.
     pub fn shutdown(&mut self) {
-        let _ = self.request("close", json!({}));
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.child.try_wait();
         let _ = fs::remove_file(&self.runner_path);
     }
 }
@@ -1497,7 +1496,7 @@ impl PersistentBrowserHandle {
 impl Drop for PersistentBrowserHandle {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.child.try_wait();
         let _ = fs::remove_file(&self.runner_path);
     }
 }
