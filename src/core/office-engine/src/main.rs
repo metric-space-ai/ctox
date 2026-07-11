@@ -12,7 +12,8 @@ fn main() -> anyhow::Result<()> {
          comments-resolve|comments-add|a11y-audit|a11y-fix|privacy-scrub|redact|\
          tracked-changes-accept|tracked-changes-reject|tracked-changes-replace|\
          protection-set|table-export|fields-report|fields-materialize|\
-         style-lint|watermark-audit|watermark-remove|merge-append",
+         style-lint|style-normalize|watermark-audit|watermark-add|\
+         watermark-remove|merge-append|table-import",
     )?;
     // Batch document operations (Ebene B) take the input package directly.
     match operation.as_str() {

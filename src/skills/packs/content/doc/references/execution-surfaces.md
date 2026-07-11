@@ -48,11 +48,12 @@ Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 | Merge/append documents (refuses media/hyperlink/comment rels) | `merge-append` | **available** |
 | Accessibility audit (alt text, heading ladder, table headers) | `a11y-audit` | **available** |
 | Accessibility safe fixes (alt from name, header rows) | `a11y-fix` | **available** |
-| Style lint (fake bullets, fake headings) | `style-lint` | **available** (normalize planned) |
+| Style lint (fake bullets, fake headings) | `style-lint` | **available** |
+| Style normalize (clear heading-style overrides) | `style-normalize` | **available** |
 | Fields report (instructions + cached results) | `fields-report` | **available** |
 | Field materialization (REF/PAGEREF/SEQ; PAGE stays live) | `fields-materialize` | **available** |
-| Watermark audit / remove (VML header objects) | `watermark-audit\|remove` | **available** (add planned) |
-| Table → CSV export | `table-export` | **available** (import planned) |
+| Watermark audit / add / remove (VML header objects) | `watermark-audit\|add\|remove` | **available** |
+| Table ↔ CSV (export nth table, import with geometry + header row) | `table-export\|import` | **available** |
 
 ## Known coverage gaps fed back to the office port
 

@@ -26,8 +26,15 @@ Umsetzungsstand:
   Header-Zeilen), `tracked-changes-replace` (echte del+ins-Revisionspaare
   mit Run-Splitting; komplexe Runs werden gemeldet, nicht geraten),
   `merge-append` (Seitenumbruch-getrennt; verweigert Dokumente mit
-  Media/Hyperlink/Kommentar-Relationships). 34 Tests grün. Restliste:
-  Style-Normalize, Watermark-Add, Tabellen-Import.
+  Media/Hyperlink/Kommentar-Relationships). 34 Tests grün.
+- **Ebene-B-Ops Slice 4 implementiert** (Commit `d17e45482`):
+  `style-normalize` (löscht Font/Größe/Farbe-Overrides nur in
+  Heading/Title-Absätzen, Emphasis bleibt), `watermark-add`
+  (selbständiges VML-Fragment inkl. Shapetype, verweigert Pakete ohne
+  Header), `table-import` (CSV → Tabelle mit expliziter DXA-Geometrie
+  und Header-Zeile). 38 Tests grün. **Damit ist die komplette Op-Liste
+  aus der ursprünglichen Capability-Matrix implementiert** (alle 20
+  geplanten Batch-Operationen verfügbar).
 - **Gating-Guard** (`src/scripts/check-office-skill-gating.mjs`, Commit
   `e5d0dd216`): diffst die execution-surfaces-Tabellen gegen `features.json`,
   schlägt bei Drift oder unreferenzierten Gruppen fehl. Hat unmittelbar die
