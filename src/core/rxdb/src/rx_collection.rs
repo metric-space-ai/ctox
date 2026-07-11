@@ -900,6 +900,7 @@ impl RxCollection {
             let doc = self.doc_cache()?.get_cached_rx_document(&doc_data)?;
             return doc
                 .incremental_modify(Box::new(move |_inner_doc| {
+                    let use_json = use_json.clone();
                     Box::pin(async move { Ok(use_json) })
                 }))
                 .await;
@@ -917,6 +918,7 @@ impl RxCollection {
         } else {
             let doc = self.doc_cache()?.get_cached_rx_document(&existing)?;
             doc.incremental_modify(Box::new(move |_inner_doc| {
+                let use_json = use_json.clone();
                 Box::pin(async move { Ok(use_json) })
             }))
             .await

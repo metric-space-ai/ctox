@@ -50,3 +50,4 @@ export const CTOX_PRESENCE_RPC = Object.freeze({
 });
 export const CTOX_COMMAND_LIFECYCLE_CAPABILITY = "ctox-command-lifecycle-v2";
 export const CTOX_CHECKPOINT_GENERATION_CAPABILITY = "ctox-checkpoint-generation-v2";
+export const CTOX_APP_RUNTIME_CAPABILITY = "ctox-app-runtime-v1";

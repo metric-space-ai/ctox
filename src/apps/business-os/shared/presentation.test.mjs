@@ -28,7 +28,9 @@ test('presentation contract resolves explicit window configuration', () => {
 test('presentation contract retains bounded legacy behavior', () => {
   const windowed = { layout: { shell: 'desktop-window' } };
   const workspace = { layout: { shell: 'full-workspace' } };
+  const ordinaryPaneModule = {};
 
   assert.equal(launchesInWindow(windowed), true);
   assert.equal(usesLegacyWorkspace(workspace), true);
+  assert.equal(usesLegacyWorkspace(ordinaryPaneModule), false);
 });

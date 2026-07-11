@@ -6,6 +6,9 @@
     "queue": "all remaining command types fall through to record_command"
   },
   "exact_control_types": [
+    "ctox.app.access.grant",
+    "ctox.app.access.revoke",
+    "ctox.app.action.run",
     "ctox.app_store.install",
     "ctox.app_store.uninstall",
     "ctox.business_os.audit.list",
@@ -78,6 +81,7 @@
     "business_os.import.modify",
     "business_os.scoring.modify",
     "business_os.search_sort.modify",
+    "ctox.app.action.run",
     "ctox.app_store.install",
     "ctox.app_store.uninstall",
     "ctox.browser_context.capture",

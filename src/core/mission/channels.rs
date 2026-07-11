@@ -3626,6 +3626,136 @@ fn register_business_command_saga_tx(
     Ok(())
 }
 
+/// Register the immutable definition and ordered effects for a runtime-loaded
+/// app action. Runtime actions intentionally share the same durable saga
+/// tables and terminal owner as compiled commands; only their definition is
+/// loaded from the validated module package.
+pub(crate) fn start_runtime_business_command_saga(
+    root: &Path,
+    command_id: &str,
+    module_id: &str,
+    action_name: &str,
+    definition_hash: &str,
+    definition: &Value,
+    step_names: &[String],
+) -> Result<()> {
+    anyhow::ensure!(
+        !step_names.is_empty(),
+        "app action saga requires at least one step"
+    );
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let now_ms = epoch_millis();
+    let saga_id = format!("saga:{command_id}");
+    tx.execute(
+        "INSERT OR IGNORE INTO business_app_action_snapshots
+            (command_id, module_id, action_name, definition_hash, definition_json, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            command_id,
+            module_id,
+            action_name,
+            definition_hash,
+            serde_json::to_string(definition)?,
+            now_ms,
+        ],
+    )?;
+    let existing: (String, String) = tx.query_row(
+        "SELECT definition_hash, definition_json FROM business_app_action_snapshots WHERE command_id = ?1",
+        params![command_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    anyhow::ensure!(
+        existing.0 == definition_hash && existing.1 == serde_json::to_string(definition)?,
+        "app_action_definition_changed: command already admitted with another definition"
+    );
+    tx.execute(
+        "INSERT OR IGNORE INTO business_command_sagas
+            (saga_id, command_id, saga_kind, phase, current_step, total_steps, compensation_status, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, 'forward', 0, ?4, 'not_started', ?5, ?5)",
+        params![
+            saga_id,
+            command_id,
+            format!("ctox.app.action.v1:{module_id}:{action_name}:{definition_hash}"),
+            step_names.len() as i64,
+            now_ms,
+        ],
+    )?;
+    for (index, name) in step_names.iter().enumerate() {
+        let forward_key = format!("{command_id}:{definition_hash}:{index}:forward");
+        let compensation_key = format!("{command_id}:{definition_hash}:{index}:compensation");
+        tx.execute(
+            "INSERT OR IGNORE INTO business_command_saga_steps
+                (saga_id, step_index, step_name, forward_effect_key, compensation_effect_key, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![saga_id, index as i64, name, forward_key, compensation_key, now_ms],
+        )?;
+    }
+    let registered_steps: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM business_command_saga_steps WHERE saga_id = ?1",
+        params![saga_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        registered_steps == step_names.len() as i64,
+        "app_action_definition_changed: registered saga step count differs"
+    );
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn runtime_business_command_action_snapshot(
+    root: &Path,
+    command_id: &str,
+) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT definition_json FROM business_app_action_snapshots WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.map(|value| serde_json::from_str(&value).map_err(Into::into))
+        .transpose()
+}
+
+pub(crate) fn business_command_saga_status(root: &Path, command_id: &str) -> Result<Option<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let saga_id = format!("saga:{command_id}");
+    let saga: Option<(String, String, i64, i64)> = conn
+        .query_row(
+            "SELECT phase, compensation_status, current_step, total_steps
+             FROM business_command_sagas WHERE saga_id = ?1",
+            params![saga_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((phase, compensation_status, current_step, total_steps)) = saga else {
+        return Ok(None);
+    };
+    let error_message: Option<String> = conn
+        .query_row(
+            "SELECT error_message FROM business_command_saga_steps
+             WHERE saga_id = ?1 AND error_message IS NOT NULL
+             ORDER BY CASE WHEN compensation_status = 'failed' THEN 0 ELSE 1 END, step_index DESC
+             LIMIT 1",
+            params![format!("saga:{command_id}")],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(Some(json!({
+        "phase": phase,
+        "compensation_status": compensation_status,
+        "current_step": current_step,
+        "total_steps": total_steps,
+        "error_message": error_message,
+    })))
+}
+
 pub(crate) fn start_business_command_saga(
     root: &Path,
     command_id: &str,
@@ -3732,6 +3862,23 @@ pub(crate) fn business_command_saga_step_evidence(
         |row| row.get(0),
     )?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+pub(crate) fn business_command_saga_pending_compensation_steps(
+    root: &Path,
+    command_id: &str,
+) -> Result<Vec<String>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let saga_id = format!("saga:{command_id}");
+    let mut stmt = conn.prepare(
+        "SELECT step_name FROM business_command_saga_steps
+         WHERE saga_id = ?1 AND compensation_status IN ('pending', 'claimed')
+         ORDER BY step_index ASC",
+    )?;
+    let rows = stmt.query_map(params![saga_id], |row| row.get::<_, String>(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
 }
 
 pub(crate) fn record_business_command_saga_step_evidence(
@@ -4071,17 +4218,19 @@ pub(crate) fn complete_business_control_command(
     crate::business_os::command_lifecycle::validate_execution_phase_transition(&phase, "terminal")?;
     let next_version = version.saturating_add(1);
     let now_ms = epoch_millis();
+    let error_code = result.get("error_code").and_then(Value::as_str);
     tx.execute(
         "UPDATE business_command_aggregates
          SET execution_phase = 'terminal', terminal_status = ?2,
-             projection_version = ?3, result_json = ?4, error_message = ?5,
-             retryable = 0, updated_at_ms = ?6
+             projection_version = ?3, result_json = ?4, error_code = ?5,
+             error_message = ?6, retryable = 0, updated_at_ms = ?7
          WHERE command_id = ?1",
         params![
             command_id,
             terminal_status,
             next_version,
             serde_json::to_string(result)?,
+            error_code,
             error_message,
             now_ms,
         ],
@@ -10762,6 +10911,18 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             UNIQUE(saga_id, compensation_effect_key),
             FOREIGN KEY(saga_id) REFERENCES business_command_sagas(saga_id)
         );
+
+        CREATE TABLE IF NOT EXISTS business_app_action_snapshots (
+            command_id TEXT PRIMARY KEY,
+            module_id TEXT NOT NULL,
+            action_name TEXT NOT NULL,
+            definition_hash TEXT NOT NULL,
+            definition_json TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_app_action_snapshots_definition
+            ON business_app_action_snapshots(module_id, action_name, definition_hash);
 
         CREATE TABLE IF NOT EXISTS business_command_results (
             command_id TEXT NOT NULL,
@@ -18286,6 +18447,61 @@ mod tests {
         assert_eq!(projection["saga_phase"], "compensated");
         assert_eq!(projection["compensation_status"], "completed");
         assert_eq!(projection["saga_total_steps"], 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_action_saga_snapshots_definition_and_derives_effect_keys() {
+        let root = business_command_test_root("ctox-runtime-action-saga");
+        let mut claim = business_command_claim("command-runtime-action-1", "sha256:runtime-action");
+        claim.command_type = "ctox.app.action.run".to_string();
+        claim_business_control_command(&root, claim).expect("claim runtime action");
+        let snapshot = json!({
+            "module_id": "workbench",
+            "action_name": "approve",
+            "definition_hash": "sha256:def",
+            "definition": { "steps": [{ "op": "patch" }, { "op": "insert" }] },
+        });
+        start_runtime_business_command_saga(
+            &root,
+            "command-runtime-action-1",
+            "workbench",
+            "approve",
+            "sha256:def",
+            &snapshot,
+            &["patch_record".to_string(), "write_audit".to_string()],
+        )
+        .expect("register dynamic saga");
+        assert_eq!(
+            runtime_business_command_action_snapshot(&root, "command-runtime-action-1")
+                .expect("load snapshot"),
+            Some(snapshot.clone())
+        );
+        // Re-registration with identical immutable input is an idempotent crash replay.
+        start_runtime_business_command_saga(
+            &root,
+            "command-runtime-action-1",
+            "workbench",
+            "approve",
+            "sha256:def",
+            &snapshot,
+            &["patch_record".to_string(), "write_audit".to_string()],
+        )
+        .expect("replay registration");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+        let keys: (String, String, i64) = conn
+            .query_row(
+                "SELECT forward_effect_key, compensation_effect_key,
+                        (SELECT COUNT(*) FROM business_command_saga_steps WHERE saga_id = 'saga:command-runtime-action-1')
+                 FROM business_command_saga_steps
+                 WHERE saga_id = 'saga:command-runtime-action-1' AND step_index = 0",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("runtime effect keys");
+        assert_eq!(keys.0, "command-runtime-action-1:sha256:def:0:forward");
+        assert_eq!(keys.1, "command-runtime-action-1:sha256:def:0:compensation");
+        assert_eq!(keys.2, 2);
         let _ = fs::remove_dir_all(root);
     }
 

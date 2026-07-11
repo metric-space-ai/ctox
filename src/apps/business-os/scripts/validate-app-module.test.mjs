@@ -795,6 +795,16 @@ function writeSourceModule(root, moduleId, overrides = {}) {
         required: ['id', 'title', 'updated_at_ms'],
       },
     },
+    schemaJs: [
+      'export const collections = {',
+      '  schemaversiondrift_records: {',
+      "    version: 0, primaryKey: 'id', type: 'object',",
+      "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, updated_at_ms: { type: 'number' } },",
+      "    required: ['id', 'title', 'updated_at_ms'],",
+      '  },',
+      '};',
+      '',
+    ].join('\n'),
   });
   const run = runValidator(root, 'schemaversiondrift', '--installed');
   assert.notEqual(run.status, 0);
@@ -1096,6 +1106,91 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'testbad', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /module test failed: runtime\/business-os\/installed-modules\/testbad\/tests\/basic\.test\.mjs/);
+}
+
+{
+  const root = makeWorkspace();
+  const moduleId = 'runtimeok';
+  const collection = `${moduleId}_records`;
+  writeInstalledModule(root, moduleId, {
+    manifest: {
+      data_runtime: {
+        version: 1,
+        sync: 'realtime',
+        scope: 'actor',
+        actions: {
+          save: {
+            version: 1,
+            input_schema: {
+              type: 'object',
+              required: ['id', 'title'],
+              additionalProperties: false,
+              properties: { id: { type: 'string' }, title: { type: 'string' } },
+            },
+            steps: [{
+              name: 'save_record',
+              op: 'upsert',
+              collection,
+              record: {
+                id: { $input: 'id' },
+                title: { $input: 'title' },
+                actor_id: { $actor: 'id' },
+                updated_at_ms: { $now_ms: true },
+              },
+            }],
+          },
+        },
+      },
+    },
+    collections: {
+      [collection]: {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          actor_id: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'actor_id', 'updated_at_ms'],
+      },
+    },
+    schemaJs: [
+      'export const collections = {',
+      `  ${collection}: {`,
+      "    version: 0, primaryKey: 'id', type: 'object',",
+      "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, actor_id: { type: 'string' }, updated_at_ms: { type: 'number' } },",
+      "    required: ['id', 'title', 'actor_id', 'updated_at_ms'],",
+      '  },',
+      '};',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, moduleId, '--installed', '--skip-tests', '--skip-node-check', '--json');
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.equal(JSON.parse(run.stdout).checks.find((check) => check.name === 'data_runtime_v1').ok, true);
+}
+
+{
+  const root = makeWorkspace();
+  const moduleId = 'runtimebad';
+  const collection = `${moduleId}_records`;
+  writeInstalledModule(root, moduleId, {
+    manifest: {
+      data_runtime: {
+        version: 1,
+        actions: {
+          unsafe: { steps: [{ op: 'sql', collection, sql: 'DELETE FROM everything' }] },
+        },
+      },
+    },
+  });
+  const run = runValidator(root, moduleId, '--installed', '--skip-tests', '--skip-node-check', '--json');
+  assert.notEqual(run.status, 0);
+  const result = JSON.parse(run.stdout);
+  assert.match(result.failures.join('\n'), /forbidden key sql/);
+  assert.match(result.failures.join('\n'), /op is unsupported/);
 }
 
 console.log('[validate-app-module.test] OK');

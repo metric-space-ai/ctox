@@ -1,4 +1,5 @@
 import { CtoxResizer } from './shared/resizer.js';
+import { createAppActions } from './shared/app-actions.js?v=20260711-runtime-v1';
 import {
   appLifecycleBadge,
   appLifecycleState,
@@ -24,7 +25,7 @@ import {
   launchesInWindow,
   resolvePresentation,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260710-presentation-v2';
+} from './shared/presentation.js?v=20260711-presentation-v3';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -49,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260710-settings-users-v12';
+const APP_BUILD = '20260711-app-runtime-v1';
 
 ensureShellStylesheets();
 
@@ -4570,6 +4571,58 @@ function createModuleContext(mod, overrides = {}) {
     storageScope: createStorageScopeFacade(mod),
     sync: createLiveSyncFacade(),
     commandBus: createLiveCommandBusFacade(),
+    actions: createAppActions({
+      module: mod,
+      commandBus: createLiveCommandBusFacade(),
+      ensureRuntimeReady: async () => {
+        const collections = Array.isArray(mod.collections) ? mod.collections.filter(Boolean) : [];
+        const bridges = await Promise.all(collections.map((collection) => state.sync?.startCollection?.(collection)));
+        if (collections.length && bridges.some((bridge) => !bridge)) {
+          throw new Error('app collection replication is unavailable');
+        }
+        const readiness = bridges
+          .map((bridge, index) => ({ replication: bridge?.state, collection: collections[index] }))
+          .filter(({ replication }) => Boolean(replication))
+          .map(async ({ replication, collection }) => {
+            await replication.awaitInitialReplication?.();
+            await replication.awaitInSync?.();
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+              const peers = replication.openPeerIds?.() || [];
+              const visible = peers.some((peerId) => {
+                const protocol = replication.remoteProtocolForPeer?.(peerId) || null;
+                const schemas = protocol?.collectionSchemas;
+                if (schemas && typeof schemas === 'object') {
+                  return Boolean(schemas[collection]);
+                }
+                return protocol?.collection?.name === collection;
+              });
+              if (visible) return;
+              await new Promise((resolve) => window.setTimeout(resolve, 100));
+            }
+            throw new Error(`native app collection ${collection} did not become visible`);
+          });
+        if (!readiness.length) return;
+        let timeoutId = 0;
+        try {
+          await Promise.race([
+            Promise.all(readiness),
+            new Promise((_, reject) => {
+              timeoutId = window.setTimeout(
+                () => reject(new Error('app collection readiness timed out after 30 seconds')),
+                30000,
+              );
+            }),
+          ]);
+        } finally {
+          if (timeoutId) window.clearTimeout(timeoutId);
+        }
+      },
+      hasCapability: (capability) => {
+        const capabilities = state.syncDiagnostics?.remoteCapabilities;
+        return Array.isArray(capabilities) ? capabilities.includes(capability) : null;
+      },
+    }),
     contextActions: createContextActionsFacade(mod),
     businessChat: createLiveBusinessChatFacade(mod),
     presence: createModulePresenceFacade(mod),
@@ -4671,6 +4724,7 @@ function createRuntimeCapabilityFacade(mod) {
     }),
     external_effects: Object.freeze({
       command_bus: 'allowed',
+      app_actions: 'ctox-app-runtime-v1',
       allowed_command_bus: runtimeInstalled ? Object.freeze(['business_os.chat.task']) : Object.freeze([]),
       direct_control_commands: runtimeInstalled ? 'forbidden' : 'packaged-module-compatibility',
       approval_boundary: 'server-policy',
@@ -5126,6 +5180,11 @@ function assertGuardedCollectionPermission(guard, collectionName, permission) {
 function guardAllowsCollectionPermission(guard, collectionName, permission) {
   const name = String(collectionName || '').trim();
   if (!guard || !name) return true;
+  // Runtime-installed app code never inherits the signed-in operator's
+  // ambient collection authority. Its shell-delivered facade is confined to
+  // the collections declared by that app; native policy/grants then decide
+  // whether those declared collections are readable or writable.
+  if (!guard.collections.has(name)) return false;
   if (canUseBusinessPermission({
     session: state.session,
     governance: state.governance,
@@ -5135,7 +5194,6 @@ function guardAllowsCollectionPermission(guard, collectionName, permission) {
   })) {
     return true;
   }
-  if (!guard.collections.has(name)) return false;
   return canUseBusinessPermission({
     session: state.session,
     governance: state.governance,
@@ -5205,6 +5263,8 @@ function createLiveSyncFacade() {
 function createLiveCommandBusFacade() {
   return {
     dispatch: (...args) => state.commandBus?.dispatch?.(...args),
+    getStatus: (...args) => state.commandBus?.getStatus?.(...args),
+    subscribe: (...args) => state.commandBus?.subscribe?.(...args),
   };
 }
 

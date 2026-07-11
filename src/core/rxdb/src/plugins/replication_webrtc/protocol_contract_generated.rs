@@ -38,3 +38,4 @@ pub(super) const CTOX_PRESENCE_MAX_ENTRIES_PER_PEER: usize = 32;
 #[allow(dead_code)]
 pub(super) const CTOX_COMMAND_LIFECYCLE_CAPABILITY: &str = "ctox-command-lifecycle-v2";
 pub(super) const CTOX_CHECKPOINT_GENERATION_CAPABILITY: &str = "ctox-checkpoint-generation-v2";
+pub(super) const CTOX_APP_RUNTIME_CAPABILITY: &str = "ctox-app-runtime-v1";

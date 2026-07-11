@@ -305,6 +305,8 @@ export async function mount(ctx) {
   function isSyncCollectionReady(diagnostics) {
     if (!diagnostics) return false;
     const status = diagnostics.connectionStatus || diagnostics.status || '';
+    const activePeerCount = Number(diagnostics.frameTransport?.activePeerCount || 0);
+    if (diagnostics.frameTransport && activePeerCount === 0) return false;
     if (diagnostics.initialReplicationAt || diagnostics.connectedAt) return true;
     if (diagnostics.initialReplicationState === 'complete') return true;
     return ['connected', 'running', 'reused'].includes(status);
@@ -753,7 +755,13 @@ export async function mount(ctx) {
 
   function isDatabaseClosingError(error) {
     const message = String(error?.message || error || '');
-    return /IDBDatabase.*closing|database connection is closing/i.test(message);
+    if (/IDBDatabase.*closing|database connection is closing/i.test(message)) return true;
+    // Demand queries already publish durable authorization failures through
+    // Sync/Advanced Status. During an internally supervised peer replacement,
+    // an in-flight icon refresh can additionally observe the retiring peer's
+    // authorization map. The desktop falls back to launcher icons here and
+    // lets the status surface remain the single error owner.
+    return /UNAUTHORIZED: peer is not authorized for this collection/i.test(message);
   }
 
   function subscribeCommandStream() {

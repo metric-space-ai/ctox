@@ -754,6 +754,8 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("create") => handle_business_os_app_create(root, &args[1..]),
         Some("modify") => handle_business_os_app_modify(root, &args[1..]),
+        Some("runtime") => handle_business_os_app_runtime(root, &args[1..]),
+        Some("access") => handle_business_os_app_access(root, &args[1..]),
         Some("validate") => {
             let module_id = args
                 .get(1)
@@ -894,6 +896,96 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os app command `{other}`"),
     }
+}
+
+fn handle_business_os_app_runtime(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("inspect") => {
+            let module_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .context("usage: ctox business-os app runtime inspect <module-id> --json")?;
+            print_json(&crate::business_os::inspect_app_runtime_module(
+                root, module_id,
+            )?)
+        }
+        Some("reconcile") => {
+            let module_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .context(
+                "usage: ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)",
+            )?;
+            let apply = args.iter().any(|value| value == "--apply");
+            let dry_run = args.iter().any(|value| value == "--dry-run");
+            anyhow::ensure!(
+                apply != dry_run,
+                "runtime reconcile requires exactly one of --dry-run or --apply"
+            );
+            let inspection = crate::business_os::inspect_app_runtime_module(root, module_id)?;
+            let peer_reconfiguration = if apply {
+                crate::business_os::restart_native_peer(root)?
+            } else {
+                serde_json::json!({ "status": "would_supervise" })
+            };
+            print_json(&serde_json::json!({
+                "ok": true,
+                "module_id": module_id,
+                "apply": apply,
+                "runtime_hash": inspection.get("runtime_hash"),
+                "actions": inspection.get("actions"),
+                "collections": inspection.get("collections"),
+                "peer_reconfiguration": peer_reconfiguration,
+                "manual_restart_required": false,
+                "backend_recompile_required": false,
+            }))
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("usage:\n  ctox business-os app runtime inspect <module-id> --json\n  ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os app runtime command `{other}`"),
+    }
+}
+
+fn handle_business_os_app_access(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    let operation = args.first().map(String::as_str).unwrap_or_default();
+    anyhow::ensure!(
+        matches!(operation, "grant" | "revoke"),
+        "usage: ctox business-os app access grant|revoke <module-id> --subject <id> [--subject-type user|role] --permission data.read|data.write --collection <name> --reason <text>"
+    );
+    let module_id = args
+        .get(1)
+        .filter(|value| !value.starts_with("--"))
+        .context("module id is required")?;
+    let subject_id = flag_value(args, "--subject")
+        .or_else(|| flag_value(args, "--subject-id"))
+        .context("--subject is required")?;
+    let permission = flag_value(args, "--permission").context("--permission is required")?;
+    let collection = flag_value(args, "--collection").context("--collection is required")?;
+    let command_id = format!("cmd_app_access_{}_{}", operation, Uuid::new_v4());
+    let document = serde_json::json!({
+        "id": command_id.as_str(),
+        "command_id": command_id.as_str(),
+        "module": "ctox",
+        "command_type": format!("ctox.app.access.{operation}"),
+        "record_id": module_id,
+        "payload": {
+            "module_id": module_id,
+            "subject_type": flag_value(args, "--subject-type").unwrap_or("user"),
+            "subject_id": subject_id,
+            "permission": permission,
+            "collection": collection,
+            "reason": flag_value(args, "--reason").unwrap_or("Business OS app access CLI change"),
+        },
+        "client_context": {
+            "source": "ctox-cli.business-os-app-access",
+            "actor": business_os_app_cli_actor(args),
+        }
+    });
+    print_json(&crate::business_os::store::accept_rxdb_business_command(
+        root, document,
+    )?)
 }
 
 fn handle_business_os_app_create(root: &Path, args: &[String]) -> anyhow::Result<()> {
@@ -1934,6 +2026,7 @@ fn business_os_app_reference_candidates(
             "Do not copy layout.icon_svg or any inline SVG from source manifests. Runtime apps keep SVG markup in icon.svg.",
             "Do not copy store.installable into runtime-installed module.json.",
             "Do not copy layout.right unless the app truly needs a third pane and module.json includes layout.third_pane_justification.",
+            "Default to data_runtime.version=1, sync=realtime and scope=actor. Use ctx.db for CRUD and ctx.actions only for bounded declarative Sagas.",
             "The skill contract and validator override any source reference field that conflicts with runtime-installed app rules."
         ],
         "runtime_manifest_contract": {
@@ -1941,6 +2034,12 @@ fn business_os_app_reference_candidates(
             "install_scope": "installed",
             "icon": "Use icon.svg. Do not copy layout.icon_svg or inline SVG into module.json.",
             "store": "Do not set store.installable for runtime-installed modules.",
+            "data_runtime": {
+                "version": 1,
+                "sync": "realtime",
+                "scope": "actor",
+                "actions": {}
+            },
             "layout": "Prefer left + center or a modal/drawer. Use layout.right only with layout.third_pane_justification."
         },
         "modules": modules,
@@ -3651,6 +3750,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os app bench status --run-id <id> [--validate]",
+        )
+        .replace(
+            "  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]",
+            "  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app runtime inspect <module-id> --json\n  ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)\n  ctox business-os app access grant|revoke <module-id> --subject <id> [--subject-type user|role] --permission data.read|data.write --collection <name> --reason <text>",
         )
         .replace(
             "  ctox business-os peer start\n  ctox business-os desktop invite",

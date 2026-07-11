@@ -61,5 +61,5 @@ export function launchesInWindow(moduleDef) {
 }
 
 export function usesLegacyWorkspace(moduleDef) {
-  return resolvePresentation(moduleDef).defaultMode === 'workspace';
+  return resolvePresentation(moduleDef).legacy.fullWorkspace;
 }

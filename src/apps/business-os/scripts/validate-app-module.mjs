@@ -200,6 +200,86 @@ function collectStaticFailures(stderr) {
   return lines;
 }
 
+function collectDataRuntimeFailures(moduleDir) {
+  const manifestPath = join(moduleDir, 'module.json');
+  const schemaPath = join(moduleDir, 'collections.schema.json');
+  if (!existsSync(manifestPath)) return [];
+  let manifest;
+  let schemas = {};
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (existsSync(schemaPath)) {
+      schemas = JSON.parse(readFileSync(schemaPath, 'utf8'))?.collections || {};
+    }
+  } catch {
+    return []; // The existing static checker reports malformed JSON precisely.
+  }
+  const runtime = manifest?.data_runtime;
+  if (runtime == null) return [];
+  const failures = [];
+  if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) {
+    return ['data_runtime must be an object'];
+  }
+  if (runtime.version !== 1) failures.push('data_runtime.version must be 1');
+  if ((runtime.sync ?? 'realtime') !== 'realtime') failures.push('data_runtime.sync must be "realtime" in v1');
+  const scope = runtime.scope ?? 'actor';
+  if (!['actor', 'workspace'].includes(scope)) failures.push('data_runtime.scope must be "actor" or "workspace"');
+  const actions = runtime.actions ?? {};
+  if (!actions || typeof actions !== 'object' || Array.isArray(actions)) {
+    failures.push('data_runtime.actions must be an object');
+    return failures;
+  }
+  const declared = new Set(Array.isArray(manifest.collections) ? manifest.collections : []);
+  const allowedOps = new Set(['read', 'assert', 'insert', 'upsert', 'patch', 'delete', 'tombstone']);
+  const allowedStepKeys = new Set(['name', 'op', 'collection', 'id', 'record', 'patch', 'path', 'equals']);
+  for (const [name, action] of Object.entries(actions)) {
+    if (!/^[A-Za-z0-9_.-]{1,160}$/.test(name)) failures.push(`data_runtime action has invalid name: ${name}`);
+    if (!action || typeof action !== 'object' || Array.isArray(action)) {
+      failures.push(`data_runtime.actions.${name} must be an object`);
+      continue;
+    }
+    if (action.version != null && (!Number.isSafeInteger(action.version) || action.version < 1)) {
+      failures.push(`data_runtime.actions.${name}.version must be a positive integer`);
+    }
+    if (action.input_schema != null && (!action.input_schema || typeof action.input_schema !== 'object' || Array.isArray(action.input_schema))) {
+      failures.push(`data_runtime.actions.${name}.input_schema must be a JSON Schema object`);
+    }
+    if (!Array.isArray(action.steps) || action.steps.length < 1 || action.steps.length > 64) {
+      failures.push(`data_runtime.actions.${name}.steps must contain 1..64 steps`);
+      continue;
+    }
+    const names = new Set();
+    action.steps.forEach((step, index) => {
+      const prefix = `data_runtime.actions.${name}.steps[${index}]`;
+      if (!step || typeof step !== 'object' || Array.isArray(step)) {
+        failures.push(`${prefix} must be an object`);
+        return;
+      }
+      for (const key of Object.keys(step)) {
+        if (!allowedStepKeys.has(key)) failures.push(`${prefix} contains forbidden key ${key}`);
+      }
+      if (!allowedOps.has(step.op)) failures.push(`${prefix}.op is unsupported`);
+      if (!declared.has(step.collection)) failures.push(`${prefix}.collection is not declared by module.json`);
+      const ownedPrefix = `${String(manifest.id || '').replaceAll('-', '_')}_`;
+      if (!String(step.collection || '').startsWith(ownedPrefix)) {
+        failures.push(`${prefix}.collection must be owned by module ${manifest.id}`);
+      }
+      if (step.name != null && (!/^[A-Za-z0-9_.-]{1,160}$/.test(step.name) || names.has(step.name))) {
+        failures.push(`${prefix}.name is invalid or duplicated`);
+      }
+      if (step.name != null) names.add(step.name);
+      if (['insert', 'upsert'].includes(step.op) && step.record == null) failures.push(`${prefix}.record is required`);
+      if (step.op === 'patch' && (step.id == null || step.patch == null)) failures.push(`${prefix} requires id and patch`);
+      if (['read', 'assert', 'delete', 'tombstone'].includes(step.op) && step.id == null) failures.push(`${prefix}.id is required`);
+      if (scope === 'actor') {
+        const schema = schemas?.[step.collection]?.schema || schemas?.[step.collection];
+        if (!schema?.properties?.actor_id) failures.push(`${prefix}.collection must declare actor_id for actor scope`);
+      }
+    });
+  }
+  return failures;
+}
+
 function validate(options) {
   const mode = options.mode || (
     existsSync(moduleDirFor(options.workspace, options.moduleId, 'source'))
@@ -218,6 +298,13 @@ function validate(options) {
   if (mode === 'installed' || mode === 'local') {
     failures.push(...collectInstalledModuleRootEntryFailures(options.workspace, moduleDir));
   }
+  const dataRuntimeFailures = collectDataRuntimeFailures(moduleDir);
+  failures.push(...dataRuntimeFailures);
+  checks.push({
+    name: 'data_runtime_v1',
+    ok: dataRuntimeFailures.length === 0,
+    detail: dataRuntimeFailures.length === 0 ? 'absent or valid' : dataRuntimeFailures,
+  });
 
   const staticChecker = resolveStaticChecker(options.workspace);
   if (!staticChecker) {

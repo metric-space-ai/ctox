@@ -31,12 +31,12 @@ Current implementation status:
 | Permission-filtered multiuser replication | Available |
 | Runtime-installed/local app packages | Available |
 | Declarative migrations | Available |
-| Generic runtime action/Saga definitions without per-app Rust handlers | Refactoring target |
-| Automatic hot registration of schemas/actions with no visible peer restart | Refactoring target |
+| Generic runtime action/Saga definitions without per-app Rust handlers | Available in runtime v1 |
+| Supervised schema/action reconciliation without daemon recompile | Available in runtime v1 |
 
-Do not describe the final two rows as shipped until their cross-process gates
-pass. Queue-backed unknown command types can already become durable CTOX work,
-but that is not yet the complete declarative backend-action SDK.
+The release qualification still installs unknown schemas/actions into an
+already-built binary. Runtime v1 does not permit arbitrary SQL, shell, network,
+host-path or browser-code effects.
 
 ## Package layout
 
@@ -188,7 +188,7 @@ Choose the smallest execution level that preserves the invariant:
 
 1. **Direct client CRUD** — default for forms, records, inline edits and
    single-collection changes. It is local-first and automatically synchronized.
-2. **Declarative runtime action** — target contract for authoritative
+2. **Declarative runtime action** — for authoritative
    mutations, bulk operations and multi-collection Sagas. The app package
    declares input schema, permission, idempotency and bounded effects; the
    generic native executor loads this at runtime. No per-app Rust handler.
@@ -201,9 +201,86 @@ Never pass free SQL, shell commands, arbitrary file paths or executable
 browser code as a supposed declarative action. The native side remains the
 authorization boundary.
 
-Until the runtime action registry is complete, use `ctx.commandBus` for durable
-CTOX work and existing typed capabilities. Do not add an HTTP endpoint as a
-temporary app backend.
+Declare these actions in `module.json` and call them through `ctx.actions`.
+There is only one compiled native command type (`ctox.app.action.run`); the
+module/action name is resolved from the validated runtime registry.
+
+```json
+{
+  "id": "my-app",
+  "collections": ["my_app_records"],
+  "data_runtime": {
+    "version": 1,
+    "sync": "realtime",
+    "scope": "actor",
+    "actions": {
+      "save": {
+        "version": 1,
+        "input_schema": {
+          "type": "object",
+          "required": ["id", "title"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" }
+          }
+        },
+        "steps": [{
+          "name": "save_record",
+          "op": "upsert",
+          "collection": "my_app_records",
+          "record": {
+            "id": { "$input": "id" },
+            "title": { "$input": "title" },
+            "actor_id": { "$actor": "id" },
+            "updated_at_ms": { "$now_ms": true }
+          }
+        }]
+      }
+    }
+  }
+}
+```
+
+Actor-scoped collections must declare `actor_id`. Draft/local apps default to
+actor scope; workspace scope requires reviewed native grants.
+
+```js
+const receipt = await ctx.actions.run('save', {
+  id: crypto.randomUUID(),
+  title: 'First record'
+}, {
+  idempotencyKey: 'save:first-record',
+  until: 'terminal'
+});
+
+const current = await ctx.actions.getStatus(receipt.command_id);
+const unsubscribe = ctx.actions.subscribe(receipt.command_id, (status) => {
+  renderActionStatus(status);
+});
+// Later: unsubscribe();
+```
+
+At admission the native side snapshots the action definition and input. App
+updates therefore cannot change an in-flight Saga. Insert, upsert, patch and
+delete effects store their previous document state and compensate in reverse
+order; a failed compensation becomes durable `manual_intervention`.
+
+The operator can inspect and reconcile the validated runtime without changing
+or rebuilding CTOX:
+
+```bash
+ctox business-os app runtime inspect my-app --json
+ctox business-os app runtime reconcile my-app --dry-run
+ctox business-os app runtime reconcile my-app --apply
+ctox business-os app access grant my-app \
+  --subject user-42 --permission data.write --collection my_app_records \
+  --reason "Workspace release review"
+```
+
+`reconcile --apply` performs a supervised in-process peer reconfiguration.
+Grant/revoke commands go through the native policy and audit path; they never
+write access tables directly from the browser.
 
 ## Offline, conflicts and recovery
 

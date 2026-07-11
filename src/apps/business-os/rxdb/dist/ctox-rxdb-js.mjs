@@ -50,6 +50,7 @@ var CTOX_PRESENCE_RPC = Object.freeze({
 });
 var CTOX_COMMAND_LIFECYCLE_CAPABILITY = "ctox-command-lifecycle-v2";
 var CTOX_CHECKPOINT_GENERATION_CAPABILITY = "ctox-checkpoint-generation-v2";
+var CTOX_APP_RUNTIME_CAPABILITY = "ctox-app-runtime-v1";
 
 // src/apps/business-os/rxdb/src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
@@ -2999,10 +3000,26 @@ function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigi
     if (collectionName === "business_commands" && isStaleReplicatedBusinessCommandState(existingRecord.doc, incomingDocument)) {
       return false;
     }
+    if (collectionName === "business_commands" && isForwardReplicatedBusinessCommandState(existingRecord.doc, incomingDocument)) {
+      return true;
+    }
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
   }
   return nextLwt >= existingLwt;
+}
+function isForwardReplicatedBusinessCommandState(existingDocument, incomingDocument) {
+  const rank = (document2) => {
+    const status = String(document2?.terminal_status || document2?.status || "").trim().toLowerCase();
+    if (document2?.execution_phase === "terminal" || ["completed", "failed", "rejected", "cancelled", "canceled", "blocked"].includes(status)) {
+      return 2;
+    }
+    if (document2?.replication_phase === "native_observed" || ["accepted", "queued", "running", "in_progress"].includes(status)) {
+      return 1;
+    }
+    return 0;
+  };
+  return rank(incomingDocument) > rank(existingDocument);
 }
 function isStaleReplicatedBusinessCommandState(existingDocument, incomingDocument) {
   const existingStatus = String(existingDocument?.status || "").trim().toLowerCase();
@@ -7933,6 +7950,7 @@ var BROWSER_CAPABILITIES = [
   "ctox-peer-session-v1",
   "ctox-checkpoint-epoch-v1",
   CTOX_CHECKPOINT_GENERATION_CAPABILITY,
+  CTOX_APP_RUNTIME_CAPABILITY,
   CTOX_QUERY_FETCH_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
   CTOX_COMMAND_LIFECYCLE_CAPABILITY

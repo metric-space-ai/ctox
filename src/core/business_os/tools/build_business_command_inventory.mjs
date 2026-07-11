@@ -16,8 +16,8 @@ if (functionStart < 0 || matchStart < 0 || fallback < 0) {
   throw new Error('cannot locate authoritative Business OS command classifier');
 }
 const classifier = source.slice(matchStart, fallback);
-const exactControlTypes = [...classifier.matchAll(/^\s*"([^"]+)"\s*=>\s*\{/gm)]
-  .map((match) => match[1])
+const exactControlTypes = [...classifier.matchAll(/^\s*((?:"[^"]+"\s*(?:\|\s*)?)+)=>\s*\{/gm)]
+  .flatMap((match) => [...match[1].matchAll(/"([^"]+)"/g)].map((value) => value[1]))
   .sort();
 const dispatchPredicates = [...classifier.matchAll(/^\s*command_type\s+if\s+(.+?)\s*=>\s*\{/gm)]
   .map((match) => match[1].trim())

@@ -17,6 +17,7 @@
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
     "ctox-checkpoint-generation-v2",
+    "ctox-app-runtime-v1",
     "ctox-rxdb-query-fetch-v1",
     "ctox-presence-v1",
     "ctox-command-lifecycle-v2"
@@ -29,6 +30,7 @@
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
     "ctox-checkpoint-generation-v2",
+    "ctox-app-runtime-v1",
     "ctox-rxdb-query-fetch-v1",
     "ctox-presence-v1",
     "ctox-command-lifecycle-v2"
@@ -36,8 +38,9 @@
   "optionalCapabilities": {
     "queryFetch": "ctox-rxdb-query-fetch-v1",
     "presence": "ctox-presence-v1",
-    "commandLifecycle": "ctox-command-lifecycle-v2"
-    ,"checkpointGeneration": "ctox-checkpoint-generation-v2"
+    "commandLifecycle": "ctox-command-lifecycle-v2",
+    "checkpointGeneration": "ctox-checkpoint-generation-v2",
+    "appRuntime": "ctox-app-runtime-v1"
   },
   "presenceRpc": {
     "update": "rxdb.presence.update",

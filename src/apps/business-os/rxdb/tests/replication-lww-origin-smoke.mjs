@@ -12,7 +12,7 @@
 //   1. replication-over-replication: ALWAYS accepted (master checkpoint
 //      iteration only moves forward; the payload heuristic must not veto).
 //   2. replication-over-LOCAL: the unsynced local write wins while its lwt
-//      is newer (it pushes and round-trips through the master).
+//      is newer, except authoritative command lifecycle progress.
 //   3. local writes keep plain LWW semantics.
 
 import {
@@ -92,6 +92,34 @@ assert(
     'business_commands',
   ) === false,
   'an accepted replay must not reopen a terminal native command',
+);
+
+const locallyNewerPendingCommand = {
+  lwt: 5000,
+  doc: {
+    id: 'command-2',
+    command_id: 'command-2',
+    status: 'pending_sync',
+    updated_at_ms: 5000,
+    _meta: { lwt: 5000 },
+  },
+};
+assert(
+  shouldAcceptDocumentWrite(
+    locallyNewerPendingCommand,
+    4000,
+    origin,
+    {
+      id: 'command-2',
+      command_id: 'command-2',
+      status: 'completed',
+      execution_phase: 'terminal',
+      replication_phase: 'native_observed',
+      updated_at_ms: 4000,
+    },
+    'business_commands',
+  ) === true,
+  'native command progress must beat a newer browser timestamp caused by clock skew',
 );
 
 // --- 2. unsynced local write survives a replication write -------------------

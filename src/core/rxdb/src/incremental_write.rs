@@ -8,7 +8,8 @@
 //!   (`for (const item of items) await ...`), so the outer parallelism was
 //!   just an idiomatic JS quirk; collapsing it to sequential preserves
 //!   semantics for the single-storage write call.
-//! - Modifier callbacks are `Box<dyn FnOnce(Value) -> BoxFuture<RxResult<Value>>>`.
+//! - Modifier callbacks are reusable `Arc<dyn Fn(Value) -> ...>` values so a
+//!   409 retry reapplies the original mutation to the latest document state.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -27,7 +28,7 @@ use crate::types::{BulkWriteRow, RxStorageBulkWriteResponse, RxStorageInstance};
 /// Modifier callback: takes a cloned doc, returns a future of a (possibly
 /// modified) doc.
 pub type IncrementalWriteModifier =
-    Box<dyn FnOnce(Value) -> BoxFuture<'static, RxResult<Value>> + Send>;
+    Arc<dyn Fn(Value) -> BoxFuture<'static, RxResult<Value>> + Send + Sync>;
 
 /// Pre-write hook: called once per docId with `(new_data, old_data)`.
 /// It returns the possibly mutated document data, mirroring JS hooks that
@@ -151,12 +152,8 @@ impl IncrementalWriteQueue {
                 );
                 let mut new_data = old_data.clone();
                 for item in items.iter_mut() {
-                    let modifier = match item.modifier_take() {
-                        Some(m) => m,
-                        None => continue, // Already errored.
-                    };
                     let cloned = clone_deep(&new_data);
-                    match modifier(cloned).await {
+                    match (item.modifier)(cloned).await {
                         Ok(updated) => {
                             new_data = updated;
                         }
@@ -295,27 +292,16 @@ impl IncrementalWriteQueue {
     }
 }
 
-impl QueueItem {
-    /// Take the modifier callback out of the item, leaving a no-op behind.
-    fn modifier_take(&mut self) -> Option<IncrementalWriteModifier> {
-        // FnOnce can only be taken once; we swap with a sentinel no-op.
-        let noop: IncrementalWriteModifier = Box::new(|v| Box::pin(async move { Ok(v) }));
-        let prev = std::mem::replace(&mut self.modifier, noop);
-        // We cannot distinguish "real" from "noop" once swapped, so callers
-        // must check `sender` to know if this item still needs work. The
-        // returned modifier is the real one on first take.
-        Some(prev)
-    }
-}
-
 // ref: rxdb/src/incremental-write.ts:189-210
 /// Convert a public modifier (operates on the document without RxDB meta) to
 /// an internal modifier (re-attaches `_meta`, `_attachments`, `_rev`, `_deleted`).
-pub fn modifier_from_public_to_internal<F>(public_modifier: F) -> IncrementalWriteModifier
-where
-    F: FnOnce(Value) -> BoxFuture<'static, RxResult<Value>> + Send + 'static,
-{
-    Box::new(move |doc_data: Value| {
+pub fn modifier_from_public_to_internal(
+    public_modifier: crate::rx_document::ModifyFunction,
+) -> IncrementalWriteModifier {
+    let public_modifier: Arc<dyn Fn(Value) -> BoxFuture<'static, RxResult<Value>> + Send + Sync> =
+        Arc::from(public_modifier);
+    Arc::new(move |doc_data: Value| {
+        let public_modifier = Arc::clone(&public_modifier);
         Box::pin(async move {
             // Strip meta fields.
             let mut without_meta = doc_data.clone();

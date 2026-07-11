@@ -61,6 +61,9 @@ Grundregeln (aus `docs/ctox-rxdb.md` und den AGENTS-Guardrails):
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `commandBus` | facade | `dispatch(command)` → `business_commands` (server-geprüft, Capability-Token wird angeheftet). Der einzige Mutationsweg für serverwirksame Aktionen. |
+| `actions` | facade | `run(name, input, options)`, `getStatus(commandId)`, `subscribe(commandId, listener)` für deklarative, zur Laufzeit registrierte App-Actions. Intern existiert nur `ctox.app.action.run`; Apps benötigen keinen Backend-Recompile. |
+| `contextActions` | facade | Kontextbezogene Shell-/Agent-Aktionen registrieren und auslösen. Nicht mit deklarativen Daten-Actions verwechseln. |
+| `args` | object | Von Shell/Fensterstart übergebene, nicht persistente Startargumente. |
 | `businessChat` | facade | `open(detail)`, `submitTask(options)` — CTOX-Arbeit aus der App auslösen. |
 | `openBusinessChat(detail)` | fn | Chat-Panel öffnen (Kontextübergabe). |
 | `canModifyModule()` | fn → bool | UX-Spiegel der Modify-Policy (Server bleibt autoritativ). |
@@ -96,8 +99,8 @@ Grundregeln (aus `docs/ctox-rxdb.md` und den AGENTS-Guardrails):
 
 ## Stabilität
 
-- v1 umfasst exakt die 42 oben gelisteten Felder (Pin im Assert-Skript;
-  `getActionIcon` kam additiv hinzu).
+- v1 wird additiv erweitert und mechanisch durch den Pin im Assert-Skript
+  gezählt. `actions` kam als client-only Runtime-Fassade hinzu.
 - Additiv erweitern ist erlaubt (Pin + Doku im selben Commit).
 - Entfernen/Umbenennen ⇒ `business-os-module-context-v2` mit
   Migrationshinweisen für alle Module.

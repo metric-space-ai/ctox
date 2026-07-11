@@ -863,7 +863,7 @@ ctox chat "Check this CTOX installation, summarize what is configured, and list 
             </div>
             <div class="cell">
               <b>No per-app Rust rebuild</b>
-              <p>Runtime schemas already load from app packages. Generic declarative backend actions and invisible hot registration are the remaining SDK refactor target.</p>
+              <p>Runtime schemas and bounded declarative actions load from app packages. Every app action uses the generic <code>ctox.app.action.run</code> executor.</p>
             </div>
           </div>
 
@@ -904,13 +904,14 @@ ctox chat "Check this CTOX installation, summarize what is configured, and list 
           <p>
             App code must not import upstream RxDB and must not create an HTTP
             data fallback. Use <code>ctx.db</code> for ordinary local-first CRUD.
-            Use <code>ctx.commandBus</code> when work must be durable, delegated,
-            agent-executed, or server-authoritative.
+            Use <code>ctx.actions</code> for declarative server-authoritative or
+            multi-collection work, and <code>ctx.commandBus</code> for delegated
+            agent work and existing privileged capabilities.
           </p>
 
           <h3>Actions without compiling a new backend API</h3>
           <p>
-            The refactoring target separates three levels: direct client CRUD
+            The runtime separates three levels: direct client CRUD
             as the default, runtime-registered declarative mutations/Sagas for
             authoritative business actions, and explicitly reviewed privileged
             extensions for host or external-system access. A new app-specific
@@ -919,16 +920,33 @@ ctox chat "Check this CTOX installation, summarize what is configured, and list 
             idempotency, audit, and bounded effect primitives; they are not a
             vehicle for browser-supplied SQL or shell commands.
           </p>
+          <pre><code>const receipt = await ctx.actions.run('approve', {
+  record_id: selected.id
+}, {
+  idempotencyKey: `approve:${selected.id}`,
+  until: 'terminal'
+});
+
+ctx.actions.subscribe(receipt.command_id, renderActionStatus);</code></pre>
+          <pre><code>ctox business-os app runtime inspect my-app --json
+ctox business-os app runtime reconcile my-app --apply
+ctox business-os app access grant my-app \
+  --subject user-42 --permission data.write \
+  --collection my_app_records --reason "Release review"</code></pre>
+          <p>
+            Runtime reconciliation is an in-process supervised peer change; it
+            does not rebuild CTOX or require a manual daemon restart. Access
+            changes pass through native policy, approval, and audit controls.
+          </p>
 
           <div class="callout">
-            <b>Current boundary</b>
+            <b>Security boundary</b>
             <p>
-              Runtime collection schemas, local-first CRUD, WebRTC sync, and
-              multiuser grants are available today. The generic runtime
-              action/Saga registry and fully transparent schema/action hot
-              registration remain explicit open work. Until those gates pass,
-              use existing typed CTOX capabilities or queue durable agent work;
-              do not add an app-local HTTP backend.
+              Runtime actions are data-only: read/assert, insert/upsert, patch,
+              tombstone/delete, and ordered Sagas with reverse compensation.
+              SQL, shell commands, host paths, arbitrary networking, and
+              browser-supplied executable steps are rejected. External effects
+              remain reviewed adapters or sandboxed extensions.
             </p>
           </div>
 

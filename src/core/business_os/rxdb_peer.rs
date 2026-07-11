@@ -17,6 +17,7 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+use super::app_runtime;
 use super::browser_runtime::{browser_runtime_manager, BrowserSessionAutomationRequest};
 use super::command_lifecycle_generated::CTOX_COMMAND_LIFECYCLE_CAPABILITY;
 use super::store;
@@ -291,6 +292,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
     "ctox-checkpoint-generation-v2",
+    "ctox-app-runtime-v1",
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
@@ -400,6 +402,10 @@ const NATIVE_PEER_MIN_WORKER_THREADS: usize = 4;
 /// dedicated heartbeat thread has died/stalled, the watchdog shuts the peer
 /// down cleanly so the OS process lock is released for a fresh start.
 const NATIVE_PEER_WATCHDOG_INTERVAL_SECS: u64 = 15;
+/// Runtime-installed app schemas are an activation input, not a health probe.
+/// Detect them promptly so a client-only app does not sit behind the general
+/// 15-second watchdog cadence before its collections become native-visible.
+const NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS: u64 = 1;
 /// FIX 2: maximum tolerated heartbeat staleness before the watchdog considers
 /// its own liveness machinery wedged. Generously above the write interval and
 /// the published TTL so a healthy peer never trips it.
@@ -1589,15 +1595,13 @@ pub fn spawn_native_peer(
                     Ok(NativePeerExit::ConfigChanged) => {
                         eprintln!(
                             "[business-os] native rxdb peer sync config changed; \
-                             respawning in {}s",
-                            delay.as_secs()
+                             reconfiguring immediately"
                         );
                     }
                     Ok(NativePeerExit::RuntimeSchemaChanged) => {
                         eprintln!(
                             "[business-os] native rxdb peer runtime app schemas changed; \
-                             respawning in {}s",
-                            delay.as_secs()
+                             reconfiguring immediately"
                         );
                     }
                     Ok(NativePeerExit::CriticalChildExited) => {
@@ -1627,14 +1631,24 @@ pub fn spawn_native_peer(
                 {
                     delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
                 }
-                if native_peer_circuit_snapshot()
+                let immediate_reconfigure = matches!(
+                    result,
+                    Ok(NativePeerExit::ConfigChanged | NativePeerExit::RuntimeSchemaChanged)
+                );
+                if !immediate_reconfigure
+                    && native_peer_circuit_snapshot()
                     .get("state")
                     .and_then(Value::as_str)
                     != Some("open")
                 {
                     sleep_native_peer_supervisor(native_peer_retry_delay(delay));
                 }
-                delay = (delay * 2).min(Duration::from_secs(NATIVE_PEER_RESPAWN_MAX_DELAY_SECS));
+                if immediate_reconfigure {
+                    delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
+                } else {
+                    delay =
+                        (delay * 2).min(Duration::from_secs(NATIVE_PEER_RESPAWN_MAX_DELAY_SECS));
+                }
             }
             NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
             NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
@@ -2971,6 +2985,10 @@ async fn run_native_peer(
     let mut watchdog =
         tokio::time::interval(Duration::from_secs(NATIVE_PEER_WATCHDOG_INTERVAL_SECS));
     watchdog.tick().await; // first tick fires immediately; consume it.
+    let mut runtime_schema_watch = tokio::time::interval(Duration::from_secs(
+        NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS,
+    ));
+    runtime_schema_watch.tick().await;
     let mut exit = NativePeerExit::Shutdown;
     let mut progress_stall_ticks = 0_u32;
     loop {
@@ -3065,14 +3083,16 @@ async fn run_native_peer(
                         );
                     }
                 }
+            }
+            _ = runtime_schema_watch.tick() => {
                 match native_peer_runtime_installed_schemas_changed(
                     &root,
                     &runtime_schema_fingerprint,
                 ) {
                     Ok(true) => {
                         eprintln!(
-                            "[business-os] native rxdb peer watchdog: runtime app schemas changed; \
-                             shutting down for a supervised respawn"
+                            "[business-os] native rxdb peer: runtime app schemas changed; \
+                             shutting down for immediate supervised reconfiguration"
                         );
                         exit = NativePeerExit::RuntimeSchemaChanged;
                         break;
@@ -3080,7 +3100,7 @@ async fn run_native_peer(
                     Ok(false) => {}
                     Err(err) => {
                         eprintln!(
-                            "[business-os] native rxdb peer watchdog: runtime app schema check failed: {err:#}"
+                            "[business-os] native rxdb peer runtime app schema check failed: {err:#}"
                         );
                     }
                 }
@@ -5148,7 +5168,7 @@ async fn accept_pending_business_command(
     })
     .await;
 
-    let accepted = match accepted_result {
+    let mut accepted = match accepted_result {
         Ok(Ok(val)) => val,
         Ok(Err(err)) => {
             eprintln!("[business-os] native business command store execution failed: {err:#}");
@@ -5168,8 +5188,12 @@ async fn accept_pending_business_command(
                     json!({ "id": command_id, "command_id": command_id })
                 };
                 if let Some(obj) = next.as_object_mut() {
+                    let error_message = err.to_string();
                     obj.insert("status".to_string(), Value::String("failed".to_string()));
-                    obj.insert("error".to_string(), Value::String(err.to_string()));
+                    obj.insert("error".to_string(), Value::String(error_message.clone()));
+                    if let Some(code) = typed_app_action_error_code(&error_message) {
+                        obj.insert("error_code".to_string(), Value::String(code.to_owned()));
+                    }
                     obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
                 }
                 incremental_upsert_document_with_repair(&commands, next, "failed business_command")
@@ -5184,6 +5208,37 @@ async fn accept_pending_business_command(
             return Err(err.into());
         }
     };
+
+    if command_type == app_runtime::APP_ACTION_COMMAND_TYPE
+        && accepted.get("already_accepted").and_then(Value::as_bool) != Some(true)
+    {
+        let snapshot = accepted
+            .get("_app_action_snapshot")
+            .cloned()
+            .context("app_runtime_reconfiguring: admitted action has no immutable snapshot")?;
+        let execution = app_runtime::execute(
+            root.as_path(),
+            database,
+            &command_id_from_document(&document)?,
+            &snapshot,
+        )
+        .await?;
+        let mut result = execution.result;
+        if let Some(object) = result.as_object_mut() {
+            if let Some(code) = execution.error_code {
+                object.insert("error_code".to_owned(), Value::String(code.to_owned()));
+            }
+            if let Some(message) = execution.error_message {
+                object.insert("error".to_owned(), Value::String(message));
+            }
+        }
+        accepted = store::finalize_runtime_app_action(
+            root.as_path(),
+            &document,
+            execution.status,
+            result,
+        )?;
+    }
 
     let command_id = accepted
         .get("command_id")
@@ -5477,6 +5532,30 @@ async fn accept_pending_business_command(
     }
 
     Ok(())
+}
+
+fn command_id_from_document(document: &Value) -> anyhow::Result<String> {
+    document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("business command id is required")
+}
+
+fn typed_app_action_error_code(message: &str) -> Option<&'static str> {
+    [
+        "app_action_not_registered",
+        "app_action_input_invalid",
+        "app_action_permission_denied",
+        "app_action_definition_changed",
+        "app_runtime_reconfiguring",
+        "app_action_compensation_failed",
+    ]
+    .into_iter()
+    .find(|code| message.contains(code))
 }
 
 fn enrich_native_command_lifecycle(document: &mut Value, accepted: &Value) -> anyhow::Result<()> {

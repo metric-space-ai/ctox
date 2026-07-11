@@ -340,6 +340,8 @@ const supportedSmokeModes = [
   'file-chunk-metadata-error-browser-status',
   'file-chunk-tombstone-error-browser-status',
   'file-chunk-stale-generation-error-browser-status',
+  'client-app-hot-registration-browser-to-rust',
+  'client-app-action-saga-browser-to-rust',
   ...businessOsProductionSmokeModes,
 ];
 
@@ -790,6 +792,11 @@ function prepareBusinessOsDynamicOpenModuleFixture(fixture) {
   fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-phase13-open-module-template>Phase 13 openModule guarded DB fixture</section>\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
+  fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Phase 13">
+  <rect width="64" height="64" rx="14" fill="#23665f"/>
+  <text x="32" y="39" text-anchor="middle" font-family="system-ui, sans-serif" font-size="20" font-weight="700" fill="#ffffff">13</text>
+</svg>
+`);
   fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
   const collectionName = 'business_commands';
   const attempts = {};
@@ -997,6 +1004,275 @@ function writeBusinessOsReleaseModuleFixture(installedModulesRoot, id, module) {
   return () => marker.remove();
 }
 `);
+}
+
+function installClientRuntimeSmokeFixture() {
+  const id = 'runtime-action-smoke';
+  const collectionNames = [
+    'runtime_action_smoke_orders',
+    'runtime_action_smoke_audit',
+  ];
+  const installedModulesRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules');
+  fs.mkdirSync(installedModulesRoot, { recursive: true });
+  const targetRealPath = fs.realpathSync(installedModulesRoot);
+  const repoRealPath = fs.realpathSync(root);
+  if (targetRealPath === repoRealPath || targetRealPath.startsWith(`${repoRealPath}${path.sep}`)) {
+    throw new Error('client runtime smoke fixture would write into the real Business OS source tree');
+  }
+  const staged = path.join(installedModulesRoot, `.${id}.staged-${Date.now()}-${token(6)}`);
+  const active = path.join(installedModulesRoot, id);
+  fs.mkdirSync(staged, { recursive: true });
+  const recordSchema = {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 160 },
+      actor_id: { type: 'string' },
+      title: { type: 'string' },
+      status: { type: 'string' },
+      order_id: { type: 'string' },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+    },
+    required: ['id', 'actor_id', 'status', 'updated_at_ms'],
+    indexes: ['actor_id', 'status', 'updated_at_ms'],
+    additionalProperties: true,
+  };
+  const schemas = {
+    runtime_action_smoke_orders: recordSchema,
+    runtime_action_smoke_audit: recordSchema,
+  };
+  const manifest = {
+    id,
+    module_id: id,
+    title: 'Client Runtime Smoke',
+    description: 'Runtime-installed client-only app smoke fixture.',
+    version: '1.0.0',
+    source: 'installed',
+    install_scope: 'installed',
+    entry: `installed-modules/${id}/index.js`,
+    default_installed: true,
+    instance_visible: true,
+    collections: collectionNames,
+    lifecycle: {
+      runtime_installed: true,
+      visibility_state: 'team',
+      audience: 'team',
+    },
+    data_runtime: {
+      version: 1,
+      sync: 'realtime',
+      scope: 'actor',
+      actions: {
+        create_order: {
+          version: 1,
+          input_schema: {
+            type: 'object',
+            required: ['order_id', 'audit_id', 'title'],
+            additionalProperties: false,
+            properties: {
+              order_id: { type: 'string' },
+              audit_id: { type: 'string' },
+              title: { type: 'string' },
+            },
+          },
+          steps: [
+            {
+              name: 'write_order',
+              op: 'upsert',
+              collection: 'runtime_action_smoke_orders',
+              record: {
+                id: { $input: 'order_id' },
+                actor_id: { $actor: 'id' },
+                title: { $input: 'title' },
+                status: 'created',
+                updated_at_ms: { $now_ms: true },
+              },
+            },
+            {
+              name: 'write_audit',
+              op: 'insert',
+              collection: 'runtime_action_smoke_audit',
+              record: {
+                id: { $input: 'audit_id' },
+                actor_id: { $actor: 'id' },
+                order_id: { $input: 'order_id' },
+                status: 'created',
+                updated_at_ms: { $now_ms: true },
+              },
+            },
+          ],
+        },
+        fail_and_compensate: {
+          version: 1,
+          input_schema: {
+            type: 'object',
+            required: ['order_id'],
+            additionalProperties: false,
+            properties: { order_id: { type: 'string' } },
+          },
+          steps: [
+            {
+              name: 'mark_processing',
+              op: 'patch',
+              collection: 'runtime_action_smoke_orders',
+              id: { $input: 'order_id' },
+              patch: { status: 'processing', updated_at_ms: { $now_ms: true } },
+            },
+            {
+              name: 'force_failure',
+              op: 'assert',
+              collection: 'runtime_action_smoke_orders',
+              id: { $input: 'order_id' },
+              path: 'status',
+              equals: 'impossible-status',
+            },
+          ],
+        },
+      },
+    },
+  };
+  fs.writeFileSync(path.join(staged, 'module.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(staged, 'collections.schema.json'), `${JSON.stringify({
+    schema_format: 'ctox-business-os-module-collections-v1',
+    module_id: id,
+    collections: schemas,
+    migration_strategies: {},
+  }, null, 2)}\n`);
+  fs.writeFileSync(
+    path.join(staged, 'schema.js'),
+    `export const collections = ${JSON.stringify(schemas, null, 2)};\nexport const migrationStrategies = {};\n`,
+  );
+  fs.writeFileSync(path.join(staged, 'index.html'), '<section>Client Runtime Smoke</section>\n');
+  fs.writeFileSync(path.join(staged, 'index.css'), ':host { display: block; }\n');
+  fs.writeFileSync(
+    path.join(staged, 'icon.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#23665f"/><path d="M7 12h10M12 7v10" stroke="#fff" stroke-width="2"/></svg>\n',
+  );
+  fs.writeFileSync(path.join(staged, 'index.js'), `export async function mount(ctx) {
+  const mode = String(globalThis.__ctoxClientRuntimeSmokeMode || 'hot-registration');
+  const profile = String(ctx.args?.profile || 'primary');
+  const suffix = profile.replace(/[^a-z0-9_-]+/gi, '_');
+  const orders = ctx.db.collection('runtime_action_smoke_orders');
+  const audit = ctx.db.collection('runtime_action_smoke_audit');
+  let aclDenied = false;
+  try {
+    await ctx.db.collection('business_commands').findOne('runtime-action-smoke-denied').exec();
+  } catch (error) {
+    aclDenied = error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED';
+  }
+  if (mode === 'action-saga') {
+    const orderId = 'runtime_action_order_' + suffix;
+    const auditId = 'runtime_action_audit_' + suffix;
+    const idempotencyKey = 'runtime-action-smoke-' + suffix;
+    const events = [];
+    const first = await ctx.actions.run('create_order', {
+      order_id: orderId,
+      audit_id: auditId,
+      title: 'Client-only runtime order',
+    }, { idempotencyKey, timeoutMs: 60000 });
+    const commandId = first?.command_id || first?.id || '';
+    const unsubscribe = ctx.actions.subscribe(commandId, (value) => events.push(value?.status || ''));
+    const duplicate = await ctx.actions.run('create_order', {
+      order_id: orderId,
+      audit_id: auditId,
+      title: 'Client-only runtime order',
+    }, { idempotencyKey, timeoutMs: 60000 });
+    let failure;
+    try {
+      failure = await ctx.actions.run('fail_and_compensate', { order_id: orderId }, {
+        idempotencyKey: 'runtime-action-compensation-' + suffix,
+        timeoutMs: 60000,
+      });
+    } catch (error) {
+      failure = {
+        status: error?.status || 'failed',
+        error_code: error?.code || '',
+        result: error?.result || null,
+      };
+    }
+    unsubscribe?.();
+    let order = null;
+    let auditRecord = null;
+    const projectionDeadline = Date.now() + 30000;
+    while (Date.now() < projectionDeadline) {
+      order = (await orders.findOne(orderId).exec())?.toJSON?.() || null;
+      auditRecord = (await audit.findOne(auditId).exec())?.toJSON?.() || null;
+      if (order?.status === 'created' && auditRecord) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    globalThis.__ctoxClientRuntimeEvidence = {
+      mode,
+      profile,
+      aclDenied,
+      commandId,
+      duplicateCommandId: duplicate?.command_id || duplicate?.id || '',
+      commandStatus: first?.status || '',
+      duplicateStatus: duplicate?.status || '',
+      failureStatus: failure?.status || '',
+      failureCode: failure?.error_code || failure?.result?.error_code || '',
+      compensationRestored: order?.status === 'created',
+      orderPresent: Boolean(order),
+      auditPresent: Boolean(auditRecord),
+      subscriptionEvents: events,
+    };
+  } else {
+    const id = 'runtime_hot_record_' + suffix;
+    await ctx.sync.stopCollection?.('runtime_action_smoke_orders');
+    await orders.upsert({
+      id,
+      actor_id: ctx.user?.id || 'runtime-smoke-actor',
+      title: 'Offline client-only write ' + profile,
+      status: 'offline-created',
+      updated_at_ms: Date.now(),
+    });
+    const local = (await orders.findOne(id).exec())?.toJSON?.() || null;
+    const bridge = await ctx.sync.startCollection?.('runtime_action_smoke_orders');
+    const replication = bridge?.state;
+    const schemaDeadline = Date.now() + 60000;
+    // Multi-tab followers deliberately have no DataChannel of their own; the
+    // elected leader owns native schema negotiation and forwards sync status.
+    let nativeSchemaVisible = !replication && bridge?.mode === 'follower';
+    while (replication && Date.now() < schemaDeadline) {
+      const peers = replication?.openPeerIds?.() || [];
+      nativeSchemaVisible = peers.some((peerId) => {
+        const protocol = replication?.remoteProtocolForPeer?.(peerId) || null;
+        const schemas = protocol?.collectionSchemas;
+        if (schemas && typeof schemas === 'object') {
+          return Boolean(schemas.runtime_action_smoke_orders);
+        }
+        return protocol?.collection?.name === 'runtime_action_smoke_orders';
+      });
+      if (nativeSchemaVisible) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!nativeSchemaVisible) {
+      throw new Error('native runtime_action_smoke_orders schema did not become visible');
+    }
+    await bridge?.state?.awaitInitialReplication?.();
+    await bridge?.state?.awaitInSync?.();
+    globalThis.__ctoxClientRuntimeEvidence = {
+      mode,
+      profile,
+      id,
+      aclDenied,
+      localOfflineWrite: local?.status === 'offline-created',
+      resumedRealtime: true,
+    };
+  }
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.clientRuntimeSmoke = mode;
+  marker.textContent = 'Client Runtime Smoke';
+  host.replaceChildren(marker);
+  return () => marker.remove();
+}
+`);
+  if (fs.existsSync(active)) fs.rmSync(active, { recursive: true, force: true });
+  fs.renameSync(staged, active);
+  return { moduleId: id, collections: collectionNames };
 }
 
 async function seedBusinessOsReleaseNativeSetup() {
@@ -3021,7 +3297,22 @@ function ensureCtoxSmokeBinary() {
     expectedNetworkFlapWarnings: 0,
     expectedNetworkFlapErrors: 0,
     expectedNetworkFlapRequestFailures: 0,
+    expectedTransportInterruptionWarnings: 0,
+    expectedTransportInterruptionErrors: 0,
+    errorSamples: [],
   };
+  function recordBrowserError(kind, value, location = null) {
+    if (browserDiagnostics.errorSamples.length >= 8) return;
+    browserDiagnostics.errorSamples.push({
+      kind,
+      message: String(value || '').slice(0, 1000),
+      ...(location?.url ? {
+        url: String(location.url).slice(0, 1000),
+        lineNumber: Number(location.lineNumber || 0),
+        columnNumber: Number(location.columnNumber || 0),
+      } : {}),
+    });
+  }
   let browserDiagnosticsEmitted = false;
   function emitBrowserDiagnostics() {
     if (browserDiagnosticsEmitted) return;
@@ -3036,8 +3327,11 @@ function ensureCtoxSmokeBinary() {
     console.log(`expected_network_flap_warning_count=${browserDiagnostics.expectedNetworkFlapWarnings}`);
     console.log(`expected_network_flap_error_count=${browserDiagnostics.expectedNetworkFlapErrors}`);
     console.log(`expected_network_flap_request_failure_count=${browserDiagnostics.expectedNetworkFlapRequestFailures}`);
+    console.log(`expected_transport_interruption_warning_count=${browserDiagnostics.expectedTransportInterruptionWarnings}`);
+    console.log(`expected_transport_interruption_error_count=${browserDiagnostics.expectedTransportInterruptionErrors}`);
     console.log(`startup_smoke_hook_reload_count=${browserDiagnostics.smokeHookReloads}`);
     console.log(`startup_smoke_hook_wait_ms=${browserDiagnostics.smokeHookWaitMs}`);
+    console.log(`browser_error_samples=${JSON.stringify(browserDiagnostics.errorSamples)}`);
     if (browserDiagnostics.cacheRepairs > 0) {
       throw new Error(`Business OS local RxDB cache repair was triggered during smoke: ${browserDiagnostics.cacheRepairs}`);
     }
@@ -3054,6 +3348,12 @@ function ensureCtoxSmokeBinary() {
     return smokeMode === 'network-flap-browser-to-rust'
       && /ERR_INTERNET_DISCONNECTED/i.test(failureText)
       && request.url().includes('/business-os/modules/registry.json');
+  }
+  function isExpectedTransportInterruptionConsole(text) {
+    return smokeMode === 'restart-signaling-browser-to-rust' && (
+      /ERR_CONNECTION_REFUSED/i.test(text)
+      || /ctox_signaling_socket_error/i.test(text)
+    );
   }
 
   let browser;
@@ -3091,12 +3391,15 @@ function ensureCtoxSmokeBinary() {
     page.on('console', (msg) => {
       const type = msg.type();
       const text = msg.text();
+      const location = msg.location();
       if (/local RxDB cache repair triggered/i.test(text)) {
         browserDiagnostics.cacheRepairs += 1;
       }
       if (type === 'warning') {
         if (isExpectedNetworkFlapConsole(text)) {
           browserDiagnostics.expectedNetworkFlapWarnings += 1;
+        } else if (isExpectedTransportInterruptionConsole(text)) {
+          browserDiagnostics.expectedTransportInterruptionWarnings += 1;
         } else {
           browserDiagnostics.warnings += 1;
           if (/websocket/i.test(text)) browserDiagnostics.websocketWarnings += 1;
@@ -3106,14 +3409,18 @@ function ensureCtoxSmokeBinary() {
           browserDiagnostics.resource404Errors += 1;
         } else if (isExpectedNetworkFlapConsole(text)) {
           browserDiagnostics.expectedNetworkFlapErrors += 1;
+        } else if (isExpectedTransportInterruptionConsole(text)) {
+          browserDiagnostics.expectedTransportInterruptionErrors += 1;
         } else {
           browserDiagnostics.errors += 1;
+          recordBrowserError('console', text, location);
         }
       }
       console.log(`[browser:${type}] ${text}`);
     });
     page.on('pageerror', (err) => {
       browserDiagnostics.errors += 1;
+      recordBrowserError('pageerror', err.stack || err.message);
       console.error(`[browser:error] ${err.stack || err.message}`);
     });
     page.on('requestfailed', (request) => {
@@ -3134,6 +3441,44 @@ function ensureCtoxSmokeBinary() {
         console.error(`[browser:response] ${response.status()} ${url}`);
       }
     });
+    const monitorAdditionalPage = (candidate, label) => {
+      candidate.on('console', (message) => {
+        const type = message.type();
+        const text = message.text();
+        const location = message.location();
+        if (type === 'warning') browserDiagnostics.warnings += 1;
+        if (type === 'error') {
+          if (/failed to load resource/i.test(text) && /status of 404/i.test(text)) {
+            browserDiagnostics.resource404Errors += 1;
+          } else {
+            browserDiagnostics.errors += 1;
+            recordBrowserError(`${label}:console`, text, location);
+          }
+        }
+        console.log(`[browser:${label}:${type}] ${text}`);
+      });
+      candidate.on('pageerror', (error) => {
+        browserDiagnostics.errors += 1;
+        recordBrowserError(`${label}:pageerror`, error.stack || error.message);
+        console.error(`[browser:${label}:error] ${error.stack || error.message}`);
+      });
+      candidate.on('requestfailed', (request) => {
+        const url = request.url();
+        if (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/')
+          || url.includes('/installed-modules/') || url.includes('/vendor/')) {
+          browserDiagnostics.requestFailures += 1;
+          console.error(`[browser:${label}:requestfailed] ${request.method()} ${url} ${request.failure()?.errorText || ''}`);
+        }
+      });
+      candidate.on('response', (response) => {
+        const url = response.url();
+        if (response.status() >= 400 && (url.includes('/app.js') || url.includes('/shared/')
+          || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/'))) {
+          browserDiagnostics.assetResponseErrors += 1;
+          console.error(`[browser:${label}:response] ${response.status()} ${url}`);
+        }
+      });
+    };
     const outboundScreenshotDir = process.env.SMOKE_OUTBOUND_SCREENSHOT_DIR
       ? path.resolve(process.env.SMOKE_OUTBOUND_SCREENSHOT_DIR)
       : '';
@@ -3162,6 +3507,12 @@ function ensureCtoxSmokeBinary() {
     await page.exposeFunction('__ctoxCorruptRustSeedChunkMetadata', () => corruptRustSeedChunkMetadata(rustSeed));
     await page.exposeFunction('__ctoxTombstoneRustSeedChunk', () => tombstoneRustSeedChunk(rustSeed));
     await page.exposeFunction('__ctoxStaleRustSeedChunkGeneration', () => staleRustSeedChunkGeneration(rustSeed));
+    await page.exposeFunction('__ctoxInstallClientRuntimeFixture', () => {
+      const before = crypto.createHash('sha256').update(fs.readFileSync(ctoxBin)).digest('hex');
+      const fixture = installClientRuntimeSmokeFixture();
+      const after = crypto.createHash('sha256').update(fs.readFileSync(ctoxBin)).digest('hex');
+      return { ...fixture, binaryHashBefore: before, binaryHashAfter: after };
+    });
     await page.exposeFunction('__ctoxRestartNativePeer', async () => {
       await stopChild(ctox);
       ctox = startCtoxServer();
@@ -6108,6 +6459,8 @@ function ensureCtoxSmokeBinary() {
       const codingAgentsUiSmokeMode = smokeMode === 'coding-agents-ui';
       const businessOsAppReleaseUiSmokeMode = smokeMode === 'business-os-app-release-ui';
       const businessOsThreadsRightClickUiSmokeMode = smokeMode === 'business-os-threads-rightclick-ui';
+      const clientRuntimeSmokeMode = smokeMode === 'client-app-hot-registration-browser-to-rust'
+        || smokeMode === 'client-app-action-saga-browser-to-rust';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
         || smokeMode === 'command-burst-browser-to-rust'
@@ -6125,11 +6478,12 @@ function ensureCtoxSmokeBinary() {
         || outboundActiveUiSmokeMode
         || codingAgentsUiSmokeMode
         || businessOsAppReleaseUiSmokeMode
-        || businessOsThreadsRightClickUiSmokeMode;
+        || businessOsThreadsRightClickUiSmokeMode
+        || clientRuntimeSmokeMode;
       const needsCodingAgentCollections = codingAgentsUiSmokeMode;
       const needsTicketCollections = ticketSmokeMode;
       const needsFileCollections = (
-        (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode)
+        (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode && !clientRuntimeSmokeMode)
         || materializeSmokeMode
       ) && !deferInitialFileCollections;
       const setupPhaseTimings = {};
@@ -6355,6 +6709,62 @@ function ensureCtoxSmokeBinary() {
         ...context,
         ...(smokeCapabilityToken ? { capability_token: smokeCapabilityToken } : {}),
       });
+
+      if (clientRuntimeSmokeMode) {
+        const fixture = await globalThis.__ctoxInstallClientRuntimeFixture?.();
+        if (!fixture?.moduleId || fixture.binaryHashBefore !== fixture.binaryHashAfter) {
+          throw new Error(`runtime app install changed or failed to fingerprint the CTOX binary: ${JSON.stringify(fixture)}`);
+        }
+        const collectionNames = Array.isArray(fixture.collections) ? fixture.collections : [];
+        const deadline = Date.now() + 90000;
+        let module = null;
+        while (Date.now() < deadline) {
+          const currentState = globalThis.ctoxBusinessOsSmoke?.state;
+          module = currentState?.modules?.find?.((candidate) => candidate?.id === fixture.moduleId) || null;
+          if (module) break;
+          await delay(250);
+        }
+        const currentState = globalThis.ctoxBusinessOsSmoke?.state;
+        if (!module || !currentState) {
+          throw new Error(`runtime app did not become visible after hot registration: ${fixture.moduleId}`);
+        }
+        globalThis.__ctoxClientRuntimeSmokeMode = smokeMode === 'client-app-action-saga-browser-to-rust'
+          ? 'action-saga'
+          : 'hot-registration';
+        globalThis.__ctoxClientRuntimeEvidence = null;
+        location.hash = `#${fixture.moduleId}?profile=primary`;
+        await currentState.openModule?.(fixture.moduleId);
+        while (Date.now() < deadline && !globalThis.__ctoxClientRuntimeEvidence) await delay(250);
+        const evidence = globalThis.__ctoxClientRuntimeEvidence;
+        if (!evidence) throw new Error('runtime app did not publish client SDK evidence');
+        if (!collectionNames.every((name) => Boolean(currentState.db?.raw?.[name]))) {
+          throw new Error(`runtime app collections were not registered in the shell: ${JSON.stringify(collectionNames)}`);
+        }
+        if (!evidence.aclDenied) {
+          throw new Error(`runtime app foreign collection ACL was not denied: ${JSON.stringify(evidence)}`);
+        }
+        if (smokeMode === 'client-app-action-saga-browser-to-rust') {
+          if (!evidence.orderPresent || !evidence.auditPresent || !evidence.compensationRestored) {
+            throw new Error(`runtime action/saga evidence is incomplete: ${JSON.stringify(evidence)}`);
+          }
+          if (!evidence.commandId || evidence.commandId !== evidence.duplicateCommandId) {
+            throw new Error(`runtime action idempotency failed: ${JSON.stringify(evidence)}`);
+          }
+          if (evidence.failureStatus !== 'failed') {
+            throw new Error(`runtime compensation action was not terminally failed: ${JSON.stringify(evidence)}`);
+          }
+        } else if (!evidence.localOfflineWrite || !evidence.resumedRealtime) {
+          throw new Error(`runtime hot-registration/offline evidence is incomplete: ${JSON.stringify(evidence)}`);
+        }
+        return {
+          ...evidence,
+          mode: smokeMode,
+          moduleId: fixture.moduleId,
+          collections: collectionNames,
+          binaryHashBefore: fixture.binaryHashBefore,
+          binaryHashAfter: fixture.binaryHashAfter,
+        };
+      }
 
       function selectActiveFileChunks(chunks, contentGenerationId) {
         const candidates = Array.isArray(chunks) ? chunks : [];
@@ -6983,12 +7393,12 @@ function ensureCtoxSmokeBinary() {
               button.click();
               await waitFor(() => {
                 const panel = root.querySelector(`[data-panel="${tab}"]`);
-                const pressed = root.querySelector(`[data-tab="${tab}"]`)?.getAttribute('aria-pressed') === 'true';
+                const selected = root.querySelector(`[data-tab="${tab}"]`)?.getAttribute('aria-selected') === 'true';
                 return {
-                  ok: Boolean(panel && !panel.hidden && pressed),
+                  ok: Boolean(panel && !panel.hidden && selected),
                   tab,
                   panelHidden: panel?.hidden ?? null,
-                  pressed,
+                  selected,
                 };
               }, 5000, `knowledge tab ${tab}`);
               evidence.actions.push(`knowledge-tab-${tab}`);
@@ -6998,7 +7408,7 @@ function ensureCtoxSmokeBinary() {
             if (!newTask) throw new Error('Research new-task action is missing');
             newTask.click();
             await waitForElement('[data-research-task-form]', 'research new-task modal');
-            document.querySelector('.research-modal [data-close]')?.click();
+            document.querySelector('.research-task-dialog [data-close]')?.click();
             await waitForAbsent('[data-research-task-form]', 'research modal close');
             evidence.actions.push('research-new-task-modal');
           } else if (moduleId === 'matching') {
@@ -7165,9 +7575,10 @@ function ensureCtoxSmokeBinary() {
             }
             listView.click();
             await waitFor(() => ({
-              ok: listView.classList.contains('active') && !gridView.classList.contains('active'),
-              listActive: listView.classList.contains('active'),
-              gridActive: gridView.classList.contains('active'),
+              ok: listView.getAttribute('aria-pressed') === 'true'
+                && gridView.getAttribute('aria-pressed') === 'false',
+              listActive: listView.getAttribute('aria-pressed') === 'true',
+              gridActive: gridView.getAttribute('aria-pressed') === 'true',
             }), 5000, 'app-store list view');
             installedScope.click();
             await waitFor(() => ({
@@ -7504,7 +7915,10 @@ function ensureCtoxSmokeBinary() {
         } = rolesMod;
         const moduleCatalog = await waitFor(() => {
           const modules = Array.isArray(state.modules) ? state.modules.filter((mod) => mod?.id) : [];
-          const targetModule = modules.find((mod) => mod.id === 'app-store') || modules.find((mod) => mod.id !== 'desktop') || null;
+          // Use a fully local data module. The App Store performs public GitHub
+          // discovery while mounting; anonymous rate limits would otherwise
+          // turn this permission-only gate into an external-network lottery.
+          const targetModule = modules.find((mod) => mod.id === 'customers') || modules.find((mod) => mod.id !== 'desktop') || null;
           const otherModule = modules.find((mod) => mod.id && mod.id !== targetModule?.id && mod.id !== 'desktop') || null;
           return {
             ok: Boolean(targetModule && otherModule),
@@ -7761,9 +8175,13 @@ function ensureCtoxSmokeBinary() {
           && roleDisplayName('founder') === 'App-Verantwortliche:r'
           && roleDisplayName('team') === 'Teammitglied'
           && labelsAreBusinessFacing(allContextLabels)
-          && deniedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask'
+          && deniedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
           && allowedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
-          && !/value="app"|App ändern/.test(deniedGlobalModeHtml)
+          && deniedGlobalModes.find((mode) => mode.value === 'app')?.approvalRequired === true
+          && allowedGlobalModes.find((mode) => mode.value === 'app')?.approvalRequired === false
+          && /value="app"/.test(deniedGlobalModeHtml)
+          && /data-approval-required="true"/.test(deniedGlobalModeHtml)
+          && /App ändern/.test(deniedGlobalModeHtml)
           && /value="app"/.test(allowedGlobalModeHtml)
           && /App ändern/.test(allowedGlobalModeHtml);
         applySmokeActorState();
@@ -10001,6 +10419,13 @@ function ensureCtoxSmokeBinary() {
               };
             }, 15000, `P13C packaged guard collection ${spec.id}`);
             await state.sync?.startCollection?.(packagedGuardCollection);
+            // Registering a previously unknown schema can yield to shell
+            // session hydration. Re-apply the synthetic actor immediately at
+            // the permission boundary so this smoke measures the facade, not
+            // an unrelated authenticated-session refresh.
+            state.session = packagedGuardSession;
+            state.governance = governance;
+            globalThis.CTOX_BUSINESS_OS_SESSION = packagedGuardSession;
             const packagedGuardDb = smoke.createLiveDbFacade(packagedGuardModule);
             const packagedGuardContext = smoke.createModuleContext(packagedGuardModule);
             const packagedGuardContextDb = packagedGuardContext?.db;
@@ -13853,6 +14278,115 @@ function ensureCtoxSmokeBinary() {
     }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
+    if (result.mode === 'client-app-hot-registration-browser-to-rust') {
+      const moduleHash = '#runtime-action-smoke?profile=follower';
+      const followerPage = await browser.newPage();
+      monitorAdditionalPage(followerPage, 'follower');
+      await followerPage.addInitScript(() => {
+        globalThis.__ctoxClientRuntimeSmokeMode = 'hot-registration';
+      });
+      await followerPage.goto(`${smokeUrl}${moduleHash}`, { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
+      await followerPage.waitForFunction(() => Boolean(globalThis.__ctoxClientRuntimeEvidence?.localOfflineWrite), null, {
+        timeout: 90000,
+      });
+      const roleSnapshot = async (candidate) => candidate.evaluate(() => (
+        globalThis.ctoxBusinessOsSmoke?.state?.syncDiagnostics?.multiTab
+        || globalThis.ctoxBusinessOsSmoke?.state?.sync?.diagnostics?.multiTab
+        || null
+      ));
+      const leaderDeadline = Date.now() + 15000;
+      let primaryRole = null;
+      let followerRole = null;
+      while (Date.now() < leaderDeadline) {
+        [primaryRole, followerRole] = await Promise.all([roleSnapshot(page), roleSnapshot(followerPage)]);
+        if ([primaryRole, followerRole].filter((role) => role?.role === 'leader').length === 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const leaderPage = primaryRole?.role === 'leader' ? page : followerPage;
+      const takeoverPage = leaderPage === page ? followerPage : page;
+      await leaderPage.evaluate(() => globalThis.dispatchEvent(new Event('pagehide')));
+      await takeoverPage.waitForFunction(() => {
+        const role = globalThis.ctoxBusinessOsSmoke?.state?.syncDiagnostics?.multiTab
+          || globalThis.ctoxBusinessOsSmoke?.state?.sync?.diagnostics?.multiTab;
+        return role?.role === 'leader';
+      }, null, { timeout: 15000 });
+      result.multiTabSingleLeader = [primaryRole, followerRole].filter((role) => role?.role === 'leader').length === 1;
+      result.leaderHandover = true;
+
+      const secondProfileDir = fs.mkdtempSync(path.join(runtimeRoot, 'browser-profile-second-'));
+      const secondProfile = await chromium.launchPersistentContext(secondProfileDir, chromiumLaunchOptions());
+      try {
+        const secondProfilePage = await secondProfile.newPage();
+        monitorAdditionalPage(secondProfilePage, 'second-profile');
+        await secondProfilePage.addInitScript(() => {
+          globalThis.__ctoxClientRuntimeSmokeMode = 'hot-registration';
+        });
+        await secondProfilePage.goto(`${smokeUrl}#runtime-action-smoke?profile=second-profile`, {
+          waitUntil: 'commit',
+          timeout: pageNavigationTimeoutMs,
+        });
+        await secondProfilePage.waitForFunction(() => Boolean(globalThis.__ctoxClientRuntimeEvidence?.localOfflineWrite), null, {
+          timeout: 90000,
+        });
+        result.secondProfileObservedPrimary = await secondProfilePage.evaluate(async (recordId) => {
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          const collectionName = 'runtime_action_smoke_orders';
+          const bridge = await state?.sync?.startCollection?.(collectionName);
+          const replication = bridge?.state;
+          if (!replication) {
+            throw new Error(`second-profile sync bridge is unavailable for ${collectionName}`);
+          }
+          const schemaDeadline = Date.now() + 30000;
+          while (Date.now() < schemaDeadline) {
+            const peers = replication.openPeerIds?.() || [];
+            const nativeSchemaVisible = peers.some((peerId) => {
+              const protocol = replication.remoteProtocolForPeer?.(peerId) || null;
+              const schemas = protocol?.collectionSchemas;
+              if (schemas && typeof schemas === 'object') {
+                return Boolean(schemas[collectionName]);
+              }
+              return protocol?.collection?.name === collectionName;
+            });
+            if (nativeSchemaVisible) break;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          const peers = replication.openPeerIds?.() || [];
+          const nativeSchemaVisible = peers.some((peerId) => {
+            const protocol = replication.remoteProtocolForPeer?.(peerId) || null;
+            const schemas = protocol?.collectionSchemas;
+            if (schemas && typeof schemas === 'object') {
+              return Boolean(schemas[collectionName]);
+            }
+            return protocol?.collection?.name === collectionName;
+          });
+          if (!nativeSchemaVisible) {
+            throw new Error(`native schema did not become visible for ${collectionName}`);
+          }
+          await replication.awaitInitialReplication?.();
+          await replication.awaitInSync?.();
+          const deadline = Date.now() + 60000;
+          while (Date.now() < deadline) {
+            const collection = state?.db?.raw?.[collectionName];
+            const record = collection ? await collection.findOne(recordId).exec() : null;
+            if (record) return true;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          return false;
+        }, result.id);
+        result.secondProfileAclDenied = await secondProfilePage.evaluate(() => (
+          globalThis.__ctoxClientRuntimeEvidence?.aclDenied === true
+        ));
+      } finally {
+        await secondProfile.close();
+        removeSmokePath(secondProfileDir);
+      }
+      await followerPage.close();
+      if (!result.multiTabSingleLeader || !result.leaderHandover
+        || !result.secondProfileObservedPrimary || !result.secondProfileAclDenied) {
+        throw new Error(`client runtime multi-tab/multi-profile evidence failed: ${JSON.stringify(result)}`);
+      }
+    }
+
     if (result.mode === 'business-os-ui-regression') {
       result.screenshotEvidence = await captureBusinessOsVisualScreenshotEvidence(page);
     }
@@ -14213,6 +14747,29 @@ function ensureCtoxSmokeBinary() {
       console.log(`outbound_active_ui_screenshots=${(result.screenshotPaths || []).join(',')}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'client-app-hot-registration-browser-to-rust') {
+      console.log(`client_app_module_id=${result.moduleId}`);
+      console.log(`client_app_collection_count=${result.collections?.length || 0}`);
+      console.log(`client_app_hot_registered=1`);
+      console.log(`client_app_offline_write=${result.localOfflineWrite ? 1 : 0}`);
+      console.log(`client_app_realtime_resumed=${result.resumedRealtime ? 1 : 0}`);
+      console.log(`client_app_acl_denied=${result.aclDenied ? 1 : 0}`);
+      console.log(`client_app_multi_tab_single_leader=${result.multiTabSingleLeader ? 1 : 0}`);
+      console.log(`client_app_leader_handover=${result.leaderHandover ? 1 : 0}`);
+      console.log(`client_app_second_profile_sync=${result.secondProfileObservedPrimary ? 1 : 0}`);
+      console.log(`client_app_second_profile_acl_denied=${result.secondProfileAclDenied ? 1 : 0}`);
+      console.log(`client_app_binary_hash_unchanged=${result.binaryHashBefore === result.binaryHashAfter ? 1 : 0}`);
+    } else if (result.mode === 'client-app-action-saga-browser-to-rust') {
+      console.log(`client_app_module_id=${result.moduleId}`);
+      console.log(`client_app_collection_count=${result.collections?.length || 0}`);
+      console.log(`client_app_action_command_id=${result.commandId || ''}`);
+      console.log(`client_app_action_idempotent=${result.commandId && result.commandId === result.duplicateCommandId ? 1 : 0}`);
+      console.log(`client_app_action_order_present=${result.orderPresent ? 1 : 0}`);
+      console.log(`client_app_action_audit_present=${result.auditPresent ? 1 : 0}`);
+      console.log(`client_app_action_compensated=${result.compensationRestored ? 1 : 0}`);
+      console.log(`client_app_action_failure_status=${result.failureStatus || ''}`);
+      console.log(`client_app_acl_denied=${result.aclDenied ? 1 : 0}`);
+      console.log(`client_app_binary_hash_unchanged=${result.binaryHashBefore === result.binaryHashAfter ? 1 : 0}`);
     } else if (result.mode === 'command-burst-browser-to-rust') {
       console.log(`command_count=${result.commandCount}`);
       console.log(`task_count_for_commands=${result.taskCountForCommands}`);

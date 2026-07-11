@@ -1150,6 +1150,17 @@ function shouldAcceptDocumentWrite(
     ) {
       return false;
     }
+    // Browser and daemon clocks do not have to be identical. A browser can
+    // therefore stamp its pending command a little later than the daemon
+    // stamps the authoritative accepted/terminal projection. Lifecycle
+    // progress must win over that skew; otherwise the pull checkpoint moves
+    // past a completed command while IndexedDB remains pending forever.
+    if (
+      collectionName === 'business_commands'
+      && isForwardReplicatedBusinessCommandState(existingRecord.doc, incomingDocument)
+    ) {
+      return true;
+    }
     // Replication writes carry the MASTER's authoritative state for this id
     // (master checkpoint iteration only moves forward). The app-level
     // `updated_at_ms` lwt heuristic must not veto them: master rows arrive
@@ -1163,6 +1174,22 @@ function shouldAcceptDocumentWrite(
     if (!existingIsLocalWrite) return true;
   }
   return nextLwt >= existingLwt;
+}
+
+function isForwardReplicatedBusinessCommandState(existingDocument, incomingDocument) {
+  const rank = (document) => {
+    const status = String(document?.terminal_status || document?.status || '').trim().toLowerCase();
+    if (document?.execution_phase === 'terminal'
+      || ['completed', 'failed', 'rejected', 'cancelled', 'canceled', 'blocked'].includes(status)) {
+      return 2;
+    }
+    if (document?.replication_phase === 'native_observed'
+      || ['accepted', 'queued', 'running', 'in_progress'].includes(status)) {
+      return 1;
+    }
+    return 0;
+  };
+  return rank(incomingDocument) > rank(existingDocument);
 }
 
 function isStaleReplicatedBusinessCommandState(existingDocument, incomingDocument) {

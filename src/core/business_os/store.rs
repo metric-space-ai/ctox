@@ -1,6 +1,7 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+use super::app_runtime;
 use super::policy::{
     self, BusinessOsActor, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType,
     PolicyDecision,
@@ -12672,6 +12673,12 @@ fn materialize_runtime_app_starter_artifacts(
             "install_scope": "installed",
             "version": version,
             "collections": [collection],
+            "data_runtime": {
+                "version": 1,
+                "sync": "realtime",
+                "scope": "actor",
+                "actions": {}
+            },
             "category": category,
             "developer": "CTOX",
             "license": "AGPL-3.0-only",
@@ -20022,28 +20029,276 @@ pub fn accept_rxdb_business_command_with_origin(
                 }));
             }
             _ => {
-                return Ok(serde_json::json!({
-                    "ok": false,
-                    "id": command_id,
-                    "command_id": command_id,
-                    "status": "accepted",
-                    "execution_mode": "control",
-                    "execution_task_id": "",
-                    "target_task_id": "",
-                    "target_record_id": command.record_id.clone().unwrap_or_default(),
-                    "task_id": "",
-                    "task_status": "blocked",
-                    "execution_phase": "blocked",
-                    "terminal_status": "none",
-                    "error_code": "dependency_missing",
-                    "error_message": "control effect was durably claimed but has no terminal outcome; automatic replay is suppressed to prevent a duplicate side effect",
-                    "retryable": false,
-                    "already_accepted": true,
-                }));
+                if command.command_type == app_runtime::APP_ACTION_COMMAND_TYPE {
+                    if let Some(snapshot) = app_runtime::admitted_snapshot(root, &command_id)? {
+                        return Ok(serde_json::json!({
+                            "ok": true,
+                            "id": command_id,
+                            "command_id": command_id,
+                            "status": "accepted",
+                            "execution_mode": "control",
+                            "execution_phase": "accepted",
+                            "terminal_status": "none",
+                            "task_status": "accepted",
+                            "_app_action_snapshot": snapshot,
+                            "already_accepted": false,
+                            "resumed": true,
+                        }));
+                    }
+                } else {
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "id": command_id,
+                        "command_id": command_id,
+                        "status": "accepted",
+                        "execution_mode": "control",
+                        "execution_task_id": "",
+                        "target_task_id": "",
+                        "target_record_id": command.record_id.clone().unwrap_or_default(),
+                        "task_id": "",
+                        "task_status": "blocked",
+                        "execution_phase": "blocked",
+                        "terminal_status": "none",
+                        "error_code": "dependency_missing",
+                        "error_message": "control effect was durably claimed but has no terminal outcome; automatic replay is suppressed to prevent a duplicate side effect",
+                        "retryable": false,
+                        "already_accepted": true,
+                    }));
+                }
             }
         }
     }
     match command.command_type.as_str() {
+        "ctox.app.action.run" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = command
+                .payload
+                .get("module_id")
+                .and_then(Value::as_str)
+                .unwrap_or(command.module.as_str())
+                .trim();
+            anyhow::ensure!(
+                module_id == command.module,
+                "app_action_permission_denied: command module and payload module_id differ"
+            );
+            let decision =
+                module_policy_decision(root, &session, BusinessOsPermission::DataWrite, module_id)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let action_name = command
+                .payload
+                .get("action")
+                .or_else(|| command.payload.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if let Some(idempotency_key) = command
+                .payload
+                .get("idempotency_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                anyhow::ensure!(
+                    command_id
+                        == app_runtime::idempotent_command_id(
+                            module_id,
+                            action_name,
+                            idempotency_key,
+                        ),
+                    "app_action_input_invalid: command id does not match stable idempotency key"
+                );
+            }
+            let version = command
+                .payload
+                .get("action_version")
+                .and_then(Value::as_u64);
+            let input = command.payload.get("input").cloned().unwrap_or(Value::Null);
+            let actor_id = session_user_id(&session)
+                .context("app_action_permission_denied: authenticated actor is required")?;
+            let admission = app_runtime::admit(
+                root,
+                &command_id,
+                module_id,
+                action_name,
+                version,
+                input,
+                actor_id,
+            )?;
+            if let Some(steps) = admission
+                .snapshot
+                .pointer("/definition/steps")
+                .and_then(Value::as_array)
+            {
+                let mut checked = HashSet::new();
+                for collection in steps
+                    .iter()
+                    .filter_map(|step| step.get("collection"))
+                    .filter_map(Value::as_str)
+                {
+                    if !checked.insert(collection) {
+                        continue;
+                    }
+                    let collection_decision = scoped_policy_decision(
+                        root,
+                        &session,
+                        BusinessOsPermission::DataWrite,
+                        BusinessOsScope::collection(collection),
+                    )?;
+                    if let Some(outcome) =
+                        reject_command_if_policy_denied(root, &command, &collection_decision)?
+                    {
+                        return Ok(outcome);
+                    }
+                }
+            }
+            app_runtime::persist_admission(root, &command_id, &admission)?;
+            return Ok(serde_json::json!({
+                "ok": true,
+                "id": command_id,
+                "command_id": command_id,
+                "status": "accepted",
+                "execution_mode": "control",
+                "execution_phase": "accepted",
+                "terminal_status": "none",
+                "task_status": "accepted",
+                "definition_hash": admission.definition_hash,
+                "saga_total_steps": admission.step_names.len(),
+                "_app_action_snapshot": admission.snapshot,
+            }));
+        }
+        "ctox.app.access.grant" | "ctox.app.access.revoke" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::RolesManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let module_id = command
+                .payload
+                .get("module_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let subject_type = command
+                .payload
+                .get("subject_type")
+                .and_then(Value::as_str)
+                .unwrap_or("user")
+                .trim();
+            let subject_id = command
+                .payload
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let permission = command
+                .payload
+                .get("permission")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let collection = command
+                .payload
+                .get("collection")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            anyhow::ensure!(
+                matches!(subject_type, "user" | "role"),
+                "subject_type must be user or role"
+            );
+            anyhow::ensure!(!subject_id.is_empty(), "subject_id is required");
+            anyhow::ensure!(
+                matches!(permission, "data.read" | "data.write"),
+                "permission must be data.read or data.write"
+            );
+            let owned_prefix = format!("{}_", module_id.replace('-', "_"));
+            anyhow::ensure!(
+                !module_id.is_empty() && collection.starts_with(&owned_prefix),
+                "collection must be owned by the target module"
+            );
+            let inspection = app_runtime::inspect_module(root, module_id)?;
+            anyhow::ensure!(
+                inspection
+                    .get("collections")
+                    .and_then(Value::as_array)
+                    .is_some_and(|collections| collections
+                        .iter()
+                        .any(|item| item.as_str() == Some(collection))),
+                "collection is not declared by the target module"
+            );
+            let grant_id = format!(
+                "app-access:{module_id}:{subject_type}:{subject_id}:{permission}:{collection}"
+            );
+            let active = command.command_type == "ctox.app.access.grant";
+            let now = now_ms() as i64;
+            let reason = command
+                .payload
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("Business OS app access change")
+                .trim();
+            let actor_id = session_user_id(&session).unwrap_or("ctox-cli");
+            let conn = open_store(root)?;
+            conn.execute(
+                "INSERT INTO business_permission_grants
+                    (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                     active, reason, created_by, created_at_ms, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, 'collection', ?5, ?6, ?7, ?8, ?9, ?9)
+                 ON CONFLICT(grant_id) DO UPDATE SET
+                    active = excluded.active, reason = excluded.reason,
+                    created_by = excluded.created_by, updated_at_ms = excluded.updated_at_ms",
+                params![
+                    grant_id,
+                    subject_type,
+                    subject_id,
+                    permission,
+                    collection,
+                    active as i64,
+                    reason,
+                    actor_id,
+                    now,
+                ],
+            )?;
+            insert_business_event(
+                &conn,
+                "business_permission_grants",
+                &grant_id,
+                if active {
+                    "business_os.app_access.granted"
+                } else {
+                    "business_os.app_access.revoked"
+                },
+                serde_json::json!({
+                    "grant_id": grant_id,
+                    "module_id": module_id,
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "permission": permission,
+                    "collection": collection,
+                    "active": active,
+                    "reason": reason,
+                    "actor_id": actor_id,
+                }),
+                now,
+            )?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({
+                    "ok": true,
+                    "grant_id": grant_id,
+                    "active": active,
+                    "module_id": module_id,
+                    "collection": collection,
+                }),
+            );
+        }
         command_type if crate::coding_agents::is_coding_agent_command(command_type) => {
             let outcome = match rxdb_command_session(root, &command)
                 .and_then(|_| crate::coding_agents::handle_business_command(root, &command))
@@ -27443,6 +27698,8 @@ fn write_rxdb_control_command_outcome(
         "payload": command.payload.clone(),
         "client_context": command.client_context.clone(),
         "result": result.clone(),
+        "error_code": result.get("error_code").cloned().unwrap_or(Value::Null),
+        "error_message": result.get("error").cloned().unwrap_or(Value::Null),
         "updated_at_ms": now
     });
     upsert_business_record(
@@ -27465,8 +27722,42 @@ fn write_rxdb_control_command_outcome(
         "target_record_id": target_record_id,
         "task_id": task_id.unwrap_or_default(),
         "task_status": task_status.unwrap_or(status),
+        "error_code": result.get("error_code").cloned().unwrap_or(Value::Null),
+        "error_message": result.get("error").cloned().unwrap_or(Value::Null),
         "result": result
     }))
+}
+
+pub(crate) fn finalize_runtime_app_action(
+    root: &Path,
+    document: &Value,
+    status: &str,
+    result: Value,
+) -> anyhow::Result<Value> {
+    let command = BusinessCommand {
+        origin: CommandOrigin::ReplicatedPeer,
+        id: document
+            .get("command_id")
+            .or_else(|| document.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        module: document
+            .get("module")
+            .and_then(Value::as_str)
+            .unwrap_or("ctox")
+            .to_owned(),
+        command_type: app_runtime::APP_ACTION_COMMAND_TYPE.to_owned(),
+        record_id: document
+            .get("record_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        payload: document.get("payload").cloned().unwrap_or(Value::Null),
+        client_context: document
+            .get("client_context")
+            .cloned()
+            .unwrap_or(Value::Null),
+    };
+    write_rxdb_control_command_outcome(root, &command, status, None, Some(status), result)
 }
 
 /// Persist the native-enriched v2 command document as the canonical Business OS

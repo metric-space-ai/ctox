@@ -245,9 +245,23 @@ For a runtime-installed app, `module.json` normally uses:
   "icon": "icon.svg",
   "version": "0.1.0",
   "collections": ["<module_collection>"],
+  "data_runtime": {
+    "version": 1,
+    "sync": "realtime",
+    "scope": "actor",
+    "actions": {}
+  },
   "layout": { "shell": "full-workspace", "center": "module workspace" }
 }
 ```
+
+Direct `ctx.db.collection(name)` CRUD is the default. Use
+`ctx.actions.run(name, input, options)` only for server-authoritative or
+multi-collection work. Declarative actions may contain only `read`, `assert`,
+`insert`, `upsert`, `patch`, `delete`, and `tombstone` steps against collections
+declared by the same module. Never declare SQL, shell, filesystem, network, or
+executable-code steps. Actor-scoped action collections must declare an
+`actor_id` string property.
 
 Use existing shipped apps as concrete examples, but adapt them to the requested app. If an old app conflicts with this contract or the validator, the current contract wins.
 

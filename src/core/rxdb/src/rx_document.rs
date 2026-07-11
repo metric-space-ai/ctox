@@ -32,7 +32,7 @@ use crate::types::{
 };
 
 /// Public modifier callback used by `modify`/`incremental_modify`.
-pub type ModifyFunction = Box<dyn FnOnce(Value) -> BoxFuture<'static, RxResult<Value>> + Send>;
+pub type ModifyFunction = Box<dyn Fn(Value) -> BoxFuture<'static, RxResult<Value>> + Send + Sync>;
 
 // ref: rxdb/src/rx-document.ts:44-406
 /// Rust counterpart to upstream `basePrototype` methods.
@@ -396,6 +396,7 @@ impl RxDocument {
     // ref: rxdb/src/rx-document.ts:318-331
     pub async fn incremental_patch(self: &Arc<Self>, patch: Value) -> RxResult<Arc<Self>> {
         self.incremental_modify(Box::new(move |mut doc_data| {
+            let patch = patch.clone();
             Box::pin(async move {
                 if let (Some(doc_obj), Some(patch_obj)) =
                     (doc_data.as_object_mut(), patch.as_object())
