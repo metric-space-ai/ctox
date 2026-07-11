@@ -1062,13 +1062,7 @@ async function openBusinessDataPlane(syncConfig) {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
 
-    setStartupProgress(54, shellText('bootDbOpen'));
-    const { createBusinessDb } = await loadBusinessDbModule();
-    state.db = await createBusinessDb({ name: dbName });
-    assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
-
-    setStartupProgress(58, shellText('bootDbStructures'));
-    await registerCoreCollections();
+    await openBusinessDbAndRegisterCoreCollections(dbName);
 
     setStartupProgress(62, shellText('bootDesktopLayout'));
     await hydrateTaskbarPinsFromDesktopLayout();
@@ -1119,6 +1113,37 @@ async function openBusinessDataPlane(syncConfig) {
     rejectDataPlaneReady(error);
     throw error;
   }
+}
+
+async function openBusinessDbAndRegisterCoreCollections(dbName) {
+  const { createBusinessDb } = await loadBusinessDbModule();
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    setStartupProgress(54, shellText('bootDbOpen'));
+    state.db = await createBusinessDb({ name: dbName });
+    assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
+
+    try {
+      setStartupProgress(58, shellText('bootDbStructures'));
+      await registerCoreCollections();
+      return;
+    } catch (error) {
+      const retryable = isIndexedDbConnectionClosingError(error) && attempt < maxAttempts;
+      try { await state.db?.close?.(); } catch (closeError) {
+        console.debug('[business-os] stale IndexedDB close failed during startup retry', closeError);
+      }
+      state.db = null;
+      if (!retryable) throw error;
+      console.warn(`[business-os] IndexedDB closed during schema registration; reopening (${attempt}/${maxAttempts - 1})`, error);
+      await new Promise((resolve) => window.setTimeout(resolve, attempt * 150));
+    }
+  }
+}
+
+function isIndexedDbConnectionClosingError(error) {
+  const message = String(error?.message || error || '');
+  return error?.name === 'InvalidStateError'
+    && /IDBDatabase.*closing|database connection is closing/i.test(message);
 }
 
 function scheduleCatalogRefresh(reason = 'database-sync') {
