@@ -36,9 +36,10 @@ not fall back to external document tooling. See
 `references/execution-surfaces.md` for the full operation-to-surface map and
 current gating status.
 
-Today the engine exposes `inspect` and `export` (byte-preserving OOXML
-round-trip). Everything listed as gated or planned must be treated as
-unavailable until its status says otherwise.
+Available today: `inspect`, `export` (byte-preserving OOXML round-trip), and
+the first batch-op slice — `comments-extract`, `a11y-audit`, `privacy-scrub`,
+`tracked-changes-accept`, `protection-set`. Everything listed as gated or
+planned must be treated as unavailable until its status says otherwise.
 
 ## Non-negotiable: render, inspect, iterate
 
@@ -150,6 +151,14 @@ with external tools.
   contexts, use Business OS deep links.
 - Final responses describe the document result; they do not link builders,
   QA renders, or debug output.
+
+## Where to go deeper
+
+- `references/execution-surfaces.md` — operation → surface → gating status.
+- `references/authoring-design.md` — token method, visual registers,
+  first-page treatment, template-following mode, design audit.
+- `references/review-lifecycle.md` — redline/comment semantics, OOXML
+  essentials, finalization with engine ops, delivery checklist.
 
 ## Quality bar
 

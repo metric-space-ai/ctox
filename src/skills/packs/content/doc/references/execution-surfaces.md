@@ -32,14 +32,15 @@ the skill promise operations the build cannot perform.
 |---|---|---|
 | Inspect package (manifest, parts, structure) | `inspect` | available |
 | Export (byte-preserving round-trip/merge) | `export` | available |
-| Accept/reject all tracked changes | `tracked-changes accept\|reject` | planned |
-| Insert tracked replacements | `tracked-changes replace` | planned |
-| Add / extract / resolve / strip comments | `comments add\|extract\|resolve\|strip` | planned |
-| Privacy scrub (authors, rsid, custom props) | `privacy-scrub` | planned |
+| Accept all tracked changes | `tracked-changes-accept` | **available** |
+| Reject tracked changes / insert tracked replacements | `tracked-changes reject\|replace` | planned |
+| Extract comments (text, author, resolved state) | `comments-extract` | **available** |
+| Add / resolve / strip comments | `comments add\|resolve\|strip` | planned |
+| Privacy scrub (authors, rsid, custom props) | `privacy-scrub` | **available** |
 | Layout-preserving redaction | `redact` | planned |
-| Edit protection (read-only/comments/forms) | `protection set\|clear` | planned |
+| Edit protection (readonly/comments/forms/none) | `protection-set` | **available** |
 | Merge/append documents | `merge` | planned |
-| Accessibility audit (+ safe fixes) | `a11y-audit` | planned |
+| Accessibility audit (alt text, heading ladder, table headers) | `a11y-audit` | **available** (safe fixes planned) |
 | Style lint / conservative normalize | `style lint\|normalize` | planned |
 | Structure audits (headings, sections, images, footnotes, fields) | `audit <kind>` | planned |
 | Field materialization (SEQ/REF display text) | `fields materialize` | planned |

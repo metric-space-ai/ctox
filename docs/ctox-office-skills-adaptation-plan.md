@@ -1,17 +1,28 @@
 # CTOX Office-Skills-Adaption: Word, Excel, PDF
 
-Stand: 2026-07-11. Status: Phase 1a und 1c umgesetzt, Ebene B zurückgestellt.
+Stand: 2026-07-11. Status: Phase 1 vollständig umgesetzt.
 
 Umsetzungsstand:
 
 - `pdf`-Skill v2: portiert (Commit `b7efb183c`).
 - `doc`-Skill v2: portiert inkl. `references/execution-surfaces.md` mit
-  Operation→Fläche→Feature-Gruppe-Mapping (Commit `bcc2d3ac6`).
-- `spreadsheet`-Skill v2: portiert inkl. Gating-Referenz (Commit `e3068225d`).
-- Ebene-B-Ops in `office_engine.rs`: **zurückgestellt** — die Datei ist
-  in-flight beim laufenden Office-Port-Agenten (uncommitted, aktive Edits).
-  Die Op-Spezifikation (Namen, Semantik) steht in den beiden
-  `execution-surfaces.md`-Dateien und wartet auf Koordination.
+  Operation→Fläche→Feature-Gruppe-Mapping (Commit `bcc2d3ac6`); vertieft um
+  `references/authoring-design.md` (Token-Methode, Register, Template-Modus,
+  Design-Audit) und `references/review-lifecycle.md` (Redline/Kommentar-
+  Semantik, OOXML-Grundlagen, Finalisierung, Liefer-Checkliste).
+- `spreadsheet`-Skill v2: portiert inkl. Gating-Referenz (Commit `e3068225d`);
+  vertieft um `references/charts-and-models.md`.
+- **Ebene-B-Ops Slice 1 implementiert** (`src/core/office-engine/src/ops.rs`,
+  Commit `810b6fb05`): `comments-extract`, `a11y-audit`, `privacy-scrub`,
+  `tracked-changes-accept`, `protection-set` — deterministische
+  OOXML-Transformationen, unberührte Parts byte-identisch, CLI-Dispatch in
+  `ctox-office-engine`, 18 Tests grün plus Real-Fixture-Smoke (der `inspect`
+  des Ports akzeptiert transformierte Pakete). Noch offen aus der Op-Liste:
+  `redact`, `merge`, `comments add|resolve|strip`, `tracked-changes
+  reject|replace`, Style-Lint/Normalize, Struktur-Audits, Feld-
+  Materialisierung, Wasserzeichen, Tabellen-Konvertierung — sowie die
+  `business_commands`-Fläche (wartet auf die committete Server-Welle des
+  Port-Agenten, um `mod`-Verdrahtung ohne Kollision zu setzen).
 
 ## Lizenz-Randbedingung (Umsetzungserkenntnis)
 

@@ -118,6 +118,12 @@ reconciled against source definitions.
   context to audit the number. Do not paste large source excerpts into the
   workbook.
 
+## Where to go deeper
+
+- `references/execution-surfaces.md` — operation → surface → gating status.
+- `references/charts-and-models.md` — model zoning, chart selection and
+  discipline, conditional formatting and validation doctrine.
+
 ## Deliverables
 
 - The deliverable is the persisted workbook (Business OS record / desktop
