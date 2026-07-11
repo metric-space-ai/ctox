@@ -8,20 +8,22 @@ change; the skill must not promise operations the build cannot perform.
 
 ## Editor surface
 
-| Operation class | Feature group | Status (2026-07-11) |
+| Operation class | Feature group | Status (2026-07-11, re-baselined) |
 |---|---|---|
-| Open workbook, render sheets/ranges (visual QA) | `spreadsheet.open-render-sheets` | differential_passed |
-| Cell edits, save | `spreadsheet.edit-save` | differential_passed |
-| Undo, clipboard, fill | `spreadsheet.undo-clipboard-fill` | differential_passed |
-| Cell formats, rows/columns | `spreadsheet.cell-format-rows-columns` | differential_passed |
-| Formulas and references | `spreadsheet.formulas-references` | differential_passed |
-| Multi-sheet, merge, freeze | `spreadsheet.multi-sheet-merge-freeze` | discovered |
-| Sort, filter, tables | `spreadsheet.sort-filter-tables` | discovered |
+| Open workbook, render sheets/ranges (visual QA) | `spreadsheet.open-render-sheets` | oracle_captured |
+| Cell edits, save | `spreadsheet.edit-save` | oracle_captured |
+| Undo, clipboard, fill | `spreadsheet.undo-clipboard-fill` | oracle_captured |
+| Cell formats, rows/columns | `spreadsheet.cell-format-rows-columns` | oracle_captured |
+| Formulas and references | `spreadsheet.formulas-references` | oracle_captured |
+| Multi-sheet, merge, freeze | `spreadsheet.multi-sheet-merge-freeze` | oracle_captured |
+| Sort, filter, tables | `spreadsheet.sort-filter-tables` | oracle_captured |
 | Validation, conditional formatting | `spreadsheet.validation-conditional-formatting` | discovered |
 | Comments, names, protection | `spreadsheet.comments-names-protection` | discovered |
 | Charts | `spreadsheet.charts` | discovered |
 | Pivot, print layout | `spreadsheet.pivot-print-layout` | discovered |
 | XLSX round-trip corpus | `spreadsheet.xlsx-roundtrip-corpus` | discovered |
+
+Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 
 ## Package operations (ctox-office-engine)
 
@@ -33,12 +35,12 @@ change; the skill must not promise operations the build cannot perform.
 
 ## Practical consequence
 
-Core model authoring (values, formulas, references, cell/row/column formats)
-has passed differential acceptance and is usable behind the editor rollout
-flag, alongside reading, analyzing, rendering, and byte-preserving export.
-Still blocked and to be reported as such: multi-sheet/merge/freeze,
-sort/filter/tables, validation and conditional formatting, comments/names/
-protection, charts, and pivot/print work.
+The feature matrix was re-baselined on 2026-07-11: previously
+differential-passed groups are back to `oracle_captured` pending
+re-validation. Until groups pass differential acceptance again, the editor
+surface must be treated as unavailable; the usable surface is the package
+level — `inspect`, `export`, and the batch ops. Report editor-dependent
+authoring as blocked.
 
 Not ported from the Codex lineage: live control of a running Excel instance
 (Office.js) — conceptually out of scope for CTOX engines.

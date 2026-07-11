@@ -13,18 +13,21 @@ the skill promise operations the build cannot perform.
 
 ## Editor-flow surface (layout-affecting)
 
-| Operation class | Feature group | Status (2026-07-11) |
+| Operation class | Feature group | Status (2026-07-11, re-baselined) |
 |---|---|---|
-| Open, render pages, zoom (visual QA) | `document.open-render-zoom` | differential_passed |
-| Author/edit text, save | `document.edit-save` | differential_passed |
-| Character/paragraph formatting | `document.character-paragraph-formatting` | differential_passed |
-| Styles, lists, real numbering | `document.styles-lists-numbering` | differential_passed |
-| Tables (create, geometry, layout) | `document.tables` | differential_passed |
-| Images and positioning | `document.images-positioning` | differential_passed |
-| Sections, headers, footers | `document.sections-headers-footers` | differential_passed |
-| Links, bookmarks, fields, TOC | `document.links-bookmarks-fields` | differential_passed |
-| Tracked changes / comments in context | `document.comments-track-changes` | differential_passed |
-| Drawings and charts | `document.drawings-charts` | differential_passed |
+| Open, render pages, zoom (visual QA) | `document.open-render-zoom` | oracle_captured |
+| Author/edit text, save | `document.edit-save` | oracle_captured |
+| Undo, clipboard, keyboard | `document.undo-clipboard-keyboard` | oracle_captured |
+| Character/paragraph formatting | `document.character-paragraph-formatting` | oracle_captured |
+| Styles, lists, real numbering | `document.styles-lists-numbering` | oracle_captured |
+| Tables (create, geometry, layout) | `document.tables` | oracle_captured |
+| Images and positioning | `document.images-positioning` | oracle_captured |
+| Sections, headers, footers | `document.sections-headers-footers` | oracle_captured |
+| Links, bookmarks, fields, TOC | `document.links-bookmarks-fields` | oracle_captured |
+| Tracked changes / comments in context | `document.comments-track-changes` | oracle_captured |
+| Drawings and charts | `document.drawings-charts` | oracle_captured |
+
+Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 
 ## Native batch operations (deterministic OOXML, planned ctox-office-engine ops)
 
@@ -33,19 +36,21 @@ the skill promise operations the build cannot perform.
 | Inspect package (manifest, parts, structure) | `inspect` | available |
 | Export (byte-preserving round-trip/merge) | `export` | available |
 | Accept all tracked changes | `tracked-changes-accept` | **available** |
-| Reject tracked changes / insert tracked replacements | `tracked-changes reject\|replace` | planned |
+| Reject all tracked changes (refuses `*PrChange`) | `tracked-changes-reject` | **available** |
+| Insert tracked replacements | `tracked-changes replace` | planned |
 | Extract comments (text, author, resolved state) | `comments-extract` | **available** |
-| Add / resolve / strip comments | `comments add\|resolve\|strip` | planned |
+| Add a comment (anchored by paragraph text) | `comments-add` | **available** |
+| Resolve comments (one or all) | `comments-resolve` | **available** |
+| Strip all comments (parts, rels, anchors) | `comments-strip` | **available** |
 | Privacy scrub (authors, rsid, custom props) | `privacy-scrub` | **available** |
-| Layout-preserving redaction | `redact` | planned |
+| Layout-preserving redaction (terms, emails, phones) | `redact` | **available** (single-run matches) |
 | Edit protection (readonly/comments/forms/none) | `protection-set` | **available** |
 | Merge/append documents | `merge` | planned |
 | Accessibility audit (alt text, heading ladder, table headers) | `a11y-audit` | **available** (safe fixes planned) |
-| Style lint / conservative normalize | `style lint\|normalize` | planned |
-| Structure audits (headings, sections, images, footnotes, fields) | `audit <kind>` | planned |
-| Field materialization (SEQ/REF display text) | `fields materialize` | planned |
+| Style lint (fake bullets, fake headings) | `style-lint` | **available** (normalize planned) |
+| Fields report (instructions + cached results) | `fields-report` | **available** (materialize planned) |
 | Watermark add / audit / remove | `watermark add\|audit\|remove` | planned |
-| Table ↔ data conversion (docx table ↔ csv, xlsx → docx table) | `table export\|import` | planned |
+| Table → CSV export | `table-export` | **available** (import planned) |
 
 ## Known coverage gaps fed back to the office port
 

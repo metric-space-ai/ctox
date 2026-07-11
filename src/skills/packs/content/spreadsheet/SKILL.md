@@ -34,11 +34,11 @@ not shipped in this build, that is a blocker — report exactly what is missing
 instead of falling back to external tooling. See
 `references/execution-surfaces.md` for the operation map and current status.
 
-As of 2026-07-11 open/render, edit-save, undo/clipboard/fill, cell/row/column
-formatting, and formulas/references have passed differential acceptance
-(usable behind the editor rollout flag); charts, conditional formatting,
-sort/filter, multi-sheet operations, comments, protection, and pivot work are
-not yet available and must be reported as blockers.
+Check `references/execution-surfaces.md` for the live gating state — the
+matrix moves in both directions (a 2026-07-11 re-baseline set previously
+passed groups back to `oracle_captured`). When editor groups are not passed,
+the usable surface is package-level (`inspect`, `export`, batch ops) and
+editor-dependent authoring must be reported as blocked.
 
 ## Formula rules (auditable models)
 
