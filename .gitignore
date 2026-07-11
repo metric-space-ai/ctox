@@ -67,6 +67,7 @@ tmp_intersolar_*.js
 !/docs/business-os-roles-permissions-rollout.md
 !/docs/business-os-roles-permissions-plan.md
 !/docs/business-os-security-privacy-signoff.json
+!/docs/business-os-mcp-channel-v1-security-admin-guide.md
 !/docs/business-os-db-isolation-inventory.json
 !/docs/business-os-module-context.md
 !/docs/ctox-office-skills-adaptation-plan.md
