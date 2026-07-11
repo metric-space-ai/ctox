@@ -2636,6 +2636,328 @@ fn extract_body_content(document_xml: &str) -> anyhow::Result<String> {
 }
 
 // ---------------------------------------------------------------------------
+// style normalize
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NormalizeReport {
+    pub overrides_cleared: usize,
+    pub empty_property_blocks_removed: usize,
+}
+
+/// Direct-formatting properties that a named heading/title style should
+/// govern; run-level copies of these fight the style sheet.
+const NORMALIZE_OVERRIDES: &[&str] = &["w:rFonts", "w:sz", "w:szCs", "w:color"];
+
+/// Conservative style cleanup: inside paragraphs styled as
+/// Heading*/Title/Subtitle, remove run-level font/size/color overrides so
+/// the style governs; afterwards drop property blocks that became empty.
+/// Body text and deliberate emphasis (bold/italic) are never touched.
+pub fn style_normalize(package: &[u8]) -> anyhow::Result<(Vec<u8>, NormalizeReport)> {
+    let mut parts = read_parts(package)?;
+    let mut report = NormalizeReport {
+        overrides_cleared: 0,
+        empty_property_blocks_removed: 0,
+    };
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+
+        // Pass 1: which paragraphs (document order) carry a governed style?
+        let text = std::str::from_utf8(&xml).with_context(|| format!("{name} is not UTF-8"))?;
+        let doc =
+            roxmltree::Document::parse(text).with_context(|| format!("failed to parse {name}"))?;
+        let governed: Vec<bool> = doc
+            .descendants()
+            .filter(|node| {
+                node.tag_name().name() == "p" && node.tag_name().namespace() == Some(W_NS)
+            })
+            .map(|paragraph| {
+                paragraph
+                    .descendants()
+                    .find(|node| node.tag_name().name() == "pStyle")
+                    .and_then(|node| {
+                        node.attributes()
+                            .find(|a| a.name() == "val")
+                            .map(|a| a.value().to_string())
+                    })
+                    .map(|style| {
+                        style.starts_with("Heading") || style == "Title" || style == "Subtitle"
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let (transformed, cleared) = normalize_xml(&xml, &governed)
+            .with_context(|| format!("failed to normalize styles in {name}"))?;
+        report.overrides_cleared += cleared;
+
+        // Pass 2: drop property blocks that are now (or were already) empty.
+        let mut cleaned = String::from_utf8(transformed).context("normalized part not UTF-8")?;
+        for empty in ["<w:rPr></w:rPr>", "<w:rPr/>", "<w:pPr></w:pPr>", "<w:pPr/>"] {
+            let count = cleaned.matches(empty).count();
+            if count > 0 {
+                cleaned = cleaned.replace(empty, "");
+                report.empty_property_blocks_removed += count;
+            }
+        }
+        parts.insert(name, cleaned.into_bytes());
+    }
+    Ok((write_parts(&parts)?, report))
+}
+
+fn normalize_xml(xml: &[u8], governed: &[bool]) -> anyhow::Result<(Vec<u8>, usize)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut para_index: isize = -1;
+    let mut para_depth = 0usize;
+    let mut in_governed = false;
+    let mut in_rpr = false;
+    let mut skip_depth = 0usize;
+    let mut cleared = 0usize;
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(&start);
+                if skip_depth > 0 {
+                    skip_depth += 1;
+                    continue;
+                }
+                if name == "w:p" {
+                    para_depth += 1;
+                    if para_depth == 1 {
+                        para_index += 1;
+                        in_governed = governed.get(para_index as usize).copied().unwrap_or(false);
+                    }
+                }
+                if name == "w:rPr" {
+                    in_rpr = true;
+                }
+                if in_governed && in_rpr && NORMALIZE_OVERRIDES.contains(&name.as_str()) {
+                    skip_depth = 1;
+                    cleared += 1;
+                    continue;
+                }
+                writer.write_event(Event::Start(start.into_owned()))?;
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if skip_depth > 0 {
+                    skip_depth -= 1;
+                    continue;
+                }
+                if name == "w:p" {
+                    if para_depth == 1 {
+                        in_governed = false;
+                    }
+                    para_depth = para_depth.saturating_sub(1);
+                }
+                if name == "w:rPr" {
+                    in_rpr = false;
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            Event::Empty(start) => {
+                let name = qname_string(&start);
+                if skip_depth > 0 {
+                    continue;
+                }
+                if in_governed && in_rpr && NORMALIZE_OVERRIDES.contains(&name.as_str()) {
+                    cleared += 1;
+                    continue;
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            other => {
+                if skip_depth == 0 {
+                    writer.write_event(other.into_owned())?;
+                }
+            }
+        }
+    }
+    Ok((writer.into_inner(), cleared))
+}
+
+// ---------------------------------------------------------------------------
+// watermark add
+// ---------------------------------------------------------------------------
+
+/// Insert a diagonal text watermark into every header part. The VML fragment
+/// declares its namespaces inline and includes the text-on-path shapetype so
+/// it renders without relying on document-level declarations.
+pub fn watermark_add(package: &[u8], text: &str) -> anyhow::Result<(Vec<u8>, usize)> {
+    if text.trim().is_empty() {
+        bail!("watermark text must not be empty");
+    }
+    let mut parts = read_parts(package)?;
+    let headers: Vec<String> = parts
+        .keys()
+        .filter(|name| name.starts_with("word/header") && name.ends_with(".xml"))
+        .cloned()
+        .collect();
+    if headers.is_empty() {
+        bail!(
+            "package has no header parts; creating headers (sectPr references, rels, \
+             content types) is an editor-flow concern"
+        );
+    }
+    let mut added = 0usize;
+    for (index, name) in headers.iter().enumerate() {
+        let xml = parts.get(name).expect("header part present").clone();
+        ensure_conventional_prefix(&xml, name)?;
+        let escaped = xml_escape(text);
+        let shape_id = format!("PowerPlusWaterMarkObject{}", 357922000 + index);
+        let fragment = format!(
+            r##"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e"><v:formulas><v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/><v:f eqn="sum 0 0 @2"/><v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 0"/><v:f eqn="if @0 21600 @1"/><v:f eqn="if @0 0 @2"/><v:f eqn="if @0 @4 21600"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/><v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/><v:f eqn="sum @6 0 @5"/></v:formulas><v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/><v:textpath on="t" fitshape="t"/><v:handles><v:h position="#0,bottomRight" xrange="6629,14971"/></v:handles><o:lock v:ext="edit" text="t" shapetype="t"/></v:shapetype><v:shape id="{shape_id}" type="#_x0000_t136" style="position:absolute;margin-left:0;margin-top:0;width:412.4pt;height:137.45pt;rotation:315;z-index:-251656192;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" o:allowincell="f" fillcolor="silver" stroked="f"><v:fill opacity=".5"/><v:textpath style="font-family:&quot;Calibri&quot;;font-size:1pt" string="{escaped}"/></v:shape></w:pict></w:r></w:p>"##
+        );
+        let transformed = append_before_root_end(&xml, "w:hdr", &fragment)
+            .with_context(|| format!("failed to add watermark to {name}"))?;
+        parts.insert(name.clone(), transformed);
+        added += 1;
+    }
+    Ok((write_parts(&parts)?, added))
+}
+
+// ---------------------------------------------------------------------------
+// table import
+// ---------------------------------------------------------------------------
+
+/// Usable page width in twentieths of a point for US Letter portrait with
+/// one-inch margins — the explicit-geometry baseline the doc skill mandates.
+const TABLE_TOTAL_WIDTH_DXA: usize = 9360;
+
+/// Append a table built from CSV data to the end of the document body, with
+/// explicit column geometry and the first row marked as a repeating header.
+pub fn table_import(package: &[u8], csv: &str, header_row: bool) -> anyhow::Result<Vec<u8>> {
+    let rows = parse_csv(csv)?;
+    if rows.is_empty() {
+        bail!("CSV contains no rows");
+    }
+    let columns = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+    if columns == 0 {
+        bail!("CSV contains no columns");
+    }
+    let col_width = TABLE_TOTAL_WIDTH_DXA / columns;
+
+    let mut table = String::new();
+    table.push_str("<w:tbl><w:tblPr>");
+    table.push_str(&format!(
+        "<w:tblW w:w=\"{TABLE_TOTAL_WIDTH_DXA}\" w:type=\"dxa\"/>"
+    ));
+    table.push_str(
+        "<w:tblBorders><w:top w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/>\
+         <w:left w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/>\
+         <w:bottom w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/>\
+         <w:right w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/>\
+         <w:insideH w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/>\
+         <w:insideV w:val=\"single\" w:sz=\"4\" w:color=\"auto\"/></w:tblBorders>",
+    );
+    table.push_str("</w:tblPr><w:tblGrid>");
+    for _ in 0..columns {
+        table.push_str(&format!("<w:gridCol w:w=\"{col_width}\"/>"));
+    }
+    table.push_str("</w:tblGrid>");
+    for (row_index, row) in rows.iter().enumerate() {
+        table.push_str("<w:tr>");
+        if header_row && row_index == 0 {
+            table.push_str("<w:trPr><w:tblHeader/></w:trPr>");
+        }
+        for column in 0..columns {
+            let value = row.get(column).map(String::as_str).unwrap_or("");
+            table.push_str(&format!(
+                "<w:tc><w:tcPr><w:tcW w:w=\"{col_width}\" w:type=\"dxa\"/></w:tcPr>\
+                 <w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p></w:tc>",
+                xml_escape(value)
+            ));
+        }
+        table.push_str("</w:tr>");
+    }
+    table.push_str("</w:tbl><w:p/>");
+
+    let mut parts = read_parts(package)?;
+    let document = parts
+        .get("word/document.xml")
+        .context("package has no word/document.xml")?
+        .clone();
+    ensure_conventional_prefix(&document, "word/document.xml")?;
+    let text = std::str::from_utf8(&document).context("document.xml is not UTF-8")?;
+    let merged = if let Some(position) = text.rfind("<w:sectPr") {
+        let mut result = String::with_capacity(text.len() + table.len());
+        result.push_str(&text[..position]);
+        result.push_str(&table);
+        result.push_str(&text[position..]);
+        result
+    } else {
+        String::from_utf8(append_before_root_end(text.as_bytes(), "w:body", &table)?)
+            .context("merged document is not UTF-8")?
+    };
+    parts.insert("word/document.xml".to_string(), merged.into_bytes());
+    write_parts(&parts)
+}
+
+/// Minimal CSV parser: comma separators, double-quoted fields with `""`
+/// escapes, newlines allowed inside quotes.
+fn parse_csv(input: &str) -> anyhow::Result<Vec<Vec<String>>> {
+    let mut rows = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            match c {
+                '"' => {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        field.push('"');
+                    } else {
+                        in_quotes = false;
+                    }
+                }
+                other => field.push(other),
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                if field.is_empty() {
+                    in_quotes = true;
+                } else {
+                    field.push('"');
+                }
+            }
+            ',' => {
+                row.push(std::mem::take(&mut field));
+            }
+            '\r' => {}
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                if !(row.len() == 1 && row[0].is_empty()) {
+                    rows.push(std::mem::take(&mut row));
+                } else {
+                    row.clear();
+                }
+            }
+            other => field.push(other),
+        }
+    }
+    if in_quotes {
+        bail!("unterminated quoted field in CSV");
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
@@ -3158,6 +3480,84 @@ mod tests {
         let document = part_text(&rejected, "word/document.xml");
         assert!(document.contains("target"));
         assert!(!document.contains("chosen"));
+    }
+
+    #[test]
+    fn style_normalize_clears_heading_overrides_only() {
+        let document = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
+      <w:r><w:rPr><w:rFonts w:ascii="Comic Sans MS"/><w:sz w:val="48"/><w:b/></w:rPr><w:t>Heading</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>Body keeps its size.</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        writer.start_file("word/document.xml", options).unwrap();
+        writer.write_all(document.as_bytes()).unwrap();
+        let package = writer.finish().unwrap().into_inner();
+        let (normalized, report) = style_normalize(&package).unwrap();
+        assert_eq!(report.overrides_cleared, 2);
+        let text = part_text(&normalized, "word/document.xml");
+        assert!(!text.contains("Comic Sans"));
+        assert!(!text.contains("w:val=\"48\""));
+        // Bold on the heading run survives (deliberate emphasis).
+        assert!(text.contains("<w:b/>"));
+        // Body-run override survives.
+        assert!(text.contains("w:val=\"20\""));
+    }
+
+    #[test]
+    fn watermark_add_then_audit_and_remove_round_trip() {
+        let package = build_slice3_docx();
+        // Remove the fixture's existing watermark first for a clean base.
+        let (clean, _) = watermark_remove(&package, true).unwrap();
+        let (marked, added) = watermark_add(&clean, "DRAFT & CONFIDENTIAL").unwrap();
+        assert_eq!(added, 1);
+        let findings = watermark_audit(&marked).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_watermark);
+        let header = part_text(&marked, "word/header1.xml");
+        assert!(header.contains("DRAFT &amp; CONFIDENTIAL"));
+        let (removed, count) = watermark_remove(&marked, false).unwrap();
+        assert_eq!(count, 1);
+        assert!(watermark_audit(&removed).unwrap().is_empty());
+    }
+
+    #[test]
+    fn watermark_add_requires_header_parts() {
+        let package = build_slice2_docx();
+        assert!(watermark_add(&package, "DRAFT").is_err());
+    }
+
+    #[test]
+    fn table_import_appends_table_with_geometry_and_header() {
+        let package = build_slice3_docx();
+        let csv = "Name,Value\n\"quoted, comma\",\"line\nbreak\"\nplain,42";
+        let imported = table_import(&package, csv, true).unwrap();
+        let document = part_text(&imported, "word/document.xml");
+        assert!(document
+            .contains("<w:tblGrid><w:gridCol w:w=\"4680\"/><w:gridCol w:w=\"4680\"/></w:tblGrid>"));
+        assert!(document.contains("quoted, comma"));
+        assert!(document.contains(">42</w:t>"));
+        // Round trip: the imported table is extractable again (it is the
+        // second table in the fixture document).
+        let csv_out = export_table_csv(&imported, 1).unwrap();
+        assert!(csv_out.starts_with("Name,Value"));
+        assert!(csv_out.contains("\"quoted, comma\""));
+        assert!(csv_out.contains("plain,42"));
+        // Header row of the imported table is marked.
+        let a11y = a11y_audit(&imported).unwrap();
+        let header_findings = a11y
+            .iter()
+            .filter(|f| f.code == "table-missing-header-row")
+            .count();
+        assert_eq!(header_findings, 1); // only the fixture's own table
     }
 
     #[test]

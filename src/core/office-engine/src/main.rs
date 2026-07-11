@@ -242,6 +242,42 @@ fn main() -> anyhow::Result<()> {
             write_output(&output, &ops::merge_append(&base_bytes, &appendix_bytes)?)?;
             return Ok(());
         }
+        "style-normalize" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (normalized, report) = ops::style_normalize(&bytes)?;
+            write_output(&output, &normalized)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        "watermark-add" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let text = args.next().context("watermark text is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (marked, added) = ops::watermark_add(&bytes, &text)?;
+            write_output(&output, &marked)?;
+            println!("{{\"headers_marked\": {added}}}");
+            return Ok(());
+        }
+        "table-import" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let csv_path = args.next().context("CSV file path is required")?;
+            let header_row = match args.next().as_deref() {
+                None => true,
+                Some("--no-header") => false,
+                Some(other) => bail!("unexpected argument: {other}"),
+            };
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let csv = fs::read_to_string(&csv_path).with_context(|| format!("read {csv_path}"))?;
+            write_output(&output, &ops::table_import(&bytes, &csv, header_row)?)?;
+            return Ok(());
+        }
         _ => {}
     }
     let kind = parse_kind(
