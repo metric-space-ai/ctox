@@ -8,8 +8,10 @@ mod ops;
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let operation = args.next().context(
-        "operation is required: inspect|export|comments-extract|a11y-audit|\
-         privacy-scrub|tracked-changes-accept|protection-set",
+        "operation is required: inspect|export|comments-extract|comments-strip|\
+         comments-resolve|comments-add|a11y-audit|privacy-scrub|redact|\
+         tracked-changes-accept|tracked-changes-reject|protection-set|\
+         table-export|fields-report|style-lint",
     )?;
     // Batch document operations (Ebene B) take the input package directly.
     match operation.as_str() {
@@ -62,6 +64,105 @@ fn main() -> anyhow::Result<()> {
             ensure_no_more(args)?;
             let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
             write_output(&output, &ops::set_protection(&bytes, mode)?)?;
+            return Ok(());
+        }
+        "tracked-changes-reject" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            write_output(&output, &ops::reject_tracked_changes(&bytes)?)?;
+            return Ok(());
+        }
+        "redact" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let mut terms = Vec::new();
+            let mut emails = false;
+            let mut phones = false;
+            for arg in args {
+                match arg.as_str() {
+                    "--emails" => emails = true,
+                    "--phones" => phones = true,
+                    term => terms.push(term.to_string()),
+                }
+            }
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (redacted, report) = ops::redact(&bytes, &terms, emails, phones)?;
+            write_output(&output, &redacted)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        "comments-strip" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            write_output(&output, &ops::strip_comments(&bytes)?)?;
+            return Ok(());
+        }
+        "comments-resolve" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let id = args.next();
+            ensure_no_more(args)?;
+            let id = match id.as_deref() {
+                None | Some("--all") => None,
+                Some(value) => Some(value.to_string()),
+            };
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            write_output(&output, &ops::resolve_comments(&bytes, id.as_deref())?)?;
+            return Ok(());
+        }
+        "comments-add" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let anchor = args.next().context("anchor substring is required")?;
+            let author = args.next().context("author is required")?;
+            let text: Vec<String> = args.collect();
+            if text.is_empty() {
+                bail!("comment text is required");
+            }
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            write_output(
+                &output,
+                &ops::add_comment(&bytes, &anchor, &author, &text.join(" "))?,
+            )?;
+            return Ok(());
+        }
+        "table-export" => {
+            let input = args.next().context("input package path is required")?;
+            let index = args
+                .next()
+                .map(|value| {
+                    value
+                        .parse::<usize>()
+                        .context("table index must be a number")
+                })
+                .transpose()?
+                .unwrap_or(0);
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            println!("{}", ops::export_table_csv(&bytes, index)?);
+            return Ok(());
+        }
+        "fields-report" => {
+            let input = args.next().context("input package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&ops::fields_report(&bytes)?)?
+            );
+            return Ok(());
+        }
+        "style-lint" => {
+            let input = args.next().context("input package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&ops::style_lint(&bytes)?)?
+            );
             return Ok(());
         }
         _ => {}

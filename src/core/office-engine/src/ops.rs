@@ -730,6 +730,946 @@ pub fn a11y_audit(package: &[u8]) -> anyhow::Result<Vec<A11yFinding>> {
 }
 
 // ---------------------------------------------------------------------------
+// tracked-changes reject
+// ---------------------------------------------------------------------------
+
+/// Reject all content revisions: insertions and move targets disappear,
+/// deletions and move sources are restored to plain content. Formatting
+/// revisions (`*PrChange`) would require re-applying the stored previous
+/// properties; that is not implemented yet, so their presence is a refusal,
+/// not a silent wrong result.
+pub fn reject_tracked_changes(package: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut parts = read_parts(package)?;
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in &story_names {
+        let xml = parts.get(name).expect("story part present");
+        let text = std::str::from_utf8(xml).with_context(|| format!("{name} is not UTF-8"))?;
+        if text.contains("PrChange") {
+            bail!(
+                "{name} contains formatting revisions (*PrChange); rejecting those is not \
+                 supported yet — resolve them in the editor first"
+            );
+        }
+    }
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+        let transformed = reject_tracked_changes_xml(&xml)
+            .with_context(|| format!("failed to reject tracked changes in {name}"))?;
+        parts.insert(name, transformed);
+    }
+    write_parts(&parts)
+}
+
+const REJECT_DROP: &[&str] = &[
+    "w:ins",
+    "w:moveTo",
+    "w:moveToRangeStart",
+    "w:moveToRangeEnd",
+    "w:cellIns",
+    "w:customXmlInsRangeStart",
+    "w:customXmlInsRangeEnd",
+];
+
+const REJECT_UNWRAP: &[&str] = &[
+    "w:del",
+    "w:moveFrom",
+    "w:moveFromRangeStart",
+    "w:moveFromRangeEnd",
+    "w:cellDel",
+];
+
+fn reject_tracked_changes_xml(xml: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut skip_depth = 0usize;
+    let mut del_depth = 0usize;
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(&start);
+                if skip_depth > 0 || REJECT_DROP.contains(&name.as_str()) {
+                    skip_depth += 1;
+                    continue;
+                }
+                if REJECT_UNWRAP.contains(&name.as_str()) {
+                    if name == "w:del" {
+                        del_depth += 1;
+                    }
+                    continue;
+                }
+                if del_depth > 0 && name == "w:delText" {
+                    // Restored deletion text becomes regular text again.
+                    let mut renamed = BytesStart::new("w:t");
+                    for attr in start.attributes() {
+                        let attr = attr.context("bad attribute")?;
+                        renamed.push_attribute((
+                            String::from_utf8_lossy(attr.key.as_ref()).as_ref(),
+                            attr.unescape_value()?.as_ref(),
+                        ));
+                    }
+                    writer.write_event(Event::Start(renamed))?;
+                    continue;
+                }
+                if del_depth > 0 && name == "w:delInstrText" {
+                    writer.write_event(Event::Start(BytesStart::new("w:instrText")))?;
+                    continue;
+                }
+                writer.write_event(Event::Start(start.into_owned()))?;
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if skip_depth > 0 {
+                    skip_depth -= 1;
+                    continue;
+                }
+                if REJECT_UNWRAP.contains(&name.as_str()) {
+                    if name == "w:del" {
+                        del_depth = del_depth.saturating_sub(1);
+                    }
+                    continue;
+                }
+                if del_depth > 0 && name == "w:delText" {
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:t")))?;
+                    continue;
+                }
+                if del_depth > 0 && name == "w:delInstrText" {
+                    writer
+                        .write_event(Event::End(quick_xml::events::BytesEnd::new("w:instrText")))?;
+                    continue;
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            Event::Empty(start) => {
+                let name = qname_string(&start);
+                if skip_depth > 0
+                    || REJECT_DROP.contains(&name.as_str())
+                    || REJECT_UNWRAP.contains(&name.as_str())
+                {
+                    continue;
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            other => {
+                if skip_depth == 0 {
+                    writer.write_event(other.into_owned())?;
+                }
+            }
+        }
+    }
+    Ok(writer.into_inner())
+}
+
+// ---------------------------------------------------------------------------
+// redact
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactReport {
+    pub replacements: usize,
+    pub parts_touched: Vec<String>,
+    /// Matching happens within single text nodes; terms split across runs
+    /// are not found. Compare `terms_not_found` against expectations.
+    pub terms_not_found: Vec<String>,
+}
+
+/// Replace matched text with a same-length block-character mask so the
+/// layout stays stable. Matches literal terms plus optional e-mail and
+/// phone-number patterns, inside story parts and comments.
+pub fn redact(
+    package: &[u8],
+    terms: &[String],
+    emails: bool,
+    phones: bool,
+) -> anyhow::Result<(Vec<u8>, RedactReport)> {
+    if terms.is_empty() && !emails && !phones {
+        bail!("nothing to redact: pass terms and/or --emails/--phones");
+    }
+    let mut patterns: Vec<regex::Regex> = Vec::new();
+    for term in terms {
+        patterns.push(
+            regex::Regex::new(&regex::escape(term)).with_context(|| format!("bad term: {term}"))?,
+        );
+    }
+    if emails {
+        patterns.push(
+            regex::Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+                .expect("static regex"),
+        );
+    }
+    if phones {
+        patterns.push(regex::Regex::new(r"\+?\d[\d\s\-()/]{6,}\d").expect("static regex"));
+    }
+
+    let mut parts = read_parts(package)?;
+    let mut report = RedactReport {
+        replacements: 0,
+        parts_touched: Vec::new(),
+        terms_not_found: Vec::new(),
+    };
+    let mut found_term = vec![false; terms.len()];
+
+    let target_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name) || name.as_str() == "word/comments.xml")
+        .cloned()
+        .collect();
+    for name in target_names {
+        let xml = parts.get(&name).expect("part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+        let (redacted, count, term_hits) = redact_xml(&xml, &patterns, terms.len())?;
+        if count > 0 {
+            report.replacements += count;
+            report.parts_touched.push(name.clone());
+            parts.insert(name, redacted);
+        }
+        for (index, hit) in term_hits.iter().enumerate() {
+            if *hit {
+                found_term[index] = true;
+            }
+        }
+    }
+    for (index, term) in terms.iter().enumerate() {
+        if !found_term[index] {
+            report.terms_not_found.push(term.clone());
+        }
+    }
+    Ok((write_parts(&parts)?, report))
+}
+
+fn redact_xml(
+    xml: &[u8],
+    patterns: &[regex::Regex],
+    term_count: usize,
+) -> anyhow::Result<(Vec<u8>, usize, Vec<bool>)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut in_text_depth = 0usize;
+    let mut replacements = 0usize;
+    let mut term_hits = vec![false; term_count];
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(&start);
+                if name == "w:t" || name == "w:delText" || name == "w:instrText" {
+                    in_text_depth += 1;
+                }
+                writer.write_event(Event::Start(start.into_owned()))?;
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if name == "w:t" || name == "w:delText" || name == "w:instrText" {
+                    in_text_depth = in_text_depth.saturating_sub(1);
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            Event::Text(text) => {
+                if in_text_depth > 0 {
+                    let value = text.unescape().context("bad text node")?.to_string();
+                    let mut masked = value.clone();
+                    for (index, pattern) in patterns.iter().enumerate() {
+                        let mut result = String::with_capacity(masked.len());
+                        let mut last = 0usize;
+                        for found in pattern.find_iter(&masked.clone()) {
+                            result.push_str(&masked[last..found.start()]);
+                            result.extend(masked[found.range()].chars().map(|c| {
+                                if c.is_whitespace() {
+                                    c
+                                } else {
+                                    '\u{2588}'
+                                }
+                            }));
+                            last = found.end();
+                            replacements += 1;
+                            if index < term_count {
+                                term_hits[index] = true;
+                            }
+                        }
+                        result.push_str(&masked[last..]);
+                        masked = result;
+                    }
+                    writer.write_event(Event::Text(
+                        quick_xml::events::BytesText::new(&masked).into_owned(),
+                    ))?;
+                    continue;
+                }
+                writer.write_event(Event::Text(text.into_owned()))?;
+            }
+            other => writer.write_event(other.into_owned())?,
+        }
+    }
+    Ok((writer.into_inner(), replacements, term_hits))
+}
+
+// ---------------------------------------------------------------------------
+// comments strip / resolve / add
+// ---------------------------------------------------------------------------
+
+const COMMENT_PARTS: &[&str] = &[
+    "word/comments.xml",
+    "word/commentsExtended.xml",
+    "word/commentsIds.xml",
+    "word/commentsExtensible.xml",
+];
+
+const COMMENT_ANCHORS: &[&str] = &[
+    "w:commentRangeStart",
+    "w:commentRangeEnd",
+    "w:commentReference",
+];
+
+/// Remove every comment: the comment parts, their content-type overrides and
+/// relationships, and the range/reference anchors in the stories.
+pub fn strip_comments(package: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut parts = read_parts(package)?;
+    let mut removed_any = false;
+    for name in COMMENT_PARTS {
+        if parts.remove(*name).is_some() {
+            removed_any = true;
+            let part_name = format!("/{name}");
+            if let Some(types) = parts.get("[Content_Types].xml").cloned() {
+                parts.insert(
+                    "[Content_Types].xml".to_string(),
+                    drop_elements_with_attr(&types, "Override", "PartName", &part_name)?,
+                );
+            }
+            let target = name.trim_start_matches("word/");
+            if let Some(rels) = parts.get("word/_rels/document.xml.rels").cloned() {
+                parts.insert(
+                    "word/_rels/document.xml.rels".to_string(),
+                    drop_elements_with_attr(&rels, "Relationship", "Target", target)?,
+                );
+            }
+        }
+    }
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+        let mut transformed = xml;
+        for anchor in COMMENT_ANCHORS {
+            transformed = drop_elements_with_attr_any(&transformed, anchor)?;
+        }
+        parts.insert(name, transformed);
+    }
+    if !removed_any {
+        // Nothing to strip is fine; the result is simply unchanged content.
+    }
+    write_parts(&parts)
+}
+
+/// Mark a comment (or all comments) as resolved in commentsExtended.xml.
+pub fn resolve_comments(package: &[u8], comment_id: Option<&str>) -> anyhow::Result<Vec<u8>> {
+    let mut parts = read_parts(package)?;
+    let comments_xml = parts
+        .get("word/comments.xml")
+        .context("package has no comments to resolve")?;
+    let comments_text =
+        std::str::from_utf8(comments_xml).context("word/comments.xml is not valid UTF-8")?;
+    let doc =
+        roxmltree::Document::parse(comments_text).context("failed to parse word/comments.xml")?;
+
+    // Which paraIds should flip to done: the last paragraph of each targeted
+    // comment.
+    let mut target_para_ids: Vec<String> = Vec::new();
+    for comment in doc.descendants().filter(|node| {
+        node.tag_name().name() == "comment" && node.tag_name().namespace() == Some(W_NS)
+    }) {
+        let id = comment
+            .attributes()
+            .find(|a| a.name() == "id")
+            .map(|a| a.value().to_string())
+            .unwrap_or_default();
+        if let Some(wanted) = comment_id {
+            if id != wanted {
+                continue;
+            }
+        }
+        if let Some(para_id) = comment
+            .descendants()
+            .filter(|node| node.tag_name().name() == "p")
+            .filter_map(|node| {
+                node.attributes()
+                    .find(|a| a.name() == "paraId")
+                    .map(|a| a.value().to_string())
+            })
+            .last()
+        {
+            target_para_ids.push(para_id);
+        }
+    }
+    if target_para_ids.is_empty() {
+        bail!(
+            "no matching comment{} found",
+            comment_id
+                .map(|id| format!(" with id {id}"))
+                .unwrap_or_default()
+        );
+    }
+
+    let extended = parts
+        .get("word/commentsExtended.xml")
+        .context("package has no word/commentsExtended.xml; cannot store resolution state")?
+        .clone();
+    let mut reader = Reader::from_reader(extended.as_slice());
+    let mut writer = Writer::new(Vec::new());
+    let mut flipped = 0usize;
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Empty(start) if qname_string(&start).ends_with("commentEx") => {
+                let mut para_id = None;
+                for attr in start.attributes() {
+                    let attr = attr.context("bad attribute")?;
+                    if String::from_utf8_lossy(attr.key.as_ref()).ends_with("paraId") {
+                        para_id = Some(attr.unescape_value()?.to_string());
+                    }
+                }
+                let should_flip = para_id
+                    .as_deref()
+                    .map(|id| target_para_ids.iter().any(|t| t == id))
+                    .unwrap_or(false);
+                if should_flip {
+                    let name = qname_string(&start);
+                    let mut rebuilt = BytesStart::new(name);
+                    for attr in start.attributes() {
+                        let attr = attr.context("bad attribute")?;
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                        if key.ends_with("done") {
+                            continue;
+                        }
+                        rebuilt.push_attribute((key.as_str(), attr.unescape_value()?.as_ref()));
+                    }
+                    rebuilt.push_attribute(("w15:done", "1"));
+                    flipped += 1;
+                    writer.write_event(Event::Empty(rebuilt))?;
+                    continue;
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            other => writer.write_event(other.into_owned())?,
+        }
+    }
+    if flipped == 0 {
+        bail!("comment found but no matching commentEx entry in commentsExtended.xml");
+    }
+    parts.insert("word/commentsExtended.xml".to_string(), writer.into_inner());
+    write_parts(&parts)
+}
+
+/// Anchor a new comment on the first paragraph whose text contains
+/// `anchor_substring`. Creates word/comments.xml (plus content-type override
+/// and relationship) when the package has no comments yet.
+pub fn add_comment(
+    package: &[u8],
+    anchor_substring: &str,
+    author: &str,
+    text: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut parts = read_parts(package)?;
+    let document = parts
+        .get("word/document.xml")
+        .context("package has no word/document.xml")?
+        .clone();
+    ensure_conventional_prefix(&document, "word/document.xml")?;
+
+    // Locate the target paragraph by document order.
+    let doc_text = std::str::from_utf8(&document).context("word/document.xml is not UTF-8")?;
+    let doc = roxmltree::Document::parse(doc_text).context("failed to parse document.xml")?;
+    let mut target_index: Option<usize> = None;
+    for (index, paragraph) in doc
+        .descendants()
+        .filter(|node| node.tag_name().name() == "p" && node.tag_name().namespace() == Some(W_NS))
+        .enumerate()
+    {
+        let text: String = paragraph
+            .descendants()
+            .filter(|node| node.tag_name().name() == "t")
+            .filter_map(|node| node.text())
+            .collect();
+        if text.contains(anchor_substring) {
+            target_index = Some(index);
+            break;
+        }
+    }
+    let target_index =
+        target_index.with_context(|| format!("no paragraph contains: {anchor_substring}"))?;
+
+    // Next free comment id.
+    let next_id = parts
+        .get("word/comments.xml")
+        .and_then(|xml| std::str::from_utf8(xml).ok().map(str::to_string))
+        .and_then(|text| {
+            roxmltree::Document::parse(&text).ok().map(|doc| {
+                doc.descendants()
+                    .filter(|node| node.tag_name().name() == "comment")
+                    .filter_map(|node| {
+                        node.attributes()
+                            .find(|a| a.name() == "id")
+                            .and_then(|a| a.value().parse::<u64>().ok())
+                    })
+                    .max()
+                    .map(|max| max + 1)
+                    .unwrap_or(0)
+            })
+        })
+        .unwrap_or(0);
+    let id = next_id.to_string();
+
+    // Inject the range anchors into the document.
+    let transformed = inject_comment_anchors(&document, target_index, &id)?;
+    parts.insert("word/document.xml".to_string(), transformed);
+
+    // Append the comment content (creating the part when needed).
+    let comment_body = format!(
+        "<w:comment w:id=\"{id}\" w:author=\"{}\" w:initials=\"\"><w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p></w:comment>",
+        xml_escape(author),
+        xml_escape(text)
+    );
+    match parts.get("word/comments.xml").cloned() {
+        Some(existing) => {
+            let appended = append_before_root_end(&existing, "w:comments", &comment_body)?;
+            parts.insert("word/comments.xml".to_string(), appended);
+        }
+        None => {
+            let part = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:comments xmlns:w=\"{W_NS}\">{comment_body}</w:comments>"
+            );
+            parts.insert("word/comments.xml".to_string(), part.into_bytes());
+            let types = parts
+                .get("[Content_Types].xml")
+                .context("package has no [Content_Types].xml")?
+                .clone();
+            parts.insert(
+                "[Content_Types].xml".to_string(),
+                append_before_root_end(
+                    &types,
+                    "Types",
+                    "<Override PartName=\"/word/comments.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml\"/>",
+                )?,
+            );
+            let rels = parts
+                .get("word/_rels/document.xml.rels")
+                .context("package has no word/_rels/document.xml.rels")?
+                .clone();
+            let next_rid = next_relationship_id(&rels)?;
+            parts.insert(
+                "word/_rels/document.xml.rels".to_string(),
+                append_before_root_end(
+                    &rels,
+                    "Relationships",
+                    &format!(
+                        "<Relationship Id=\"{next_rid}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments\" Target=\"comments.xml\"/>"
+                    ),
+                )?,
+            );
+        }
+    }
+    write_parts(&parts)
+}
+
+fn inject_comment_anchors(xml: &[u8], target_index: usize, id: &str) -> anyhow::Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut para_index: isize = -1;
+    let mut para_depth = 0usize;
+    let mut in_target = false;
+    let mut start_pending = false;
+    let mut awaiting_ppr_end = false;
+    loop {
+        let event = reader.read_event().context("XML parse error")?;
+        match &event {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(start);
+                if name == "w:p" {
+                    para_depth += 1;
+                    if para_depth == 1 {
+                        para_index += 1;
+                        if para_index as usize == target_index {
+                            in_target = true;
+                            start_pending = true;
+                            writer.write_event(event.borrow())?;
+                            continue;
+                        }
+                    }
+                } else if in_target && start_pending {
+                    if name == "w:pPr" {
+                        awaiting_ppr_end = true;
+                    } else {
+                        write_range_start(&mut writer, id)?;
+                        start_pending = false;
+                    }
+                }
+                writer.write_event(event.borrow())?;
+            }
+            Event::Empty(start) => {
+                let name = qname_string(start);
+                if in_target && start_pending && name != "w:pPr" {
+                    write_range_start(&mut writer, id)?;
+                    start_pending = false;
+                }
+                writer.write_event(event.borrow())?;
+                if in_target && start_pending && name == "w:pPr" {
+                    write_range_start(&mut writer, id)?;
+                    start_pending = false;
+                }
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if in_target && awaiting_ppr_end && name == "w:pPr" {
+                    writer.write_event(event.borrow())?;
+                    write_range_start(&mut writer, id)?;
+                    awaiting_ppr_end = false;
+                    start_pending = false;
+                    continue;
+                }
+                if name == "w:p" {
+                    if in_target && para_depth == 1 {
+                        if start_pending {
+                            // Empty paragraph: open the range before closing.
+                            write_range_start(&mut writer, id)?;
+                            start_pending = false;
+                        }
+                        write_range_end(&mut writer, id)?;
+                        in_target = false;
+                    }
+                    para_depth = para_depth.saturating_sub(1);
+                }
+                writer.write_event(event.borrow())?;
+            }
+            _ => writer.write_event(event.borrow())?,
+        }
+    }
+    Ok(writer.into_inner())
+}
+
+fn write_range_start(writer: &mut Writer<Vec<u8>>, id: &str) -> anyhow::Result<()> {
+    let mut elem = BytesStart::new("w:commentRangeStart");
+    elem.push_attribute(("w:id", id));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn write_range_end(writer: &mut Writer<Vec<u8>>, id: &str) -> anyhow::Result<()> {
+    let mut elem = BytesStart::new("w:commentRangeEnd");
+    elem.push_attribute(("w:id", id));
+    writer.write_event(Event::Empty(elem))?;
+    let run = BytesStart::new("w:r");
+    writer.write_event(Event::Start(run))?;
+    let mut reference = BytesStart::new("w:commentReference");
+    reference.push_attribute(("w:id", id));
+    writer.write_event(Event::Empty(reference))?;
+    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:r")))?;
+    Ok(())
+}
+
+fn append_before_root_end(xml: &[u8], root: &str, fragment: &str) -> anyhow::Result<Vec<u8>> {
+    let text = std::str::from_utf8(xml).context("part is not valid UTF-8")?;
+    let close_tag = format!("</{root}>");
+    let Some(position) = text.rfind(&close_tag) else {
+        bail!("part has no closing </{root}> tag");
+    };
+    let mut result = String::with_capacity(text.len() + fragment.len());
+    result.push_str(&text[..position]);
+    result.push_str(fragment);
+    result.push_str(&text[position..]);
+    Ok(result.into_bytes())
+}
+
+fn next_relationship_id(rels_xml: &[u8]) -> anyhow::Result<String> {
+    let text = std::str::from_utf8(rels_xml).context("rels part is not valid UTF-8")?;
+    let doc = roxmltree::Document::parse(text).context("failed to parse rels part")?;
+    let max = doc
+        .descendants()
+        .filter(|node| node.tag_name().name() == "Relationship")
+        .filter_map(|node| {
+            node.attributes().find(|a| a.name() == "Id").and_then(|a| {
+                a.value()
+                    .strip_prefix("rId")
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+        })
+        .max()
+        .unwrap_or(0);
+    Ok(format!("rId{}", max + 1))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// ---------------------------------------------------------------------------
+// table export
+// ---------------------------------------------------------------------------
+
+/// Extract the nth table of the document as CSV.
+pub fn export_table_csv(package: &[u8], table_index: usize) -> anyhow::Result<String> {
+    let parts = read_parts(package)?;
+    let document = parts
+        .get("word/document.xml")
+        .context("package has no word/document.xml")?;
+    let text = std::str::from_utf8(document).context("word/document.xml is not valid UTF-8")?;
+    let doc = roxmltree::Document::parse(text).context("failed to parse word/document.xml")?;
+    let table = doc
+        .descendants()
+        .filter(|node| node.tag_name().name() == "tbl" && node.tag_name().namespace() == Some(W_NS))
+        .nth(table_index)
+        .with_context(|| format!("document has no table with index {table_index}"))?;
+    let mut lines = Vec::new();
+    for row in table
+        .children()
+        .filter(|node| node.tag_name().name() == "tr")
+    {
+        let mut cells = Vec::new();
+        for cell in row.children().filter(|node| node.tag_name().name() == "tc") {
+            let value: String = cell
+                .descendants()
+                .filter(|node| node.tag_name().name() == "t")
+                .filter_map(|node| node.text())
+                .collect();
+            cells.push(csv_escape(&value));
+        }
+        lines.push(cells.join(","));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fields report
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldReport {
+    pub instruction: String,
+    pub cached_result: String,
+}
+
+/// List every field with its instruction and the cached display result —
+/// the basis for deciding whether cached results are stale before a
+/// deterministic render.
+pub fn fields_report(package: &[u8]) -> anyhow::Result<Vec<FieldReport>> {
+    let parts = read_parts(package)?;
+    let document = parts
+        .get("word/document.xml")
+        .context("package has no word/document.xml")?;
+    let text = std::str::from_utf8(document).context("word/document.xml is not valid UTF-8")?;
+    let doc = roxmltree::Document::parse(text).context("failed to parse word/document.xml")?;
+    let mut fields = Vec::new();
+
+    // Simple fields carry the instruction as an attribute.
+    for field in doc
+        .descendants()
+        .filter(|node| node.tag_name().name() == "fldSimple")
+    {
+        let instruction = field
+            .attributes()
+            .find(|a| a.name() == "instr")
+            .map(|a| a.value().trim().to_string())
+            .unwrap_or_default();
+        let cached: String = field
+            .descendants()
+            .filter(|node| node.tag_name().name() == "t")
+            .filter_map(|node| node.text())
+            .collect();
+        fields.push(FieldReport {
+            instruction,
+            cached_result: cached,
+        });
+    }
+
+    // Complex fields: begin -> instruction runs -> separate -> result runs -> end.
+    let mut state = 0u8; // 0 idle, 1 instruction, 2 result
+    let mut instruction = String::new();
+    let mut result = String::new();
+    for node in doc.descendants() {
+        match node.tag_name().name() {
+            "fldChar" => {
+                let fld_type = node
+                    .attributes()
+                    .find(|a| a.name() == "fldCharType")
+                    .map(|a| a.value())
+                    .unwrap_or("");
+                match fld_type {
+                    "begin" => {
+                        state = 1;
+                        instruction.clear();
+                        result.clear();
+                    }
+                    "separate" => {
+                        if state == 1 {
+                            state = 2;
+                        }
+                    }
+                    "end" => {
+                        if state != 0 {
+                            fields.push(FieldReport {
+                                instruction: instruction.trim().to_string(),
+                                cached_result: result.clone(),
+                            });
+                        }
+                        state = 0;
+                    }
+                    _ => {}
+                }
+            }
+            "instrText" => {
+                if state == 1 {
+                    if let Some(text) = node.text() {
+                        instruction.push_str(text);
+                    }
+                }
+            }
+            "t" => {
+                if state == 2 {
+                    if let Some(text) = node.text() {
+                        result.push_str(text);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(fields)
+}
+
+// ---------------------------------------------------------------------------
+// style lint
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LintFinding {
+    pub code: String,
+    pub message: String,
+}
+
+/// Report structural style problems that break navigation, numbering, and
+/// downstream tooling.
+pub fn style_lint(package: &[u8]) -> anyhow::Result<Vec<LintFinding>> {
+    let parts = read_parts(package)?;
+    let document = parts
+        .get("word/document.xml")
+        .context("package has no word/document.xml")?;
+    let text = std::str::from_utf8(document).context("word/document.xml is not valid UTF-8")?;
+    let doc = roxmltree::Document::parse(text).context("failed to parse word/document.xml")?;
+    let mut findings = Vec::new();
+
+    for paragraph in doc
+        .descendants()
+        .filter(|node| node.tag_name().name() == "p" && node.tag_name().namespace() == Some(W_NS))
+    {
+        let para_text: String = paragraph
+            .descendants()
+            .filter(|node| node.tag_name().name() == "t")
+            .filter_map(|node| node.text())
+            .collect();
+        if para_text.trim().is_empty() {
+            continue;
+        }
+        let style = paragraph
+            .descendants()
+            .find(|node| node.tag_name().name() == "pStyle")
+            .and_then(|node| {
+                node.attributes()
+                    .find(|a| a.name() == "val")
+                    .map(|a| a.value().to_string())
+            });
+        let has_num_pr = paragraph
+            .descendants()
+            .any(|node| node.tag_name().name() == "numPr");
+
+        // Fake bullets: typed markers instead of a numbering definition.
+        let trimmed = para_text.trim_start();
+        if !has_num_pr
+            && (trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("\u{2022}"))
+        {
+            findings.push(LintFinding {
+                code: "fake-bullet".to_string(),
+                message: format!(
+                    "paragraph starts with a typed list marker instead of real numbering: {}",
+                    snippet(&para_text)
+                ),
+            });
+        }
+
+        // Fake headings: short, fully bold paragraphs without a heading style.
+        let is_heading_style = style
+            .as_deref()
+            .map(|s| s.starts_with("Heading") || s == "Title" || s == "Subtitle")
+            .unwrap_or(false);
+        if !is_heading_style && para_text.trim().len() <= 80 {
+            let runs: Vec<_> = paragraph
+                .descendants()
+                .filter(|node| {
+                    node.tag_name().name() == "r"
+                        && node
+                            .descendants()
+                            .any(|child| child.tag_name().name() == "t")
+                })
+                .collect();
+            let all_bold = !runs.is_empty()
+                && runs
+                    .iter()
+                    .all(|run| run.descendants().any(|node| tag_is_bold(node)));
+            if all_bold {
+                findings.push(LintFinding {
+                    code: "fake-heading".to_string(),
+                    message: format!(
+                        "short all-bold paragraph without a heading style: {}",
+                        snippet(&para_text)
+                    ),
+                });
+            }
+        }
+    }
+    Ok(findings)
+}
+
+fn tag_is_bold(node: roxmltree::Node<'_, '_>) -> bool {
+    if node.tag_name().name() != "b" {
+        return false;
+    }
+    node.attributes()
+        .find(|a| a.name() == "val")
+        .map(|a| a.value() != "0" && a.value() != "false" && a.value() != "none")
+        .unwrap_or(true)
+}
+
+fn snippet(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= 48 {
+        trimmed.to_string()
+    } else {
+        let cut: String = trimmed.chars().take(48).collect();
+        format!("{cut}...")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
@@ -913,5 +1853,218 @@ mod tests {
             before.get("docProps/core.xml"),
             after.get("docProps/core.xml")
         );
+    }
+
+    fn build_slice2_docx() -> Vec<u8> {
+        let document = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr><w:pStyle w:val="Normal"/></w:pPr>
+      <w:r><w:t>Contact alice@example.com or +49 30 1234567 for details.</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:rPr><w:b/></w:rPr><w:t>Fake Heading Candidate</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:t>- fake bullet item</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:ins w:id="1" w:author="R"><w:r><w:t>added</w:t></w:r></w:ins>
+      <w:del w:id="2" w:author="R"><w:r><w:delText>removed</w:delText></w:r></w:del>
+    </w:p>
+    <w:p>
+      <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+      <w:r><w:instrText xml:space="preserve"> REF section1 </w:instrText></w:r>
+      <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+      <w:r><w:t>Section One</w:t></w:r>
+      <w:r><w:fldChar w:fldCharType="end"/></w:r>
+    </w:p>
+    <w:p>
+      <w:commentRangeStart w:id="1"/>
+      <w:r><w:t>secret project name</w:t></w:r>
+      <w:commentRangeEnd w:id="1"/>
+      <w:r><w:commentReference w:id="1"/></w:r>
+    </w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Value, with comma</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t>alpha</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+        let comments = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:comment w:id="1" w:author="Alice">
+    <w:p w14:paraId="AAAA0001"><w:r><w:t>Check the secret name.</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"#;
+        let comments_extended = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
+  <w15:commentEx w15:paraId="AAAA0001" w15:done="0"/>
+</w15:commentsEx>"#;
+        let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
+</Types>"#;
+        let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+        let doc_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>
+</Relationships>"#;
+
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        for (name, content) in [
+            ("[Content_Types].xml", content_types),
+            ("_rels/.rels", rels),
+            ("word/_rels/document.xml.rels", doc_rels),
+            ("word/document.xml", document),
+            ("word/comments.xml", comments),
+            ("word/commentsExtended.xml", comments_extended),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn redact_masks_terms_emails_and_phones_preserving_length() {
+        let package = build_slice2_docx();
+        let (redacted, report) = redact(
+            &package,
+            &["secret".to_string(), "unfindable".to_string()],
+            true,
+            true,
+        )
+        .unwrap();
+        let document = part_text(&redacted, "word/document.xml");
+        assert!(!document.contains("alice@example.com"));
+        assert!(!document.contains("secret"));
+        assert!(document.contains('\u{2588}'));
+        assert!(report.replacements >= 3);
+        assert_eq!(report.terms_not_found, vec!["unfindable".to_string()]);
+        // Comments are also redacted.
+        let comments = part_text(&redacted, "word/comments.xml");
+        assert!(!comments.contains("secret"));
+    }
+
+    #[test]
+    fn strip_comments_removes_parts_rels_and_anchors() {
+        let package = build_slice2_docx();
+        let stripped = strip_comments(&package).unwrap();
+        let parts = read_parts(&stripped).unwrap();
+        assert!(parts.get("word/comments.xml").is_none());
+        assert!(parts.get("word/commentsExtended.xml").is_none());
+        let document = part_text(&stripped, "word/document.xml");
+        assert!(!document.contains("commentRangeStart"));
+        assert!(!document.contains("commentReference"));
+        assert!(document.contains("secret project name"));
+        let types = part_text(&stripped, "[Content_Types].xml");
+        assert!(!types.contains("comments"));
+        let rels = part_text(&stripped, "word/_rels/document.xml.rels");
+        assert!(!rels.contains("comments.xml"));
+    }
+
+    #[test]
+    fn resolve_comments_flips_done_flag() {
+        let package = build_slice2_docx();
+        let resolved = resolve_comments(&package, Some("1")).unwrap();
+        let extended = part_text(&resolved, "word/commentsExtended.xml");
+        assert!(extended.contains("done=\"1\""));
+        let all = resolve_comments(&package, None).unwrap();
+        let extended = part_text(&all, "word/commentsExtended.xml");
+        assert!(extended.contains("done=\"1\""));
+        assert!(resolve_comments(&package, Some("99")).is_err());
+    }
+
+    #[test]
+    fn add_comment_anchors_and_appends() {
+        let package = build_slice2_docx();
+        let commented = add_comment(&package, "fake bullet", "Bob", "Use real numbering.").unwrap();
+        let document = part_text(&commented, "word/document.xml");
+        assert!(document.contains("w:commentRangeStart w:id=\"2\""));
+        assert!(document.contains("w:commentRangeEnd w:id=\"2\""));
+        assert!(document.contains("w:commentReference w:id=\"2\""));
+        let comments = part_text(&commented, "word/comments.xml");
+        assert!(comments.contains("Use real numbering."));
+        assert!(comments.contains("w:author=\"Bob\""));
+        let extracted = extract_comments(&commented).unwrap();
+        assert_eq!(extracted.len(), 2);
+        // Round trip through the anchor stripper still works.
+        strip_comments(&commented).unwrap();
+    }
+
+    #[test]
+    fn add_comment_creates_comments_part_when_missing() {
+        let package = build_slice2_docx();
+        let stripped = strip_comments(&package).unwrap();
+        let commented = add_comment(&stripped, "fake bullet", "Bob", "First comment.").unwrap();
+        let parts = read_parts(&commented).unwrap();
+        assert!(parts.get("word/comments.xml").is_some());
+        let types = part_text(&commented, "[Content_Types].xml");
+        assert!(types.contains("/word/comments.xml"));
+        let rels = part_text(&commented, "word/_rels/document.xml.rels");
+        assert!(rels.contains("comments.xml"));
+        let extracted = extract_comments(&commented).unwrap();
+        assert_eq!(extracted.len(), 1);
+        assert_eq!(extracted[0].text, "First comment.");
+    }
+
+    #[test]
+    fn reject_tracked_changes_restores_deletions_drops_insertions() {
+        let package = build_slice2_docx();
+        let rejected = reject_tracked_changes(&package).unwrap();
+        let document = part_text(&rejected, "word/document.xml");
+        assert!(!document.contains("added"));
+        assert!(document.contains("removed"));
+        assert!(!document.contains("w:delText"));
+        assert!(!document.contains("<w:ins "));
+        assert!(!document.contains("<w:del "));
+    }
+
+    #[test]
+    fn reject_refuses_formatting_revisions() {
+        let document = r#"<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:rPr><w:rPrChange w:id="1" w:author="R"><w:rPr/></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        writer.start_file("word/document.xml", options).unwrap();
+        writer.write_all(document.as_bytes()).unwrap();
+        let package = writer.finish().unwrap().into_inner();
+        assert!(reject_tracked_changes(&package).is_err());
+    }
+
+    #[test]
+    fn export_table_csv_extracts_rows_with_escaping() {
+        let package = build_slice2_docx();
+        let csv = export_table_csv(&package, 0).unwrap();
+        assert_eq!(csv, "Name,\"Value, with comma\"\nalpha,1");
+        assert!(export_table_csv(&package, 1).is_err());
+    }
+
+    #[test]
+    fn fields_report_lists_complex_fields() {
+        let package = build_slice2_docx();
+        let fields = fields_report(&package).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].instruction, "REF section1");
+        assert_eq!(fields[0].cached_result, "Section One");
+    }
+
+    #[test]
+    fn style_lint_finds_fake_bullets_and_headings() {
+        let package = build_slice2_docx();
+        let findings = style_lint(&package).unwrap();
+        let codes: Vec<&str> = findings.iter().map(|f| f.code.as_str()).collect();
+        assert!(codes.contains(&"fake-bullet"));
+        assert!(codes.contains(&"fake-heading"));
     }
 }
