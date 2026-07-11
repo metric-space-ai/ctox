@@ -2603,12 +2603,14 @@ pub fn browser_session_automation(
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        let output = browser_session_automation_with_database(root, &database, request).await?;
+        let session_id = request.session_id.trim().to_string();
+        let output = browser_session_automation_with_database(root, &database, request).await;
+        browser_runtime_manager().stop(&session_id).await;
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(output)
+        output
     })
 }
 
