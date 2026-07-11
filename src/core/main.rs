@@ -1207,7 +1207,7 @@ fn handle_appsec_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
 }
 
 fn build_appsec_forwarded_args(root: &Path, args: &[String]) -> Vec<String> {
-    let mut forwarded = Vec::with_capacity(args.len() + 3);
+    let mut forwarded = Vec::with_capacity(args.len() + 5);
     forwarded.push("ctox-appsec".to_string());
     let has_state_dir = args.iter().any(|arg| arg == "--state-dir")
         || std::env::var("PENTEST_STATE_DIR").is_ok_and(|value| !value.trim().is_empty());
@@ -1215,6 +1215,15 @@ fn build_appsec_forwarded_args(root: &Path, args: &[String]) -> Vec<String> {
         forwarded.push("--state-dir".to_string());
         forwarded.push(
             root.join("runtime/appsec/default")
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    let has_tools_root = args.iter().any(|arg| arg == "--tools-root");
+    if !has_tools_root {
+        forwarded.push("--tools-root".to_string());
+        forwarded.push(
+            root.join("runtime/tools/appsec")
                 .to_string_lossy()
                 .to_string(),
         );
@@ -4475,9 +4484,9 @@ mod tests {
     use super::{
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
         appsec_command_unresolved_placeholders, browser_automation_source_from_stage_command,
-        chat_status_has_completed_since, execute_appsec_stage_commands,
-        find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
-        looks_like_ctox_root, openrouter_tool_smoke_summary,
+        build_appsec_forwarded_args, chat_status_has_completed_since,
+        execute_appsec_stage_commands, find_ctox_root_from_ancestors, handle_appsec_pipeline_work,
+        handle_continuity_update, looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
         record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
         resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
@@ -4506,6 +4515,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("missing required --conversation-id"));
+    }
+
+    #[test]
+    fn appsec_forwarding_uses_ctox_toolroot_for_external_state() {
+        let root = unique_test_dir("appsec-external-state-toolroot");
+        let external_state = root.join("external/assessment-state");
+        let forwarded = build_appsec_forwarded_args(
+            &root,
+            &[
+                "--state-dir".to_string(),
+                external_state.to_string_lossy().to_string(),
+                "tools".to_string(),
+                "inventory".to_string(),
+                "--json".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            super::arg_value(&forwarded, "--state-dir"),
+            Some(external_state.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            super::arg_value(&forwarded, "--tools-root"),
+            Some(
+                root.join("runtime/tools/appsec")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+
+        cleanup_test_dir(&root);
     }
 
     #[test]
