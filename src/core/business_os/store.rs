@@ -11900,6 +11900,9 @@ fn seed_session_user(conn: &Connection, session: &BusinessOsSession) -> anyhow::
     let Some(user) = &session.user else {
         return Ok(());
     };
+    if is_implicit_local_dev_session_user(user) {
+        return Ok(());
+    }
     let now = now_ms() as i64;
     conn.execute(
         "INSERT INTO business_users
@@ -11911,6 +11914,19 @@ fn seed_session_user(conn: &Connection, session: &BusinessOsSession) -> anyhow::
         params![user.id, user.display_name, user.role, now],
     )?;
     Ok(())
+}
+
+fn is_implicit_local_dev_session_user(user: &BusinessOsSessionUser) -> bool {
+    fn has_explicit_env(name: &str) -> bool {
+        env::var(name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    user.id == "local-dev"
+        && user.display_name == "Local CTOX"
+        && !has_explicit_env("CTOX_BUSINESS_OS_DESKTOP_USER")
+        && !has_explicit_env("CTOX_BUSINESS_OS_DESKTOP_DISPLAY_NAME")
 }
 
 pub fn session_with_persisted_user(
@@ -38427,6 +38443,8 @@ mod tests {
         let _env = EnvRestore::set(&[
             ("CTOX_AUTH_USERS", ""),
             ("CTOX_BUSINESS_PASSWORD", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_DISPLAY_NAME", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_USER", ""),
             ("CTOX_BUSINESS_OS_DESKTOP_ROLE", "admin"),
             ("CTOX_BUSINESS_OS_LOGIN_URL", ""),
             ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "0"),
@@ -38448,6 +38466,32 @@ mod tests {
             local.user.as_ref().map(|user| user.role.as_str()),
             Some("admin")
         );
+    }
+
+    #[test]
+    fn implicit_local_dev_session_is_not_persisted_as_team_user() -> anyhow::Result<()> {
+        let _env = EnvRestore::set(&[
+            ("CTOX_AUTH_USERS", ""),
+            ("CTOX_BUSINESS_PASSWORD", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_DISPLAY_NAME", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_USER", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_ROLE", "admin"),
+            ("CTOX_BUSINESS_OS_LOGIN_URL", ""),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "0"),
+            ("CTOX_BUSINESS_OS_SESSION_TOKEN", ""),
+        ]);
+        let temp = tempdir()?;
+        let session = session_for_request(None, None, true);
+        assert!(session.authenticated);
+        remember_authenticated_session_user(temp.path(), &session)?;
+        let conn = open_store(temp.path())?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_users WHERE user_id = 'local-dev'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 0);
+        Ok(())
     }
 
     #[test]
