@@ -62,6 +62,7 @@ const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
                                                          // watermark before giving up (matches the ack timeout so a wedged peer fails
                                                          // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const SEND_BUFFER_STALLED_ERROR_CODE: &str = "ctox_webrtc_send_buffer_stalled";
 const MAX_PEER_SEND_QUEUE_FRAMES: usize = 1024;
 const MAX_PEER_SEND_QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const FAIR_SEND_SCHEDULE: [SendPriority; 7] = [
@@ -346,6 +347,7 @@ pub struct WebRtcFrameTransportStatus {
     pub resume_request_count: u64,
     pub resume_ack_count: u64,
     pub backpressure_wait_count: u64,
+    pub backpressure_stall_count: u64,
     pub queued_frames: u64,
     pub sent_scheduled_frames: u64,
     pub priority_queue_depth: usize,
@@ -387,6 +389,7 @@ impl Default for WebRtcFrameTransportStatus {
             resume_request_count: 0,
             resume_ack_count: 0,
             backpressure_wait_count: 0,
+            backpressure_stall_count: 0,
             queued_frames: 0,
             sent_scheduled_frames: 0,
             priority_queue_depth: 0,
@@ -559,7 +562,7 @@ impl WebRTCRsConnectionHandler {
     /// real time. Returns when the buffer has drained below the low watermark
     /// (OnBufferedAmountLow) or after `SEND_CAPACITY_WAIT_TIMEOUT` (so a wedged
     /// peer surfaces a timeout instead of hanging forever).
-    async fn wait_for_send_capacity(&self, peer: &WebRTCRsPeer) {
+    async fn wait_for_send_capacity(&self, peer: &WebRTCRsPeer) -> RxResult<()> {
         let bp = self.peer_backpressure(peer);
         while bp.is_high() {
             let notified = bp.low_notify.notified();
@@ -572,11 +575,44 @@ impl WebRTCRsConnectionHandler {
                 .await
                 .is_err()
             {
-                // Timed out waiting for drain; stop blocking and let the
-                // normal ack/resume machinery handle a genuinely stuck peer.
-                break;
+                self.record_status(|status| {
+                    status.backpressure_stall_count =
+                        status.backpressure_stall_count.saturating_add(1);
+                    status.rejected_frames = status.rejected_frames.saturating_add(1);
+                });
+                let error = new_rx_error(
+                    SEND_BUFFER_STALLED_ERROR_CODE,
+                    Some(serde_json::json!({
+                        "message": "WebRTC send buffer remained above the high-water mark",
+                        "peer": peer,
+                        "timeoutMs": SEND_CAPACITY_WAIT_TIMEOUT.as_millis(),
+                        "retryable": true,
+                    })),
+                );
+                self.error_subject.next(error.clone());
+                // A timed-out capacity wait is a transport failure, not
+                // permission to keep filling SCTP. Removing the peer closes
+                // the channel, drops every queued sender and clears all
+                // per-peer backpressure state before the error is returned.
+                remove_peer_with_error(self, peer, error.clone());
+                return Err(error);
             }
         }
+        Ok(())
+    }
+
+    fn clear_peer_transfer_state(&self, peer: &WebRTCRsPeer) {
+        let ack_prefix = format!("{peer}|frame|");
+        self.pending_frame_acks
+            .lock()
+            .retain(|key, _| !key.starts_with(&ack_prefix));
+        self.incoming_frames
+            .lock()
+            .retain(|_, incoming| incoming.peer != *peer);
+        self.completed_frame_acks
+            .lock()
+            .retain(|_, completed| completed.peer != *peer);
+        self.refresh_dynamic_transport_status();
     }
 
     fn start_signaling_tasks(self: &Arc<Self>) {
@@ -710,6 +746,7 @@ impl WebRTCRsConnectionHandler {
             "resumeRequestCount": status.resume_request_count,
             "resumeAckCount": status.resume_ack_count,
             "backpressureWaitCount": status.backpressure_wait_count,
+            "backpressureStallCount": status.backpressure_stall_count,
             "queuedFrames": status.queued_frames,
             "sentScheduledFrames": status.sent_scheduled_frames,
             "priorityQueueDepth": status.priority_queue_depth,
@@ -1014,6 +1051,9 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         }
         self.send_queues.lock().clear();
         self.backpressure.lock().clear();
+        self.pending_frame_acks.lock().clear();
+        self.incoming_frames.lock().clear();
+        self.completed_frame_acks.lock().clear();
         self.active_collections.lock().clear();
         self.refresh_send_queue_status();
         Ok(())
@@ -1477,12 +1517,19 @@ impl WebRTCRsConnectionHandler {
                 self.send_framed_text(peer, Arc::clone(&data_channel), item.text)
                     .await
             } else {
-                data_channel
-                    .send_text(&item.text)
-                    .await
-                    .map_err(|e| webrtc_error("send data channel frame", e))
+                match self.wait_for_send_capacity(peer).await {
+                    Ok(()) => data_channel
+                        .send_text(&item.text)
+                        .await
+                        .map_err(|e| webrtc_error("send data channel frame", e)),
+                    Err(error) => Err(error),
+                }
             };
             let _ = item.result.send(result);
+            if !self.peers.lock().contains_key(peer) {
+                reset_guard.armed = false;
+                break;
+            }
         }
         self.refresh_send_queue_status();
     }
@@ -1549,7 +1596,14 @@ impl WebRTCRsConnectionHandler {
                     // never bursts past what the channel can deliver in real
                     // time (which would overrun the buffer and get the channel
                     // killed by the browser).
-                    self.wait_for_send_capacity(peer).await;
+                    if let Err(error) = self.wait_for_send_capacity(peer).await {
+                        self.pending_frame_acks.lock().remove(&ack_key);
+                        self.refresh_dynamic_transport_status();
+                        self.record_status(|status| {
+                            status.active_transfers = status.active_transfers.saturating_sub(1);
+                        });
+                        return Err(error);
+                    }
                     let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
                     if let Err(error) = send_json_text(&data_channel, &chunk).await {
                         self.pending_frame_acks.lock().remove(&ack_key);
@@ -2450,43 +2504,50 @@ fn install_data_channel(
 }
 
 fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
+    remove_peer_inner(handler, peer, None);
+}
+
+fn remove_peer_with_error(handler: &WebRTCRsConnectionHandler, peer: &str, error: RxError) {
+    remove_peer_inner(handler, peer, Some(error));
+}
+
+fn remove_peer_inner(handler: &WebRTCRsConnectionHandler, peer: &str, error: Option<RxError>) {
+    // Clear every per-peer registry even when the peer entry already vanished
+    // in a concurrent close path. This makes teardown idempotent and ensures
+    // no queue/ack/capacity waiter survives a terminal send-buffer stall.
+    handler.active_collections.lock().remove(peer);
+    if handler
+        .presence
+        .lock()
+        .remove(peer)
+        .is_some_and(|report| !report.entries.is_empty())
+    {
+        handler.presence_dirty.store(true, Ordering::SeqCst);
+    }
+    handler.peer_capability_tokens.lock().remove(peer);
+    if let Some(bp) = handler.backpressure.lock().remove(peer) {
+        bp.clear_high();
+    }
+    if let Some(mut queue) = handler.send_queues.lock().remove(peer) {
+        if let Some(error) = error {
+            for item in queue.high.drain(..) {
+                let _ = item.result.send(Err(error.clone()));
+            }
+            for item in queue.normal.drain(..) {
+                let _ = item.result.send(Err(error.clone()));
+            }
+            for item in queue.low.drain(..) {
+                let _ = item.result.send(Err(error.clone()));
+            }
+        }
+    }
+    handler.clear_peer_transfer_state(&peer.to_string());
+    handler.refresh_send_queue_status();
+
     if let Some(mut entry) = handler.peers.lock().remove(peer) {
         for task in entry.tasks.drain(..) {
             task.abort();
         }
-        // Phase 2: drop the per-peer active-collection set so it cannot leak
-        // across reconnects (a new connection re-reports its active set).
-        handler.active_collections.lock().remove(peer);
-        // Drop any presence report. Graceful closes broadcast on the OnClose
-        // path; an ABRUPT disconnect (killed tab -> ICE/DTLS timeout) can
-        // land here without OnClose ever firing, so mark the aggregate dirty
-        // — the armed TTL sweep then pushes the corrected aggregate to the
-        // survivors even when nothing expired.
-        if handler
-            .presence
-            .lock()
-            .remove(peer)
-            .is_some_and(|report| !report.entries.is_empty())
-        {
-            handler.presence_dirty.store(true, Ordering::SeqCst);
-        }
-        // #12c: drop the captured capability token so a reconnect re-presents
-        // (and re-verifies) its identity rather than inheriting a stale one.
-        handler.peer_capability_tokens.lock().remove(peer);
-        // Release anyone parked on backpressure and drop the per-peer signal.
-        // The poll task normally does this, but when WE abort the poll task
-        // (the abort above) its cleanup tail never runs.
-        if let Some(bp) = handler.backpressure.lock().remove(peer) {
-            bp.clear_high();
-        }
-        // Drop the peer's send queue. Every queued `QueuedSend` is dropped
-        // with it, which closes its oneshot result channel — callers parked
-        // in `send_queued_text` fail fast instead of waiting forever on a
-        // drainer that no longer exists. Without this, a queue whose drainer
-        // was aborted mid-send wedged the peer id permanently and (because
-        // responses are routed through it) could stall every other peer too.
-        handler.send_queues.lock().remove(peer);
-        handler.refresh_send_queue_status();
         let peer_id = peer.to_string();
         tokio::spawn(async move {
             if let Some(data_channel) = entry.data_channel {
@@ -3559,7 +3620,8 @@ mod tests {
                 handler.wait_for_send_capacity(&peer),
             )
             .await
-            .expect("wait_for_send_capacity did not release after OnBufferedAmountLow");
+            .expect("wait_for_send_capacity did not release after OnBufferedAmountLow")
+            .expect("capacity wait should succeed after OnBufferedAmountLow");
         });
 
         assert_eq!(handler.buffered_bytes(&peer), 0);
@@ -3579,7 +3641,79 @@ mod tests {
                 handler.wait_for_send_capacity(&peer),
             )
             .await
-            .expect("wait_for_send_capacity blocked despite no backpressure");
+            .expect("wait_for_send_capacity blocked despite no backpressure")
+            .expect("capacity wait should succeed without backpressure");
         });
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn send_capacity_timeout_is_terminal_and_typed() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-stalled".to_string();
+        handler.peer_backpressure(&peer).set_high();
+        let (ack_tx, _ack_rx) = tokio::sync::oneshot::channel();
+        handler.pending_frame_acks.lock().insert(
+            transfer_ack_key("peer-stalled|frame|1", 0),
+            PendingFrameAck {
+                sender: ack_tx,
+                sent_at_ms: now_ms(),
+            },
+        );
+        handler.incoming_frames.lock().insert(
+            "incoming-1".to_string(),
+            IncomingFrame {
+                peer: peer.clone(),
+                attempt: 0,
+                total_frames: 1,
+                total_bytes: 1,
+                next_ack_seq: 0,
+                received: vec![None],
+            },
+        );
+        handler.completed_frame_acks.lock().insert(
+            "completed-1".to_string(),
+            CompletedFrameAck {
+                peer: peer.clone(),
+                ack_seq: 0,
+                received_frames: 1,
+            },
+        );
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        handler
+            .send_queues
+            .lock()
+            .entry(peer.clone())
+            .or_default()
+            .push(QueuedSend {
+                text: "queued-after-stall".to_string(),
+                priority: SendPriority::Normal,
+                collection: None,
+                intrinsic_high: false,
+                oversized_write: false,
+                queued_at_ms: now_ms(),
+                result: queued_tx,
+            });
+
+        let wait = handler.wait_for_send_capacity(&peer);
+        tokio::pin!(wait);
+        assert!(matches!(
+            futures::poll!(&mut wait),
+            std::task::Poll::Pending
+        ));
+        tokio::time::advance(SEND_CAPACITY_WAIT_TIMEOUT + Duration::from_millis(1)).await;
+        let error = wait.await.expect_err("stalled capacity wait must fail");
+
+        assert_eq!(error.code(), SEND_BUFFER_STALLED_ERROR_CODE);
+        assert_eq!(handler.frame_transport_status().backpressure_stall_count, 1);
+        assert_eq!(handler.frame_transport_status().rejected_frames, 1);
+        assert!(!handler.peer_backpressure(&peer).is_high());
+        assert!(handler.pending_frame_acks.lock().is_empty());
+        assert!(handler.incoming_frames.lock().is_empty());
+        assert!(handler.completed_frame_acks.lock().is_empty());
+        let queued_error = queued_rx
+            .await
+            .expect("queued result sender must be resolved")
+            .expect_err("queued send must be rejected");
+        assert_eq!(queued_error.code(), SEND_BUFFER_STALLED_ERROR_CODE);
     }
 }

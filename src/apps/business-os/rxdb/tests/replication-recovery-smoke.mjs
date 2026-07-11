@@ -49,6 +49,18 @@ async function makeState(name) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// --- 0a. critical command collections have checkpoint catch-up timers -----
+{
+  const commands = await makeState('business_commands');
+  assert(commands.periodicPullTimer, 'business_commands must periodically catch up missed master-change frames');
+  await commands.cancel();
+  assert(!commands.periodicPullTimer, 'cancel must clear the command catch-up timer');
+
+  const ordinary = await makeState('ordinary_collection');
+  assert(!ordinary.periodicPullTimer, 'ordinary collections stay event-driven');
+  await ordinary.cancel();
+}
+
 // --- 0. remote-origin-only changes must not trigger local push scans -------
 {
   assert(

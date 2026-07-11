@@ -11,6 +11,13 @@ const {
 assert.equal(isDemandOnlyPullCollection('desktop_file_chunks'), true, 'desktop chunks are pull-demand-only');
 assert.equal(isDemandOnlyPullCollection('document_blob_chunks'), true, 'document blob chunks are pull-demand-only');
 assert.equal(isDemandOnlyPullCollection('spreadsheet_blob_chunks'), true, 'spreadsheet blob chunks are pull-demand-only');
+assert.equal(isDemandOnlyPullCollection('user_threads'), true, 'thread headers hydrate through bounded demand queries');
+assert.equal(isDemandOnlyPullCollection('user_thread_messages'), true, 'thread messages hydrate through bounded demand queries');
+assert.equal(isDemandOnlyPullCollection('user_thread_links'), true, 'thread links hydrate through bounded demand queries');
+assert.equal(isDemandOnlyPullCollection('user_notifications'), true, 'thread notifications hydrate through bounded demand queries');
+assert.equal(isDemandOnlyPullCollection('ctox_task_approval_requests'), true, 'approval records hydrate through bounded demand queries');
+assert.equal(isDemandOnlyPullCollection('business_commands'), true, 'command history hydrates by command id while new commands still push');
+assert.equal(isDemandOnlyPullCollection('ctox_queue_tasks'), true, 'queue history hydrates by linked task id');
 assert.equal(isDemandOnlyPullCollection('desktop_files'), false, 'desktop file metadata still pulls normally');
 
 assert.equal(isModuleDemandOnlyCollection('desktop_file_chunks'), true, 'desktop chunks are module demand-only');
@@ -19,6 +26,8 @@ assert.equal(isModuleDemandOnlyCollection('spreadsheet_blob_chunks'), true, 'spr
 assert.equal(isModuleDemandOnlyCollection('desktop_files'), false, 'desktop file metadata stays module-startable');
 assert.equal(isModuleDemandOnlyCollection('documents'), false, 'document metadata stays module-startable');
 assert.equal(isModuleDemandOnlyCollection('spreadsheets'), false, 'spreadsheet metadata stays module-startable');
+assert.equal(isModuleDemandOnlyCollection('user_threads'), false, 'thread bridges stay module-startable for demand queries');
+assert.equal(isModuleDemandOnlyCollection('business_commands'), false, 'the command bridge stays module-startable for push');
 
 assert.deepEqual(
   moduleSyncCollections([

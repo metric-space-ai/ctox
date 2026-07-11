@@ -21309,8 +21309,119 @@ pub fn accept_rxdb_business_command_with_origin(
             if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
                 return Ok(outcome);
             }
-            business_os_set_module_visible(root, &module_id, request.visible)?;
-            write_module_catalog_projection_to_rxdb(root)?;
+            let command_id = command.id.as_deref().context("command id is required")?;
+            channels::start_business_command_saga(root, command_id, &command.command_type)?;
+            let prior_evidence = channels::business_command_saga_step_evidence(
+                root,
+                command_id,
+                "persist_visibility",
+            )?;
+            let previous_visible = prior_evidence
+                .get("previous_visible")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| business_os_visible_modules(root).contains(&module_id));
+            if channels::claim_business_command_saga_step(
+                root,
+                command_id,
+                "persist_visibility",
+                false,
+            )? {
+                channels::record_business_command_saga_step_evidence(
+                    root,
+                    command_id,
+                    "persist_visibility",
+                    &serde_json::json!({ "module_id": module_id, "previous_visible": previous_visible, "visible": request.visible }),
+                )?;
+                if let Err(error) =
+                    business_os_set_module_visible(root, &module_id, request.visible)
+                {
+                    channels::fail_business_command_saga_step(
+                        root,
+                        command_id,
+                        "persist_visibility",
+                        &error.to_string(),
+                        false,
+                    )?;
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "set_visible",
+                        error,
+                    );
+                }
+                channels::complete_business_command_saga_step(
+                    root,
+                    command_id,
+                    "persist_visibility",
+                    false,
+                    &serde_json::json!({ "module_id": module_id, "previous_visible": previous_visible, "visible": request.visible }),
+                )?;
+            }
+            if channels::claim_business_command_saga_step(
+                root,
+                command_id,
+                "project_catalog",
+                false,
+            )? {
+                if let Err(error) = write_module_catalog_projection_to_rxdb(root) {
+                    channels::fail_business_command_saga_step(
+                        root,
+                        command_id,
+                        "project_catalog",
+                        &error.to_string(),
+                        false,
+                    )?;
+                    let compensation = (|| -> anyhow::Result<()> {
+                        if channels::claim_business_command_saga_step(
+                            root,
+                            command_id,
+                            "persist_visibility",
+                            true,
+                        )? {
+                            business_os_set_module_visible(root, &module_id, previous_visible)?;
+                            channels::complete_business_command_saga_step(
+                                root,
+                                command_id,
+                                "persist_visibility",
+                                true,
+                                &serde_json::json!({ "module_id": module_id, "restored_visible": previous_visible }),
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    if let Err(compensation_error) = compensation {
+                        channels::fail_business_command_saga_step(
+                            root,
+                            command_id,
+                            "persist_visibility",
+                            &compensation_error.to_string(),
+                            true,
+                        )?;
+                        let failure = anyhow::anyhow!(
+                            "saga_compensation_failed: projection failed ({error:#}); visibility restore failed ({compensation_error:#})"
+                        );
+                        return write_rxdb_failed_control_command_outcome(
+                            root,
+                            &command,
+                            "set_visible",
+                            failure,
+                        );
+                    }
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "set_visible",
+                        error,
+                    );
+                }
+                channels::complete_business_command_saga_step(
+                    root,
+                    command_id,
+                    "project_catalog",
+                    false,
+                    &serde_json::json!({ "module_id": module_id, "projected": true }),
+                )?;
+            }
             return write_rxdb_control_command_outcome(
                 root,
                 &command,

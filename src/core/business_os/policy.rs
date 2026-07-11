@@ -271,7 +271,14 @@ impl PolicyDecision {
             scope_id: scope.scope_id.clone(),
             reason_code,
             display_reason,
-            requires_approval: false,
+            // A role/scope denial for an otherwise delegable mutation is not
+            // terminal: the actor may ask an authorized reviewer to execute
+            // the frozen target through Threads. Read denials and privileged
+            // workspace controls stay non-delegable.
+            requires_approval: matches!(
+                permission,
+                BusinessOsPermission::DataWrite | BusinessOsPermission::AppsModify
+            ),
             audit_level: "decision",
         }
     }
@@ -643,7 +650,10 @@ mod tests {
         assert_eq!(decision.scope_id.as_deref(), Some("crm"));
         assert_eq!(decision.reason_code, "role_or_scope_denied");
         assert!(!decision.display_reason.is_empty());
-        assert!(!decision.requires_approval);
+        assert!(decision.requires_approval);
         assert_eq!(decision.audit_level, "decision");
+
+        let read_denial = evaluate(&actor, BusinessOsPermission::DataRead, &scope);
+        assert!(!read_denial.requires_approval);
     }
 }

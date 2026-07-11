@@ -18,6 +18,8 @@ const queryFetchCapability = fixture.optionalCapabilities?.queryFetch || 'ctox-r
 const presenceCapability = fixture.optionalCapabilities?.presence || 'ctox-presence-v1';
 const commandLifecycleCapability = fixture.optionalCapabilities?.commandLifecycle
   || 'ctox-command-lifecycle-v2';
+const checkpointGenerationCapability = fixture.optionalCapabilities?.checkpointGeneration
+  || 'ctox-checkpoint-generation-v2';
 
 const js = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.json.
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
@@ -33,6 +35,7 @@ export const CTOX_FILE_RPC = Object.freeze(${json(fileRpc)});
 export const CTOX_PRESENCE_CAPABILITY = ${json(presenceCapability)};
 export const CTOX_PRESENCE_RPC = Object.freeze(${json(presenceRpc)});
 export const CTOX_COMMAND_LIFECYCLE_CAPABILITY = ${json(commandLifecycleCapability)};
+export const CTOX_CHECKPOINT_GENERATION_CAPABILITY = ${json(checkpointGenerationCapability)};
 `;
 
 const rust = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.json.
@@ -72,6 +75,7 @@ pub(super) const CTOX_PRESENCE_TTL_MS: u64 = ${presenceRpc.ttlMs ?? 45000};
 pub(super) const CTOX_PRESENCE_MAX_ENTRIES_PER_PEER: usize = ${presenceRpc.maxEntriesPerPeer ?? 32};
 #[allow(dead_code)]
 pub(super) const CTOX_COMMAND_LIFECYCLE_CAPABILITY: &str = ${rustString(commandLifecycleCapability)};
+pub(super) const CTOX_CHECKPOINT_GENERATION_CAPABILITY: &str = ${rustString(checkpointGenerationCapability)};
 `;
 
 writeFileSync(jsPath, js);

@@ -11710,8 +11710,7 @@ function ensureCtoxSmokeBinary() {
           'ctox_runtime_settings',
           'business_commands',
           'ctox_queue_tasks',
-          'desktop_files',
-          'desktop_file_chunks',
+          ...(needsFileCollections ? ['desktop_files', 'desktop_file_chunks'] : []),
         ];
         const preRestartState = globalThis.ctoxBusinessOsSmoke?.state;
         const preRestartDiagnostics = preRestartState?.syncDiagnostics?.collections || {};
@@ -12658,9 +12657,19 @@ function ensureCtoxSmokeBinary() {
         }
         const commandDoc = await db.business_commands.findOne(id).exec();
         const queueDocs = await db.ctox_queue_tasks.find({ limit: 5 }).exec();
+        const commandReplicationDiagnostics = appCommandReplicationState ? {
+          cancelled: Boolean(appCommandReplicationState.cancelled),
+          periodicPullIntervalMs: appCommandReplicationState.periodicPullIntervalMs?.() || 0,
+          periodicPullTimerActive: Boolean(appCommandReplicationState.periodicPullTimer),
+          pullInProgress: Boolean(appCommandReplicationState.pullInProgress),
+          openPeerIds: appCommandReplicationState.openPeerIds?.() || [],
+          pullCheckpoints: Array.from(appCommandReplicationState.pullCheckpointsByPeer?.entries?.() || []),
+          pushCheckpoints: Array.from(appCommandReplicationState.pushCheckpointsByPeer?.entries?.() || []),
+        } : null;
         throw new Error(`command ${id} was not accepted via RxDB/WebRTC: ${JSON.stringify({
           command: commandDoc?.toJSON?.() || null,
           queueCount: queueDocs.length,
+          commandReplicationDiagnostics,
           syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
           syncConfig: globalThis.ctoxBusinessOsSmoke?.state?.sync?.config || null,
         })}`);

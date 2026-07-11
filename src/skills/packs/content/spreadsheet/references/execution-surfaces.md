@@ -13,8 +13,8 @@ change; the skill must not promise operations the build cannot perform.
 | Open workbook, render sheets/ranges (visual QA) | `spreadsheet.open-render-sheets` | differential_passed |
 | Cell edits, save | `spreadsheet.edit-save` | differential_passed |
 | Undo, clipboard, fill | `spreadsheet.undo-clipboard-fill` | differential_passed |
-| Cell formats, rows/columns | `spreadsheet.cell-format-rows-columns` | discovered (next active path) |
-| Formulas and references | `spreadsheet.formulas-references` | discovered |
+| Cell formats, rows/columns | `spreadsheet.cell-format-rows-columns` | differential_passed |
+| Formulas and references | `spreadsheet.formulas-references` | differential_passed |
 | Multi-sheet, merge, freeze | `spreadsheet.multi-sheet-merge-freeze` | discovered |
 | Sort, filter, tables | `spreadsheet.sort-filter-tables` | discovered |
 | Validation, conditional formatting | `spreadsheet.validation-conditional-formatting` | discovered |
@@ -33,11 +33,12 @@ change; the skill must not promise operations the build cannot perform.
 
 ## Practical consequence
 
-Until `spreadsheet.formulas-references` and the formatting groups ship, this
-skill supports: reading and analyzing workbooks, rendering sheets for visual
-review, simple value edits with save, and byte-preserving export. Model
-authoring (formulas, formats, charts, conditional formatting, protection) is
-blocked and must be reported as such.
+Core model authoring (values, formulas, references, cell/row/column formats)
+has passed differential acceptance and is usable behind the editor rollout
+flag, alongside reading, analyzing, rendering, and byte-preserving export.
+Still blocked and to be reported as such: multi-sheet/merge/freeze,
+sort/filter/tables, validation and conditional formatting, comments/names/
+protection, charts, and pivot/print work.
 
 Not ported from the Codex lineage: live control of a running Excel instance
 (Office.js) — conceptually out of scope for CTOX engines.

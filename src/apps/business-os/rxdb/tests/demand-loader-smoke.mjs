@@ -68,6 +68,44 @@ const r2 = await loader.resolveQuery({ selector: { status: 'open' } });
 assert(r2.length === 5, 'second resolve same length');
 assert(fetchCount === 1, 'second resolve must hit cache');
 
+// Demand-only command history stays bounded, but lifecycle projections must
+// not become permanent cache hits after the first pending result.
+{
+  let commandNow = 1_000;
+  let commandFetches = 0;
+  const commandStorage = makeFakeStorageCollection();
+  const commandSidecar = createSidecarWithMemoryBackend({
+    databaseName: 'command-status-sidecar',
+    clock: () => commandNow,
+  });
+  const commandLoader = createQueryDemandLoader({
+    storageCollection: commandStorage,
+    sidecar: commandSidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => commandNow,
+    requestQueryFetch: async () => {
+      commandFetches += 1;
+      return {
+        documents: [{
+          id: 'cmd-status-1',
+          command_id: 'cmd-status-1',
+          status: commandFetches === 1 ? 'pending_sync' : 'accepted',
+        }],
+        authoritativeRevision: `command-rev-${commandFetches}`,
+      };
+    },
+  });
+  const pending = await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
+  assert(pending[0]?.status === 'pending_sync', 'first command query materializes pending state');
+  await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
+  assert(commandFetches === 1, 'fresh command status window stays local within its freshness budget');
+  commandNow += 1_001;
+  const accepted = await commandLoader.resolveQuery({ selector: { id: 'cmd-status-1' }, limit: 1 });
+  assert(commandFetches === 2, 'stale command status window is revalidated over WebRTC');
+  assert(accepted[0]?.status === 'accepted', 'revalidation materializes the native command lifecycle');
+}
+
 let scanCount = 0;
 const originalScanQueryWindows = sidecar.backend.scanQueryWindows.bind(sidecar.backend);
 sidecar.backend.scanQueryWindows = async () => {

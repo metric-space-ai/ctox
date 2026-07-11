@@ -47,6 +47,53 @@ assert(
   'master state with a newer timestamp is accepted',
 );
 
+// A live accepted/terminal command update can overtake an older in-flight
+// pull page. The older master row must not regress server-owned lifecycle
+// state even though replication-over-replication normally always wins.
+const acceptedCommand = {
+  lwt: 2000,
+  doc: {
+    id: 'command-1',
+    command_id: 'command-1',
+    status: 'accepted',
+    _meta: { lwt: 2000, ctoxReplicationOrigin: { role: 'ctox_instance' } },
+  },
+};
+assert(
+  shouldAcceptDocumentWrite(
+    acceptedCommand,
+    3000,
+    origin,
+    { id: 'command-1', command_id: 'command-1', status: 'pending_sync' },
+    'business_commands',
+  ) === false,
+  'an older pending command pull must not regress an accepted native command',
+);
+assert(
+  shouldAcceptDocumentWrite(
+    acceptedCommand,
+    3000,
+    origin,
+    { id: 'command-1', command_id: 'command-1', status: 'completed' },
+    'business_commands',
+  ) === true,
+  'a forward native command transition must still be accepted',
+);
+const completedCommand = {
+  ...acceptedCommand,
+  doc: { ...acceptedCommand.doc, status: 'completed' },
+};
+assert(
+  shouldAcceptDocumentWrite(
+    completedCommand,
+    4000,
+    origin,
+    { id: 'command-1', command_id: 'command-1', status: 'accepted' },
+    'business_commands',
+  ) === false,
+  'an accepted replay must not reopen a terminal native command',
+);
+
 // --- 2. unsynced local write survives a replication write -------------------
 assert(
   shouldAcceptDocumentWrite(localRecord(2000), 1000, origin) === false,

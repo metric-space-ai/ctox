@@ -77,7 +77,7 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   business_module_releases: '8d9ff79eec5eccc04353a885002a8982deb169dbbf3a348998b88fafb7e219f7',
   business_module_reports: '440b04e33e1040e556c62741d7c4289422b6d0d01203c74e5aee391d5f050ed1',
   business_module_source_files: 'fa9cdeda3530f04bd84b926cb8ffae650c8f5886efac079daee0d01315737551',
-  business_users: 'da6d1a192bc21ad59baf2680d8b80faa471a4883457a8d0ad5a533a1afefba42',
+  business_users: 'e735ef56eaa56c6661ac40b2549d4172a4654fb9d7f3aadc638b3a99bc71293f',
   business_workspace_branding: 'a53d4f3e84454928bfeb239c22820b305cec6c657bb6d7340f68594f20baae22',
   calendar_availability_rules: 'be220a21b86c15d22627f8685e0a90849a485baaa2b07b7133364107ffde661a',
   calendar_booking_holds: '1add78cb8f30596fd320eafcd798f54e06cd09451097398d87f56b6dcea6bde4',
@@ -366,6 +366,8 @@ export function buildProtocolPayload({
   // collections when the room reconnects, especially for file chunk stores
   // where stale checkpoint epochs are a data-corruption signal.
   collectionCheckpoints = null,
+  storageGeneration = null,
+  nativeTimeMs = null,
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   const peerSession = {
@@ -392,6 +394,10 @@ export function buildProtocolPayload({
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
+    storageGeneration: typeof storageGeneration === 'string' && storageGeneration.trim()
+      ? storageGeneration.trim()
+      : null,
+    nativeTimeMs: Number.isFinite(nativeTimeMs) ? Math.trunc(nativeTimeMs) : null,
     peerSession,
     capabilities: Array.from(new Set([
       ...CTOX_REQUIRED_PROTOCOL_CAPABILITIES,

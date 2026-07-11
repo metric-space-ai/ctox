@@ -14,6 +14,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../../../..');
@@ -73,6 +74,7 @@ const runSummary = {
   endedAt: null,
   ok: false,
   cycleResults: [],
+  source: sourceEvidence(),
 };
 let runnerLock = null;
 const cycles = parsePositiveIntegerConfig('SOAK_CYCLES', cyclesInput, { max: 100 });
@@ -94,6 +96,9 @@ if (missingRequiredModes.length) {
 }
 if (requiredModeList.length && !failOnRetry) {
   failConfiguration('SOAK_FAIL_ON_RETRY=1 is required when SOAK_REQUIRED_MODES is set');
+}
+if (requiredModeList.length && runSummary.source.dirty) {
+  failConfiguration('a dirty working tree cannot qualify a release soak');
 }
 const maxPortOffset = (cycles - 1) * portStride;
 if (businessPortBase + maxPortOffset > 65535) {
@@ -387,4 +392,25 @@ function writeRunSummary(ok) {
   if (!resultPath) return;
   fs.mkdirSync(path.dirname(resultPath), { recursive: true });
   fs.writeFileSync(resultPath, `${JSON.stringify(runSummary, null, 2)}\n`);
+}
+
+function sourceEvidence() {
+  const git = (args, fallback = '') => {
+    try { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
+    catch { return fallback; }
+  };
+  const status = git(['status', '--porcelain=v1', '--untracked-files=all']);
+  return {
+    commit: git(['rev-parse', 'HEAD'], 'unknown'),
+    dirty: Boolean(status),
+    artifactHashes: {
+      browserBundleSha256: sha256File(path.join(root, 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs')),
+      smokeBinarySha256: sha256File(path.join(root, 'runtime/build/core-rxdb-integration-target/debug/ctox')),
+    },
+  };
+}
+
+function sha256File(filePath) {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'); }
+  catch { return null; }
 }

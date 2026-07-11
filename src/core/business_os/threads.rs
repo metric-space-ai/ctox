@@ -4612,7 +4612,7 @@ mod tests {
             &alice_token,
             "business_commands"
         ));
-        assert!(may_accept_peer_write(temp.path(), "", "business_commands"));
+        assert!(!may_accept_peer_write(temp.path(), "", "business_commands"));
         assert!(!may_accept_peer_write(
             temp.path(),
             &alice_token,

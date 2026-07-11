@@ -15,7 +15,15 @@ env:
   CTOX_BUILD_VERSION: ${{ github.ref_name }}
 
 jobs:
+  rxdb-release-soak:
+    uses: ./.github/workflows/rxdb-soak.yml
+    with:
+      cycles: "3"
+      fail_on_retry: "true"
+      require_release_coverage: "true"
+
   business-os-production-gate:
+    needs: rxdb-release-soak
     runs-on: ubuntu-22.04
     name: Business OS production gate
 
@@ -77,7 +85,7 @@ jobs:
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
           SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
           SMOKE_MODES="$SMOKE_MODES" \
-          SMOKE_MATRIX_ATTEMPTS=2 \
+          SMOKE_MATRIX_ATTEMPTS=1 \
           SMOKE_PAGE_PATH=/index.html \
           SMOKE_MODE_TIMEOUT_MS=300000 \
           SMOKE_BROWSER_WARNING_BUDGET=0 \

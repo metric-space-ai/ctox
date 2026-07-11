@@ -37,14 +37,17 @@ assertContainsAll('smoke matrix evidence requirements', evidenceModes, matrixMod
 assertContainsAll('smoke harness supported modes', smokeModes, evidenceModes);
 assertIncludes(
   workflow,
-  "SOAK_MIN_CYCLES: ${{ inputs.require_release_coverage == 'true' && '3' || '' }}",
+  "SOAK_MIN_CYCLES: ${{ (github.event_name == 'schedule' || inputs.require_release_coverage == 'true') && '3' || '' }}",
   'workflow must require at least three cycles when release coverage is enabled',
 );
 assertIncludes(
   workflow,
-  "SOAK_FAIL_ON_RETRY: ${{ inputs.require_release_coverage == 'true' && '1' || (inputs.fail_on_retry == 'true' && '1' || '0') }}",
+  "SOAK_FAIL_ON_RETRY: ${{ (github.event_name == 'schedule' || inputs.require_release_coverage == 'true' || inputs.fail_on_retry == 'true') && '1' || '0' }}",
   'workflow must force fail-on-retry when release coverage is enabled',
 );
+assertIncludes(workflow, 'workflow_call:', 'soak workflow must be reusable by the release workflow');
+assertIncludes(workflow, 'schedule:', 'soak workflow must run nightly');
+assertIncludes(workflow, "github.event_name == 'schedule' && '9'", 'nightly soak must run nine cycles');
 assertIncludes(
   workflow,
   'require_release_coverage:\n        description: "Fail unless all release smoke modes are included"\n        required: true\n        default: "true"',

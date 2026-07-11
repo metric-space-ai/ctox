@@ -1,7 +1,9 @@
 import { CtoxEventEmitter } from './event-target.mjs';
-import { sha256Hex } from './schema.mjs';
+import { schemaHash, sha256Hex } from './schema.mjs';
 import { normalizeConflictStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
 import { formatHybridLogicalClock, nextHybridLogicalClock } from './hybrid-logical-clock.mjs';
+import { openRecoveryJournal } from './recovery-journal.mjs';
+import { recoverQueryMetaQuota } from './query-meta-storage.mjs';
 
 const DB_VERSION = 3;
 const DOCUMENT_STORE = 'documents';
@@ -19,19 +21,34 @@ export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_o
     throw new Error('indexedDB is required for ctox-rxdb-js storage');
   }
   const db = await openDatabase(databaseName);
-  return new CtoxIndexedDbStorage(db);
+  const quotaCoordinator = {
+    recover: (context = {}) => recoverQueryMetaQuota(databaseName, context),
+  };
+  const recoveryJournal = await openRecoveryJournal({
+    databaseName,
+    instanceId: databaseName,
+    quotaCoordinator,
+  });
+  return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
 }
 
 export class CtoxIndexedDbStorage {
-  constructor(db) {
+  constructor(db, { recoveryJournal = null, quotaCoordinator = null } = {}) {
     this.db = db;
+    this.recoveryJournal = recoveryJournal;
+    this.quotaCoordinator = quotaCoordinator;
   }
 
   collection(name, { schema = null, conflictStrategy = 'lww' } = {}) {
     if (!name || typeof name !== 'string') {
       throw new TypeError('collection name must be a non-empty string');
     }
-    return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
+    return new CtoxIndexedDbCollection(this.db, name, {
+      schema,
+      conflictStrategy,
+      recoveryJournal: this.recoveryJournal,
+      quotaCoordinator: this.quotaCoordinator,
+    });
   }
 
   async unsyncedWriteSummary() {
@@ -39,12 +56,18 @@ export class CtoxIndexedDbStorage {
   }
 
   close() {
+    this.recoveryJournal?.close?.();
     this.db.close();
   }
 }
 
 export class CtoxIndexedDbCollection {
-  constructor(db, name, { schema = null, conflictStrategy = 'lww' } = {}) {
+  constructor(db, name, {
+    schema = null,
+    conflictStrategy = 'lww',
+    recoveryJournal = null,
+    quotaCoordinator = null,
+  } = {}) {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
@@ -65,6 +88,68 @@ export class CtoxIndexedDbCollection {
     // sync diagnostics per collection.
     this.mergeStats = { pullFieldMerges: 0, pushConflictMerges: 0 };
     this.events = new CtoxEventEmitter();
+    this.recoveryJournal = recoveryJournal;
+    this.quotaCoordinator = quotaCoordinator;
+    this.recoverySchemaHash = '';
+    this.recoveryReady = null;
+    this.externalChangeListener = (event) => {
+      const detail = event?.detail || {};
+      if (detail.databaseName !== this.db.name || detail.collection !== this.name) return;
+      this.events.emit('change', {
+        collection: this.name,
+        external: true,
+        ids: Array.isArray(detail.ids) ? detail.ids : [],
+        at: Date.now(),
+      });
+    };
+    globalThis.addEventListener?.('ctox-rxdb-external-change', this.externalChangeListener);
+  }
+
+  close() {
+    globalThis.removeEventListener?.('ctox-rxdb-external-change', this.externalChangeListener);
+  }
+
+  async initializeRecovery() {
+    if (!this.recoveryJournal) return;
+    if (!this.recoveryReady) {
+      this.recoveryReady = (async () => {
+        this.recoverySchemaHash = await schemaHash(this.schema || {}, this.name);
+        this.recoveryJournal.registerCollection(this.name, {
+          schemaHash: this.recoverySchemaHash,
+          applyBatch: (batch) => this.runWithQuotaRecovery(
+            () => batch.operation === 'upsert'
+              ? this._bulkUpsertOnce(batch.rows || [], {})
+              : this._bulkWriteOnce(batch.rows || [], { baseById: batch.baseById || null }),
+            { source: 'recovery-replay' },
+          ),
+          // A user resolution is a NEW pushable local write, not recovery
+          // replay. Route it through the public path so it receives a fresh
+          // HLC and durable WAL entry before the primary row changes.
+          resolveConflict: (batch) => this.bulkWrite(batch.rows || [], {
+            baseById: batch.baseById || null,
+          }),
+        });
+        await this.acknowledgePersistedMasterRecovery();
+        await this.recoveryJournal.replayRegisteredCollections();
+      })();
+    }
+    return this.recoveryReady;
+  }
+
+  async acknowledgePersistedMasterRecovery() {
+    const batches = await this.recoveryJournal?.listBatches?.('pending') || [];
+    const ids = [...new Set(batches
+      .filter((batch) => batch.collection === this.name)
+      .flatMap((batch) => batch.documentIds || []))];
+    if (!ids.length) return;
+    const documents = {};
+    for (const id of ids) {
+      const record = await this.getStoredRecord(id);
+      if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
+    }
+    if (Object.keys(documents).length) {
+      await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+    }
   }
 
   observe(listener) {
@@ -111,6 +196,9 @@ export class CtoxIndexedDbCollection {
     if (!mergeEnabled || !existingIsLocalWrite) {
       return { doc, lwt, replicationOrigin, base: undefined };
     }
+    if (doc?._deleted) {
+      return { doc, lwt, replicationOrigin, base: undefined };
+    }
     const { merged, identicalToMaster, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
       previous.base,
       previous.doc,
@@ -122,6 +210,9 @@ export class CtoxIndexedDbCollection {
       error.code = 'structured_conflict_requires_resolution';
       error.collection = this.name;
       error.fields = conflictFields;
+      error.base = previous.base;
+      error.local = previous.doc;
+      error.master = doc;
       throw error;
     }
     if (identicalToMaster) {
@@ -144,7 +235,46 @@ export class CtoxIndexedDbCollection {
     return success[id] || null;
   }
 
-  async bulkUpsert(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+  async bulkUpsert(docs, {
+    now = Date.now(),
+    replicationOrigin = null,
+    skipJournal = false,
+    recoveryReplay = false,
+  } = {}) {
+    await this.initializeRecovery();
+    const journalWrite = Boolean(this.recoveryJournal)
+      && !skipJournal && !replicationOrigin?.role && Array.isArray(docs);
+    const prepared = journalWrite ? await this.prepareJournalRows(docs) : { rows: docs, baseById: null };
+    const writeDocs = prepared.rows;
+    const validDocs = Array.isArray(writeDocs) ? writeDocs.filter((doc) => documentId(doc)) : writeDocs;
+    const journalBaseById = prepared.baseById;
+    const batchId = !skipJournal && !replicationOrigin?.role && Array.isArray(validDocs) && validDocs.length
+      ? await this.recoveryJournal?.appendBatch({
+        collection: this.name,
+        schemaHash: this.recoverySchemaHash,
+        primaryPath: this.primaryPath,
+        operation: 'upsert',
+        rows: validDocs,
+        baseById: journalBaseById,
+      })
+      : null;
+    let result;
+    try {
+      await this.persistDeleteUpdateConflicts(validDocs, replicationOrigin);
+      result = await this.runWithQuotaRecovery(
+        () => this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
+        { source: recoveryReplay ? 'recovery-replay' : 'bulk-upsert' },
+      );
+    } catch (error) {
+      await this.persistStructuredConflict(error);
+      throw error;
+    }
+    if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
+    if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
+    return result;
+  }
+
+  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null } = {}) {
     if (!Array.isArray(docs)) {
       throw new TypeError('bulkUpsert docs must be an array');
     }
@@ -158,6 +288,7 @@ export class CtoxIndexedDbCollection {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
     }
 
+    try {
     for (const doc of docs) {
       const id = documentId(doc);
       if (!id) {
@@ -171,7 +302,7 @@ export class CtoxIndexedDbCollection {
         lwt = Math.max(lwt, localWriteLwtFloor);
         localWriteLwtFloor = lwt + 1;
       }
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name)) {
         if (previous?.doc) success[id] = previous.doc;
         continue;
       }
@@ -200,6 +331,11 @@ export class CtoxIndexedDbCollection {
     }
 
     await done;
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      try { await done; } catch {}
+      throw error;
+    }
     schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit('change', {
@@ -207,11 +343,54 @@ export class CtoxIndexedDbCollection {
         success,
         at: now,
       });
+      dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error };
   }
 
-  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
+  async bulkWrite(rows, {
+    now = Date.now(),
+    replicationOrigin = null,
+    baseById = null,
+    skipJournal = false,
+    recoveryReplay = false,
+  } = {}) {
+    await this.initializeRecovery();
+    const journalWrite = Boolean(this.recoveryJournal)
+      && !skipJournal && !replicationOrigin?.role && Array.isArray(rows);
+    const prepared = journalWrite ? await this.prepareJournalRows(rows) : { rows, baseById: null };
+    const writeRows = prepared.rows;
+    const validRows = Array.isArray(writeRows)
+      ? writeRows.filter((row) => documentId(row?.document || row))
+      : writeRows;
+    const journalBaseById = baseById || prepared.baseById;
+    const batchId = !skipJournal && !replicationOrigin?.role && Array.isArray(validRows) && validRows.length
+      ? await this.recoveryJournal?.appendBatch({
+        collection: this.name,
+        schemaHash: this.recoverySchemaHash,
+        primaryPath: this.primaryPath,
+        operation: 'write',
+        rows: validRows,
+        baseById: journalBaseById,
+      })
+      : null;
+    let result;
+    try {
+      await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
+      result = await this.runWithQuotaRecovery(
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById }),
+        { source: recoveryReplay ? 'recovery-replay' : 'bulk-write' },
+      );
+    } catch (error) {
+      await this.persistStructuredConflict(error);
+      throw error;
+    }
+    if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
+    if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
+    return result;
+  }
+
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError('bulkWrite rows must be an array');
     }
@@ -225,6 +404,7 @@ export class CtoxIndexedDbCollection {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
     }
 
+    try {
     for (const row of rows) {
       const doc = row?.document || row;
       const id = documentId(doc);
@@ -238,7 +418,7 @@ export class CtoxIndexedDbCollection {
         localWriteLwtFloor = lwt + 1;
       }
       const previous = await idbRequest(store.get([this.name, id]));
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name)) {
         continue;
       }
       const resolved = this.resolveIncomingWrite({
@@ -272,6 +452,11 @@ export class CtoxIndexedDbCollection {
     }
 
     await done;
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      try { await done; } catch {}
+      throw error;
+    }
     schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit('change', {
@@ -279,8 +464,92 @@ export class CtoxIndexedDbCollection {
         success,
         at: now,
       });
+      dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error };
+  }
+
+  async runWithQuotaRecovery(operation, context = {}) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      await this.quotaCoordinator?.recover?.(context);
+      try {
+        return await operation();
+      } catch (retryError) {
+        const quotaError = new Error('IndexedDB write failed after safe cache eviction and one retry.', { cause: retryError });
+        quotaError.code = 'indexeddb_quota_exceeded';
+        quotaError.retryable = true;
+        throw quotaError;
+      }
+    }
+  }
+
+  async persistStructuredConflict(error) {
+    if (error?.code !== 'structured_conflict_requires_resolution') return;
+    await this.recoveryJournal?.recordConflict?.({
+      code: error.code,
+      collection: this.name,
+      fields: error.fields || [],
+      base: error.base || null,
+      local: error.local || null,
+      master: error.master || null,
+      message: error.message || String(error),
+    });
+  }
+
+  async persistDeleteUpdateConflicts(rows, replicationOrigin) {
+    if (!replicationOrigin?.role || !Array.isArray(rows)) return;
+    for (const row of rows) {
+      const master = row?.document || row;
+      if (!master?._deleted) continue;
+      const id = documentId(master, this.primaryPath);
+      const previous = id ? await this.getStoredRecord(id) : null;
+      if (!previous || previous.replicationOriginRole || previous.doc?._deleted) continue;
+      await this.recoveryJournal?.recordConflict?.({
+        code: 'structured_conflict_requires_resolution',
+        conflictType: 'delete_vs_update',
+        collection: this.name,
+        base: previous.base || null,
+        local: previous.doc,
+        master,
+        message: 'The native tombstone is authoritative; the local update remains recoverable here.',
+      });
+    }
+  }
+
+  async prepareJournalRows(rows) {
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const bases = {};
+    const prepared = [];
+    const lastHlcById = new Map();
+    for (const row of rows || []) {
+      const document = row?.document || row;
+      const id = documentId(document);
+      if (!id) {
+        prepared.push(row);
+        continue;
+      }
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (previous && !Object.prototype.hasOwnProperty.call(bases, id)) {
+        bases[id] = previous.replicationOriginRole ? previous.doc : (previous.base || previous.doc);
+      }
+      const nextDocument = structuredClone(document);
+      const nextHlc = nextHybridLogicalClock(
+        lastHlcById.get(id) || previous?.doc?._meta?.ctoxHlc || nextDocument?._meta?.ctoxHlc,
+      );
+      lastHlcById.set(id, nextHlc);
+      nextDocument._meta = {
+        ...(nextDocument._meta || {}),
+        ctoxHlc: nextHlc,
+      };
+      prepared.push(row?.document ? { ...row, document: nextDocument } : nextDocument);
+    }
+    await done;
+    return { rows: prepared, baseById: bases };
   }
 
   /// V1.5 eviction hook. Hard-deletes documents from the primary store
@@ -792,10 +1061,13 @@ function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) 
       || formatHybridLogicalClock({ physicalMs: lwt, nodeId: 'native' });
     normalized._meta.ctoxReplicationOrigin = sanitizeReplicationOrigin(replicationOrigin);
   } else {
-    normalized._meta.ctoxHlc = nextHybridLogicalClock(
-      previous?._meta?.ctoxHlc || normalized._meta.ctoxHlc,
-      { nowMs: Math.max(Date.now(), Number(lwt) || 0) },
-    );
+    const suppliedHlc = String(normalized._meta.ctoxHlc || '');
+    const previousHlc = String(previous?._meta?.ctoxHlc || '');
+    normalized._meta.ctoxHlc = suppliedHlc && suppliedHlc !== previousHlc
+      ? suppliedHlc
+      : nextHybridLogicalClock(previousHlc || suppliedHlc, {
+        nowMs: Math.max(Date.now(), Number(lwt) || 0),
+      });
     delete normalized._meta.ctoxReplicationOrigin;
   }
   normalized._deleted = Boolean(normalized._deleted);
@@ -854,12 +1126,30 @@ function normalizeStoredReplicationFlags(record) {
   };
 }
 
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
+function shouldAcceptDocumentWrite(
+  existingRecord,
+  incomingLwt,
+  replicationOrigin = null,
+  incomingDocument = null,
+  collectionName = '',
+) {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
   if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
   if (replicationOrigin?.role) {
+    // A push can race the native command consumer: the consumer's `accepted`
+    // change may arrive through the live stream before an older in-flight
+    // `masterChangesSince` response that still contains `pending_sync`.
+    // Both are master-origin writes, so timestamp-only acceptance would let
+    // the stale response regress the command forever after the pull checkpoint
+    // had already advanced. Server-owned command lifecycle state is monotonic.
+    if (
+      collectionName === 'business_commands'
+      && isStaleReplicatedBusinessCommandState(existingRecord.doc, incomingDocument)
+    ) {
+      return false;
+    }
     // Replication writes carry the MASTER's authoritative state for this id
     // (master checkpoint iteration only moves forward). The app-level
     // `updated_at_ms` lwt heuristic must not veto them: master rows arrive
@@ -875,6 +1165,17 @@ function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigi
   return nextLwt >= existingLwt;
 }
 
+function isStaleReplicatedBusinessCommandState(existingDocument, incomingDocument) {
+  const existingStatus = String(existingDocument?.status || '').trim().toLowerCase();
+  const incomingStatus = String(incomingDocument?.status || '').trim().toLowerCase();
+  if (!existingStatus || !incomingStatus || existingStatus === incomingStatus) return false;
+  if (incomingStatus === 'pending_sync' && existingStatus !== 'pending_sync') return true;
+  const terminal = new Set([
+    'completed', 'failed', 'rejected', 'cancelled', 'canceled', 'blocked',
+  ]);
+  return terminal.has(existingStatus) && !terminal.has(incomingStatus);
+}
+
 function documentLwt(doc = {}, fallback = Date.now()) {
   const values = [
     Number(doc._meta?.lwt || 0),
@@ -882,6 +1183,26 @@ function documentLwt(doc = {}, fallback = Date.now()) {
     Number(doc.updatedAtMs || 0),
   ].filter((value) => Number.isFinite(value) && value > 0);
   return values.length ? Math.max(...values) : Number(fallback || Date.now());
+}
+
+function isQuotaExceededError(error) {
+  if (!error) return false;
+  if (error.name === 'QuotaExceededError') return true;
+  if (typeof error.code === 'number' && error.code === 22) return true;
+  const message = String(error.message || '').toLowerCase();
+  return message.includes('quota') || message.includes('storage full');
+}
+
+function dispatchStorageChange(databaseName, collection, success, replicationOrigin) {
+  globalThis.dispatchEvent?.(new CustomEvent('ctox-rxdb-storage-change', {
+    detail: {
+      databaseName,
+      collection,
+      ids: Object.keys(success || {}),
+      replicationOriginRole: String(replicationOrigin?.role || ''),
+      atMs: Date.now(),
+    },
+  }));
 }
 
 async function latestCollectionLwtInTransaction(store, collection) {

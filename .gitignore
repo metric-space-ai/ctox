@@ -70,6 +70,8 @@ tmp_intersolar_*.js
 !/docs/business-os-db-isolation-inventory.json
 !/docs/business-os-module-context.md
 !/docs/ctox-office-skills-adaptation-plan.md
+!/docs/business-os-app-development.md
+!/docs/business-os-app-platform-refactoring-plan.md
 !/docs/business-os.md
 !/docs/core_runtime_state_machine.md
 !/docs/harness-operating-model.md

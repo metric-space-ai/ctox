@@ -20,6 +20,7 @@ import {
 } from './replication-webrtc.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
+import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -77,6 +78,7 @@ export function rxdbCore() {
     createRxDatabase,
     getCtoxIndexedDbStorage,
     getConnectionHandlerSimplePeer,
+    getMultiTabSyncCoordinator,
     getPresenceRegistry,
     replicateWebRTC,
     removeRxDatabase,
@@ -94,6 +96,28 @@ class CtoxRxDatabase {
     this.multiInstance = Boolean(multiInstance);
     this.closeDuplicates = Boolean(closeDuplicates);
     this.collections = {};
+    const journal = storage?.recoveryJournal || null;
+    this.recovery = {
+      getStatus: () => journal?.getStatus?.() || Promise.resolve(emptyRecoveryStatus(name)),
+      export: (passphrase) => journal?.export?.(passphrase),
+      previewImport: (file, passphrase) => journal?.previewImport?.(file, passphrase),
+      applyImport: (previewId) => journal?.applyImport?.(previewId),
+      retryPrimaryOpen: async () => {
+        if (!globalThis.indexedDB?.open) return false;
+        const request = indexedDB.open(name);
+        const opened = await new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error || new Error(`Failed to reopen IndexedDB ${name}`));
+          request.onblocked = () => reject(new Error(`IndexedDB open blocked for ${name}`));
+        });
+        opened.close();
+        return true;
+      },
+    };
+    this.conflicts = {
+      list: () => journal?.listConflicts?.() || Promise.resolve([]),
+      resolve: (id, resolution) => journal?.resolveConflict?.(id, resolution),
+    };
   }
 
   async addCollections(collections) {
@@ -111,6 +135,7 @@ class CtoxRxDatabase {
       });
       this.collections[name] = collection;
       this[name] = collection;
+      await collection.storageCollection.initializeRecovery?.();
     }
     return this.collections;
   }
@@ -124,8 +149,25 @@ class CtoxRxDatabase {
   }
 
   async close() {
+    for (const collection of Object.values(this.collections)) {
+      collection.storageCollection?.close?.();
+    }
     this.storage.close();
   }
+}
+
+function emptyRecoveryStatus(databaseName) {
+  return {
+    schema: 'ctox.browser-recovery.status.v2',
+    databaseName,
+    pendingBatches: 0,
+    pendingWrites: 0,
+    pendingBytes: 0,
+    oldestPendingAtMs: 0,
+    unresolvedConflicts: 0,
+    lastExportAtMs: 0,
+    updatedAtMs: Date.now(),
+  };
 }
 
 class CtoxRxCollection {

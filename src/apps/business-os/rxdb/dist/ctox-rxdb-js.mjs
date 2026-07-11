@@ -49,6 +49,7 @@ var CTOX_PRESENCE_RPC = Object.freeze({
   maxEntriesPerPeer: 32
 });
 var CTOX_COMMAND_LIFECYCLE_CAPABILITY = "ctox-command-lifecycle-v2";
+var CTOX_CHECKPOINT_GENERATION_CAPABILITY = "ctox-checkpoint-generation-v2";
 
 // src/apps/business-os/rxdb/src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
@@ -96,7 +97,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   business_module_releases: "8d9ff79eec5eccc04353a885002a8982deb169dbbf3a348998b88fafb7e219f7",
   business_module_reports: "440b04e33e1040e556c62741d7c4289422b6d0d01203c74e5aee391d5f050ed1",
   business_module_source_files: "fa9cdeda3530f04bd84b926cb8ffae650c8f5886efac079daee0d01315737551",
-  business_users: "da6d1a192bc21ad59baf2680d8b80faa471a4883457a8d0ad5a533a1afefba42",
+  business_users: "e735ef56eaa56c6661ac40b2549d4172a4654fb9d7f3aadc638b3a99bc71293f",
   business_workspace_branding: "a53d4f3e84454928bfeb239c22820b305cec6c657bb6d7340f68594f20baae22",
   calendar_availability_rules: "be220a21b86c15d22627f8685e0a90849a485baaa2b07b7133364107ffde661a",
   calendar_booking_holds: "1add78cb8f30596fd320eafcd798f54e06cd09451097398d87f56b6dcea6bde4",
@@ -361,7 +362,9 @@ function buildProtocolPayload({
   // representative collection's checkpoint is not valid for sibling
   // collections when the room reconnects, especially for file chunk stores
   // where stale checkpoint epochs are a data-corruption signal.
-  collectionCheckpoints = null
+  collectionCheckpoints = null,
+  storageGeneration = null,
+  nativeTimeMs = null
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   const peerSession = {
@@ -388,6 +391,8 @@ function buildProtocolPayload({
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
+    storageGeneration: typeof storageGeneration === "string" && storageGeneration.trim() ? storageGeneration.trim() : null,
+    nativeTimeMs: Number.isFinite(nativeTimeMs) ? Math.trunc(nativeTimeMs) : null,
     peerSession,
     capabilities: Array.from(/* @__PURE__ */ new Set([
       ...CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
@@ -691,6 +696,32 @@ function normalizeConflictStrategy(value) {
 // src/apps/business-os/rxdb/src/hybrid-logical-clock.mjs
 var HLC_NODE_STORAGE_KEY = "ctox.businessOs.hlcNodeId.v1";
 var cachedNodeId = null;
+var nativeClockOffsetMs = 0;
+var nativeClockObservedAtMs = null;
+var clockSkewDetected = false;
+var CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1e3;
+function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
+  nativeClockOffsetMs = Math.trunc(nativeTimeMs) - Math.trunc(observedAtMs);
+  nativeClockObservedAtMs = Math.trunc(observedAtMs);
+  clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
+  return hybridLogicalClockStatus();
+}
+function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {
+  return Math.max(0, Math.trunc(Number(nowMs) || 0) + nativeClockOffsetMs);
+}
+function hybridLogicalClockStatus() {
+  return {
+    code: clockSkewDetected ? "clock_skew_detected" : null,
+    clockSkewDetected,
+    nativeClockOffsetMs,
+    nativeClockObservedAtMs
+  };
+}
+function isFutureHybridLogicalClock(value, nowMs = correctedHybridLogicalClockNowMs()) {
+  const parsed = parseHybridLogicalClock(value);
+  return Boolean(parsed && parsed.physicalMs > nowMs + CLOCK_SKEW_LIMIT_MS);
+}
 function hybridLogicalClockNodeId() {
   if (cachedNodeId) return cachedNodeId;
   try {
@@ -709,11 +740,11 @@ function hybridLogicalClockNodeId() {
   return generated;
 }
 function nextHybridLogicalClock(previous, {
-  nowMs = Date.now(),
+  nowMs = null,
   nodeId = hybridLogicalClockNodeId()
 } = {}) {
   const prior = parseHybridLogicalClock(previous);
-  const wall = Math.max(0, Math.floor(Number(nowMs) || 0));
+  const wall = nowMs === null || nowMs === void 0 ? correctedHybridLogicalClockNowMs() : Math.max(0, Math.floor(Number(nowMs) || 0));
   const physicalMs = Math.max(wall, prior?.physicalMs || 0);
   const logical = prior && physicalMs === prior.physicalMs ? prior.logical + 1 : 0;
   return formatHybridLogicalClock({ physicalMs, logical, nodeId });
@@ -743,6 +774,1194 @@ function sanitizeNodeId(value) {
   return String(value || "unknown").toLowerCase().replace(/[^0-9a-z_-]/g, "").slice(0, 48) || "unknown";
 }
 
+// src/apps/business-os/rxdb/src/recovery-crypto.mjs
+var RECOVERY_EXPORT_SCHEMA = "ctox.browser-recovery.v2";
+var RECOVERY_CRYPTO_SCHEMA = "ctox.browser-recovery.crypto.v1";
+var PBKDF2_ITERATIONS = 6e5;
+async function encryptRecoveryArtifact(value, passphrase) {
+  requirePassphrase(passphrase);
+  const subtle = requireSubtle();
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveRecoveryKey(subtle, passphrase, salt, ["encrypt"]);
+  const plaintext = new TextEncoder().encode(JSON.stringify(value));
+  const ciphertext = await subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return {
+    schema: RECOVERY_CRYPTO_SCHEMA,
+    contentSchema: RECOVERY_EXPORT_SCHEMA,
+    kdf: { name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, saltBase64: bytesToBase64(salt) },
+    cipher: { name: "AES-GCM", ivBase64: bytesToBase64(iv) },
+    ciphertextBase64: bytesToBase64(new Uint8Array(ciphertext))
+  };
+}
+async function decryptRecoveryArtifact(envelope, passphrase) {
+  requirePassphrase(passphrase);
+  if (envelope?.schema !== RECOVERY_CRYPTO_SCHEMA) {
+    throw recoveryCryptoError("recovery_integrity_failed", "Unsupported recovery encryption envelope.");
+  }
+  try {
+    const subtle = requireSubtle();
+    const salt = base64ToBytes(envelope.kdf?.saltBase64 || "");
+    const iv = base64ToBytes(envelope.cipher?.ivBase64 || "");
+    const ciphertext = base64ToBytes(envelope.ciphertextBase64 || "");
+    const iterations = Number(envelope.kdf?.iterations || 0);
+    if (envelope.kdf?.name !== "PBKDF2" || envelope.kdf?.hash !== "SHA-256" || envelope.cipher?.name !== "AES-GCM" || iterations < 1e5 || salt.byteLength !== 16 || iv.byteLength !== 12 || ciphertext.byteLength === 0) {
+      throw new Error("invalid recovery encryption parameters");
+    }
+    const key = await deriveRecoveryKey(subtle, passphrase, salt, ["decrypt"], iterations);
+    const plaintext = await subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+    if (parsed?.schema !== RECOVERY_EXPORT_SCHEMA) throw new Error("unexpected recovery content schema");
+    return parsed;
+  } catch (cause) {
+    throw recoveryCryptoError("recovery_integrity_failed", "Recovery export could not be decrypted or failed integrity validation.", cause);
+  }
+}
+async function sha256Json(value) {
+  const bytes = new TextEncoder().encode(canonicalJson2(value));
+  const digest = await requireSubtle().digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function canonicalJson2(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+async function deriveRecoveryKey(subtle, passphrase, salt, usages, iterations = PBKDF2_ITERATIONS) {
+  const base = await subtle.importKey(
+    "raw",
+    new TextEncoder().encode(String(passphrase)),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return subtle.deriveKey(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    usages
+  );
+}
+function requireSubtle() {
+  if (!globalThis.crypto?.subtle) throw recoveryCryptoError("recovery_integrity_failed", "WebCrypto is required for recovery export encryption.");
+  return globalThis.crypto.subtle;
+}
+function requirePassphrase(passphrase) {
+  if (String(passphrase || "").length < 8) {
+    throw recoveryCryptoError("recovery_integrity_failed", "Recovery export passphrase must contain at least eight characters.");
+  }
+}
+function randomBytes(length) {
+  const bytes = new Uint8Array(length);
+  globalThis.crypto.getRandomValues(bytes);
+  return bytes;
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary);
+}
+function base64ToBytes(value) {
+  const binary = globalThis.atob(String(value || ""));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+function recoveryCryptoError(code, message, cause = null) {
+  const error = new Error(message, cause ? { cause } : void 0);
+  error.code = code;
+  error.retryable = false;
+  return error;
+}
+var recoveryCryptoTestInternals = Object.freeze({
+  RECOVERY_EXPORT_SCHEMA,
+  RECOVERY_CRYPTO_SCHEMA,
+  PBKDF2_ITERATIONS,
+  canonicalJson: canonicalJson2
+});
+
+// src/apps/business-os/rxdb/src/recovery-journal.mjs
+var JOURNAL_VERSION = 2;
+var BATCH_STORE = "batches";
+var CONFLICT_STORE = "conflicts";
+var META_STORE = "meta";
+var ACKED_RETENTION_MS = 24 * 60 * 60 * 1e3;
+var previews = /* @__PURE__ */ new Map();
+async function openRecoveryJournal({ databaseName, instanceId = databaseName, quotaCoordinator = null } = {}) {
+  if (!databaseName) throw new TypeError("Recovery journal requires databaseName");
+  const db = await openJournalDatabase(`${databaseName}__recovery_v2`);
+  return new CtoxRecoveryJournal(db, { databaseName, instanceId, quotaCoordinator });
+}
+var CtoxRecoveryJournal = class {
+  constructor(db, { databaseName, instanceId, quotaCoordinator }) {
+    this.db = db;
+    this.databaseName = databaseName;
+    this.instanceId = instanceId;
+    this.quotaCoordinator = quotaCoordinator;
+    this.replayers = /* @__PURE__ */ new Map();
+  }
+  registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null } = {}) {
+    if (!collection || typeof applyBatch !== "function") return;
+    this.replayers.set(collection, { schemaHash: schemaHash2, applyBatch, resolveConflict });
+  }
+  async appendBatch({ collection, schemaHash: schemaHash2 = "", primaryPath = "id", operation = "write", rows = [], baseById = null }) {
+    const normalizedRows = structuredCloneSafe2(rows);
+    const batch = {
+      batchId: globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      sequence: 0,
+      schema: "ctox.indexeddb.recovery-journal.v2",
+      databaseName: this.databaseName,
+      instanceId: this.instanceId,
+      collection,
+      schemaHash: schemaHash2,
+      primaryPath,
+      operation,
+      rows: normalizedRows,
+      baseById: structuredCloneSafe2(baseById),
+      documentIds: normalizedRows.map((row) => documentId(row?.document || row, primaryPath)).filter(Boolean),
+      committedDocs: {},
+      ackedIds: [],
+      payloadHash: await sha256Json({ collection, schemaHash: schemaHash2, primaryPath, operation, rows: normalizedRows, baseById }),
+      state: "pending",
+      createdAtMs: Date.now(),
+      primaryCommittedAtMs: 0,
+      masterAckedAtMs: 0
+    };
+    await this.withQuotaRecovery(() => putSequencedBatch(this.db, batch));
+    await this.publishStatus();
+    return batch.batchId;
+  }
+  async commitBatch(batchId, success = {}) {
+    await updateRecord(this.db, BATCH_STORE, batchId, (batch) => ({
+      ...batch,
+      committedDocs: structuredCloneSafe2(success),
+      primaryCommittedAtMs: Date.now()
+    }));
+    await this.publishStatus();
+  }
+  async markMasterAcknowledged(collection, documents = {}) {
+    const batches = await this.listBatches("pending");
+    for (const batch of batches) {
+      if (batch.collection !== collection) continue;
+      const acked = new Set(batch.ackedIds || []);
+      for (const id of batch.documentIds || []) {
+        const master = documents[id];
+        const local = batch.committedDocs?.[id];
+        if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
+      }
+      const complete = (batch.documentIds || []).every((id) => acked.has(id));
+      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
+        ...current,
+        ackedIds: [...acked],
+        state: complete ? "master_acked" : "pending",
+        masterAckedAtMs: complete ? Date.now() : 0
+      }));
+    }
+    await this.gc();
+    await this.publishStatus();
+  }
+  async replayRegisteredCollections() {
+    const batches = await this.listBatches("pending");
+    const outcomes = [];
+    for (const batch of batches) {
+      const replayer = this.replayers.get(batch.collection);
+      if (!replayer) continue;
+      if (batch.schemaHash && replayer.schemaHash && batch.schemaHash !== replayer.schemaHash) {
+        await this.recordConflict({
+          code: "recovery_schema_mismatch",
+          collection: batch.collection,
+          batchId: batch.batchId,
+          base: batch.baseById,
+          local: batch.rows,
+          master: null
+        });
+        await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
+          ...current,
+          state: "conflict",
+          conflictAtMs: Date.now()
+        }));
+        outcomes.push({ batchId: batch.batchId, status: "conflict" });
+        continue;
+      }
+      try {
+        const result = await replayer.applyBatch(batch);
+        await this.commitBatch(batch.batchId, result?.success || {});
+        outcomes.push({ batchId: batch.batchId, status: "replayed" });
+      } catch (error) {
+        await this.recordConflict({
+          code: error?.code || "recovery_replay_failed",
+          collection: batch.collection,
+          batchId: batch.batchId,
+          base: batch.baseById,
+          local: batch.rows,
+          master: null,
+          message: error?.message || String(error)
+        });
+        await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
+          ...current,
+          state: "conflict",
+          conflictAtMs: Date.now()
+        }));
+        outcomes.push({ batchId: batch.batchId, status: "conflict" });
+      }
+    }
+    await this.publishStatus();
+    return outcomes;
+  }
+  async recordConflict(conflict = {}) {
+    const record = {
+      conflictId: conflict.conflictId || globalThis.crypto?.randomUUID?.() || `conflict-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      schema: "ctox.indexeddb.recovery-conflict.v1",
+      databaseName: this.databaseName,
+      instanceId: this.instanceId,
+      state: "pending",
+      createdAtMs: Date.now(),
+      ...structuredCloneSafe2(conflict)
+    };
+    await this.withQuotaRecovery(() => putRecord(this.db, CONFLICT_STORE, record));
+    await this.publishStatus();
+    return record;
+  }
+  async listConflicts() {
+    return getAllRecords(this.db, CONFLICT_STORE).then((rows) => rows.filter((row) => row.state === "pending"));
+  }
+  async resolveConflict(conflictId, resolution) {
+    if (!["keep_local", "keep_master", "restore_as_copy"].includes(resolution)) {
+      throw recoveryError("structured_conflict_requires_resolution", `Unsupported conflict resolution ${resolution}`);
+    }
+    const conflict = await getRecord(this.db, CONFLICT_STORE, conflictId);
+    if (!conflict) return false;
+    if (conflict.conflictType === "delete_vs_update" && resolution === "keep_local") {
+      throw recoveryError(
+        "structured_conflict_requires_resolution",
+        "A native tombstone is authoritative. Restore the local version as a copy instead."
+      );
+    }
+    const replayer = this.replayers.get(conflict.collection);
+    if ((resolution === "keep_local" || resolution === "restore_as_copy") && !replayer) {
+      throw recoveryError("structured_conflict_requires_resolution", `Collection ${conflict.collection} is not registered.`);
+    }
+    if (resolution === "keep_local") {
+      const rows = normalizeConflictRows(conflict.local);
+      await (replayer.resolveConflict || replayer.applyBatch)({
+        operation: "write",
+        rows,
+        baseById: conflictBaseById(conflict, rows)
+      });
+    } else if (resolution === "restore_as_copy") {
+      const rows = normalizeConflictRows(conflict.local).map((row) => restoreAsCopy(row?.document || row));
+      await (replayer.resolveConflict || replayer.applyBatch)({ operation: "write", rows, baseById: null });
+    }
+    await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
+      ...current,
+      state: "resolved",
+      resolution,
+      resolvedAtMs: Date.now()
+    }));
+    await this.publishStatus();
+    return true;
+  }
+  async getStatus() {
+    const batches = await this.listBatches("pending");
+    const conflicts = await this.listConflicts();
+    const bytes = estimateBytes(batches) + estimateBytes(conflicts);
+    return {
+      schema: "ctox.browser-recovery.status.v2",
+      databaseName: this.databaseName,
+      instanceId: this.instanceId,
+      pendingBatches: batches.length,
+      pendingWrites: batches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingBytes: bytes,
+      oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER ? 0 : batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER),
+      unresolvedConflicts: conflicts.length,
+      lastExportAtMs: Number((await getRecord(this.db, META_STORE, "lastExport"))?.value || 0),
+      updatedAtMs: Date.now()
+    };
+  }
+  async export(passphrase) {
+    const pendingBatches = await this.listBatches("pending");
+    const conflicts = await this.listConflicts();
+    const content = {
+      schema: "ctox.browser-recovery.v2",
+      databaseName: this.databaseName,
+      instanceId: this.instanceId,
+      createdAtMs: Date.now(),
+      pendingBatches,
+      conflicts
+    };
+    content.contentHash = await sha256Json(content);
+    const encrypted = await encryptRecoveryArtifact(content, passphrase);
+    const text = JSON.stringify(encrypted, null, 2);
+    await putRecord(this.db, META_STORE, { key: "lastExport", value: Date.now() });
+    await this.publishStatus();
+    return {
+      filename: `ctox-recovery-${this.instanceId}-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.ctox-recovery`,
+      blob: new Blob([text], { type: "application/vnd.ctox.recovery+json" }),
+      pendingWrites: content.pendingBatches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0)
+    };
+  }
+  async previewImport(file, passphrase) {
+    const text = typeof file === "string" ? file : await file.text();
+    const content = await decryptRecoveryArtifact(JSON.parse(text), passphrase);
+    const expectedHash = content.contentHash;
+    const hashInput = { ...content };
+    delete hashInput.contentHash;
+    if (!expectedHash || await sha256Json(hashInput) !== expectedHash) {
+      throw recoveryError("recovery_integrity_failed", "Recovery content hash does not match.");
+    }
+    if (content.instanceId !== this.instanceId || content.databaseName !== this.databaseName) {
+      throw recoveryError("recovery_instance_mismatch", "Recovery export belongs to a different CTOX instance or database.");
+    }
+    const previewId = globalThis.crypto?.randomUUID?.() || `preview-${Date.now()}`;
+    const schemaMismatches = (content.pendingBatches || []).filter((batch) => {
+      const replayer = this.replayers.get(batch.collection);
+      return Boolean(batch.schemaHash && replayer?.schemaHash && batch.schemaHash !== replayer.schemaHash);
+    }).map((batch) => ({
+      batchId: batch.batchId,
+      collection: batch.collection,
+      artifactSchemaHash: batch.schemaHash,
+      localSchemaHash: this.replayers.get(batch.collection)?.schemaHash || null
+    }));
+    previews.set(previewId, { journal: this, content, expiresAtMs: Date.now() + 10 * 60 * 1e3 });
+    return {
+      previewId,
+      pendingBatches: content.pendingBatches?.length || 0,
+      pendingWrites: (content.pendingBatches || []).reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      conflicts: content.conflicts?.length || 0,
+      schemaMismatches,
+      createdAtMs: content.createdAtMs
+    };
+  }
+  async applyImport(previewId) {
+    const preview = previews.get(previewId);
+    if (!preview || preview.journal !== this || preview.expiresAtMs < Date.now()) {
+      throw recoveryError("recovery_integrity_failed", "Recovery import preview is missing or expired.");
+    }
+    previews.delete(previewId);
+    for (const batch of preview.content.pendingBatches || []) {
+      const existing = await getRecord(this.db, BATCH_STORE, batch.batchId);
+      if (!existing) await putRecord(this.db, BATCH_STORE, { ...batch, state: "pending" });
+    }
+    for (const conflict of preview.content.conflicts || []) {
+      const existing = await getRecord(this.db, CONFLICT_STORE, conflict.conflictId);
+      if (!existing) await putRecord(this.db, CONFLICT_STORE, { ...conflict, state: "pending" });
+    }
+    const replay = await this.replayRegisteredCollections();
+    await this.publishStatus();
+    return { imported: true, replay };
+  }
+  async listBatches(state = null) {
+    const rows = (await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    return state ? rows.filter((row) => row.state === state) : rows;
+  }
+  async gc(now = Date.now()) {
+    const rows = await this.listBatches("master_acked");
+    for (const row of rows) {
+      if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
+        await deleteRecord(this.db, BATCH_STORE, row.batchId);
+      }
+    }
+  }
+  async publishStatus() {
+    try {
+      const status = await this.getStatus();
+      globalThis.dispatchEvent?.(new CustomEvent("ctox-indexeddb-recovery-status", { detail: status }));
+      globalThis.localStorage?.setItem?.(
+        `ctox.businessOs.recoveryStatus.${this.databaseName}`,
+        JSON.stringify(status)
+      );
+    } catch {
+    }
+  }
+  async withQuotaRecovery(operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isQuotaExceeded(error) || !this.quotaCoordinator?.recover) {
+        if (isQuotaExceeded(error)) throw recoveryError("indexeddb_journal_unavailable", "Recovery journal is out of storage space.", error);
+        throw error;
+      }
+      await this.quotaCoordinator.recover({ source: "recovery-journal" });
+      try {
+        return await operation();
+      } catch (retryError) {
+        throw recoveryError("indexeddb_journal_unavailable", "Recovery journal could not commit after quota recovery.", retryError);
+      }
+    }
+  }
+  close() {
+    this.db.close();
+  }
+};
+function openJournalDatabase(name) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, JOURNAL_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(BATCH_STORE)) db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
+      if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: "conflictId" });
+      if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    request.onerror = () => reject(request.error || new Error(`Failed to open recovery journal ${name}`));
+    request.onblocked = () => reject(recoveryError("indexeddb_journal_unavailable", `Recovery journal ${name} is blocked.`));
+  });
+}
+function transact(db, storeName, mode, run) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, mode);
+    const store = tx.objectStore(storeName);
+    let result;
+    try {
+      Promise.resolve(run(store)).then((value) => {
+        result = value;
+      }, (error) => {
+        try {
+          tx.abort();
+        } catch {
+        }
+        reject(error);
+      });
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      reject(error);
+    }
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error || new Error(`IndexedDB ${storeName} transaction failed`));
+    tx.onabort = () => reject(tx.error || new Error(`IndexedDB ${storeName} transaction aborted`));
+  });
+}
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
+  });
+}
+function putRecord(db, storeName, value) {
+  return transact(db, storeName, "readwrite", (store) => requestResult(store.put(value)));
+}
+function putSequencedBatch(db, batch) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([META_STORE, BATCH_STORE], "readwrite");
+    const meta = tx.objectStore(META_STORE);
+    const batches = tx.objectStore(BATCH_STORE);
+    const request = meta.get("journalSequence");
+    let sequence = 0;
+    request.onsuccess = () => {
+      sequence = Math.max(0, Number(request.result?.value || 0)) + 1;
+      batch.sequence = sequence;
+      meta.put({ key: "journalSequence", value: sequence });
+      batches.put(batch);
+    };
+    request.onerror = () => {
+      try {
+        tx.abort();
+      } catch {
+      }
+      reject(request.error || new Error("Failed to allocate recovery journal sequence"));
+    };
+    tx.oncomplete = () => resolve(sequence);
+    tx.onerror = () => reject(tx.error || new Error("Recovery journal batch transaction failed"));
+    tx.onabort = () => reject(tx.error || new Error("Recovery journal batch transaction aborted"));
+  });
+}
+function getRecord(db, storeName, key) {
+  return transact(db, storeName, "readonly", (store) => requestResult(store.get(key)));
+}
+function getAllRecords(db, storeName) {
+  return transact(db, storeName, "readonly", (store) => requestResult(store.getAll()));
+}
+function deleteRecord(db, storeName, key) {
+  return transact(db, storeName, "readwrite", (store) => requestResult(store.delete(key)));
+}
+async function updateRecord(db, storeName, key, update) {
+  return transact(db, storeName, "readwrite", async (store) => {
+    const current = await requestResult(store.get(key));
+    if (!current) return false;
+    await requestResult(store.put(update(current)));
+    return true;
+  });
+}
+function documentId(doc = {}, primaryPath = "id") {
+  return String(valueAtPath(doc, primaryPath) || doc.id || doc._id || doc.key || doc.uuid || "");
+}
+function valueAtPath(value, path) {
+  return String(path || "").split(".").filter(Boolean).reduce((current, segment) => current?.[segment], value);
+}
+function masterAcknowledgesLocal(master, local, collection = "") {
+  const masterHlc = String(master?._meta?.ctoxHlc || "");
+  const localHlc = String(local?._meta?.ctoxHlc || "");
+  if (collection === "business_commands" && serverAcknowledgesCommand(master, local)) return true;
+  if (masterHlc && localHlc) return masterHlc === localHlc;
+  return comparableDocument(master) === comparableDocument(local);
+}
+function serverAcknowledgesCommand(master, local) {
+  const terminalOrAccepted = /* @__PURE__ */ new Set([
+    "accepted",
+    "completed",
+    "failed",
+    "rejected",
+    "cancelled",
+    "canceled",
+    "blocked"
+  ]);
+  if (!terminalOrAccepted.has(String(master?.status || "").toLowerCase())) return false;
+  return String(master?.id || "") === String(local?.id || "") && String(master?.command_id || "") === String(local?.command_id || "") && String(master?.command_type || "") === String(local?.command_type || "") && String(master?.module || "") === String(local?.module || "") && isJsonSubset(local?.payload ?? null, master?.payload ?? null);
+}
+function isJsonSubset(expected, actual) {
+  if (Object.is(expected, actual)) return true;
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual) && expected.length === actual.length && expected.every((value, index) => isJsonSubset(value, actual[index]));
+  }
+  if (!expected || typeof expected !== "object" || !actual || typeof actual !== "object") return false;
+  return Object.entries(expected).every(([key, value]) => Object.prototype.hasOwnProperty.call(actual, key) && isJsonSubset(value, actual[key]));
+}
+function comparableDocument(doc) {
+  const copy = structuredCloneSafe2(doc) || {};
+  if (copy._meta) delete copy._meta.ctoxReplicationOrigin;
+  return JSON.stringify(copy);
+}
+function normalizeConflictRows(value) {
+  return Array.isArray(value) ? value : value ? [value] : [];
+}
+function conflictBaseById(conflict, rows) {
+  if (!conflict?.base) return null;
+  const baseById = {};
+  for (const row of rows) {
+    const id = documentId(row?.document || row, conflict.primaryPath || "id");
+    if (id) baseById[id] = structuredCloneSafe2(conflict.base);
+  }
+  return Object.keys(baseById).length ? baseById : null;
+}
+function restoreAsCopy(doc) {
+  const copy = structuredCloneSafe2(doc) || {};
+  const id = documentId(copy);
+  copy.id = `${id || "recovered"}-recovered-${Date.now().toString(36)}`;
+  delete copy._rev;
+  if (copy._meta) delete copy._meta.ctoxReplicationOrigin;
+  return copy;
+}
+function estimateBytes(value) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return 0;
+  }
+}
+function structuredCloneSafe2(value) {
+  if (value == null) return value;
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+function isQuotaExceeded(error) {
+  return error?.name === "QuotaExceededError" || String(error?.message || "").toLowerCase().includes("quota");
+}
+function recoveryError(code, message, cause = null) {
+  const error = new Error(message, cause ? { cause } : void 0);
+  error.code = code;
+  error.retryable = code === "indexeddb_journal_unavailable";
+  return error;
+}
+var recoveryJournalTestInternals = Object.freeze({
+  BATCH_STORE,
+  CONFLICT_STORE,
+  META_STORE,
+  ACKED_RETENTION_MS,
+  masterAcknowledgesLocal
+});
+
+// src/apps/business-os/rxdb/src/query-meta-backend-memory.mjs
+function createMemoryMetaBackend() {
+  const queryWindows = /* @__PURE__ */ new Map();
+  const queryWindowRefsByDocument = /* @__PURE__ */ new Map();
+  const queryWindowRefsByWindow = /* @__PURE__ */ new Map();
+  const documentAccess = /* @__PURE__ */ new Map();
+  const cacheStats = /* @__PURE__ */ new Map();
+  return {
+    name: "memory",
+    async putQueryWindow(record) {
+      const key = queryWindowKey(record);
+      queryWindows.set(key, { ...record });
+    },
+    async getQueryWindow(key) {
+      const entry = queryWindows.get(stringKey(key));
+      return entry ? { ...entry } : null;
+    },
+    async deleteQueryWindow(key) {
+      const normalizedKey = stringKey(key);
+      queryWindows.delete(normalizedKey);
+      deleteQueryWindowRefs2(normalizedKey);
+    },
+    async scanQueryWindows() {
+      return Array.from(queryWindows.values(), (record) => ({ ...record }));
+    },
+    async replaceQueryWindowDocumentRefs(record) {
+      const windowKey = queryWindowKey(record);
+      deleteQueryWindowRefs2(windowKey);
+      const documentKeys = /* @__PURE__ */ new Set();
+      for (const id of normalizeDocumentIds(record.documentIds)) {
+        const documentKey = `${record.collection}|${id}`;
+        documentKeys.add(documentKey);
+        const refs = queryWindowRefsByDocument.get(documentKey) || /* @__PURE__ */ new Set();
+        refs.add(windowKey);
+        queryWindowRefsByDocument.set(documentKey, refs);
+      }
+      queryWindowRefsByWindow.set(windowKey, documentKeys);
+    },
+    async getQueryWindowKeysByDocumentIds(collection, ids) {
+      const keys = /* @__PURE__ */ new Set();
+      for (const id of normalizeDocumentIds(ids)) {
+        const refs = queryWindowRefsByDocument.get(`${collection}|${id}`);
+        if (!refs) continue;
+        for (const key of refs) keys.add(key);
+      }
+      return Array.from(keys);
+    },
+    async putDocumentAccess(record) {
+      documentAccess.set(documentAccessKey(record), { ...record });
+    },
+    async getDocumentAccess(collection, id) {
+      const entry = documentAccess.get(`${collection}|${id}`);
+      return entry ? { ...entry } : null;
+    },
+    async deleteDocumentAccess(collection, id) {
+      documentAccess.delete(`${collection}|${id}`);
+    },
+    async scanDocumentAccess() {
+      return Array.from(documentAccess.values(), (record) => ({ ...record }));
+    },
+    async putCacheStats(record) {
+      cacheStats.set(record.databaseName, { ...record });
+    },
+    async getCacheStats(databaseName) {
+      const entry = cacheStats.get(databaseName);
+      return entry ? { ...entry } : null;
+    },
+    async clear() {
+      queryWindows.clear();
+      queryWindowRefsByDocument.clear();
+      queryWindowRefsByWindow.clear();
+      documentAccess.clear();
+      cacheStats.clear();
+    },
+    async close() {
+    }
+  };
+  function deleteQueryWindowRefs2(windowKey) {
+    const documentKeys = queryWindowRefsByWindow.get(windowKey);
+    if (!documentKeys) return;
+    for (const documentKey of documentKeys) {
+      const refs = queryWindowRefsByDocument.get(documentKey);
+      if (!refs) continue;
+      refs.delete(windowKey);
+      if (!refs.size) queryWindowRefsByDocument.delete(documentKey);
+    }
+    queryWindowRefsByWindow.delete(windowKey);
+  }
+}
+function queryWindowKey(record) {
+  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+}
+function documentAccessKey(record) {
+  return `${record.collection}|${record.id}`;
+}
+function stringKey(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+function normalizeDocumentIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
+}
+
+// src/apps/business-os/rxdb/src/query-meta-storage.mjs
+var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
+var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
+var PIN_RECENT_READ = "recently-read";
+var evictionSchedulerGroups = /* @__PURE__ */ new Map();
+var QueryMetaStorage = class {
+  constructor(backend, {
+    databaseName,
+    schedulerKey = databaseName,
+    clock = Date.now,
+    primaryDelete = null
+  } = {}) {
+    if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
+    if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
+    this.backend = backend;
+    this.databaseName = databaseName;
+    this.schedulerKey = schedulerKey;
+    this.clock = clock;
+    this.primaryDelete = typeof primaryDelete === "function" ? primaryDelete : null;
+  }
+  setPrimaryDelete(fn) {
+    this.primaryDelete = typeof fn === "function" ? fn : null;
+  }
+  async getQueryWindow(key) {
+    const record = await this.backend.getQueryWindow(stringKey2(key));
+    if (!record) return null;
+    record.lastAccessedAt = this.clock();
+    await this.backend.putQueryWindow(record);
+    return record;
+  }
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, queryShape = null }) {
+    const now = this.clock();
+    const existing = await this.backend.getQueryWindow(
+      [collection, queryFingerprint2, offset, limit].join("|")
+    );
+    const record = {
+      collection,
+      queryFingerprint: queryFingerprint2,
+      offset,
+      limit,
+      documentIds: [...documentIds],
+      complete: Boolean(complete),
+      // Sticky marker: once a window has been complete, its member documents
+      // exist in the primary store (and replication keeps them fresh). The
+      // demand loader serves such windows local-first while it revalidates
+      // in the background, and the reconnect-abort path must NOT tombstone
+      // their members as partial orphans.
+      everCompleted: Boolean(complete) || Boolean(existing?.everCompleted),
+      authoritativeRevision: authoritativeRevision ?? null,
+      queryShape: queryShape && typeof queryShape === "object" ? structuredCloneSafe3(queryShape) : null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastAccessedAt: now
+    };
+    await this.backend.putQueryWindow(record);
+    await this.backend.replaceQueryWindowDocumentRefs?.(record);
+    return record;
+  }
+  async invalidateQueryWindow(key) {
+    const stringified = stringKey2(key);
+    const existing = await this.backend.getQueryWindow(stringified);
+    if (!existing) return;
+    existing.everCompleted = Boolean(existing.everCompleted) || Boolean(existing.complete);
+    existing.complete = false;
+    existing.updatedAt = this.clock();
+    await this.backend.putQueryWindow(existing);
+  }
+  async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
+    const now = this.clock();
+    const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (!normalizedIds.length) return;
+    const perDocumentBytes = normalizeEstimatedBytes(estimatedBytes);
+    let deltaBytes = 0;
+    for (const id of normalizedIds) {
+      const previous = await this.backend.getDocumentAccess(collection, id) || {};
+      const nextEstimatedBytes = perDocumentBytes || previous.estimatedBytes || 0;
+      deltaBytes += nextEstimatedBytes - (previous.estimatedBytes || 0);
+      await this.backend.putDocumentAccess({
+        collection,
+        id,
+        lastAccessedAt: now,
+        pinReason: previous.dirty ? "dirty" : pinReason,
+        dirty: Boolean(previous.dirty),
+        estimatedBytes: nextEstimatedBytes
+      });
+    }
+    if (deltaBytes !== 0) {
+      const stats = await this.getCacheStats();
+      stats.estimatedBytes = Math.max(0, (stats.estimatedBytes || 0) + deltaBytes);
+      await this.backend.putCacheStats(stats);
+    }
+  }
+  async markDirty(collection, id, dirty) {
+    const previous = await this.backend.getDocumentAccess(collection, id) || {
+      collection,
+      id,
+      lastAccessedAt: this.clock(),
+      estimatedBytes: 0
+    };
+    await this.backend.putDocumentAccess({
+      ...previous,
+      dirty: Boolean(dirty),
+      pinReason: dirty ? "dirty" : previous.pinReason ?? null
+    });
+  }
+  async getDocumentAccess(collection, id) {
+    const record = await this.backend.getDocumentAccess(collection, id);
+    return record ? { ...record } : null;
+  }
+  async evictDocuments(ids) {
+    const now = this.clock();
+    let removed = 0;
+    for (const { collection, id } of ids) {
+      const record = await this.backend.getDocumentAccess(collection, id);
+      if (!record) continue;
+      if (record.dirty) continue;
+      if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
+        continue;
+      }
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(collection, id);
+        } catch {
+          continue;
+        }
+      }
+      await this.backend.deleteDocumentAccess(collection, id);
+      removed += 1;
+    }
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
+    stats.estimatedBytes = await this.estimateWorkingSetBytes();
+    await this.backend.putCacheStats(stats);
+    return removed;
+  }
+  async estimateWorkingSetBytes() {
+    const docs = await this.backend.scanDocumentAccess();
+    return docs.reduce((sum, record) => sum + (record.estimatedBytes || 0), 0);
+  }
+  async setBudgetBytes(budgetBytes) {
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.budgetBytes = Number(budgetBytes) || 0;
+    await this.backend.putCacheStats(stats);
+  }
+  async getCacheStats() {
+    return await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+  }
+  async clear() {
+    await this.backend.clear();
+  }
+  async invalidateQueryWindowsForDocuments(collection, ids) {
+    const normalizedIds = normalizeDocumentIds2(ids);
+    if (!collection || !normalizedIds.length) return 0;
+    const windowKeys = typeof this.backend.getQueryWindowKeysByDocumentIds === "function" ? await this.backend.getQueryWindowKeysByDocumentIds(collection, normalizedIds) : await this.scanQueryWindowKeysForDocuments(collection, normalizedIds);
+    let invalidated = 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (const key of windowKeys) {
+      const stringified = stringKey2(key);
+      if (seen.has(stringified)) continue;
+      seen.add(stringified);
+      const window2 = await this.backend.getQueryWindow(stringified);
+      if (!window2 || window2.collection !== collection) continue;
+      await this.invalidateQueryWindow([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+  async invalidateQueryWindowsForChanges(collection, documents, primaryPath = "id") {
+    const changes = Array.isArray(documents) ? documents.filter(Boolean) : [];
+    if (!collection || !changes.length) return 0;
+    const all = await this.backend.scanQueryWindows();
+    let invalidated = 0;
+    for (const window2 of all) {
+      if (window2.collection !== collection) continue;
+      const members = new Set((window2.documentIds || []).map(String));
+      const simple = simpleEqualitySelector(window2.queryShape);
+      const affected = !simple || changes.some((document2) => {
+        const id = valueAtPath2(document2, primaryPath);
+        return members.has(String(id ?? "")) || matchesSimpleEquality(document2, simple);
+      });
+      if (!affected) continue;
+      await this.invalidateQueryWindow([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+  async scanQueryWindowKeysForDocuments(collection, ids) {
+    const idSet = new Set(ids);
+    const all = await this.backend.scanQueryWindows();
+    const keys = [];
+    for (const window2 of all) {
+      if (window2.collection !== collection) continue;
+      const documentIds = Array.isArray(window2.documentIds) ? window2.documentIds : [];
+      if (!documentIds.some((id) => idSet.has(String(id || "")))) continue;
+      keys.push([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+    }
+    return keys;
+  }
+  async close() {
+    await this.backend.close();
+  }
+  /// Evicts LRU document access entries until the working set fits the budget.
+  /// Skips dirty docs and unexpired recently-read pins. Returns the number of
+  /// document records removed.
+  async runEvictionIfOverBudget({ forceRecount = false } = {}) {
+    const stats = await this.getCacheStats();
+    if (!stats.budgetBytes) {
+      return 0;
+    }
+    if (!forceRecount && (stats.estimatedBytes || 0) <= stats.budgetBytes) {
+      return 0;
+    }
+    const all = await this.backend.scanDocumentAccess();
+    const workingSetBytes = sumEstimatedDocumentAccessBytes(all);
+    if (stats.estimatedBytes !== workingSetBytes) {
+      stats.estimatedBytes = workingSetBytes;
+      await this.backend.putCacheStats(stats);
+    }
+    if (workingSetBytes <= stats.budgetBytes) {
+      return 0;
+    }
+    const now = this.clock();
+    const candidates = all.filter((record) => !record.dirty).filter((record) => {
+      if (record.pinReason !== "recently-read") return true;
+      return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
+    }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+    let removed = 0;
+    let remainingBytes = workingSetBytes;
+    for (const candidate of candidates) {
+      if (remainingBytes <= stats.budgetBytes) break;
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(candidate.collection, candidate.id);
+        } catch {
+          continue;
+        }
+      }
+      await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
+      remainingBytes -= candidate.estimatedBytes || 0;
+      removed += 1;
+    }
+    if (removed > 0) {
+      const updated = { ...stats, estimatedBytes: remainingBytes, lastEvictionAt: now };
+      await this.backend.putCacheStats(updated);
+    }
+    return removed;
+  }
+  async recordEstimatedBytes(bytes) {
+    const stats = await this.getCacheStats();
+    stats.estimatedBytes = Math.max(0, Number(bytes) || 0);
+    await this.backend.putCacheStats(stats);
+  }
+  /// Wraps an IDB write attempt in a quota-recovery loop. On
+  /// `QuotaExceededError` we run eviction once and retry; on second failure
+  /// the error propagates. Use this from production paths that materialize
+  /// fetched chunks into the primary store.
+  async withQuotaRecovery(writeFn) {
+    try {
+      return await writeFn();
+    } catch (err) {
+      if (!isQuotaExceeded2(err)) throw err;
+      const stats = await this.getCacheStats();
+      const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
+      await this.setBudgetBytes(tighten);
+      await this.runEvictionIfOverBudget({ forceRecount: true });
+      try {
+        const result = await writeFn();
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        return result;
+      } catch (retryErr) {
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        throw retryErr;
+      }
+    }
+  }
+  /// Starts a periodic eviction scheduler. The handle returned has a
+  /// `stop()` method. Idempotent: calling twice with the same handle is
+  /// safe. Default interval: 30s.
+  startEvictionScheduler({
+    intervalMs = 3e4,
+    globalBudgetBytes = 0,
+    shareBudgetBytes = 0
+  } = {}) {
+    if (this._evictionSchedulerGroupKey) {
+      return { stop: () => this.stopEvictionScheduler() };
+    }
+    const key = String(this.schedulerKey || this.databaseName);
+    let group = evictionSchedulerGroups.get(key);
+    if (!group) {
+      group = {
+        storages: /* @__PURE__ */ new Set(),
+        timer: null,
+        intervalMs,
+        globalBudgetBytes: Math.max(0, Number(globalBudgetBytes) || 0)
+      };
+      evictionSchedulerGroups.set(key, group);
+    }
+    group.globalBudgetBytes = Math.max(
+      group.globalBudgetBytes,
+      Math.max(0, Number(globalBudgetBytes) || 0)
+    );
+    this._configuredShareBudgetBytes = Math.max(0, Number(shareBudgetBytes) || 0);
+    this._evictionSchedulerGroupKey = key;
+    group.storages.add(this);
+    rebalanceEvictionSchedulerGroup(group).catch(() => {
+    });
+    if (!group.timer) {
+      group.timer = setInterval(() => runEvictionSchedulerGroup(group), group.intervalMs);
+      if (typeof group.timer.unref === "function") group.timer.unref();
+    }
+    return { stop: () => this.stopEvictionScheduler() };
+  }
+  stopEvictionScheduler() {
+    const key = this._evictionSchedulerGroupKey;
+    if (!key) return;
+    this._evictionSchedulerGroupKey = null;
+    const group = evictionSchedulerGroups.get(key);
+    if (!group) return;
+    group.storages.delete(this);
+    if (group.storages.size === 0) {
+      if (group.timer) clearInterval(group.timer);
+      evictionSchedulerGroups.delete(key);
+      return;
+    }
+    rebalanceEvictionSchedulerGroup(group).catch(() => {
+    });
+  }
+  /// Orphan-window GC: drop sidecar query-window entries that haven't been
+  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
+  /// by other windows remain. This keeps the sidecar from growing monotonically
+  /// as one-off queries accumulate.
+  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
+    const now = this.clock();
+    const all = await this.backend.scanQueryWindows();
+    let removed = 0;
+    for (const window2 of all) {
+      const age = now - (window2.lastAccessedAt ?? window2.updatedAt ?? window2.createdAt ?? now);
+      if (age >= maxAgeMs) {
+        await this.backend.deleteQueryWindow([
+          window2.collection,
+          window2.queryFingerprint,
+          window2.offset,
+          window2.limit
+        ]);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+};
+function simpleEqualitySelector(queryShape) {
+  if (!queryShape || typeof queryShape !== "object") return null;
+  if (Array.isArray(queryShape.sort) && queryShape.sort.length > 0) return null;
+  const selector = queryShape.selector;
+  if (!selector || typeof selector !== "object" || Array.isArray(selector)) return null;
+  const entries = Object.entries(selector);
+  if (!entries.length) return null;
+  const equalities = [];
+  for (const [field, condition] of entries) {
+    if (!field || field.startsWith("$")) return null;
+    if (condition && typeof condition === "object") {
+      const keys = Object.keys(condition);
+      if (keys.length !== 1 || keys[0] !== "$eq") return null;
+      equalities.push([field, condition.$eq]);
+    } else {
+      equalities.push([field, condition]);
+    }
+  }
+  return equalities;
+}
+function matchesSimpleEquality(document2, equalities) {
+  if (!equalities || document2?._deleted) return false;
+  return equalities.every(([field, expected]) => Object.is(valueAtPath2(document2, field), expected));
+}
+function valueAtPath2(value, path) {
+  return String(path || "").split(".").filter(Boolean).reduce((current, segment) => current?.[segment], value);
+}
+function structuredCloneSafe3(value) {
+  try {
+    return globalThis.structuredClone?.(value) ?? JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+async function rebalanceEvictionSchedulerGroup(group) {
+  const storages = [...group.storages];
+  if (!storages.length) return;
+  const globalShare = group.globalBudgetBytes > 0 ? Math.max(1, Math.floor(group.globalBudgetBytes / storages.length)) : Number.POSITIVE_INFINITY;
+  await Promise.all(storages.map(async (storage) => {
+    const configured = storage._configuredShareBudgetBytes || globalShare;
+    const effective = Math.max(1, Math.floor(Math.min(configured, globalShare)));
+    await storage.setBudgetBytes(effective);
+  }));
+}
+async function runEvictionSchedulerGroup(group) {
+  await rebalanceEvictionSchedulerGroup(group);
+  await Promise.all(
+    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0))
+  );
+}
+async function recoverQueryMetaQuota(schedulerKey) {
+  const group = evictionSchedulerGroups.get(String(schedulerKey || ""));
+  if (!group?.storages?.size) return { evicted: 0, storages: 0 };
+  const storages = [...group.storages];
+  const previous = await Promise.all(storages.map((storage) => storage.getCacheStats()));
+  let evicted = 0;
+  try {
+    for (let index = 0; index < storages.length; index += 1) {
+      const storage = storages[index];
+      const stats = previous[index];
+      const tightened = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
+      await storage.setBudgetBytes(tightened);
+      evicted += await storage.runEvictionIfOverBudget({ forceRecount: true });
+    }
+  } finally {
+    await rebalanceEvictionSchedulerGroup(group);
+  }
+  return { evicted, storages: storages.length };
+}
+function normalizeEstimatedBytes(estimatedBytes) {
+  const bytes = Math.max(0, Number(estimatedBytes) || 0);
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
+}
+function sumEstimatedDocumentAccessBytes(records) {
+  return (Array.isArray(records) ? records : []).reduce(
+    (sum, record) => sum + (record.estimatedBytes || 0),
+    0
+  );
+}
+function normalizeDocumentIds2(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
+}
+function isQuotaExceeded2(err) {
+  if (!err) return false;
+  if (err.name === "QuotaExceededError") return true;
+  if (typeof err.code === "number" && err.code === 22) return true;
+  const msg = String(err.message || "").toLowerCase();
+  return msg.includes("quota") || msg.includes("storage full");
+}
+function createSidecarWithMemoryBackend({ databaseName = SIDECAR_DATABASE_NAME, clock = Date.now } = {}) {
+  return new QueryMetaStorage(createMemoryMetaBackend(), { databaseName, clock });
+}
+function stringKey2(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+
 // src/apps/business-os/rxdb/src/storage-indexeddb.mjs
 var DB_VERSION = 3;
 var DOCUMENT_STORE = "documents";
@@ -759,27 +1978,48 @@ async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
   }
   const db = await openDatabase(databaseName);
-  return new CtoxIndexedDbStorage(db);
+  const quotaCoordinator = {
+    recover: (context = {}) => recoverQueryMetaQuota(databaseName, context)
+  };
+  const recoveryJournal = await openRecoveryJournal({
+    databaseName,
+    instanceId: databaseName,
+    quotaCoordinator
+  });
+  return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
 }
 var CtoxIndexedDbStorage = class {
-  constructor(db) {
+  constructor(db, { recoveryJournal = null, quotaCoordinator = null } = {}) {
     this.db = db;
+    this.recoveryJournal = recoveryJournal;
+    this.quotaCoordinator = quotaCoordinator;
   }
   collection(name, { schema = null, conflictStrategy = "lww" } = {}) {
     if (!name || typeof name !== "string") {
       throw new TypeError("collection name must be a non-empty string");
     }
-    return new CtoxIndexedDbCollection(this.db, name, { schema, conflictStrategy });
+    return new CtoxIndexedDbCollection(this.db, name, {
+      schema,
+      conflictStrategy,
+      recoveryJournal: this.recoveryJournal,
+      quotaCoordinator: this.quotaCoordinator
+    });
   }
   async unsyncedWriteSummary() {
     return countUnsyncedWrites(this.db);
   }
   close() {
+    this.recoveryJournal?.close?.();
     this.db.close();
   }
 };
 var CtoxIndexedDbCollection = class {
-  constructor(db, name, { schema = null, conflictStrategy = "lww" } = {}) {
+  constructor(db, name, {
+    schema = null,
+    conflictStrategy = "lww",
+    recoveryJournal = null,
+    quotaCoordinator = null
+  } = {}) {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
@@ -792,6 +2032,61 @@ var CtoxIndexedDbCollection = class {
     this.queryPerformanceStats = createQueryPerformanceStats();
     this.mergeStats = { pullFieldMerges: 0, pushConflictMerges: 0 };
     this.events = new CtoxEventEmitter();
+    this.recoveryJournal = recoveryJournal;
+    this.quotaCoordinator = quotaCoordinator;
+    this.recoverySchemaHash = "";
+    this.recoveryReady = null;
+    this.externalChangeListener = (event) => {
+      const detail = event?.detail || {};
+      if (detail.databaseName !== this.db.name || detail.collection !== this.name) return;
+      this.events.emit("change", {
+        collection: this.name,
+        external: true,
+        ids: Array.isArray(detail.ids) ? detail.ids : [],
+        at: Date.now()
+      });
+    };
+    globalThis.addEventListener?.("ctox-rxdb-external-change", this.externalChangeListener);
+  }
+  close() {
+    globalThis.removeEventListener?.("ctox-rxdb-external-change", this.externalChangeListener);
+  }
+  async initializeRecovery() {
+    if (!this.recoveryJournal) return;
+    if (!this.recoveryReady) {
+      this.recoveryReady = (async () => {
+        this.recoverySchemaHash = await schemaHash(this.schema || {}, this.name);
+        this.recoveryJournal.registerCollection(this.name, {
+          schemaHash: this.recoverySchemaHash,
+          applyBatch: (batch) => this.runWithQuotaRecovery(
+            () => batch.operation === "upsert" ? this._bulkUpsertOnce(batch.rows || [], {}) : this._bulkWriteOnce(batch.rows || [], { baseById: batch.baseById || null }),
+            { source: "recovery-replay" }
+          ),
+          // A user resolution is a NEW pushable local write, not recovery
+          // replay. Route it through the public path so it receives a fresh
+          // HLC and durable WAL entry before the primary row changes.
+          resolveConflict: (batch) => this.bulkWrite(batch.rows || [], {
+            baseById: batch.baseById || null
+          })
+        });
+        await this.acknowledgePersistedMasterRecovery();
+        await this.recoveryJournal.replayRegisteredCollections();
+      })();
+    }
+    return this.recoveryReady;
+  }
+  async acknowledgePersistedMasterRecovery() {
+    const batches = await this.recoveryJournal?.listBatches?.("pending") || [];
+    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => batch.documentIds || []))];
+    if (!ids.length) return;
+    const documents = {};
+    for (const id of ids) {
+      const record = await this.getStoredRecord(id);
+      if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
+    }
+    if (Object.keys(documents).length) {
+      await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
+    }
   }
   observe(listener) {
     return this.events.on("change", (event) => listener(event?.detail || event));
@@ -827,6 +2122,9 @@ var CtoxIndexedDbCollection = class {
     if (!mergeEnabled || !existingIsLocalWrite) {
       return { doc, lwt, replicationOrigin, base: void 0 };
     }
+    if (doc?._deleted) {
+      return { doc, lwt, replicationOrigin, base: void 0 };
+    }
     const { merged, identicalToMaster, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
       previous.base,
       previous.doc,
@@ -838,6 +2136,9 @@ var CtoxIndexedDbCollection = class {
       error.code = "structured_conflict_requires_resolution";
       error.collection = this.name;
       error.fields = conflictFields;
+      error.base = previous.base;
+      error.local = previous.doc;
+      error.master = doc;
       throw error;
     }
     if (identicalToMaster) {
@@ -848,14 +2149,49 @@ var CtoxIndexedDbCollection = class {
     return { doc: merged, lwt: mergedLwt, replicationOrigin: null, base: doc };
   }
   async upsert(doc) {
-    const id = documentId(doc);
+    const id = documentId2(doc);
     if (!id) {
       throw new Error(`Cannot upsert ${this.name} document without primary key`);
     }
     const { success } = await this.bulkUpsert([doc]);
     return success[id] || null;
   }
-  async bulkUpsert(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+  async bulkUpsert(docs, {
+    now = Date.now(),
+    replicationOrigin = null,
+    skipJournal = false,
+    recoveryReplay = false
+  } = {}) {
+    await this.initializeRecovery();
+    const journalWrite = Boolean(this.recoveryJournal) && !skipJournal && !replicationOrigin?.role && Array.isArray(docs);
+    const prepared = journalWrite ? await this.prepareJournalRows(docs) : { rows: docs, baseById: null };
+    const writeDocs = prepared.rows;
+    const validDocs = Array.isArray(writeDocs) ? writeDocs.filter((doc) => documentId2(doc)) : writeDocs;
+    const journalBaseById = prepared.baseById;
+    const batchId = !skipJournal && !replicationOrigin?.role && Array.isArray(validDocs) && validDocs.length ? await this.recoveryJournal?.appendBatch({
+      collection: this.name,
+      schemaHash: this.recoverySchemaHash,
+      primaryPath: this.primaryPath,
+      operation: "upsert",
+      rows: validDocs,
+      baseById: journalBaseById
+    }) : null;
+    let result;
+    try {
+      await this.persistDeleteUpdateConflicts(validDocs, replicationOrigin);
+      result = await this.runWithQuotaRecovery(
+        () => this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
+        { source: recoveryReplay ? "recovery-replay" : "bulk-upsert" }
+      );
+    } catch (error) {
+      await this.persistStructuredConflict(error);
+      throw error;
+    }
+    if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
+    if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
+    return result;
+  }
+  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null } = {}) {
     if (!Array.isArray(docs)) {
       throw new TypeError("bulkUpsert docs must be an array");
     }
@@ -868,47 +2204,59 @@ var CtoxIndexedDbCollection = class {
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
     }
-    for (const doc of docs) {
-      const id = documentId(doc);
-      if (!id) {
-        error.push({ document: doc, error: "missing primary key" });
-        continue;
+    try {
+      for (const doc of docs) {
+        const id = documentId2(doc);
+        if (!id) {
+          error.push({ document: doc, error: "missing primary key" });
+          continue;
+        }
+        const previous = await idbRequest(store.get([this.name, id]));
+        const nextDocument = { ...previous?.doc || {}, ...doc };
+        let lwt = documentLwt(nextDocument, now);
+        if (localWriteLwtFloor !== null) {
+          lwt = Math.max(lwt, localWriteLwtFloor);
+          localWriteLwtFloor = lwt + 1;
+        }
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name)) {
+          if (previous?.doc) success[id] = previous.doc;
+          continue;
+        }
+        const resolved = this.resolveIncomingWrite({
+          previous,
+          doc: nextDocument,
+          lwt,
+          replicationOrigin
+        });
+        if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
+          resolved.lwt = Number(previous.lwt) + 1;
+        }
+        const stored = storedRecordForWrite({
+          collection: this.name,
+          id,
+          doc: resolved.doc,
+          lwt: resolved.lwt,
+          indexes: this.indexes,
+          indexSignature: this.indexSignature,
+          replicationOrigin: resolved.replicationOrigin,
+          base: resolved.base,
+          previous
+        });
+        await idbRequest(store.put(stored));
+        success[id] = stored.doc;
       }
-      const previous = await idbRequest(store.get([this.name, id]));
-      const nextDocument = { ...previous?.doc || {}, ...doc };
-      let lwt = documentLwt(nextDocument, now);
-      if (localWriteLwtFloor !== null) {
-        lwt = Math.max(lwt, localWriteLwtFloor);
-        localWriteLwtFloor = lwt + 1;
+      await done;
+    } catch (error2) {
+      try {
+        tx.abort();
+      } catch {
       }
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
-        if (previous?.doc) success[id] = previous.doc;
-        continue;
+      try {
+        await done;
+      } catch {
       }
-      const resolved = this.resolveIncomingWrite({
-        previous,
-        doc: nextDocument,
-        lwt,
-        replicationOrigin
-      });
-      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
-        resolved.lwt = Number(previous.lwt) + 1;
-      }
-      const stored = storedRecordForWrite({
-        collection: this.name,
-        id,
-        doc: resolved.doc,
-        lwt: resolved.lwt,
-        indexes: this.indexes,
-        indexSignature: this.indexSignature,
-        replicationOrigin: resolved.replicationOrigin,
-        base: resolved.base,
-        previous
-      });
-      await idbRequest(store.put(stored));
-      success[id] = stored.doc;
+      throw error2;
     }
-    await done;
     schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit("change", {
@@ -916,10 +2264,47 @@ var CtoxIndexedDbCollection = class {
         success,
         at: now
       });
+      dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error };
   }
-  async bulkWrite(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
+  async bulkWrite(rows, {
+    now = Date.now(),
+    replicationOrigin = null,
+    baseById = null,
+    skipJournal = false,
+    recoveryReplay = false
+  } = {}) {
+    await this.initializeRecovery();
+    const journalWrite = Boolean(this.recoveryJournal) && !skipJournal && !replicationOrigin?.role && Array.isArray(rows);
+    const prepared = journalWrite ? await this.prepareJournalRows(rows) : { rows, baseById: null };
+    const writeRows = prepared.rows;
+    const validRows = Array.isArray(writeRows) ? writeRows.filter((row) => documentId2(row?.document || row)) : writeRows;
+    const journalBaseById = baseById || prepared.baseById;
+    const batchId = !skipJournal && !replicationOrigin?.role && Array.isArray(validRows) && validRows.length ? await this.recoveryJournal?.appendBatch({
+      collection: this.name,
+      schemaHash: this.recoverySchemaHash,
+      primaryPath: this.primaryPath,
+      operation: "write",
+      rows: validRows,
+      baseById: journalBaseById
+    }) : null;
+    let result;
+    try {
+      await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
+      result = await this.runWithQuotaRecovery(
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById }),
+        { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
+      );
+    } catch (error) {
+      await this.persistStructuredConflict(error);
+      throw error;
+    }
+    if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
+    if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
+    return result;
+  }
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -932,47 +2317,59 @@ var CtoxIndexedDbCollection = class {
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
     }
-    for (const row of rows) {
-      const doc = row?.document || row;
-      const id = documentId(doc);
-      if (!id) {
-        error.push({ row, error: "missing primary key" });
-        continue;
+    try {
+      for (const row of rows) {
+        const doc = row?.document || row;
+        const id = documentId2(doc);
+        if (!id) {
+          error.push({ row, error: "missing primary key" });
+          continue;
+        }
+        let lwt = documentLwt(doc, now);
+        if (localWriteLwtFloor !== null) {
+          lwt = Math.max(lwt, localWriteLwtFloor);
+          localWriteLwtFloor = lwt + 1;
+        }
+        const previous = await idbRequest(store.get([this.name, id]));
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name)) {
+          continue;
+        }
+        const resolved = this.resolveIncomingWrite({
+          previous,
+          doc,
+          lwt,
+          replicationOrigin,
+          explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
+        });
+        if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
+          resolved.lwt = Number(previous.lwt) + 1;
+        }
+        const stored = storedRecordForWrite({
+          collection: this.name,
+          id,
+          doc: resolved.doc,
+          lwt: resolved.lwt,
+          indexes: this.indexes,
+          indexSignature: this.indexSignature,
+          replicationOrigin: resolved.replicationOrigin,
+          base: resolved.base,
+          previous
+        });
+        await idbRequest(store.put(stored));
+        success[id] = stored.doc;
       }
-      let lwt = documentLwt(doc, now);
-      if (localWriteLwtFloor !== null) {
-        lwt = Math.max(lwt, localWriteLwtFloor);
-        localWriteLwtFloor = lwt + 1;
+      await done;
+    } catch (error2) {
+      try {
+        tx.abort();
+      } catch {
       }
-      const previous = await idbRequest(store.get([this.name, id]));
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
-        continue;
+      try {
+        await done;
+      } catch {
       }
-      const resolved = this.resolveIncomingWrite({
-        previous,
-        doc,
-        lwt,
-        replicationOrigin,
-        explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
-      });
-      if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
-        resolved.lwt = Number(previous.lwt) + 1;
-      }
-      const stored = storedRecordForWrite({
-        collection: this.name,
-        id,
-        doc: resolved.doc,
-        lwt: resolved.lwt,
-        indexes: this.indexes,
-        indexSignature: this.indexSignature,
-        replicationOrigin: resolved.replicationOrigin,
-        base: resolved.base,
-        previous
-      });
-      await idbRequest(store.put(stored));
-      success[id] = stored.doc;
+      throw error2;
     }
-    await done;
     schedulePersistUnsyncedWriteCount(this.db);
     if (Object.keys(success).length) {
       this.events.emit("change", {
@@ -980,8 +2377,88 @@ var CtoxIndexedDbCollection = class {
         success,
         at: now
       });
+      dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error };
+  }
+  async runWithQuotaRecovery(operation, context = {}) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isQuotaExceededError(error)) throw error;
+      await this.quotaCoordinator?.recover?.(context);
+      try {
+        return await operation();
+      } catch (retryError) {
+        const quotaError = new Error("IndexedDB write failed after safe cache eviction and one retry.", { cause: retryError });
+        quotaError.code = "indexeddb_quota_exceeded";
+        quotaError.retryable = true;
+        throw quotaError;
+      }
+    }
+  }
+  async persistStructuredConflict(error) {
+    if (error?.code !== "structured_conflict_requires_resolution") return;
+    await this.recoveryJournal?.recordConflict?.({
+      code: error.code,
+      collection: this.name,
+      fields: error.fields || [],
+      base: error.base || null,
+      local: error.local || null,
+      master: error.master || null,
+      message: error.message || String(error)
+    });
+  }
+  async persistDeleteUpdateConflicts(rows, replicationOrigin) {
+    if (!replicationOrigin?.role || !Array.isArray(rows)) return;
+    for (const row of rows) {
+      const master = row?.document || row;
+      if (!master?._deleted) continue;
+      const id = documentId2(master, this.primaryPath);
+      const previous = id ? await this.getStoredRecord(id) : null;
+      if (!previous || previous.replicationOriginRole || previous.doc?._deleted) continue;
+      await this.recoveryJournal?.recordConflict?.({
+        code: "structured_conflict_requires_resolution",
+        conflictType: "delete_vs_update",
+        collection: this.name,
+        base: previous.base || null,
+        local: previous.doc,
+        master,
+        message: "The native tombstone is authoritative; the local update remains recoverable here."
+      });
+    }
+  }
+  async prepareJournalRows(rows) {
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const bases = {};
+    const prepared = [];
+    const lastHlcById = /* @__PURE__ */ new Map();
+    for (const row of rows || []) {
+      const document2 = row?.document || row;
+      const id = documentId2(document2);
+      if (!id) {
+        prepared.push(row);
+        continue;
+      }
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (previous && !Object.prototype.hasOwnProperty.call(bases, id)) {
+        bases[id] = previous.replicationOriginRole ? previous.doc : previous.base || previous.doc;
+      }
+      const nextDocument = structuredClone(document2);
+      const nextHlc = nextHybridLogicalClock(
+        lastHlcById.get(id) || previous?.doc?._meta?.ctoxHlc || nextDocument?._meta?.ctoxHlc
+      );
+      lastHlcById.set(id, nextHlc);
+      nextDocument._meta = {
+        ...nextDocument._meta || {},
+        ctoxHlc: nextHlc
+      };
+      prepared.push(row?.document ? { ...row, document: nextDocument } : nextDocument);
+    }
+    await done;
+    return { rows: prepared, baseById: bases };
   }
   /// V1.5 eviction hook. Hard-deletes documents from the primary store
   /// (does NOT soft-delete via _deleted=true — the cache layer wants the
@@ -1441,7 +2918,7 @@ async function countUnsyncedWrites(db) {
   await idbTransactionDone(tx);
   return { total, byCollection };
 }
-function documentId(doc) {
+function documentId2(doc) {
   if (!doc || typeof doc !== "object") {
     return "";
   }
@@ -1449,7 +2926,7 @@ function documentId(doc) {
 }
 function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) {
   const normalized = { ...doc };
-  const id = documentId(doc);
+  const id = documentId2(doc);
   if (!normalized.id) {
     normalized.id = id;
   }
@@ -1458,10 +2935,11 @@ function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) 
     normalized._meta.ctoxHlc = normalized._meta.ctoxHlc || formatHybridLogicalClock({ physicalMs: lwt, nodeId: "native" });
     normalized._meta.ctoxReplicationOrigin = sanitizeReplicationOrigin(replicationOrigin);
   } else {
-    normalized._meta.ctoxHlc = nextHybridLogicalClock(
-      previous?._meta?.ctoxHlc || normalized._meta.ctoxHlc,
-      { nowMs: Math.max(Date.now(), Number(lwt) || 0) }
-    );
+    const suppliedHlc = String(normalized._meta.ctoxHlc || "");
+    const previousHlc = String(previous?._meta?.ctoxHlc || "");
+    normalized._meta.ctoxHlc = suppliedHlc && suppliedHlc !== previousHlc ? suppliedHlc : nextHybridLogicalClock(previousHlc || suppliedHlc, {
+      nowMs: Math.max(Date.now(), Number(lwt) || 0)
+    });
     delete normalized._meta.ctoxReplicationOrigin;
   }
   normalized._deleted = Boolean(normalized._deleted);
@@ -1512,16 +2990,34 @@ function normalizeStoredReplicationFlags(record) {
     pushable
   };
 }
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "") {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
   if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
   if (replicationOrigin?.role) {
+    if (collectionName === "business_commands" && isStaleReplicatedBusinessCommandState(existingRecord.doc, incomingDocument)) {
+      return false;
+    }
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
   }
   return nextLwt >= existingLwt;
+}
+function isStaleReplicatedBusinessCommandState(existingDocument, incomingDocument) {
+  const existingStatus = String(existingDocument?.status || "").trim().toLowerCase();
+  const incomingStatus = String(incomingDocument?.status || "").trim().toLowerCase();
+  if (!existingStatus || !incomingStatus || existingStatus === incomingStatus) return false;
+  if (incomingStatus === "pending_sync" && existingStatus !== "pending_sync") return true;
+  const terminal = /* @__PURE__ */ new Set([
+    "completed",
+    "failed",
+    "rejected",
+    "cancelled",
+    "canceled",
+    "blocked"
+  ]);
+  return terminal.has(existingStatus) && !terminal.has(incomingStatus);
 }
 function documentLwt(doc = {}, fallback = Date.now()) {
   const values = [
@@ -1530,6 +3026,24 @@ function documentLwt(doc = {}, fallback = Date.now()) {
     Number(doc.updatedAtMs || 0)
   ].filter((value) => Number.isFinite(value) && value > 0);
   return values.length ? Math.max(...values) : Number(fallback || Date.now());
+}
+function isQuotaExceededError(error) {
+  if (!error) return false;
+  if (error.name === "QuotaExceededError") return true;
+  if (typeof error.code === "number" && error.code === 22) return true;
+  const message = String(error.message || "").toLowerCase();
+  return message.includes("quota") || message.includes("storage full");
+}
+function dispatchStorageChange(databaseName, collection, success, replicationOrigin) {
+  globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-storage-change", {
+    detail: {
+      databaseName,
+      collection,
+      ids: Object.keys(success || {}),
+      replicationOriginRole: String(replicationOrigin?.role || ""),
+      atMs: Date.now()
+    }
+  }));
 }
 async function latestCollectionLwtInTransaction(store, collection) {
   const index = store.index("collectionLwtId");
@@ -1621,7 +3135,7 @@ function primaryKeyCandidateIds(query = {}, primaryPath = "id") {
 function indexValuesFor(indexes, doc) {
   const values = {};
   for (const index of indexes || []) {
-    values[index.name] = index.fields.map((field) => valueAtPath(doc, field));
+    values[index.name] = index.fields.map((field) => valueAtPath3(doc, field));
   }
   return values;
 }
@@ -1631,7 +3145,7 @@ function schemaIndexEntriesFor(indexes, doc, id, collection) {
     const components = [];
     let usable = true;
     for (const field of index.fields) {
-      const encoded = encodeIndexValue(valueAtPath(doc, field));
+      const encoded = encodeIndexValue(valueAtPath3(doc, field));
       if (!encoded) {
         usable = false;
         break;
@@ -1639,7 +3153,7 @@ function schemaIndexEntriesFor(indexes, doc, id, collection) {
       components.push(...encoded);
     }
     if (usable) {
-      entries.push([collection, index.name, ...components, String(id || documentId(doc))]);
+      entries.push([collection, index.name, ...components, String(id || documentId2(doc))]);
     }
   }
   return entries;
@@ -1877,7 +3391,7 @@ function normalizeSortFields(sort = []) {
     return Object.keys(entry || {})[0] || "";
   }).filter(Boolean);
 }
-function valueAtPath(doc, path) {
+function valueAtPath3(doc, path) {
   return String(path || "").split(".").reduce((value, key) => value?.[key], doc);
 }
 function idbRequest(request) {
@@ -1960,6 +3474,20 @@ var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var RTC_HANDSHAKE_TIMEOUT_MS = 6e4;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
+var TERMINAL_SIGNALING_REJECTION_CODES = /* @__PURE__ */ new Set([
+  "protocol_missing",
+  "protocol_mismatch",
+  "instance_mismatch",
+  "peer_revoked",
+  "role_mismatch",
+  "token_invalid",
+  "token_signature_invalid",
+  "credentials_revoked"
+]);
+var RETRYABLE_SIGNALING_REJECTION_CODES = /* @__PURE__ */ new Set([
+  "control_plane_token_expired",
+  "temporary_unavailable"
+]);
 var ICE_DISCONNECTED_GRACE_MS = 3e4;
 var SIGNALING_RECONNECT_BASE_MS = 1e3;
 var SIGNALING_RECONNECT_MAX_MS = 3e4;
@@ -2051,6 +3579,7 @@ var CtoxWebRtcNativePeer = class {
       resumeRequestCount: 0,
       resumeAckCount: 0,
       backpressureWaitCount: 0,
+      backpressureStallCount: 0,
       queuedFrames: 0,
       sentScheduledFrames: 0,
       priorityQueueDepth: 0,
@@ -2100,14 +3629,14 @@ var CtoxWebRtcNativePeer = class {
   }
   scheduleSignalingReconnect() {
     if (this.closed || this.signalingReconnectTimer) return;
-    const delay3 = this.signalingReconnectDelayMs;
-    this.signalingReconnectDelayMs = Math.min(delay3 * 2, SIGNALING_RECONNECT_MAX_MS);
+    const delay4 = this.signalingReconnectDelayMs;
+    this.signalingReconnectDelayMs = Math.min(delay4 * 2, SIGNALING_RECONNECT_MAX_MS);
     this.signalingReconnectTimer = setTimeout(() => {
       this.signalingReconnectTimer = null;
       if (this.closed) return;
-      this.events.emit("signaling-reconnect", { delayMs: delay3 });
+      this.events.emit("signaling-reconnect", { delayMs: delay4 });
       this.connect();
-    }, delay3);
+    }, delay4);
   }
   close() {
     this.closed = true;
@@ -2200,7 +3729,7 @@ var CtoxWebRtcNativePeer = class {
           lastSendPriority: item.priority
         });
         if (item.inline) {
-          await this.waitForSendBuffer(connection.channel);
+          await this.waitForSendBuffer(connection.channel, connection);
           if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== "open") {
             this.removeConnection(connection.remotePeerId, "send-queue-channel-closed");
             break;
@@ -2268,7 +3797,7 @@ var CtoxWebRtcNativePeer = class {
           const windowEnd = Math.min(windowStart + FRAME_ACK_WINDOW, totalFrames) - 1;
           const ack = this.awaitFrameAck(transferId, connection.remotePeerId, windowEnd);
           for (let seq = windowStart; seq <= windowEnd; seq += 1) {
-            await this.waitForSendBuffer(channel);
+            await this.waitForSendBuffer(channel, connection);
             if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== "open") {
               throw createPeerClosedError(connection.remotePeerId, "frame-send-channel-closed");
             }
@@ -2342,7 +3871,7 @@ var CtoxWebRtcNativePeer = class {
       const item = nextHighPriorityInlineSend(queue);
       if (!item) break;
       this.refreshSendQueueStatus(connection);
-      await this.waitForSendBuffer(connection.channel);
+      await this.waitForSendBuffer(connection.channel, connection);
       connection.channel.send(item.text);
       this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
@@ -2395,7 +3924,7 @@ var CtoxWebRtcNativePeer = class {
       this.recordTransportStatus({ resumeRequestCount: this.transportStats.resumeRequestCount + 1 });
     });
   }
-  waitForSendBuffer(channel) {
+  waitForSendBuffer(channel, connection = null) {
     if (Number(channel.bufferedAmount || 0) <= SEND_BUFFER_HIGH_WATER) {
       return Promise.resolve();
     }
@@ -2419,8 +3948,23 @@ var CtoxWebRtcNativePeer = class {
       channel.addEventListener?.("bufferedamountlow", done, { once: true });
       timer = setTimeout(() => {
         cleanup();
+        this.recordTransportStatus({
+          backpressureStallCount: this.transportStats.backpressureStallCount + 1,
+          rejectedFrames: this.transportStats.rejectedFrames + 1
+        });
         const error = new Error("WebRTC send buffer remained above the high-water mark.");
         error.code = "ctox_webrtc_send_buffer_stalled";
+        error.retryable = true;
+        error.peerId = connection?.remotePeerId || null;
+        this.events.emit("error", error);
+        if (connection?.remotePeerId) {
+          this.removeConnection(
+            connection.remotePeerId,
+            "send-buffer-stalled",
+            error,
+            { reconnect: false }
+          );
+        }
         reject(error);
       }, SEND_BUFFER_STALL_TIMEOUT_MS);
     });
@@ -2520,6 +4064,12 @@ var CtoxWebRtcNativePeer = class {
         this.lastControlPlaneError = error;
       }
       this.events.emit("error", error);
+      if (error.retryable === false) {
+        this.closed = true;
+        if (this.signalingReconnectTimer) clearTimeout(this.signalingReconnectTimer);
+        this.signalingReconnectTimer = null;
+        this.rejectAllPending(error);
+      }
       return;
     }
     if (message.type === "signal" || message.signal || message.data) {
@@ -3127,7 +4677,7 @@ var CtoxWebRtcNativePeer = class {
     }));
     return true;
   }
-  removeConnection(remotePeerId, reason = "closed") {
+  removeConnection(remotePeerId, reason = "closed", pendingError = null, { reconnect = true } = {}) {
     const peerId = String(remotePeerId || "");
     const connection = this.connections.get(peerId);
     if (!connection) return;
@@ -3146,9 +4696,9 @@ var CtoxWebRtcNativePeer = class {
     } catch {
     }
     releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
-    this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
+    this.rejectPendingForPeer(peerId, pendingError || createPeerClosedError(peerId, reason));
     this.events.emit("peer-close", { peerId, reason });
-    if (reason !== "peer-close") {
+    if (reconnect && reason !== "peer-close") {
       this.scheduleReconnect(peerId, reason);
     }
   }
@@ -3425,6 +4975,7 @@ function normalizeSignalingControlPlaneError(payload = {}) {
   const code = typeof payload.code === "string" && payload.code.trim() ? payload.code.trim() : "control_plane_rejected";
   const reason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim() : typeof payload.message === "string" && payload.message.trim() ? payload.message.trim() : code;
   if (payload.type === "ctoxError" && payload.scope === "control-plane") {
+    const retryable = RETRYABLE_SIGNALING_REJECTION_CODES.has(code) ? true : TERMINAL_SIGNALING_REJECTION_CODES.has(code) ? false : false;
     return {
       name: "CtoxSignalingControlPlaneError",
       type: payload.type,
@@ -3432,7 +4983,7 @@ function normalizeSignalingControlPlaneError(payload = {}) {
       code,
       phase: "signaling-control-plane",
       severity: "error",
-      retryable: false,
+      retryable,
       message: reason
     };
   }
@@ -4129,11 +5680,11 @@ async function decodeChunk(chunk) {
   if (typeof chunk.compressedBase64 !== "string") {
     throw new Error("compressed chunk missing compressedBase64");
   }
-  const bytes = base64ToBytes(chunk.compressedBase64);
+  const bytes = base64ToBytes2(chunk.compressedBase64);
   const json = await deflateInflate(bytes);
   return JSON.parse(json);
 }
-function base64ToBytes(b64) {
+function base64ToBytes2(b64) {
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
     const buf = Buffer.from(b64, "base64");
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -4372,7 +5923,7 @@ function createDemandLoadingTransport({
         }
         attempt += 1;
         const retryDelayMs = peerUnavailable ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
-        await delay3(retryDelayMs * attempt);
+        await delay4(retryDelayMs * attempt);
       }
     }
   }
@@ -4423,7 +5974,7 @@ function createDemandLoadingTransport({
     const message = String(error?.message || "");
     return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message) || message.includes("Timed out waiting for WebRTC response rxdb.query.fetch");
   }
-  function delay3(ms) {
+  function delay4(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
   async function requestQueryCancel({ requestId, reason = "client-abort" }) {
@@ -4729,7 +6280,7 @@ function createDemandLoadingTransport({
     if (immediate) return immediate;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      await delay3(QUERY_PEER_WAIT_POLL_MS);
+      await delay4(QUERY_PEER_WAIT_POLL_MS);
       const peerId = resolvePeerId();
       if (peerId) return peerId;
     }
@@ -4888,6 +6439,7 @@ function canonicalizeWindow(window2) {
 
 // src/apps/business-os/rxdb/src/query-demand-loader.mjs
 var DEFAULT_WINDOW_LIMIT = 200;
+var CONTROL_PLANE_QUERY_REVALIDATE_MS = 1e3;
 function createQueryDemandLoader({
   storageCollection,
   sidecar,
@@ -4914,6 +6466,7 @@ function createQueryDemandLoader({
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   const inflightByFingerprint = /* @__PURE__ */ new Map();
   const coordinatedByFingerprint = /* @__PURE__ */ new Map();
+  const resolvingByInput = /* @__PURE__ */ new Map();
   return {
     async resolveQuery(query, { window: window2 } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
@@ -4926,132 +6479,154 @@ function createQueryDemandLoader({
         skip: query?.skip,
         window: normalizedWindow
       };
-      const fingerprint = await queryFingerprint(fingerprintInput);
-      const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
-      const cached = await sidecar.getQueryWindow(sidecarKey);
-      if (cached && cached.complete) {
-        if (query?.requireRevision && cached.authoritativeRevision !== query.requireRevision) {
-        } else {
-          await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-          return readLocalDocuments(storageCollection, query, normalizedWindow);
-        }
+      const inputKey = JSON.stringify(fingerprintInput);
+      const existingInvocation = resolvingByInput.get(inputKey);
+      if (existingInvocation) {
+        bumpStatus(status, "queryFetchDedupHitCount");
+        return existingInvocation;
       }
-      const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
-      const startFetchJob = () => {
-        if (inflightByFingerprint.has(dedupKey)) {
-          bumpStatus(status, "queryFetchDedupHitCount");
-          return inflightByFingerprint.get(dedupKey).job;
-        }
-        bumpStatus(status, "queryFetchInFlight", 1);
-        v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-        const requestId = `${dedupKey}|${clock()}`;
-        const job = (async () => {
-          const startedAt = clock();
-          try {
-            const result = await requestQueryFetch({
-              requestId,
-              databaseName: storageCollection?.databaseName ?? null,
-              collectionName,
-              schemaVersion: schemaVersion ?? 0,
-              queryFingerprint: fingerprint,
-              query: {
-                selector: query?.selector ?? {},
-                sort: normalizeSort(query?.sort),
-                limit: query?.limit,
-                skip: query?.skip
-              },
-              window: normalizedWindow
-            });
-            await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
-            const documentIds = (result.documents || []).map(extractId).filter(Boolean);
-            await sidecar.upsertQueryWindow({
-              collection: collectionName,
-              queryFingerprint: fingerprint,
-              offset: normalizedWindow.offset,
-              limit: normalizedWindow.limit,
-              documentIds,
-              complete: true,
-              authoritativeRevision: result.authoritativeRevision ?? null
-            });
-            await sidecar.touchDocuments(collectionName, documentIds, {
-              estimatedBytes: estimateBytesPerDocument(result.documents || [])
-            });
-            bumpStatus(status, "queryFetchSuccessCount");
-            if (status) status.lastQueryFetchMs = clock() - startedAt;
-            v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
+      const invocationJob = (async () => {
+        const fingerprint = await queryFingerprint(fingerprintInput);
+        const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
+        const cached = await sidecar.getQueryWindow(sidecarKey);
+        const controlPlaneWindowStale = isControlPlaneStatusCollection(collectionName) && cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= CONTROL_PLANE_QUERY_REVALIDATE_MS;
+        if (cached && cached.complete) {
+          if (query?.requireRevision && cached.authoritativeRevision !== query.requireRevision) {
+          } else if (!controlPlaneWindowStale) {
+            await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
             return readLocalDocuments(storageCollection, query, normalizedWindow);
-          } catch (error) {
-            if (isQueryCancelledError(error)) {
-              bumpStatus(status, "queryFetchCancelCount");
-              v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
-              return readLocalDocuments(storageCollection, query, normalizedWindow);
-            }
-            bumpStatus(status, "queryFetchErrorCount");
-            v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
-            throw error;
-          } finally {
-            bumpStatus(status, "queryFetchInFlight", -1);
-            inflightByFingerprint.delete(dedupKey);
           }
-        })();
-        inflightByFingerprint.set(dedupKey, { job, requestId });
-        return job;
-      };
-      const runCoordinatedFetchJob = async () => {
-        if (!multiTabBroker?.claim) return startFetchJob();
-        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
-        const leader = await multiTabBroker.claim(dedupKey);
-        if (leader) {
+        }
+        const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+        const startFetchJob = () => {
+          if (inflightByFingerprint.has(dedupKey)) {
+            bumpStatus(status, "queryFetchDedupHitCount");
+            return inflightByFingerprint.get(dedupKey).job;
+          }
+          bumpStatus(status, "queryFetchInFlight", 1);
+          v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+          const requestId = `${dedupKey}|${clock()}`;
+          const job = (async () => {
+            const startedAt = clock();
+            try {
+              const result = await requestQueryFetch({
+                requestId,
+                databaseName: storageCollection?.databaseName ?? null,
+                collectionName,
+                schemaVersion: schemaVersion ?? 0,
+                queryFingerprint: fingerprint,
+                query: {
+                  selector: query?.selector ?? {},
+                  sort: normalizeSort(query?.sort),
+                  limit: query?.limit,
+                  skip: query?.skip
+                },
+                window: normalizedWindow
+              });
+              await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+              const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+              await sidecar.upsertQueryWindow({
+                collection: collectionName,
+                queryFingerprint: fingerprint,
+                offset: normalizedWindow.offset,
+                limit: normalizedWindow.limit,
+                documentIds,
+                complete: true,
+                authoritativeRevision: result.authoritativeRevision ?? null,
+                queryShape: {
+                  selector: query?.selector ?? {},
+                  sort: normalizeSort(query?.sort)
+                }
+              });
+              await sidecar.touchDocuments(collectionName, documentIds, {
+                estimatedBytes: estimateBytesPerDocument(result.documents || [])
+              });
+              bumpStatus(status, "queryFetchSuccessCount");
+              if (status) status.lastQueryFetchMs = clock() - startedAt;
+              v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
+              return readLocalDocuments(storageCollection, query, normalizedWindow);
+            } catch (error) {
+              if (isQueryCancelledError(error)) {
+                bumpStatus(status, "queryFetchCancelCount");
+                v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
+                return readLocalDocuments(storageCollection, query, normalizedWindow);
+              }
+              bumpStatus(status, "queryFetchErrorCount");
+              v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+              throw error;
+            } finally {
+              bumpStatus(status, "queryFetchInFlight", -1);
+              inflightByFingerprint.delete(dedupKey);
+            }
+          })();
+          inflightByFingerprint.set(dedupKey, { job, requestId });
+          return job;
+        };
+        const runCoordinatedFetchJob = async () => {
+          if (!multiTabBroker?.claim) return startFetchJob();
+          if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+          const leader = await multiTabBroker.claim(dedupKey);
+          if (leader) {
+            try {
+              return await startFetchJob();
+            } finally {
+              await multiTabBroker.release?.(dedupKey, { materialized: true });
+            }
+          }
+          await multiTabBroker.waitForRemote?.(dedupKey, 5e3);
+          if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+          const materialized = await sidecar.getQueryWindow(sidecarKey);
+          if (materialized?.complete) {
+            bumpStatus(status, "queryFetchDedupHitCount");
+            return readLocalDocuments(storageCollection, query, normalizedWindow);
+          }
+          const takeover = await multiTabBroker.claim(dedupKey);
+          if (!takeover) {
+            if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
+            throw new Error(`Timed out waiting for multi-tab query owner ${dedupKey}`);
+          }
           try {
             return await startFetchJob();
           } finally {
-            await multiTabBroker.release?.(dedupKey, { materialized: true });
+            await multiTabBroker.release?.(dedupKey, { materialized: true, takeover: true });
           }
-        }
-        await multiTabBroker.waitForRemote?.(dedupKey, 5e3);
-        if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
-        const materialized = await sidecar.getQueryWindow(sidecarKey);
-        if (materialized?.complete) {
-          bumpStatus(status, "queryFetchDedupHitCount");
+        };
+        const coordinatedFetchJob = () => {
+          const current = coordinatedByFingerprint.get(dedupKey);
+          if (current) {
+            bumpStatus(status, "queryFetchDedupHitCount");
+            return current;
+          }
+          const job = Promise.resolve().then(runCoordinatedFetchJob).finally(() => {
+            if (coordinatedByFingerprint.get(dedupKey) === job) {
+              coordinatedByFingerprint.delete(dedupKey);
+            }
+          });
+          coordinatedByFingerprint.set(dedupKey, job);
+          return job;
+        };
+        if (cached?.everCompleted && !query?.requireRevision) {
+          if (controlPlaneWindowStale) {
+            return coordinatedFetchJob();
+          }
+          coordinatedFetchJob().catch(() => {
+          });
+          bumpStatus(status, "queryFetchStaleServedCount");
+          v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+          await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
           return readLocalDocuments(storageCollection, query, normalizedWindow);
         }
-        const takeover = await multiTabBroker.claim(dedupKey);
-        if (!takeover) {
-          if (multiTabBroker.closed) return readLocalDocuments(storageCollection, query, normalizedWindow);
-          throw new Error(`Timed out waiting for multi-tab query owner ${dedupKey}`);
-        }
-        try {
-          return await startFetchJob();
-        } finally {
-          await multiTabBroker.release?.(dedupKey, { materialized: true, takeover: true });
-        }
-      };
-      const coordinatedFetchJob = () => {
-        const current = coordinatedByFingerprint.get(dedupKey);
-        if (current) {
-          bumpStatus(status, "queryFetchDedupHitCount");
-          return current;
-        }
-        const job = Promise.resolve().then(runCoordinatedFetchJob).finally(() => {
-          if (coordinatedByFingerprint.get(dedupKey) === job) {
-            coordinatedByFingerprint.delete(dedupKey);
-          }
-        });
-        coordinatedByFingerprint.set(dedupKey, job);
-        return job;
-      };
-      if (cached?.everCompleted && !query?.requireRevision) {
-        coordinatedFetchJob().catch(() => {
-        });
-        bumpStatus(status, "queryFetchStaleServedCount");
-        v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-        await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-        return readLocalDocuments(storageCollection, query, normalizedWindow);
+        return coordinatedFetchJob();
+      })();
+      resolvingByInput.set(inputKey, invocationJob);
+      try {
+        return await invocationJob;
+      } finally {
+        if (resolvingByInput.get(inputKey) === invocationJob) resolvingByInput.delete(inputKey);
       }
-      return coordinatedFetchJob();
     },
     inflightSize() {
-      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size);
+      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size, resolvingByInput.size);
     },
     // Wave 7: invalidation hook. When the replication layer reports that a
     // document in `collectionName` was changed remotely, call this with the
@@ -5063,6 +6638,17 @@ function createQueryDemandLoader({
         return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
       }
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+    },
+    async invalidateDocuments(changedDocuments = []) {
+      if (!changedDocuments.length) return 0;
+      if (typeof sidecar.invalidateQueryWindowsForChanges === "function") {
+        return sidecar.invalidateQueryWindowsForChanges(
+          collectionName,
+          changedDocuments,
+          storageCollection?.primaryPath || "id"
+        );
+      }
+      return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
     },
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
     // fetches and removes any partially-materialized documents from the
@@ -5087,6 +6673,7 @@ function createQueryDemandLoader({
       }
       inflightByFingerprint.clear();
       coordinatedByFingerprint.clear();
+      resolvingByInput.clear();
       try {
         const allWindows = await sidecar.backend.scanQueryWindows();
         for (const { fingerprint } of cancelled) {
@@ -5128,6 +6715,9 @@ function createQueryDemandLoader({
       await multiTabBroker.release(windowKey);
     }
   };
+}
+function isControlPlaneStatusCollection(collectionName) {
+  return collectionName === "business_commands" || collectionName === "ctox_queue_tasks";
 }
 async function invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds) {
   const all = await sidecar.backend.scanQueryWindows();
@@ -5196,7 +6786,7 @@ function extractId(doc) {
   if (!doc || typeof doc !== "object") return null;
   return doc.id || doc._id || null;
 }
-function estimateBytes(documents) {
+function estimateBytes2(documents) {
   try {
     return JSON.stringify(documents).length;
   } catch {
@@ -5205,7 +6795,7 @@ function estimateBytes(documents) {
 }
 function estimateBytesPerDocument(documents) {
   if (!Array.isArray(documents) || documents.length === 0) return 0;
-  return Math.max(1, Math.ceil(estimateBytes(documents) / documents.length));
+  return Math.max(1, Math.ceil(estimateBytes2(documents) / documents.length));
 }
 function bumpStatus(status, field, delta = 1) {
   if (!status) return;
@@ -5465,512 +7055,6 @@ function dedupeSorted(values) {
     if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
   }
   return out;
-}
-
-// src/apps/business-os/rxdb/src/query-meta-backend-memory.mjs
-function createMemoryMetaBackend() {
-  const queryWindows = /* @__PURE__ */ new Map();
-  const queryWindowRefsByDocument = /* @__PURE__ */ new Map();
-  const queryWindowRefsByWindow = /* @__PURE__ */ new Map();
-  const documentAccess = /* @__PURE__ */ new Map();
-  const cacheStats = /* @__PURE__ */ new Map();
-  return {
-    name: "memory",
-    async putQueryWindow(record) {
-      const key = queryWindowKey(record);
-      queryWindows.set(key, { ...record });
-    },
-    async getQueryWindow(key) {
-      const entry = queryWindows.get(stringKey(key));
-      return entry ? { ...entry } : null;
-    },
-    async deleteQueryWindow(key) {
-      const normalizedKey = stringKey(key);
-      queryWindows.delete(normalizedKey);
-      deleteQueryWindowRefs2(normalizedKey);
-    },
-    async scanQueryWindows() {
-      return Array.from(queryWindows.values(), (record) => ({ ...record }));
-    },
-    async replaceQueryWindowDocumentRefs(record) {
-      const windowKey = queryWindowKey(record);
-      deleteQueryWindowRefs2(windowKey);
-      const documentKeys = /* @__PURE__ */ new Set();
-      for (const id of normalizeDocumentIds(record.documentIds)) {
-        const documentKey = `${record.collection}|${id}`;
-        documentKeys.add(documentKey);
-        const refs = queryWindowRefsByDocument.get(documentKey) || /* @__PURE__ */ new Set();
-        refs.add(windowKey);
-        queryWindowRefsByDocument.set(documentKey, refs);
-      }
-      queryWindowRefsByWindow.set(windowKey, documentKeys);
-    },
-    async getQueryWindowKeysByDocumentIds(collection, ids) {
-      const keys = /* @__PURE__ */ new Set();
-      for (const id of normalizeDocumentIds(ids)) {
-        const refs = queryWindowRefsByDocument.get(`${collection}|${id}`);
-        if (!refs) continue;
-        for (const key of refs) keys.add(key);
-      }
-      return Array.from(keys);
-    },
-    async putDocumentAccess(record) {
-      documentAccess.set(documentAccessKey(record), { ...record });
-    },
-    async getDocumentAccess(collection, id) {
-      const entry = documentAccess.get(`${collection}|${id}`);
-      return entry ? { ...entry } : null;
-    },
-    async deleteDocumentAccess(collection, id) {
-      documentAccess.delete(`${collection}|${id}`);
-    },
-    async scanDocumentAccess() {
-      return Array.from(documentAccess.values(), (record) => ({ ...record }));
-    },
-    async putCacheStats(record) {
-      cacheStats.set(record.databaseName, { ...record });
-    },
-    async getCacheStats(databaseName) {
-      const entry = cacheStats.get(databaseName);
-      return entry ? { ...entry } : null;
-    },
-    async clear() {
-      queryWindows.clear();
-      queryWindowRefsByDocument.clear();
-      queryWindowRefsByWindow.clear();
-      documentAccess.clear();
-      cacheStats.clear();
-    },
-    async close() {
-    }
-  };
-  function deleteQueryWindowRefs2(windowKey) {
-    const documentKeys = queryWindowRefsByWindow.get(windowKey);
-    if (!documentKeys) return;
-    for (const documentKey of documentKeys) {
-      const refs = queryWindowRefsByDocument.get(documentKey);
-      if (!refs) continue;
-      refs.delete(windowKey);
-      if (!refs.size) queryWindowRefsByDocument.delete(documentKey);
-    }
-    queryWindowRefsByWindow.delete(windowKey);
-  }
-}
-function queryWindowKey(record) {
-  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
-}
-function documentAccessKey(record) {
-  return `${record.collection}|${record.id}`;
-}
-function stringKey(key) {
-  if (Array.isArray(key)) return key.join("|");
-  if (typeof key === "string") return key;
-  throw new TypeError("query window key must be array or string");
-}
-function normalizeDocumentIds(ids) {
-  if (!Array.isArray(ids)) return [];
-  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
-}
-
-// src/apps/business-os/rxdb/src/query-meta-storage.mjs
-var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
-var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
-var PIN_RECENT_READ = "recently-read";
-var evictionSchedulerGroups = /* @__PURE__ */ new Map();
-var QueryMetaStorage = class {
-  constructor(backend, {
-    databaseName,
-    schedulerKey = databaseName,
-    clock = Date.now,
-    primaryDelete = null
-  } = {}) {
-    if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
-    if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
-    this.backend = backend;
-    this.databaseName = databaseName;
-    this.schedulerKey = schedulerKey;
-    this.clock = clock;
-    this.primaryDelete = typeof primaryDelete === "function" ? primaryDelete : null;
-  }
-  setPrimaryDelete(fn) {
-    this.primaryDelete = typeof fn === "function" ? fn : null;
-  }
-  async getQueryWindow(key) {
-    const record = await this.backend.getQueryWindow(stringKey2(key));
-    if (!record) return null;
-    record.lastAccessedAt = this.clock();
-    await this.backend.putQueryWindow(record);
-    return record;
-  }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision }) {
-    const now = this.clock();
-    const existing = await this.backend.getQueryWindow(
-      [collection, queryFingerprint2, offset, limit].join("|")
-    );
-    const record = {
-      collection,
-      queryFingerprint: queryFingerprint2,
-      offset,
-      limit,
-      documentIds: [...documentIds],
-      complete: Boolean(complete),
-      // Sticky marker: once a window has been complete, its member documents
-      // exist in the primary store (and replication keeps them fresh). The
-      // demand loader serves such windows local-first while it revalidates
-      // in the background, and the reconnect-abort path must NOT tombstone
-      // their members as partial orphans.
-      everCompleted: Boolean(complete) || Boolean(existing?.everCompleted),
-      authoritativeRevision: authoritativeRevision ?? null,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      lastAccessedAt: now
-    };
-    await this.backend.putQueryWindow(record);
-    await this.backend.replaceQueryWindowDocumentRefs?.(record);
-    return record;
-  }
-  async invalidateQueryWindow(key) {
-    const stringified = stringKey2(key);
-    const existing = await this.backend.getQueryWindow(stringified);
-    if (!existing) return;
-    existing.everCompleted = Boolean(existing.everCompleted) || Boolean(existing.complete);
-    existing.complete = false;
-    existing.updatedAt = this.clock();
-    await this.backend.putQueryWindow(existing);
-  }
-  async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
-    const now = this.clock();
-    const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
-    if (!normalizedIds.length) return;
-    const perDocumentBytes = normalizeEstimatedBytes(estimatedBytes);
-    let deltaBytes = 0;
-    for (const id of normalizedIds) {
-      const previous = await this.backend.getDocumentAccess(collection, id) || {};
-      const nextEstimatedBytes = perDocumentBytes || previous.estimatedBytes || 0;
-      deltaBytes += nextEstimatedBytes - (previous.estimatedBytes || 0);
-      await this.backend.putDocumentAccess({
-        collection,
-        id,
-        lastAccessedAt: now,
-        pinReason: previous.dirty ? "dirty" : pinReason,
-        dirty: Boolean(previous.dirty),
-        estimatedBytes: nextEstimatedBytes
-      });
-    }
-    if (deltaBytes !== 0) {
-      const stats = await this.getCacheStats();
-      stats.estimatedBytes = Math.max(0, (stats.estimatedBytes || 0) + deltaBytes);
-      await this.backend.putCacheStats(stats);
-    }
-  }
-  async markDirty(collection, id, dirty) {
-    const previous = await this.backend.getDocumentAccess(collection, id) || {
-      collection,
-      id,
-      lastAccessedAt: this.clock(),
-      estimatedBytes: 0
-    };
-    await this.backend.putDocumentAccess({
-      ...previous,
-      dirty: Boolean(dirty),
-      pinReason: dirty ? "dirty" : previous.pinReason ?? null
-    });
-  }
-  async getDocumentAccess(collection, id) {
-    const record = await this.backend.getDocumentAccess(collection, id);
-    return record ? { ...record } : null;
-  }
-  async evictDocuments(ids) {
-    const now = this.clock();
-    let removed = 0;
-    for (const { collection, id } of ids) {
-      const record = await this.backend.getDocumentAccess(collection, id);
-      if (!record) continue;
-      if (record.dirty) continue;
-      if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
-        continue;
-      }
-      if (this.primaryDelete) {
-        try {
-          await this.primaryDelete(collection, id);
-        } catch {
-          continue;
-        }
-      }
-      await this.backend.deleteDocumentAccess(collection, id);
-      removed += 1;
-    }
-    const stats = await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-    stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
-    stats.estimatedBytes = await this.estimateWorkingSetBytes();
-    await this.backend.putCacheStats(stats);
-    return removed;
-  }
-  async estimateWorkingSetBytes() {
-    const docs = await this.backend.scanDocumentAccess();
-    return docs.reduce((sum, record) => sum + (record.estimatedBytes || 0), 0);
-  }
-  async setBudgetBytes(budgetBytes) {
-    const stats = await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-    stats.budgetBytes = Number(budgetBytes) || 0;
-    await this.backend.putCacheStats(stats);
-  }
-  async getCacheStats() {
-    return await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-  }
-  async clear() {
-    await this.backend.clear();
-  }
-  async invalidateQueryWindowsForDocuments(collection, ids) {
-    const normalizedIds = normalizeDocumentIds2(ids);
-    if (!collection || !normalizedIds.length) return 0;
-    const windowKeys = typeof this.backend.getQueryWindowKeysByDocumentIds === "function" ? await this.backend.getQueryWindowKeysByDocumentIds(collection, normalizedIds) : await this.scanQueryWindowKeysForDocuments(collection, normalizedIds);
-    let invalidated = 0;
-    const seen = /* @__PURE__ */ new Set();
-    for (const key of windowKeys) {
-      const stringified = stringKey2(key);
-      if (seen.has(stringified)) continue;
-      seen.add(stringified);
-      const window2 = await this.backend.getQueryWindow(stringified);
-      if (!window2 || window2.collection !== collection) continue;
-      await this.invalidateQueryWindow([
-        window2.collection,
-        window2.queryFingerprint,
-        window2.offset,
-        window2.limit
-      ]);
-      invalidated += 1;
-    }
-    return invalidated;
-  }
-  async scanQueryWindowKeysForDocuments(collection, ids) {
-    const idSet = new Set(ids);
-    const all = await this.backend.scanQueryWindows();
-    const keys = [];
-    for (const window2 of all) {
-      if (window2.collection !== collection) continue;
-      const documentIds = Array.isArray(window2.documentIds) ? window2.documentIds : [];
-      if (!documentIds.some((id) => idSet.has(String(id || "")))) continue;
-      keys.push([
-        window2.collection,
-        window2.queryFingerprint,
-        window2.offset,
-        window2.limit
-      ]);
-    }
-    return keys;
-  }
-  async close() {
-    await this.backend.close();
-  }
-  /// Evicts LRU document access entries until the working set fits the budget.
-  /// Skips dirty docs and unexpired recently-read pins. Returns the number of
-  /// document records removed.
-  async runEvictionIfOverBudget({ forceRecount = false } = {}) {
-    const stats = await this.getCacheStats();
-    if (!stats.budgetBytes) {
-      return 0;
-    }
-    if (!forceRecount && (stats.estimatedBytes || 0) <= stats.budgetBytes) {
-      return 0;
-    }
-    const all = await this.backend.scanDocumentAccess();
-    const workingSetBytes = sumEstimatedDocumentAccessBytes(all);
-    if (stats.estimatedBytes !== workingSetBytes) {
-      stats.estimatedBytes = workingSetBytes;
-      await this.backend.putCacheStats(stats);
-    }
-    if (workingSetBytes <= stats.budgetBytes) {
-      return 0;
-    }
-    const now = this.clock();
-    const candidates = all.filter((record) => !record.dirty).filter((record) => {
-      if (record.pinReason !== "recently-read") return true;
-      return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
-    }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
-    let removed = 0;
-    let remainingBytes = workingSetBytes;
-    for (const candidate of candidates) {
-      if (remainingBytes <= stats.budgetBytes) break;
-      if (this.primaryDelete) {
-        try {
-          await this.primaryDelete(candidate.collection, candidate.id);
-        } catch {
-          continue;
-        }
-      }
-      await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
-      remainingBytes -= candidate.estimatedBytes || 0;
-      removed += 1;
-    }
-    if (removed > 0) {
-      const updated = { ...stats, estimatedBytes: remainingBytes, lastEvictionAt: now };
-      await this.backend.putCacheStats(updated);
-    }
-    return removed;
-  }
-  async recordEstimatedBytes(bytes) {
-    const stats = await this.getCacheStats();
-    stats.estimatedBytes = Math.max(0, Number(bytes) || 0);
-    await this.backend.putCacheStats(stats);
-  }
-  /// Wraps an IDB write attempt in a quota-recovery loop. On
-  /// `QuotaExceededError` we run eviction once and retry; on second failure
-  /// the error propagates. Use this from production paths that materialize
-  /// fetched chunks into the primary store.
-  async withQuotaRecovery(writeFn) {
-    try {
-      return await writeFn();
-    } catch (err) {
-      if (!isQuotaExceeded(err)) throw err;
-      const stats = await this.getCacheStats();
-      const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
-      await this.setBudgetBytes(tighten);
-      await this.runEvictionIfOverBudget({ forceRecount: true });
-      try {
-        const result = await writeFn();
-        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
-        return result;
-      } catch (retryErr) {
-        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
-        throw retryErr;
-      }
-    }
-  }
-  /// Starts a periodic eviction scheduler. The handle returned has a
-  /// `stop()` method. Idempotent: calling twice with the same handle is
-  /// safe. Default interval: 30s.
-  startEvictionScheduler({
-    intervalMs = 3e4,
-    globalBudgetBytes = 0,
-    shareBudgetBytes = 0
-  } = {}) {
-    if (this._evictionSchedulerGroupKey) {
-      return { stop: () => this.stopEvictionScheduler() };
-    }
-    const key = String(this.schedulerKey || this.databaseName);
-    let group = evictionSchedulerGroups.get(key);
-    if (!group) {
-      group = {
-        storages: /* @__PURE__ */ new Set(),
-        timer: null,
-        intervalMs,
-        globalBudgetBytes: Math.max(0, Number(globalBudgetBytes) || 0)
-      };
-      evictionSchedulerGroups.set(key, group);
-    }
-    group.globalBudgetBytes = Math.max(
-      group.globalBudgetBytes,
-      Math.max(0, Number(globalBudgetBytes) || 0)
-    );
-    this._configuredShareBudgetBytes = Math.max(0, Number(shareBudgetBytes) || 0);
-    this._evictionSchedulerGroupKey = key;
-    group.storages.add(this);
-    rebalanceEvictionSchedulerGroup(group).catch(() => {
-    });
-    if (!group.timer) {
-      group.timer = setInterval(() => runEvictionSchedulerGroup(group), group.intervalMs);
-      if (typeof group.timer.unref === "function") group.timer.unref();
-    }
-    return { stop: () => this.stopEvictionScheduler() };
-  }
-  stopEvictionScheduler() {
-    const key = this._evictionSchedulerGroupKey;
-    if (!key) return;
-    this._evictionSchedulerGroupKey = null;
-    const group = evictionSchedulerGroups.get(key);
-    if (!group) return;
-    group.storages.delete(this);
-    if (group.storages.size === 0) {
-      if (group.timer) clearInterval(group.timer);
-      evictionSchedulerGroups.delete(key);
-      return;
-    }
-    rebalanceEvictionSchedulerGroup(group).catch(() => {
-    });
-  }
-  /// Orphan-window GC: drop sidecar query-window entries that haven't been
-  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
-  /// by other windows remain. This keeps the sidecar from growing monotonically
-  /// as one-off queries accumulate.
-  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
-    const now = this.clock();
-    const all = await this.backend.scanQueryWindows();
-    let removed = 0;
-    for (const window2 of all) {
-      const age = now - (window2.lastAccessedAt ?? window2.updatedAt ?? window2.createdAt ?? now);
-      if (age >= maxAgeMs) {
-        await this.backend.deleteQueryWindow([
-          window2.collection,
-          window2.queryFingerprint,
-          window2.offset,
-          window2.limit
-        ]);
-        removed += 1;
-      }
-    }
-    return removed;
-  }
-};
-async function rebalanceEvictionSchedulerGroup(group) {
-  const storages = [...group.storages];
-  if (!storages.length) return;
-  const globalShare = group.globalBudgetBytes > 0 ? Math.max(1, Math.floor(group.globalBudgetBytes / storages.length)) : Number.POSITIVE_INFINITY;
-  await Promise.all(storages.map(async (storage) => {
-    const configured = storage._configuredShareBudgetBytes || globalShare;
-    const effective = Math.max(1, Math.floor(Math.min(configured, globalShare)));
-    await storage.setBudgetBytes(effective);
-  }));
-}
-async function runEvictionSchedulerGroup(group) {
-  await rebalanceEvictionSchedulerGroup(group);
-  await Promise.all(
-    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0))
-  );
-}
-function normalizeEstimatedBytes(estimatedBytes) {
-  const bytes = Math.max(0, Number(estimatedBytes) || 0);
-  return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
-}
-function sumEstimatedDocumentAccessBytes(records) {
-  return (Array.isArray(records) ? records : []).reduce(
-    (sum, record) => sum + (record.estimatedBytes || 0),
-    0
-  );
-}
-function normalizeDocumentIds2(ids) {
-  if (!Array.isArray(ids)) return [];
-  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
-}
-function isQuotaExceeded(err) {
-  if (!err) return false;
-  if (err.name === "QuotaExceededError") return true;
-  if (typeof err.code === "number" && err.code === 22) return true;
-  const msg = String(err.message || "").toLowerCase();
-  return msg.includes("quota") || msg.includes("storage full");
-}
-function createSidecarWithMemoryBackend({ databaseName = SIDECAR_DATABASE_NAME, clock = Date.now } = {}) {
-  return new QueryMetaStorage(createMemoryMetaBackend(), { databaseName, clock });
-}
-function stringKey2(key) {
-  if (Array.isArray(key)) return key.join("|");
-  if (typeof key === "string") return key;
-  throw new TypeError("query window key must be array or string");
 }
 
 // src/apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
@@ -6278,10 +7362,10 @@ async function putQueryWindowRefs(db, record) {
     db.transaction(STORE_QUERY_WINDOW_REFS, "readwrite"),
     (tx) => {
       const store = tx.objectStore(STORE_QUERY_WINDOW_REFS);
-      for (const documentId2 of documentIds) {
+      for (const documentId3 of documentIds) {
         store.put({
           collection: record.collection,
-          documentId: documentId2,
+          documentId: documentId3,
           windowKey
         });
       }
@@ -6609,7 +7693,11 @@ var V1_5_STATUS_FIELDS = Object.freeze([
   "localPushChangedSinceCalls",
   "localPushChangedSinceScannedRows",
   "localPushChangedSinceScanLimitHits",
-  "localPushChangedSinceMaxScannedRows"
+  "localPushChangedSinceMaxScannedRows",
+  "clockSkewDetected",
+  "nativeClockOffsetMs",
+  "nativeClockObservedAtMs",
+  "code"
 ]);
 function createV1_5StatusState() {
   return {
@@ -6644,7 +7732,11 @@ function createV1_5StatusState() {
     localPushChangedSinceCalls: 0,
     localPushChangedSinceScannedRows: 0,
     localPushChangedSinceScanLimitHits: 0,
-    localPushChangedSinceMaxScannedRows: 0
+    localPushChangedSinceMaxScannedRows: 0,
+    clockSkewDetected: false,
+    nativeClockOffsetMs: 0,
+    nativeClockObservedAtMs: null,
+    code: null
   };
 }
 function projectStatusFromSidecar(state, sidecarStats, registry = null) {
@@ -6840,6 +7932,7 @@ var BROWSER_CAPABILITIES = [
   "ctox-schema-hash-v1",
   "ctox-peer-session-v1",
   "ctox-checkpoint-epoch-v1",
+  CTOX_CHECKPOINT_GENERATION_CAPABILITY,
   CTOX_QUERY_FETCH_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
   CTOX_COMMAND_LIFECYCLE_CAPABILITY
@@ -7502,6 +8595,12 @@ var CtoxWebRtcReplicationState = class {
       }
       this.scheduleLocalWritePush();
     });
+    const periodicPullMs = this.periodicPullIntervalMs();
+    if (periodicPullMs > 0) {
+      this.periodicPullTimer = setInterval(() => {
+        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+      }, periodicPullMs);
+    }
     const periodicPushMs = this.periodicPushIntervalMs();
     if (periodicPushMs > 0) {
       this.periodicPushTimer = setInterval(() => {
@@ -7573,6 +8672,12 @@ var CtoxWebRtcReplicationState = class {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
+    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
+      Object.assign(
+        this.demandStatus,
+        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now())
+      );
+    }
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
@@ -7842,6 +8947,19 @@ var CtoxWebRtcReplicationState = class {
       const local = row?.newDocumentState;
       const master = row?.assumedMasterState;
       const nativeAuthoritative = ["business_commands", "ctox_queue_tasks"].includes(this.collection.name);
+      if (isFutureHybridLogicalClock(local?._meta?.ctoxHlc)) {
+        await this.collection.storageCollection?.recoveryJournal?.recordConflict?.({
+          code: "clock_skew_detected",
+          collection: this.collection.name,
+          base: row?.base || null,
+          local,
+          master,
+          message: "A local HLC is more than five minutes ahead of the native time reference.",
+          clock: hybridLogicalClockStatus()
+        });
+        if (master) acceptedMaster.push(master);
+        continue;
+      }
       const order = compareHybridLogicalClocks(
         local?._meta?.ctoxHlc,
         master?._meta?.ctoxHlc
@@ -8204,7 +9322,9 @@ var CtoxWebRtcReplicationState = class {
   async invalidateDemandCacheForRemoteWrite(changedDocuments = []) {
     try {
       const ids = changedDocuments.map((doc) => primaryValue(doc, this.collection.schema.primaryPath)).filter(Boolean);
-      if (typeof this.demandLoader?.invalidateDocumentChange === "function") {
+      if (typeof this.demandLoader?.invalidateDocuments === "function") {
+        await this.demandLoader.invalidateDocuments(changedDocuments);
+      } else if (typeof this.demandLoader?.invalidateDocumentChange === "function") {
         await this.demandLoader.invalidateDocumentChange(ids);
       } else {
         await this.demandLoader?.invalidateCollectionChange?.();
@@ -8232,7 +9352,8 @@ var CtoxWebRtcReplicationState = class {
     return 15e3;
   }
   periodicPullIntervalMs() {
-    return 0;
+    if (!this.pull) return 0;
+    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
   }
   periodicPushIntervalMs() {
     if (!this.push) return 0;
@@ -8344,11 +9465,17 @@ var CtoxWebRtcReplicationState = class {
 var BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
 function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== "object") return "";
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  const storageGeneration = typeof remoteProtocol.storageGeneration === "string" ? remoteProtocol.storageGeneration.trim() : "";
   const epoch = typeof remoteProtocol.checkpoint?.epoch === "string" ? remoteProtocol.checkpoint.epoch.trim() : "";
   const sessionId = typeof remoteProtocol.peerSession?.sessionId === "string" ? remoteProtocol.peerSession.sessionId.trim() : "";
   const schemaHashValue = String(
     remoteProtocol.collection?.schemaHash || remoteProtocol.schemaHash || remoteProtocol.schema?.hash || ""
   ).trim();
+  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY) && storageGeneration && schemaHashValue) {
+    const collectionName = String(remoteProtocol.collection?.name || "").trim();
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+  }
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
@@ -8512,6 +9639,252 @@ function normalizeRemoteCollectionCheckpoints(map) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+// src/apps/business-os/rxdb/src/multi-tab-sync-coordinator.mjs
+var COORDINATORS = /* @__PURE__ */ Symbol.for("ctox.rxdb.multi-tab-sync-coordinators.v1");
+var CHANNEL_PREFIX2 = "ctox-rxdb-sync-leader-";
+var HEARTBEAT_MS = 5e3;
+var LEASE_TTL_MS = 15e3;
+function getMultiTabSyncCoordinator({ databaseName, room } = {}) {
+  const key = `${databaseName || "ctox"}|${room || "default"}`;
+  const root = globalThis;
+  if (!root[COORDINATORS]) root[COORDINATORS] = /* @__PURE__ */ new Map();
+  if (!root[COORDINATORS].has(key) || root[COORDINATORS].get(key)?.isClosed?.()) {
+    root[COORDINATORS].set(key, createMultiTabSyncCoordinator({ databaseName, room }));
+  }
+  return root[COORDINATORS].get(key);
+}
+function createMultiTabSyncCoordinator({
+  databaseName,
+  room,
+  tabId = globalThis.crypto?.randomUUID?.() || `tab-${Math.random().toString(36).slice(2)}`,
+  clock = Date.now
+} = {}) {
+  if (!databaseName || !room) throw new TypeError("multi-tab sync coordinator requires databaseName and room");
+  const listeners = /* @__PURE__ */ new Set();
+  const dirtyListeners = /* @__PURE__ */ new Set();
+  const externalChangeListeners = /* @__PURE__ */ new Set();
+  const channel = typeof globalThis.BroadcastChannel === "function" ? new BroadcastChannel(`${CHANNEL_PREFIX2}${databaseName}-${stableHash(room)}`) : null;
+  const lockName = `ctox-rxdb-sync:${databaseName}:${stableHash(room)}`;
+  let role = "follower";
+  let leaderTabId = "";
+  let leaderSeenAtMs = 0;
+  let started = false;
+  let closed = false;
+  let heartbeatTimer = null;
+  let electionTimer = null;
+  let releaseLock = null;
+  let lockRequestRunning = false;
+  const emitRole = () => {
+    const status = snapshot();
+    for (const listener of listeners) {
+      try {
+        listener(status);
+      } catch {
+      }
+    }
+    globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-multi-tab-status", { detail: status }));
+  };
+  const post = (message) => {
+    try {
+      channel?.postMessage({ ...message, tabId, atMs: clock() });
+    } catch {
+    }
+  };
+  const becomeLeader = (reason) => {
+    if (closed) return;
+    role = "leader";
+    leaderTabId = tabId;
+    leaderSeenAtMs = clock();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      leaderSeenAtMs = clock();
+      post({ type: "leader-heartbeat" });
+    }, HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
+    post({ type: "leader-heartbeat", reason });
+    emitRole();
+  };
+  const becomeFollower = (leader = "", reason = "") => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    const changed = role !== "follower" || leader && leader !== leaderTabId;
+    role = "follower";
+    if (leader) leaderTabId = leader;
+    if (changed) emitRole();
+    if (reason) post({ type: "follower", reason });
+  };
+  const tryWebLock = async () => {
+    if (closed || lockRequestRunning || !globalThis.navigator?.locks?.request) return false;
+    lockRequestRunning = true;
+    let resolveAttempt;
+    const attempted = new Promise((resolve) => {
+      resolveAttempt = resolve;
+    });
+    navigator.locks.request(lockName, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock || closed) {
+        lockRequestRunning = false;
+        resolveAttempt(false);
+        return;
+      }
+      becomeLeader("web-lock");
+      resolveAttempt(true);
+      await new Promise((resolve) => {
+        releaseLock = resolve;
+      });
+      releaseLock = null;
+      lockRequestRunning = false;
+      becomeFollower("", "web-lock-released");
+    }).catch(() => {
+      lockRequestRunning = false;
+      resolveAttempt(false);
+    });
+    return attempted;
+  };
+  const attemptElection = async () => {
+    if (closed || role === "leader") return;
+    if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
+    if (globalThis.navigator?.locks?.request) {
+      await tryWebLock();
+      return;
+    }
+    post({ type: "leader-claim" });
+    await delay3(30);
+    if (clock() - leaderSeenAtMs >= LEASE_TTL_MS || !leaderTabId || tabId < leaderTabId) {
+      becomeLeader("broadcast-election");
+    }
+  };
+  if (channel) {
+    channel.onmessage = (event) => {
+      const message = event?.data;
+      if (!message || message.tabId === tabId) return;
+      if (message.type === "leader-heartbeat") {
+        leaderSeenAtMs = clock();
+        leaderTabId = String(message.tabId || "");
+        if (role === "leader" && leaderTabId < tabId) {
+          releaseLock?.();
+          becomeFollower(leaderTabId, "leader-tiebreak");
+        } else if (role !== "leader") {
+          becomeFollower(leaderTabId);
+        }
+      } else if (message.type === "leader-claim") {
+        if (role === "leader") post({ type: "leader-heartbeat", reason: "claim-rejected" });
+        else if (!leaderTabId || String(message.tabId) < leaderTabId) leaderTabId = String(message.tabId);
+      } else if (message.type === "leader-release" && String(message.tabId || "") === leaderTabId) {
+        leaderSeenAtMs = 0;
+        leaderTabId = "";
+        attemptElection().catch(() => {
+        });
+      } else if (message.type === "dirty" && role === "leader") {
+        for (const listener of dirtyListeners) {
+          try {
+            listener(message);
+          } catch {
+          }
+        }
+      } else if (message.type === "replicated-change" && role === "follower") {
+        for (const listener of externalChangeListeners) {
+          try {
+            listener(message);
+          } catch {
+          }
+        }
+        globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-external-change", { detail: message }));
+      }
+    };
+  }
+  const lifecycleRelease = () => {
+    if (role === "leader") {
+      post({ type: "leader-release" });
+      releaseLock?.();
+    }
+    becomeFollower("", "page-lifecycle");
+  };
+  const lifecycleResume = () => attemptElection().catch(() => {
+  });
+  function start() {
+    if (started) return Promise.resolve(snapshot());
+    started = true;
+    globalThis.document?.addEventListener?.("freeze", lifecycleRelease);
+    globalThis.addEventListener?.("pagehide", lifecycleRelease);
+    globalThis.document?.addEventListener?.("resume", lifecycleResume);
+    globalThis.addEventListener?.("pageshow", lifecycleResume);
+    electionTimer = setInterval(() => attemptElection().catch(() => {
+    }), HEARTBEAT_MS);
+    electionTimer.unref?.();
+    return attemptElection().then(snapshot);
+  }
+  function snapshot() {
+    return {
+      schema: "ctox.rxdb.multi-tab-sync.v1",
+      databaseName,
+      role,
+      isLeader: role === "leader",
+      tabId,
+      leaderTabId,
+      leaderLeaseAgeMs: leaderSeenAtMs ? Math.max(0, clock() - leaderSeenAtMs) : null,
+      updatedAtMs: clock()
+    };
+  }
+  return {
+    start,
+    snapshot,
+    isLeader: () => role === "leader",
+    isClosed: () => closed,
+    onRoleChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    onDirty(listener) {
+      dirtyListeners.add(listener);
+      return () => dirtyListeners.delete(listener);
+    },
+    onExternalChange(listener) {
+      externalChangeListeners.add(listener);
+      return () => externalChangeListeners.delete(listener);
+    },
+    notifyDirty(collection, ids = []) {
+      post({ type: "dirty", collection, ids });
+    },
+    notifyReplicatedChange(collection, ids = []) {
+      post({ type: "replicated-change", collection, ids });
+    },
+    async close() {
+      if (role === "leader") post({ type: "leader-release" });
+      closed = true;
+      releaseLock?.();
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (electionTimer) clearInterval(electionTimer);
+      globalThis.document?.removeEventListener?.("freeze", lifecycleRelease);
+      globalThis.removeEventListener?.("pagehide", lifecycleRelease);
+      globalThis.document?.removeEventListener?.("resume", lifecycleResume);
+      globalThis.removeEventListener?.("pageshow", lifecycleResume);
+      try {
+        channel?.close();
+      } catch {
+      }
+      listeners.clear();
+      dirtyListeners.clear();
+      externalChangeListeners.clear();
+    }
+  };
+}
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+function delay3(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+var multiTabSyncCoordinatorTestInternals = Object.freeze({
+  HEARTBEAT_MS,
+  LEASE_TTL_MS,
+  stableHash
+});
+
 // src/apps/business-os/rxdb/src/rx-database.mjs
 function getCtoxIndexedDbStorage() {
   return { name: "ctox-indexeddb-native" };
@@ -8564,6 +9937,7 @@ function rxdbCore() {
     createRxDatabase,
     getCtoxIndexedDbStorage,
     getConnectionHandlerSimplePeer,
+    getMultiTabSyncCoordinator,
     getPresenceRegistry,
     replicateWebRTC,
     removeRxDatabase,
@@ -8580,6 +9954,28 @@ var CtoxRxDatabase = class {
     this.multiInstance = Boolean(multiInstance);
     this.closeDuplicates = Boolean(closeDuplicates);
     this.collections = {};
+    const journal = storage?.recoveryJournal || null;
+    this.recovery = {
+      getStatus: () => journal?.getStatus?.() || Promise.resolve(emptyRecoveryStatus(name)),
+      export: (passphrase) => journal?.export?.(passphrase),
+      previewImport: (file, passphrase) => journal?.previewImport?.(file, passphrase),
+      applyImport: (previewId) => journal?.applyImport?.(previewId),
+      retryPrimaryOpen: async () => {
+        if (!globalThis.indexedDB?.open) return false;
+        const request = indexedDB.open(name);
+        const opened = await new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error || new Error(`Failed to reopen IndexedDB ${name}`));
+          request.onblocked = () => reject(new Error(`IndexedDB open blocked for ${name}`));
+        });
+        opened.close();
+        return true;
+      }
+    };
+    this.conflicts = {
+      list: () => journal?.listConflicts?.() || Promise.resolve([]),
+      resolve: (id, resolution) => journal?.resolveConflict?.(id, resolution)
+    };
   }
   async addCollections(collections) {
     for (const [name, definition] of Object.entries(collections || {})) {
@@ -8593,6 +9989,7 @@ var CtoxRxDatabase = class {
       });
       this.collections[name] = collection;
       this[name] = collection;
+      await collection.storageCollection.initializeRecovery?.();
     }
     return this.collections;
   }
@@ -8603,9 +10000,25 @@ var CtoxRxDatabase = class {
     return this.storage.unsyncedWriteSummary?.() || { total: 0, byCollection: {} };
   }
   async close() {
+    for (const collection of Object.values(this.collections)) {
+      collection.storageCollection?.close?.();
+    }
     this.storage.close();
   }
 };
+function emptyRecoveryStatus(databaseName) {
+  return {
+    schema: "ctox.browser-recovery.status.v2",
+    databaseName,
+    pendingBatches: 0,
+    pendingWrites: 0,
+    pendingBytes: 0,
+    oldestPendingAtMs: 0,
+    unresolvedConflicts: 0,
+    lastExportAtMs: 0,
+    updatedAtMs: Date.now()
+  };
+}
 var CtoxRxCollection = class {
   constructor({ name, schema, storageCollection }) {
     this.name = name;
@@ -9122,7 +10535,7 @@ function matchesSelector(doc, selector = {}) {
       if (matchesSelector(doc, expected)) return false;
       continue;
     }
-    const actual = valueAtPath2(doc, key);
+    const actual = valueAtPath4(doc, key);
     if (expected && typeof expected === "object" && !Array.isArray(expected)) {
       if ("$in" in expected && !isInOperatorMatch(actual, expected.$in)) return false;
       if ("$nin" in expected && isInOperatorMatch(actual, expected.$nin)) return false;
@@ -9148,8 +10561,8 @@ function sortDocuments(docs, sort = []) {
     for (const entry of sort) {
       const [key, direction] = Object.entries(entry)[0] || [];
       const factor = direction === "desc" ? -1 : 1;
-      const a = valueAtPath2(left, key);
-      const b = valueAtPath2(right, key);
+      const a = valueAtPath4(left, key);
+      const b = valueAtPath4(right, key);
       if (a < b) return -1 * factor;
       if (a > b) return 1 * factor;
     }
@@ -9226,7 +10639,7 @@ function arrayContains(actual, expected) {
 function elemMatch(actual, selector) {
   return Array.isArray(actual) && actual.some((item) => item && typeof item === "object" ? matchesSelector(item, selector) : item === selector);
 }
-function valueAtPath2(doc, path) {
+function valueAtPath4(doc, path) {
   return String(path || "").split(".").reduce((value, key) => value?.[key], doc);
 }
 function setValueAtPath(doc, path, value) {
@@ -9252,12 +10665,12 @@ function normalizeDoc(doc, primaryPath) {
     throw new TypeError("document must be an object");
   }
   const normalized = { ...doc };
-  const id = normalized.id || normalized._id || valueAtPath2(normalized, primaryPath);
+  const id = normalized.id || normalized._id || valueAtPath4(normalized, primaryPath);
   if (!id) {
     throw new Error(`document is missing primary key ${primaryPath}`);
   }
   normalized.id = String(id);
-  if (valueAtPath2(normalized, primaryPath) === void 0) {
+  if (valueAtPath4(normalized, primaryPath) === void 0) {
     setValueAtPath(normalized, primaryPath, normalized.id);
   }
   normalized._deleted = Boolean(normalized._deleted);
@@ -9370,6 +10783,7 @@ export {
   CtoxEventEmitter,
   CtoxIndexedDbCollection,
   CtoxIndexedDbStorage,
+  CtoxRecoveryJournal,
   CtoxSubject,
   CtoxWebRtcNativePeer,
   DEFAULT_QUERY_META_BUDGET_BYTES,
@@ -9394,6 +10808,7 @@ export {
   canonicalQueryJson,
   canonicalizeQueryInput,
   compareHybridLogicalClocks,
+  correctedHybridLogicalClockNowMs,
   createActiveCollectionRegistry,
   createBroadcastChannelBroker,
   createCtoxWebRtcNativePeer,
@@ -9402,6 +10817,7 @@ export {
   createIndexedDbMetaBackend,
   createMemoryBroker,
   createMemoryMetaBackend,
+  createMultiTabSyncCoordinator,
   createPresenceRegistry,
   createQueryDemandLoader,
   createRxDatabase,
@@ -9410,20 +10826,30 @@ export {
   ctoxIndexedDbStorageTestInternals,
   ctoxRxdbTestInternals,
   decodeChunk,
+  decryptRecoveryArtifact,
   deepEqualJson,
+  encryptRecoveryArtifact,
   formatHybridLogicalClock,
   getActiveCollectionRegistry,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
+  getMultiTabSyncCoordinator,
   getPresenceRegistry,
   hybridLogicalClockNodeId,
+  hybridLogicalClockStatus,
+  isFutureHybridLogicalClock,
+  multiTabSyncCoordinatorTestInternals,
   nextHybridLogicalClock,
   normalizeConflictStrategy,
   normalizeSignalingControlPlaneError,
   openCtoxIndexedDbStorage,
+  openRecoveryJournal,
   parseHybridLogicalClock,
   projectStatusFromSidecar,
   queryFingerprint,
+  recoverQueryMetaQuota,
+  recoveryCryptoTestInternals,
+  recoveryJournalTestInternals,
   remoteSupportsQueryFetch,
   removeRxDatabase,
   replicateWebRTC,
@@ -9431,8 +10857,10 @@ export {
   rxdbCore,
   schemaHash,
   schemaHashSource,
+  setHybridLogicalClockTimeAnchor,
   setV15LogSink,
   sha256Hex,
+  sha256Json,
   snapshotV1_5Status,
   threeWayMergeDocuments,
   waitForEvent

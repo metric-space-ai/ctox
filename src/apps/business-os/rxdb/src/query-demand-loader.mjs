@@ -14,6 +14,7 @@
 import { queryFingerprint } from './query-fingerprint.mjs';
 
 export const DEFAULT_WINDOW_LIMIT = 200;
+const CONTROL_PLANE_QUERY_REVALIDATE_MS = 1000;
 
 export function createQueryDemandLoader({
   storageCollection,
@@ -44,6 +45,11 @@ export function createQueryDemandLoader({
 
   const inflightByFingerprint = new Map();
   const coordinatedByFingerprint = new Map();
+  // Install an invocation-level promise before the first fingerprint/sidecar
+  // await. Otherwise a very fast fetch can complete while sibling calls are
+  // still hashing, causing a concurrent caller to look like a later cache hit
+  // instead of sharing the original operation.
+  const resolvingByInput = new Map();
 
   return {
     async resolveQuery(query, { window } = {}) {
@@ -57,10 +63,20 @@ export function createQueryDemandLoader({
         skip: query?.skip,
         window: normalizedWindow,
       };
+      const inputKey = JSON.stringify(fingerprintInput);
+      const existingInvocation = resolvingByInput.get(inputKey);
+      if (existingInvocation) {
+        bumpStatus(status, 'queryFetchDedupHitCount');
+        return existingInvocation;
+      }
+      const invocationJob = (async () => {
       const fingerprint = await queryFingerprint(fingerprintInput);
       const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
 
       const cached = await sidecar.getQueryWindow(sidecarKey);
+      const controlPlaneWindowStale = isControlPlaneStatusCollection(collectionName)
+        && cached
+        && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= CONTROL_PLANE_QUERY_REVALIDATE_MS;
       if (cached && cached.complete) {
         // V1.5 production hardening: authoritative-revision check. If the
         // caller supplies `requireRevision` (e.g. from a change-bulk that
@@ -71,7 +87,7 @@ export function createQueryDemandLoader({
           cached.authoritativeRevision !== query.requireRevision
         ) {
           // fall through to remote fetch
-        } else {
+        } else if (!controlPlaneWindowStale) {
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
           return readLocalDocuments(storageCollection, query, normalizedWindow);
         }
@@ -113,6 +129,10 @@ export function createQueryDemandLoader({
             documentIds,
             complete: true,
             authoritativeRevision: result.authoritativeRevision ?? null,
+            queryShape: {
+              selector: query?.selector ?? {},
+              sort: normalizeSort(query?.sort),
+            },
           });
           await sidecar.touchDocuments(collectionName, documentIds, {
             estimatedBytes: estimateBytesPerDocument(result.documents || []),
@@ -201,6 +221,14 @@ export function createQueryDemandLoader({
       // module loads from a WebRTC round-trip into an IndexedDB read.
       // An explicit requireRevision keeps strict await semantics.
       if (cached?.everCompleted && !query?.requireRevision) {
+        if (controlPlaneWindowStale) {
+          // Commands and queue tasks are demand-only to avoid replaying the
+          // complete historical ledger. Their records are mutable lifecycle
+          // projections, though, so a completed query window cannot remain a
+          // permanent cache hit. Await the bounded, deduplicated ID/window
+          // refresh once its short freshness budget expires.
+          return coordinatedFetchJob();
+        }
         coordinatedFetchJob().catch(() => {
           // Surfaced via queryFetchErrorCount; the next exec retries.
         });
@@ -211,9 +239,16 @@ export function createQueryDemandLoader({
       }
 
       return coordinatedFetchJob();
+      })();
+      resolvingByInput.set(inputKey, invocationJob);
+      try {
+        return await invocationJob;
+      } finally {
+        if (resolvingByInput.get(inputKey) === invocationJob) resolvingByInput.delete(inputKey);
+      }
     },
     inflightSize() {
-      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size);
+      return Math.max(inflightByFingerprint.size, coordinatedByFingerprint.size, resolvingByInput.size);
     },
 
     // Wave 7: invalidation hook. When the replication layer reports that a
@@ -226,6 +261,18 @@ export function createQueryDemandLoader({
         return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
       }
       return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
+    },
+
+    async invalidateDocuments(changedDocuments = []) {
+      if (!changedDocuments.length) return 0;
+      if (typeof sidecar.invalidateQueryWindowsForChanges === 'function') {
+        return sidecar.invalidateQueryWindowsForChanges(
+          collectionName,
+          changedDocuments,
+          storageCollection?.primaryPath || 'id',
+        );
+      }
+      return this.invalidateDocumentChange(changedDocuments.map(extractId).filter(Boolean));
     },
 
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
@@ -250,6 +297,7 @@ export function createQueryDemandLoader({
       }
       inflightByFingerprint.clear();
       coordinatedByFingerprint.clear();
+      resolvingByInput.clear();
 
       // Orphan cleanup: for every fingerprint that had an in-flight fetch
       // but no complete window in the sidecar, drop the partial document
@@ -303,6 +351,10 @@ export function createQueryDemandLoader({
       await multiTabBroker.release(windowKey);
     },
   };
+}
+
+function isControlPlaneStatusCollection(collectionName) {
+  return collectionName === 'business_commands' || collectionName === 'ctox_queue_tasks';
 }
 
 async function invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds) {

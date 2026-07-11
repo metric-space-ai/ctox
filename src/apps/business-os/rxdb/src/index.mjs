@@ -64,6 +64,12 @@ export {
 } from './active-collections.mjs';
 
 export {
+  createMultiTabSyncCoordinator,
+  getMultiTabSyncCoordinator,
+  multiTabSyncCoordinatorTestInternals,
+} from './multi-tab-sync-coordinator.mjs';
+
+export {
   PRESENCE_NOTIFY_DEBOUNCE_MS,
   createPresenceRegistry,
   getPresenceRegistry,
@@ -77,10 +83,14 @@ export {
 
 export {
   compareHybridLogicalClocks,
+  correctedHybridLogicalClockNowMs,
   formatHybridLogicalClock,
   hybridLogicalClockNodeId,
+  hybridLogicalClockStatus,
+  isFutureHybridLogicalClock,
   nextHybridLogicalClock,
   parseHybridLogicalClock,
+  setHybridLogicalClockTimeAnchor,
 } from './hybrid-logical-clock.mjs';
 
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';
@@ -116,7 +126,21 @@ export {
   SIDECAR_PIN_RECENT_READ_TTL_MS,
   QueryMetaStorage,
   createSidecarWithMemoryBackend,
+  recoverQueryMetaQuota,
 } from './query-meta-storage.mjs';
+
+export {
+  CtoxRecoveryJournal,
+  openRecoveryJournal,
+  recoveryJournalTestInternals,
+} from './recovery-journal.mjs';
+
+export {
+  decryptRecoveryArtifact,
+  encryptRecoveryArtifact,
+  recoveryCryptoTestInternals,
+  sha256Json,
+} from './recovery-crypto.mjs';
 
 export { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 export { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';

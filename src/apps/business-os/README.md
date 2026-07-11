@@ -127,6 +127,16 @@ by the Business OS shell context. Do not import `rxdb` or `rxdb/plugins/...`
 from a module. The app-facing compatibility contract is
 `ctox-db-business-os-v1`.
 
+The product default is a client-only app: a new module declares its collections
+in `collections.schema.json`, uses the shell-provided collection handles, and
+receives local persistence plus permission-filtered realtime sync without a
+Rust edit or CTOX binary rebuild. Ordinary app CRUD must not be converted into
+an app-specific native API. Server-authoritative business actions are moving to
+a runtime-loaded declarative action/Saga registry; host or external-system
+capabilities remain explicit reviewed extensions. The current contract,
+examples, shipped/open capability table and definition of done are documented
+in `docs/business-os-app-development.md`.
+
 The Tickets app is the reference core module for native CTOX capability
 projection. It reads only replicated `ctox_ticket_*` collections and writes
 durable `ctox.ticket.*` command documents through `business_commands`; it does

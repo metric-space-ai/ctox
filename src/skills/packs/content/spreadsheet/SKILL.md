@@ -34,11 +34,11 @@ not shipped in this build, that is a blocker — report exactly what is missing
 instead of falling back to external tooling. See
 `references/execution-surfaces.md` for the operation map and current status.
 
-As of 2026-07-11 only open/render, edit-save, and undo/clipboard/fill have
-passed differential acceptance; formula authoring, charts, conditional
-formatting, comments, and pivot work are not yet available. Until they ship,
-this skill's authoring sections describe the target contract, and read /
-analyze / render tasks are the usable surface.
+As of 2026-07-11 open/render, edit-save, undo/clipboard/fill, cell/row/column
+formatting, and formulas/references have passed differential acceptance
+(usable behind the editor rollout flag); charts, conditional formatting,
+sort/filter, multi-sheet operations, comments, protection, and pivot work are
+not yet available and must be reported as blockers.
 
 ## Formula rules (auditable models)
 

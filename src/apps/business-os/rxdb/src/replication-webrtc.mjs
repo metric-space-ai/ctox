@@ -29,6 +29,7 @@ import {
   schemaHashSource,
 } from './schema.mjs';
 import {
+  CTOX_CHECKPOINT_GENERATION_CAPABILITY,
   CTOX_COMMAND_LIFECYCLE_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
   CTOX_PRESENCE_RPC,
@@ -43,7 +44,12 @@ import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { threeWayMergeDocuments } from './conflict-merge.mjs';
-import { compareHybridLogicalClocks } from './hybrid-logical-clock.mjs';
+import {
+  compareHybridLogicalClocks,
+  hybridLogicalClockStatus,
+  isFutureHybridLogicalClock,
+  setHybridLogicalClockTimeAnchor,
+} from './hybrid-logical-clock.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 import { createBroadcastChannelBroker } from './multi-tab-broker.mjs';
 
@@ -67,6 +73,7 @@ const BROWSER_CAPABILITIES = [
   'ctox-schema-hash-v1',
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
+  CTOX_CHECKPOINT_GENERATION_CAPABILITY,
   CTOX_QUERY_FETCH_CAPABILITY,
   CTOX_PRESENCE_CAPABILITY,
   CTOX_COMMAND_LIFECYCLE_CAPABILITY,
@@ -848,6 +855,17 @@ class CtoxWebRtcReplicationState {
       }
       this.scheduleLocalWritePush();
     });
+    const periodicPullMs = this.periodicPullIntervalMs();
+    if (periodicPullMs > 0) {
+      // Master-change frames are a low-latency hint, not the sole correctness
+      // mechanism for the command control plane. A frame can be missed while
+      // the browser reports its active-collection set or while an initial pull
+      // is in flight. The retained checkpoint makes this catch-up cheap and
+      // prevents an accepted native command from remaining `pending_sync`.
+      this.periodicPullTimer = setInterval(() => {
+        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+      }, periodicPullMs);
+    }
     const periodicPushMs = this.periodicPushIntervalMs();
     if (periodicPushMs > 0) {
       this.periodicPushTimer = setInterval(() => {
@@ -937,6 +955,12 @@ class CtoxWebRtcReplicationState {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
+    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
+      Object.assign(
+        this.demandStatus,
+        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now()),
+      );
+    }
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
@@ -1246,6 +1270,19 @@ class CtoxWebRtcReplicationState {
       const master = row?.assumedMasterState;
       const nativeAuthoritative = ['business_commands', 'ctox_queue_tasks']
         .includes(this.collection.name);
+      if (isFutureHybridLogicalClock(local?._meta?.ctoxHlc)) {
+        await this.collection.storageCollection?.recoveryJournal?.recordConflict?.({
+          code: 'clock_skew_detected',
+          collection: this.collection.name,
+          base: row?.base || null,
+          local,
+          master,
+          message: 'A local HLC is more than five minutes ahead of the native time reference.',
+          clock: hybridLogicalClockStatus(),
+        });
+        if (master) acceptedMaster.push(master);
+        continue;
+      }
       const order = compareHybridLogicalClocks(
         local?._meta?.ctoxHlc,
         master?._meta?.ctoxHlc,
@@ -1644,7 +1681,9 @@ class CtoxWebRtcReplicationState {
       const ids = changedDocuments
         .map((doc) => primaryValue(doc, this.collection.schema.primaryPath))
         .filter(Boolean);
-      if (typeof this.demandLoader?.invalidateDocumentChange === 'function') {
+      if (typeof this.demandLoader?.invalidateDocuments === 'function') {
+        await this.demandLoader.invalidateDocuments(changedDocuments);
+      } else if (typeof this.demandLoader?.invalidateDocumentChange === 'function') {
         await this.demandLoader.invalidateDocumentChange(ids);
       } else {
         await this.demandLoader?.invalidateCollectionChange?.();
@@ -1676,7 +1715,8 @@ class CtoxWebRtcReplicationState {
   }
 
   periodicPullIntervalMs() {
-    return 0;
+    if (!this.pull) return 0;
+    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
   }
 
   periodicPushIntervalMs() {
@@ -1805,6 +1845,10 @@ const BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
 // (then no reuse happens and the conservative full resync runs).
 function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!remoteProtocol || typeof remoteProtocol !== 'object') return '';
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  const storageGeneration = typeof remoteProtocol.storageGeneration === 'string'
+    ? remoteProtocol.storageGeneration.trim()
+    : '';
   const epoch = typeof remoteProtocol.checkpoint?.epoch === 'string'
     ? remoteProtocol.checkpoint.epoch.trim()
     : '';
@@ -1817,6 +1861,12 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
       || remoteProtocol.schema?.hash
       || '',
   ).trim();
+  if (capabilities.includes(CTOX_CHECKPOINT_GENERATION_CAPABILITY)
+      && storageGeneration
+      && schemaHashValue) {
+    const collectionName = String(remoteProtocol.collection?.name || '').trim();
+    return `${storageGeneration}|${collectionName}|${schemaHashValue}`;
+  }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }

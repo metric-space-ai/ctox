@@ -29,6 +29,7 @@ const CTOX_BROWSER_CAPABILITIES = [
   'ctox-schema-hash-v1',
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
+  'ctox-checkpoint-generation-v2',
   CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
@@ -40,6 +41,14 @@ const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
+const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
+const ROOM_CIRCUIT_OPEN_MS = 120_000;
+const ROOM_RETRY_BASE_MS = 1_000;
+const ROOM_RETRY_MAX_MS = 30_000;
+const RETRYABLE_CONTROL_PLANE_CODES = new Set([
+  'control_plane_token_expired',
+  'temporary_unavailable',
+]);
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
@@ -51,6 +60,8 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let collectionStartQueue = Promise.resolve();
+  let multiTabCoordinator = null;
+  const multiTabUnsubscribers = [];
   let suspensionReason = '';
   let stopped = false;
   const useWebrtc = nativeRxdbPeerReady(config, db);
@@ -59,6 +70,31 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   }
   const runtimeMode = 'webrtc';
   const diagnostics = createDiagnostics(config, runtimeMode);
+  diagnostics.browserStorage = sanitizeBrowserStorageStatus(db?.storageHealth || null);
+  const browserStorageListener = (event) => {
+    if (event?.detail?.databaseName && event.detail.databaseName !== db?.name) return;
+    diagnostics.browserStorage = sanitizeBrowserStorageStatus({
+      ...(db?.storageHealth || {}),
+      ...(event?.detail || {}),
+      journalPendingWrites: event?.detail?.pendingWrites
+        ?? event?.detail?.journalPendingWrites
+        ?? db?.storageHealth?.journalPendingWrites,
+      journalPendingBytes: event?.detail?.pendingBytes
+        ?? event?.detail?.journalPendingBytes
+        ?? db?.storageHealth?.journalPendingBytes,
+      lastRecoveryExportAtMs: event?.detail?.lastExportAtMs
+        ?? event?.detail?.lastRecoveryExportAtMs
+        ?? db?.storageHealth?.lastRecoveryExportAtMs,
+    });
+    scheduleDiagnosticEmit?.();
+  };
+  globalThis.addEventListener?.('ctox-indexeddb-recovery-status', browserStorageListener);
+  globalThis.addEventListener?.('ctox-indexeddb-storage-pressure', browserStorageListener);
+  multiTabUnsubscribers.push(() => {
+    globalThis.removeEventListener?.('ctox-indexeddb-recovery-status', browserStorageListener);
+    globalThis.removeEventListener?.('ctox-indexeddb-storage-pressure', browserStorageListener);
+  });
+  const roomCircuit = diagnostics.roomCircuit;
   let diagnosticEmitTimer = null;
   const commandMetricSeen = new Set();
   let lastDiagnosticEmitAtMs = 0;
@@ -92,6 +128,48 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     scheduleDiagnosticEmit({
       immediate: options.immediate === true || isUrgentDiagnosticUpdate(updates),
     });
+  };
+  const resetRoomCircuit = () => {
+    roomCircuit.state = 'closed';
+    roomCircuit.consecutiveFailures = 0;
+    roomCircuit.openUntilMs = 0;
+    roomCircuit.nextProbeAtMs = 0;
+    roomCircuit.permanent = false;
+    roomCircuit.lastError = null;
+    roomCircuit.updatedAtMs = Date.now();
+  };
+  const registerRoomFailure = (error) => {
+    const serialized = serializeError(error) || {};
+    const now = Date.now();
+    const failureKey = `${serialized.code || ''}|${serialized.message || ''}`;
+    const duplicate = roomCircuit.lastFailureKey === failureKey
+      && now - Number(roomCircuit.lastFailureAtMs || 0) < 1_000;
+    roomCircuit.lastFailureKey = failureKey;
+    roomCircuit.lastFailureAtMs = now;
+    roomCircuit.lastError = serialized;
+    roomCircuit.updatedAtMs = now;
+    if (serialized.retryable === false) {
+      roomCircuit.state = 'open';
+      roomCircuit.permanent = true;
+      roomCircuit.openUntilMs = 0;
+      roomCircuit.nextProbeAtMs = 0;
+      return null;
+    }
+    if (!duplicate) roomCircuit.consecutiveFailures += 1;
+    if (
+      roomCircuit.state === 'half_open'
+      || roomCircuit.consecutiveFailures >= ROOM_CIRCUIT_FAILURE_THRESHOLD
+    ) {
+      roomCircuit.state = 'open';
+      roomCircuit.permanent = false;
+      roomCircuit.openUntilMs = now + ROOM_CIRCUIT_OPEN_MS;
+      roomCircuit.nextProbeAtMs = roomCircuit.openUntilMs;
+      return ROOM_CIRCUIT_OPEN_MS;
+    }
+    roomCircuit.state = 'closed';
+    const exponent = Math.max(0, roomCircuit.consecutiveFailures - 1);
+    const base = Math.min(ROOM_RETRY_MAX_MS, ROOM_RETRY_BASE_MS * (2 ** exponent));
+    return base + Math.floor(Math.random() * Math.max(1, Math.floor(base / 4)));
   };
   const recordCollection = (collection, update) => {
     const current = diagnostics.collections[collection] || {};
@@ -152,22 +230,43 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   };
   const scheduleRestartOfUnhealthyCollections = (triggerCollection, delayMs = 5000) => {
     if (stopped) return;
+    if (roomCircuit.permanent) return;
     if (globalRestartTimer) return;
+    const now = Date.now();
+    if (roomCircuit.state === 'open' && roomCircuit.openUntilMs > now) {
+      delayMs = Math.max(delayMs, roomCircuit.openUntilMs - now);
+    }
     globalRestartTimer = setTimeout(async () => {
       if (stopped) return;
       globalRestartTimer = null;
+      if (roomCircuit.permanent) return;
+      if (roomCircuit.state === 'open') {
+        const remaining = Number(roomCircuit.openUntilMs || 0) - Date.now();
+        if (remaining > 0) {
+          scheduleRestartOfUnhealthyCollections(triggerCollection, remaining);
+          return;
+        }
+        roomCircuit.state = 'half_open';
+        roomCircuit.nextProbeAtMs = 0;
+        roomCircuit.updatedAtMs = Date.now();
+      }
       const collections = [...activeCollections].filter(collectionNeedsRestart);
+      let nextDelay = 0;
       try {
-        if (collections.length) await syncRuntime.restartCollections(collections);
+        if (collections.length) {
+          await syncRuntime.restartCollections(collections);
+          resetRoomCircuit();
+        }
       } catch (restartError) {
         const restartSerialized = serializeError(restartError);
+        nextDelay = registerRoomFailure(restartSerialized) || 0;
         if (triggerCollection) {
           recordCollection(triggerCollection, { status: 'failed', connectionStatus: 'error', lastError: restartSerialized });
         }
         emitDiagnostic({ phase: 'failed', lastError: restartSerialized });
       } finally {
         if (!stopped && [...activeCollections].some(collectionNeedsRestart)) {
-          scheduleRestartOfUnhealthyCollections(triggerCollection, 5000);
+          scheduleRestartOfUnhealthyCollections(triggerCollection, nextDelay || ROOM_RETRY_BASE_MS);
         }
       }
     }, delayMs);
@@ -175,27 +274,86 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const scheduleGlobalRestart = (triggerCollection, error) => {
     if (stopped) return;
     const serialized = serializeError(error);
+    const retryDelay = registerRoomFailure(serialized);
     const lifecycleEvent = isLifecycleEvent(error) ? serialized : null;
     const reconnectingSince = new Date().toISOString();
     recordCollection(triggerCollection, {
-      status: 'reconnecting',
-      connectionStatus: 'reconnecting',
+      status: retryDelay == null ? 'error' : 'reconnecting',
+      connectionStatus: retryDelay == null ? 'error' : 'reconnecting',
       lastError: !lifecycleEvent ? serialized : diagnostics.collections[triggerCollection]?.lastError || null,
       lastLifecycleEvent: lifecycleEvent || diagnostics.collections[triggerCollection]?.lastLifecycleEvent || null,
       reconnectingSince,
     });
     emitDiagnostic({
-      phase: 'reconnecting',
+      phase: retryDelay == null ? 'failed' : 'reconnecting',
       lastError: lifecycleEvent ? null : serialized,
       lastLifecycleEvent: lifecycleEvent,
     });
-    scheduleRestartOfUnhealthyCollections(triggerCollection, 5000);
+    if (retryDelay != null) scheduleRestartOfUnhealthyCollections(triggerCollection, retryDelay);
   };
   const onlineListener = () => scheduleRestartOfUnhealthyCollections(null, 250);
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('online', onlineListener);
   }
   emitDiagnostic({ phase: 'ready' });
+  const ensureMultiTabCoordinator = async () => {
+    if (multiTabCoordinator) return multiTabCoordinator;
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260711-recovery-command-subset-v16');
+    if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
+    multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
+      databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
+      room: config.sync_room,
+    });
+    multiTabUnsubscribers.push(multiTabCoordinator.onRoleChange?.((status) => {
+      diagnostics.multiTab = sanitizeMultiTabStatus(status);
+      emitDiagnostic({ phase: diagnostics.phase || 'ready' });
+      if (status.isLeader) {
+        queueMicrotask(async () => {
+          for (const collection of [...activeCollections]) {
+            const current = await Promise.resolve(bridges.get(collection)).catch(() => null);
+            if (current?.mode !== 'follower') continue;
+            bridges.delete(collection);
+            await syncRuntime.startCollection(collection).catch((error) => {
+              recordCollection(collection, { status: 'error', connectionStatus: 'error', lastError: serializeError(error) });
+            });
+          }
+        });
+      } else {
+        queueMicrotask(async () => {
+          for (const [collection, bridgePromise] of [...bridges.entries()]) {
+            const bridge = await Promise.resolve(bridgePromise).catch(() => null);
+            if (!bridge || bridge.mode === 'follower') continue;
+            try { await withTimeout(bridge.stop?.(), 3000); } catch {}
+            bridges.set(collection, Promise.resolve(createFollowerBridge(collection, status)));
+            recordCollection(collection, {
+              status: 'follower',
+              connectionStatus: 'follower',
+              multiTab: sanitizeMultiTabStatus(status),
+              lastError: null,
+            });
+          }
+        });
+      }
+    }) || (() => {}));
+    multiTabUnsubscribers.push(multiTabCoordinator.onDirty?.(({ collection }) => {
+      Promise.resolve(bridges.get(normalizeCollectionName(collection)))
+        .then((bridge) => bridge?.state?.scheduleLocalWritePush?.())
+        .catch(() => {});
+    }) || (() => {}));
+    const storageListener = (event) => {
+      const detail = event?.detail || {};
+      if (detail.databaseName !== (db?.name || db?.raw?.name)) return;
+      if (detail.replicationOriginRole) {
+        if (multiTabCoordinator.isLeader()) multiTabCoordinator.notifyReplicatedChange(detail.collection, detail.ids);
+      } else if (!multiTabCoordinator.isLeader()) {
+        multiTabCoordinator.notifyDirty(detail.collection, detail.ids);
+      }
+    };
+    globalThis.addEventListener?.('ctox-rxdb-storage-change', storageListener);
+    multiTabUnsubscribers.push(() => globalThis.removeEventListener?.('ctox-rxdb-storage-change', storageListener));
+    diagnostics.multiTab = sanitizeMultiTabStatus(await multiTabCoordinator.start());
+    return multiTabCoordinator;
+  };
   const syncRuntime = {
     db,
     config,
@@ -270,6 +428,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
+      const coordinator = await ensureMultiTabCoordinator();
       if (isModuleDemandOnlyCollection(collection) && !collectionLeaseCounts.get(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
         error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
@@ -287,6 +446,18 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         throw error;
       }
       activeCollections.add(collection);
+      if (coordinator && !coordinator.isLeader()) {
+        const follower = createFollowerBridge(collection, coordinator.snapshot());
+        bridges.set(collection, Promise.resolve(follower));
+        recordCollection(collection, {
+          status: 'follower',
+          connectionStatus: 'follower',
+          multiTab: coordinator.snapshot(),
+          lastError: null,
+          reconnectingSince: null,
+        });
+        return follower;
+      }
       if (suspendedCollections.has(collection)) {
         recordCollection(collection, {
           status: 'paused',
@@ -524,6 +695,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
         window.removeEventListener('online', onlineListener);
       }
+      for (const unsubscribe of multiTabUnsubscribers.splice(0)) {
+        try { unsubscribe?.(); } catch {}
+      }
+      await multiTabCoordinator?.close?.();
       await stopAllBridges();
       emitDiagnostic({ phase: 'stopped' }, { immediate: true });
     },
@@ -539,6 +714,47 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     return next;
   };
   return syncRuntime;
+}
+
+function createFollowerBridge(collection, status) {
+  return {
+    mode: 'follower',
+    collection,
+    state: null,
+    multiTab: status,
+    stop: async () => {},
+  };
+}
+
+function sanitizeMultiTabStatus(status) {
+  if (!status || typeof status !== 'object') return null;
+  return {
+    schema: 'ctox.rxdb.multi-tab-sync.v1',
+    databaseName: typeof status.databaseName === 'string' ? status.databaseName.slice(0, 120) : null,
+    role: status.role === 'leader' ? 'leader' : 'follower',
+    isLeader: status.isLeader === true,
+    leaderLeaseAgeMs: Number.isFinite(Number(status.leaderLeaseAgeMs))
+      ? Math.max(0, Number(status.leaderLeaseAgeMs))
+      : null,
+    updatedAtMs: Number.isFinite(Number(status.updatedAtMs)) ? Number(status.updatedAtMs) : Date.now(),
+  };
+}
+
+function sanitizeBrowserStorageStatus(status) {
+  if (!status || typeof status !== 'object') return null;
+  return {
+    persistent: typeof status.persistent === 'boolean' ? status.persistent : null,
+    ephemeralLikely: status.ephemeralLikely === true,
+    quota: Number.isFinite(Number(status.quota)) ? Number(status.quota) : null,
+    usage: Number.isFinite(Number(status.usage)) ? Number(status.usage) : null,
+    pressureRatio: Number.isFinite(Number(status.pressureRatio)) ? Number(status.pressureRatio) : null,
+    journalPendingWrites: Number(status.journalPendingWrites || 0),
+    journalPendingBytes: Number(status.journalPendingBytes || 0),
+    oldestPendingAtMs: Number(status.oldestPendingAtMs || 0),
+    unresolvedConflicts: Number(status.unresolvedConflicts || 0),
+    lastRecoveryExportAtMs: Number(status.lastRecoveryExportAtMs || 0),
+    capturedAtMs: Number(status.capturedAtMs || Date.now()),
+  };
 }
 
 function peerSessionKey(value) {
@@ -664,7 +880,7 @@ function parseSignalingControlPlaneError(raw, url) {
     code,
     phase: 'signaling-control-plane',
     severity: 'error',
-    retryable: false,
+    retryable: RETRYABLE_CONTROL_PLANE_CODES.has(code),
     url: redactUrlSecrets(url),
   };
 }
@@ -684,7 +900,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260710-observable-backpressure-v9');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260711-recovery-command-subset-v16');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1325,6 +1541,17 @@ function createDiagnostics(config, mode = 'webrtc') {
     capabilities: CTOX_BROWSER_CAPABILITIES,
     collections: {},
     commandPlane: createCommandPlaneDiagnostics(),
+    roomCircuit: {
+      state: 'closed',
+      consecutiveFailures: 0,
+      openUntilMs: 0,
+      nextProbeAtMs: 0,
+      permanent: false,
+      lastError: null,
+      lastFailureKey: '',
+      lastFailureAtMs: 0,
+      updatedAtMs: Date.now(),
+    },
     lastError: null,
     lastLifecycleEvent: null,
   };
@@ -1465,6 +1692,7 @@ function sanitizeReplicationTransportStatus(status) {
     resumeRequestCount: numberField('resumeRequestCount'),
     resumeAckCount: numberField('resumeAckCount'),
     backpressureWaitCount: numberField('backpressureWaitCount'),
+    backpressureStallCount: numberField('backpressureStallCount'),
     queuedFrames: numberField('queuedFrames'),
     sentScheduledFrames: numberField('sentScheduledFrames'),
     priorityQueueDepth: numberField('priorityQueueDepth'),
@@ -1677,7 +1905,7 @@ function classifySignalingControlPlaneError(error) {
     code,
     phase: 'signaling-control-plane',
     severity: 'error',
-    retryable: false,
+    retryable: RETRYABLE_CONTROL_PLANE_CODES.has(code),
     message,
   };
 }
@@ -2142,7 +2370,23 @@ function isReadOnlyProjectionCollection(collection) {
 function isDemandOnlyPullCollection(collection) {
   return collection === 'desktop_file_chunks'
     || collection === 'document_blob_chunks'
-    || collection === 'spreadsheet_blob_chunks';
+    || collection === 'spreadsheet_blob_chunks'
+    // Threads projections are append-heavy and can contain years of command
+    // history. Pulling all of them on every clean browser profile starves the
+    // query channel that is needed to render the current inbox and approval
+    // cards. Keep the bridge open, but hydrate these records through bounded
+    // demand queries from the Threads module.
+    || collection === 'user_threads'
+    || collection === 'user_thread_messages'
+    || collection === 'user_thread_links'
+    || collection === 'user_notifications'
+    || collection === 'ctox_task_approval_requests'
+    // Command submission still pushes through the live bridge. Status
+    // tracking already re-queries the immutable command id every 1.5s, so a
+    // full pull of the historical command/task ledger is unnecessary and can
+    // delay a new command behind thousands of old records.
+    || collection === 'business_commands'
+    || collection === 'ctox_queue_tasks';
 }
 
 function isModuleDemandOnlyCollection(collection) {

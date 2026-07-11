@@ -1,12 +1,18 @@
 # CTOX Sync Engine and Command Bus Hardening Plan
 
-Status: implementation complete; external review incorporated; exact local release soak passed; CI workflow remains a deployment gate
+Status: hardening reopened for recovery/supervision/saga wave; focused checks pass; commit-bound no-retry release soak pending
 
 Scope: `ctox-rxdb`, browser IndexedDB, WebRTC replication, Business OS command ingestion, durable queue and harness writeback
 
-Last reviewed: 2026-07-10
+Last reviewed: 2026-07-11
 
 Implementation checkpoint (2026-07-10):
+
+> The 3 × 31 result below qualifies the earlier checkpoint only. It does not
+> qualify the current recovery/supervision/saga changes. “Complete” now
+> requires native terminal backpressure, browser journal replay plus encrypted
+> export/import, complete critical-task supervision, and a clean-tree,
+> commit-bound 3 × 31 no-retry release soak on the resulting commit.
 
 - The exact `.github/workflows/rxdb-soak.yml` release profile passed locally:
   three cycles, 31 required modes per cycle, 93 first-attempt executions and
@@ -71,13 +77,27 @@ Implementation checkpoint (2026-07-10):
 - Whole-document conflicts use a browser-device HLC preserved over the Rust
   wire boundary; command/queue collections remain native-authoritative and
   unsafe structured list/rich-text merges fail visibly.
-- Current verification: the browser suite passes 59 tests with its two optional
-  wire-daemon tests skipped, while the release soak covers JS/Rust
-  cross-process query/file behavior; all 331 native `ctox-rxdb` tests and all
-  13 Command Bus unit tests pass. Both formatting checks, syntax checks, bundle
-  reproducibility and diff guards pass. The exact three-cycle release soak is
-  green locally; the tracked GitHub workflow remains the independent CI
-  deployment gate.
+- Current-wave verification: the browser suite passes all 67 tests with zero
+  skips, including its Browser/Rust cross-process cases and a real two-tab
+  Web-Lock/BroadcastChannel leader handover; the native
+  `ctox-rxdb` suite passes 300 unit tests, 31 conformance tests and the idle
+  budget test. Root `cargo check --bin ctox`, the native signaling-circuit
+  tests, terminal backpressure test and Saga compensation/terminal-owner test
+  pass. Syntax, workflow, bundle reproducibility and diff guards pass. The
+  earlier three-cycle release soak remains historical evidence only; the
+  clean-tree, commit-bound release soak for this wave is still pending.
+- A 2026-07-11 one-cycle technical no-retry run passed the first 18 modes, then
+  stopped because the `tab-freeze-browser-to-rust` CTOX child received an
+  external/startup `SIGTERM` before listening. The freeze mode passed in a
+  separate one-attempt diagnostic run, and all remaining 12 modes passed in a
+  separate one-attempt matrix. This proves each of the 31 functional paths but
+  deliberately does not qualify a contiguous 31-mode or release soak. The
+  unexplained startup termination remains a release-gate finding.
+- The Business OS app-platform contract is now explicit: direct app CRUD,
+  local persistence and permission-filtered realtime sync are the default;
+  the remaining product gate is runtime installation of a previously unknown
+  schema and declarative action into an already-running binary without Rust
+  edits, a rebuild or a developer-triggered daemon restart.
 
 ## 1. Purpose
 
@@ -101,6 +121,21 @@ The desired outcome is:
 ## 2. Non-negotiable architecture rules
 
 - Business OS data remains WebRTC/RxDB-only. This plan must not add an HTTP data bridge or fallback.
+- Business OS apps are client packages by default. A runtime-installed app may
+  add schemas and safe, declarative app actions without editing Rust, changing
+  generated core fixtures or rebuilding the CTOX binary. Echtzeitsync is the
+  default collection mode; server-authoritative grants still decide who may
+  read or write.
+- Direct app CRUD uses shell-provided collection handles. The Command Bus is
+  not a requirement for ordinary single-collection edits and must not turn
+  every new UI action into a native API implementation.
+- App-specific command names are runtime metadata. Safe data mutations and
+  collection-spanning workflows must be handled by a generic, schema- and
+  permission-checked runtime action/Saga registry. Compiled handlers remain
+  reserved for explicit core or privileged host capabilities.
+- Runtime action definitions may select only bounded platform primitives. They
+  cannot carry arbitrary SQL, filesystem paths, shell commands or executable
+  browser code into the native process.
 - The current store topology must be represented truthfully: canonical Business OS command rows live in `runtime/business-os.sqlite3`, durable queue/review state lives in `runtime/ctox.sqlite3`, and replicated command documents live in `runtime/business-os-rxdb.sqlite3` plus browser IndexedDB.
 - No design may claim one atomic transaction across those WAL databases. The recommended target is to move the command admission/lifecycle aggregate into `runtime/ctox.sqlite3` so it can commit with its queue link; `business-os.sqlite3` then retains domain state and a compatibility/materialized command view. Phase 0 must ratify this in an architecture decision before implementation depends on it.
 - Browser IndexedDB remains the local-first working store, not the source of server-side permissions or terminal work truth.
@@ -110,6 +145,16 @@ The desired outcome is:
 - Runtime configuration goes through typed configuration, the runtime store or the secret store; no new production environment toggles.
 - Generated wire and schema contracts must be changed through their fixtures and generators.
 - The forked harness remains an execution component. CTOX owns persistence, review, validation, retry and terminal completion.
+
+### Runtime app acceptance gate
+
+The hardening program is not complete until an already-running release binary
+can install an unknown app package containing a new schema and a new
+declarative action, automatically reconcile the native peer, and synchronize
+an offline write between two authorized browser profiles. The same test must
+prove denial for an unauthorized profile, idempotent action replay, durable
+audit/status projection, reload and leader handover – with no source edit,
+`cargo build`, HTTP data fallback or developer-triggered daemon restart.
 
 ## 3. Current path and failure boundary
 
@@ -969,8 +1014,8 @@ The hardening effort is complete only when all of the following are true:
 
 The implementation requirements above have been audited individually. “Code
 and focused tests” below means the behavior is present and covered by the local
-verification suites. The exact local release soak is also complete; CI remains
-an independent deployment gate.
+verification suites. The prior local release soak does not qualify this wave;
+CI remains the independent clean-commit deployment gate.
 
 | Requirement | Evidence | Audit result |
 | --- | --- | --- |
@@ -985,35 +1030,33 @@ an independent deployment gate.
 | Typed result before terminalization | Generated result envelope carries structured output, artifacts, writebacks, verification claims and retry/error disposition | Code and focused tests pass |
 | Review/validation owns terminal success | Core transition proof gates the single command/task terminal owner; compatibility projections follow through the outbox | Code and focused tests pass |
 | Watcher timeout is non-destructive | Shared timer-clearing timeout helper; no command wait invokes collection/room restart | Code and focused tests pass |
-| IndexedDB recovery protects offline writes | Persistent validity-keyed checkpoints, unsynced journal, version-change/blocking handling and dirty/pushable eviction guards | Code and browser smokes pass |
+| IndexedDB recovery protects offline writes | Separate `__recovery_v2` WAL, replay-before-sync, durable conflict store, encrypted export/import and quota coordinator | Current focused browser smokes pass; release qualification pending |
 | Bounded transport resources | Peer-scoped native registries; count/byte limits for browser queues, collectors and accepted file streams; fair scheduling | Code, native tests and cross-process smokes pass |
-| Truthful health | Heartbeat/status separates process, join, data channel, replication, consumer and progress; TURN readiness is explicit | Code and focused tests pass |
+| Truthful health | Heartbeat/status derives `replicationUp` from pool, accepted join, open DataChannel and complete named critical-task liveness; backlog-only progress watchdog is explicit | Code and focused tests pass |
 | Safe v1/v2 rollout | Handshake capability plus schema-hash drift guards; shadow fields do not require an uncoordinated schema change | Code and contract tests pass |
 | Retained command-plane observability | Heartbeat/Advanced Status metrics, durable transition evidence and command diagnostics expose latency, outbox age, orphans and duplicate effects | Code and observability smoke pass |
-| First-attempt and long-run qualification | Browser 59 passed plus 2 optional wire-daemon skips, native RxDB 331/331, Command Bus 13/13, exact release profile 3 × 31 with 93 first-attempt executions and zero retries | Local release qualification passes |
+| First-attempt and long-run qualification | Release and CI attempts are fixed at one; release calls the reusable 3 × 31 workflow; nightly runs nine cycles; artifacts bind commit, dirty flag and bundle/binary hashes | Workflow guards pass; the current commit-bound release soak is pending |
 
 Local verification commands used for this checkpoint:
 
 ```text
 node src/apps/business-os/rxdb/tests/run-all.mjs
 node --test src/apps/business-os/shared/command-bus.test.mjs
-cargo test --manifest-path src/core/rxdb/Cargo.toml -- --test-threads=1
-cargo fmt --check
-cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml
+node --test src/apps/business-os/shared/app-lifecycle.test.mjs
+cargo check --bin ctox
+cargo test --manifest-path src/core/rxdb/Cargo.toml
+cargo test --bin ctox native_signaling_
+cargo test --bin ctox registered_saga_
+node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+node --check src/apps/business-os/app.js
+node --check src/apps/business-os/shared/sync.js
 git diff --check
-SOAK_CYCLES=3 SOAK_MIN_CYCLES=3 SOAK_FAIL_ON_RETRY=1 node src/core/rxdb/tools/browser_rust_soak.js
 ```
 
-The final focused root test was attempted but could not rebuild the root binary
-because the existing WhatsApp integration has no vendored proto tree and
-`wha-proto` therefore cannot generate `MessageApplication`. This is outside the
-sync/command changes; the root-focused Business OS tests had passed earlier in
-the hardening checkpoint, and the exact release soak used the isolated CTOX
-binary built before that unrelated dependency became unavailable.
-
-Local release qualification is complete. The required
-`.github/workflows/rxdb-soak.yml` job remains the independent CI/deployment
-confirmation and must reproduce three no-retry cycles before deployment.
+Local release qualification for the earlier checkpoint is historical evidence,
+not qualification of this wave. The required `.github/workflows/rxdb-soak.yml`
+job must reproduce three no-retry cycles from a clean tree on the final commit
+before this document may return to “implementation complete”.
 
 ## 14. Primary implementation touchpoints
 

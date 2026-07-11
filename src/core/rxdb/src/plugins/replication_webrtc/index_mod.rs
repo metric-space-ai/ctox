@@ -22,7 +22,7 @@ use super::protocol_contract_generated;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -55,12 +55,12 @@ use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::RxSubject;
 use crate::types::{DocumentsWithCheckpoint, RxReplicationHandler, RxReplicationMasterChange};
 use protocol_contract_generated::{
-    CTOX_COMMAND_LIFECYCLE_CAPABILITY, CTOX_PRESENCE_CAPABILITY,
-    CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
-    CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
-    CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
-    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL,
-    CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+    CTOX_CHECKPOINT_GENERATION_CAPABILITY, CTOX_COMMAND_LIFECYCLE_CAPABILITY,
+    CTOX_PRESENCE_CAPABILITY, CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING,
+    CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH, CTOX_PROTOCOL_ERROR_MISMATCH,
+    CTOX_PROTOCOL_ERROR_MISSING, CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+    CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH, CTOX_QUERY_FETCH_CAPABILITY,
+    CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
@@ -72,6 +72,7 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-schema-hash-v1",
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
+    CTOX_CHECKPOINT_GENERATION_CAPABILITY,
     CTOX_QUERY_FETCH_CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
     // Presence is ephemeral transport state (ctox-presence-v1): always
@@ -762,6 +763,7 @@ where
                                 flag,
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
+                                Some(&storage_token),
                             )
                             .await
                         }
@@ -927,6 +929,7 @@ where
                         local_flag,
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
+                        Some(&storage_token),
                     )
                     .await;
                     let protocol_response = match send_message_and_await_answer(
@@ -1305,6 +1308,7 @@ async fn ctox_protocol_response_with_flag(
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
+    storage_generation: Option<&str>,
 ) -> Value {
     let checkpoint = collection
         .storage_instance
@@ -1326,12 +1330,13 @@ async fn ctox_protocol_response_with_flag(
         query_demand_loading_enabled,
         collection_schemas,
         collection_checkpoints,
+        storage_generation,
     )
 }
 
 #[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
-    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None, None)
+    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None, None, None)
 }
 
 fn ctox_protocol_response_payload_with_flag(
@@ -1340,6 +1345,7 @@ fn ctox_protocol_response_payload_with_flag(
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
+    storage_generation: Option<&str>,
 ) -> Value {
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
@@ -1369,6 +1375,11 @@ fn ctox_protocol_response_payload_with_flag(
         "v1_5": {
             "queryDemandLoadingEnabled": query_demand_loading_enabled,
         },
+        "storageGeneration": storage_generation.filter(|value| !value.trim().is_empty()),
+        "nativeTimeMs": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
     });
     // Phase 3 schema-validation hardening: attach the per-collection schema-hash
     // map under multiplex so the browser validates each collection's schema
@@ -2507,6 +2518,7 @@ mod tests {
             true,
             None,
             None,
+            Some("storage-generation-1"),
         );
         assert!(single.get("collectionSchemas").is_none());
         assert!(single.get("collectionCheckpoints").is_none());
@@ -2520,6 +2532,7 @@ mod tests {
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
                 "desktop_files": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "desktop_files" },
             })),
+            Some("storage-generation-1"),
         );
         assert!(multi.get("collectionSchemas").is_some());
         assert!(multi

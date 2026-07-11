@@ -44,7 +44,7 @@ export class QueryMetaStorage {
     return record;
   }
 
-  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision }) {
+  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, queryShape = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint, offset, limit].join('|'),
@@ -63,6 +63,7 @@ export class QueryMetaStorage {
       // their members as partial orphans.
       everCompleted: Boolean(complete) || Boolean(existing?.everCompleted),
       authoritativeRevision: authoritativeRevision ?? null,
+      queryShape: queryShape && typeof queryShape === 'object' ? structuredCloneSafe(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       lastAccessedAt: now,
@@ -208,6 +209,32 @@ export class QueryMetaStorage {
       seen.add(stringified);
       const window = await this.backend.getQueryWindow(stringified);
       if (!window || window.collection !== collection) continue;
+      await this.invalidateQueryWindow([
+        window.collection,
+        window.queryFingerprint,
+        window.offset,
+        window.limit,
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+
+  async invalidateQueryWindowsForChanges(collection, documents, primaryPath = 'id') {
+    const changes = Array.isArray(documents) ? documents.filter(Boolean) : [];
+    if (!collection || !changes.length) return 0;
+    const all = await this.backend.scanQueryWindows();
+    let invalidated = 0;
+    for (const window of all) {
+      if (window.collection !== collection) continue;
+      const members = new Set((window.documentIds || []).map(String));
+      const simple = simpleEqualitySelector(window.queryShape);
+      const affected = !simple
+        || changes.some((document) => {
+          const id = valueAtPath(document, primaryPath);
+          return members.has(String(id ?? '')) || matchesSimpleEquality(document, simple);
+        });
+      if (!affected) continue;
       await this.invalidateQueryWindow([
         window.collection,
         window.queryFingerprint,
@@ -401,6 +428,42 @@ export class QueryMetaStorage {
   }
 }
 
+function simpleEqualitySelector(queryShape) {
+  if (!queryShape || typeof queryShape !== 'object') return null;
+  if (Array.isArray(queryShape.sort) && queryShape.sort.length > 0) return null;
+  const selector = queryShape.selector;
+  if (!selector || typeof selector !== 'object' || Array.isArray(selector)) return null;
+  const entries = Object.entries(selector);
+  if (!entries.length) return null;
+  const equalities = [];
+  for (const [field, condition] of entries) {
+    if (!field || field.startsWith('$')) return null;
+    if (condition && typeof condition === 'object') {
+      const keys = Object.keys(condition);
+      if (keys.length !== 1 || keys[0] !== '$eq') return null;
+      equalities.push([field, condition.$eq]);
+    } else {
+      equalities.push([field, condition]);
+    }
+  }
+  return equalities;
+}
+
+function matchesSimpleEquality(document, equalities) {
+  if (!equalities || document?._deleted) return false;
+  return equalities.every(([field, expected]) => Object.is(valueAtPath(document, field), expected));
+}
+
+function valueAtPath(value, path) {
+  return String(path || '').split('.').filter(Boolean)
+    .reduce((current, segment) => current?.[segment], value);
+}
+
+function structuredCloneSafe(value) {
+  try { return globalThis.structuredClone?.(value) ?? JSON.parse(JSON.stringify(value)); }
+  catch { return null; }
+}
+
 async function rebalanceEvictionSchedulerGroup(group) {
   const storages = [...group.storages];
   if (!storages.length) return;
@@ -419,6 +482,32 @@ async function runEvictionSchedulerGroup(group) {
   await Promise.all(
     [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0)),
   );
+}
+
+// Database-wide quota coordinator used by the primary store and the recovery
+// journal. It temporarily tightens every registered sidecar share, evicts only
+// clean/unpinned replicated rows, then restores the configured group budgets.
+// If no sidecar is registered yet this is a safe no-op; the caller's retry
+// remains authoritative and will surface a typed quota error if storage is
+// still full.
+export async function recoverQueryMetaQuota(schedulerKey) {
+  const group = evictionSchedulerGroups.get(String(schedulerKey || ''));
+  if (!group?.storages?.size) return { evicted: 0, storages: 0 };
+  const storages = [...group.storages];
+  const previous = await Promise.all(storages.map((storage) => storage.getCacheStats()));
+  let evicted = 0;
+  try {
+    for (let index = 0; index < storages.length; index += 1) {
+      const storage = storages[index];
+      const stats = previous[index];
+      const tightened = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
+      await storage.setBudgetBytes(tightened);
+      evicted += await storage.runEvictionIfOverBudget({ forceRecount: true });
+    }
+  } finally {
+    await rebalanceEvictionSchedulerGroup(group);
+  }
+  return { evicted, storages: storages.length };
 }
 
 function normalizeEstimatedBytes(estimatedBytes) {

@@ -1,8 +1,12 @@
 import {
   compareHybridLogicalClocks,
+  correctedHybridLogicalClockNowMs,
   formatHybridLogicalClock,
   nextHybridLogicalClock,
   parseHybridLogicalClock,
+  hybridLogicalClockStatus,
+  isFutureHybridLogicalClock,
+  setHybridLogicalClockTimeAnchor,
 } from '../dist/ctox-rxdb-js.mjs';
 
 const assert = (condition, message) => {
@@ -24,5 +28,13 @@ assert(compareHybridLogicalClocks(deviceB, deviceA) > 0,
   'HLC ordering is antisymmetric');
 assert(compareHybridLogicalClocks('', deviceA) < 0,
   'mixed-version state with a valid HLC outranks missing clock metadata');
+
+setHybridLogicalClockTimeAnchor(601_000, 1_000);
+assert(correctedHybridLogicalClockNowMs(2_000) === 602_000,
+  'browser HLC time must apply the measured native offset');
+assert(hybridLogicalClockStatus().code === 'clock_skew_detected',
+  'offsets above five minutes must surface a typed skew status');
+assert(isFutureHybridLogicalClock(formatHybridLogicalClock({ physicalMs: 400_001, nodeId: 'future' }), 10_000),
+  'a strongly future clock must be classified for durable conflict handling');
 
 console.log('ctox-rxdb HLC conflict smoke OK');

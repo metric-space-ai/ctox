@@ -16,7 +16,7 @@ const RXDB_RESET_TIMEOUT_MS = 5000;
 const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
 const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260710-observable-backpressure-v9';
+const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260711-recovery-command-subset-v16';
 
 export async function createBusinessDb({ name }) {
   const storageHealth = await inspectBrowserStorageDurability(name);
@@ -49,10 +49,28 @@ export async function createBusinessDb({ name }) {
 }
 
 export async function resetBusinessDb({ name }) {
+  const recoveryStatus = readRecoveryStatus(name);
+  if (
+    Number(recoveryStatus?.pendingWrites || 0) > 0
+    && Number(recoveryStatus?.lastExportAtMs || 0) < Number(recoveryStatus?.oldestPendingAtMs || 0)
+  ) {
+    const error = new Error(`Recovery export required before resetting IndexedDB ${name}.`);
+    error.code = 'recovery_export_required';
+    error.recovery = recoveryStatus;
+    throw error;
+  }
   await Promise.race([
     deleteIndexedDb(name),
     timeoutAfter(RXDB_RESET_TIMEOUT_MS, `RxDB database reset timed out after ${RXDB_RESET_TIMEOUT_MS}ms (possible IndexedDB lock)`),
   ]);
+}
+
+function readRecoveryStatus(name) {
+  try {
+    return JSON.parse(localStorage.getItem(`ctox.businessOs.recoveryStatus.${name}`) || 'null');
+  } catch {
+    return null;
+  }
 }
 
 function timeoutAfter(ms, message) {
@@ -108,6 +126,8 @@ async function createRxBusinessDb({ name }) {
     },
     collection: (name) => db[name],
     getUnsyncedWriteSummary: () => db.getUnsyncedWriteSummary?.() || Promise.resolve({ total: 0, byCollection: {} }),
+    recovery: db.recovery,
+    conflicts: db.conflicts,
     close: () => db.close(),
   };
 }
@@ -189,9 +209,15 @@ async function inspectBrowserStorageDurability(databaseName = '') {
   const usage = Number(estimate?.usage || 0);
   const quota = Number(estimate?.quota || 0);
   let unsyncedWrites = null;
+  let recoveryStatus = null;
   try {
     unsyncedWrites = JSON.parse(
       localStorage.getItem(`ctox.businessOs.unsyncedWrites.${databaseName}`) || 'null',
+    );
+  } catch {}
+  try {
+    recoveryStatus = JSON.parse(
+      localStorage.getItem(`ctox.businessOs.recoveryStatus.${databaseName}`) || 'null',
     );
   } catch {}
   return {
@@ -200,10 +226,14 @@ async function inspectBrowserStorageDurability(databaseName = '') {
     usageBytes: usage,
     quotaBytes: quota,
     pressureRatio: quota > 0 ? usage / quota : null,
-    ephemeralLikely: persistent === false || quota > 0 && quota < 128 * 1024 * 1024,
+    ephemeralLikely: quota > 0 && quota < 128 * 1024 * 1024,
     wasDiscarded: Boolean(globalThis.document?.wasDiscarded),
     unsyncedWrites: Number(unsyncedWrites?.total || 0),
     unsyncedByCollection: unsyncedWrites?.byCollection || {},
+    journalPendingWrites: Number(recoveryStatus?.pendingWrites || 0),
+    journalPendingBytes: Number(recoveryStatus?.pendingBytes || 0),
+    unresolvedConflicts: Number(recoveryStatus?.unresolvedConflicts || 0),
+    lastRecoveryExportAtMs: Number(recoveryStatus?.lastExportAtMs || 0),
     capturedAtMs: Date.now(),
   };
 }
@@ -240,6 +270,19 @@ function attachDatabaseDurability(db, storageHealth) {
     globalThis.dispatchEvent?.(new CustomEvent('ctox-rxdb-lifecycle', {
       detail: { databaseName: db.name, state, event, updatedAtMs: lifecycle.updatedAtMs },
     }));
+    if (
+      ['freeze', 'pagehide'].includes(event)
+      && Number(storageHealth.journalPendingWrites || storageHealth.unsyncedWrites || 0) > 0
+      && (
+        storageHealth.persistent === false
+        || storageHealth.ephemeralLikely
+        || Number(storageHealth.pressureRatio || 0) >= 0.8
+      )
+    ) {
+      globalThis.dispatchEvent?.(new CustomEvent('ctox-indexeddb-recovery-required', {
+        detail: { databaseName: db.name, event, ...storageHealth },
+      }));
+    }
   };
   const listeners = [
     [globalThis.document, 'visibilitychange', () => update(document.visibilityState === 'hidden' ? 'background' : 'active', 'visibilitychange')],
@@ -262,10 +305,22 @@ function attachDatabaseDurability(db, storageHealth) {
   const storageHealthTimer = setInterval(() => {
     refreshStorageHealth().catch(() => {});
   }, 60_000);
+  const recoveryStatusListener = (event) => {
+    if (event?.detail?.databaseName !== db.name) return;
+    Object.assign(storageHealth, {
+      journalPendingWrites: Number(event.detail.pendingWrites || 0),
+      journalPendingBytes: Number(event.detail.pendingBytes || 0),
+      oldestPendingAtMs: Number(event.detail.oldestPendingAtMs || 0),
+      unresolvedConflicts: Number(event.detail.unresolvedConflicts || 0),
+      lastRecoveryExportAtMs: Number(event.detail.lastExportAtMs || 0),
+    });
+  };
+  globalThis.addEventListener?.('ctox-indexeddb-recovery-status', recoveryStatusListener);
   storageHealthTimer.unref?.();
   const close = db.close;
   db.close = async () => {
     clearInterval(storageHealthTimer);
+    globalThis.removeEventListener?.('ctox-indexeddb-recovery-status', recoveryStatusListener);
     for (const [target, type, handler] of listeners) target?.removeEventListener?.(type, handler);
     update('closed', 'close');
     return close();

@@ -57,6 +57,20 @@ const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
 const RTC_HANDSHAKE_TIMEOUT_MS = 60_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
+const TERMINAL_SIGNALING_REJECTION_CODES = new Set([
+  'protocol_missing',
+  'protocol_mismatch',
+  'instance_mismatch',
+  'peer_revoked',
+  'role_mismatch',
+  'token_invalid',
+  'token_signature_invalid',
+  'credentials_revoked',
+]);
+const RETRYABLE_SIGNALING_REJECTION_CODES = new Set([
+  'control_plane_token_expired',
+  'temporary_unavailable',
+]);
 // Grace window for transient ICE 'disconnected' before tearing the
 // connection down (mirrors the Rust peer's keep-through-Disconnected rule).
 // Chromium can report `disconnected` while a busy local peer drains a large
@@ -168,6 +182,7 @@ export class CtoxWebRtcNativePeer {
       resumeRequestCount: 0,
       resumeAckCount: 0,
       backpressureWaitCount: 0,
+      backpressureStallCount: 0,
       queuedFrames: 0,
       sentScheduledFrames: 0,
       priorityQueueDepth: 0,
@@ -333,7 +348,7 @@ export class CtoxWebRtcNativePeer {
           lastSendPriority: item.priority,
         });
         if (item.inline) {
-          await this.waitForSendBuffer(connection.channel);
+          await this.waitForSendBuffer(connection.channel, connection);
           if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== 'open') {
             this.removeConnection(connection.remotePeerId, 'send-queue-channel-closed');
             break;
@@ -405,7 +420,7 @@ export class CtoxWebRtcNativePeer {
           const windowEnd = Math.min(windowStart + FRAME_ACK_WINDOW, totalFrames) - 1;
           const ack = this.awaitFrameAck(transferId, connection.remotePeerId, windowEnd);
           for (let seq = windowStart; seq <= windowEnd; seq += 1) {
-            await this.waitForSendBuffer(channel);
+            await this.waitForSendBuffer(channel, connection);
             if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== 'open') {
               throw createPeerClosedError(connection.remotePeerId, 'frame-send-channel-closed');
             }
@@ -481,7 +496,7 @@ export class CtoxWebRtcNativePeer {
       const item = nextHighPriorityInlineSend(queue);
       if (!item) break;
       this.refreshSendQueueStatus(connection);
-      await this.waitForSendBuffer(connection.channel);
+      await this.waitForSendBuffer(connection.channel, connection);
       connection.channel.send(item.text);
       this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
@@ -537,7 +552,7 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
-  waitForSendBuffer(channel) {
+  waitForSendBuffer(channel, connection = null) {
     if (Number(channel.bufferedAmount || 0) <= SEND_BUFFER_HIGH_WATER) {
       return Promise.resolve();
     }
@@ -561,8 +576,23 @@ export class CtoxWebRtcNativePeer {
       channel.addEventListener?.('bufferedamountlow', done, { once: true });
       timer = setTimeout(() => {
         cleanup();
+        this.recordTransportStatus({
+          backpressureStallCount: this.transportStats.backpressureStallCount + 1,
+          rejectedFrames: this.transportStats.rejectedFrames + 1,
+        });
         const error = new Error('WebRTC send buffer remained above the high-water mark.');
         error.code = 'ctox_webrtc_send_buffer_stalled';
+        error.retryable = true;
+        error.peerId = connection?.remotePeerId || null;
+        this.events.emit('error', error);
+        if (connection?.remotePeerId) {
+          this.removeConnection(
+            connection.remotePeerId,
+            'send-buffer-stalled',
+            error,
+            { reconnect: false },
+          );
+        }
         reject(error);
       }, SEND_BUFFER_STALL_TIMEOUT_MS);
     });
@@ -678,6 +708,16 @@ export class CtoxWebRtcNativePeer {
         this.lastControlPlaneError = error;
       }
       this.events.emit('error', error);
+      if (error.retryable === false) {
+        // The server closes immediately after ctoxError. Mark this peer closed
+        // before that close event arrives so the reconnect scheduler cannot
+        // hammer a permanent auth/protocol rejection. A changed config creates
+        // a new shared-room peer and is the explicit recovery edge.
+        this.closed = true;
+        if (this.signalingReconnectTimer) clearTimeout(this.signalingReconnectTimer);
+        this.signalingReconnectTimer = null;
+        this.rejectAllPending(error);
+      }
       return;
     }
     if (message.type === 'signal' || message.signal || message.data) {
@@ -1330,7 +1370,7 @@ export class CtoxWebRtcNativePeer {
     return true;
   }
 
-  removeConnection(remotePeerId, reason = 'closed') {
+  removeConnection(remotePeerId, reason = 'closed', pendingError = null, { reconnect = true } = {}) {
     const peerId = String(remotePeerId || '');
     const connection = this.connections.get(peerId);
     if (!connection) return;
@@ -1343,9 +1383,9 @@ export class CtoxWebRtcNativePeer {
     try { connection.channel?.close?.(); } catch {}
     try { connection.peer?.close?.(); } catch {}
     releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
-    this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
+    this.rejectPendingForPeer(peerId, pendingError || createPeerClosedError(peerId, reason));
     this.events.emit('peer-close', { peerId, reason });
-    if (reason !== 'peer-close') {
+    if (reconnect && reason !== 'peer-close') {
       this.scheduleReconnect(peerId, reason);
     }
   }
@@ -1654,6 +1694,11 @@ export function normalizeSignalingControlPlaneError(payload = {}) {
       ? payload.message.trim()
       : code;
   if (payload.type === 'ctoxError' && payload.scope === 'control-plane') {
+    const retryable = RETRYABLE_SIGNALING_REJECTION_CODES.has(code)
+      ? true
+      : TERMINAL_SIGNALING_REJECTION_CODES.has(code)
+        ? false
+        : false;
     return {
       name: 'CtoxSignalingControlPlaneError',
       type: payload.type,
@@ -1661,7 +1706,7 @@ export function normalizeSignalingControlPlaneError(payload = {}) {
       code,
       phase: 'signaling-control-plane',
       severity: 'error',
-      retryable: false,
+      retryable,
       message: reason,
     };
   }

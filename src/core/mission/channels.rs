@@ -3572,6 +3572,283 @@ pub(crate) fn claim_business_command_with_queue(
     })
 }
 
+const MODULE_VISIBILITY_SAGA_STEPS: &[(&str, &str, &str)] = &[
+    (
+        "persist_visibility",
+        "module_visibility:persist",
+        "module_visibility:restore",
+    ),
+    (
+        "project_catalog",
+        "module_visibility:project",
+        "module_visibility:reproject",
+    ),
+];
+
+fn registered_business_command_saga(
+    command_type: &str,
+) -> Option<(
+    &'static str,
+    &'static [(&'static str, &'static str, &'static str)],
+)> {
+    match command_type {
+        "ctox.module.set_visible" => {
+            Some(("ctox.module.visibility.v1", MODULE_VISIBILITY_SAGA_STEPS))
+        }
+        _ => None,
+    }
+}
+
+fn register_business_command_saga_tx(
+    tx: &Transaction<'_>,
+    command_id: &str,
+    command_type: &str,
+    now_ms: i64,
+) -> Result<()> {
+    let Some((saga_kind, steps)) = registered_business_command_saga(command_type) else {
+        return Ok(());
+    };
+    let saga_id = format!("saga:{command_id}");
+    tx.execute(
+        "INSERT OR IGNORE INTO business_command_sagas
+            (saga_id, command_id, saga_kind, phase, current_step, total_steps, compensation_status, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, 'forward', 0, ?4, 'not_started', ?5, ?5)",
+        params![saga_id, command_id, saga_kind, steps.len() as i64, now_ms],
+    )?;
+    for (index, (name, forward_key, compensation_key)) in steps.iter().enumerate() {
+        tx.execute(
+            "INSERT OR IGNORE INTO business_command_saga_steps
+                (saga_id, step_index, step_name, forward_effect_key, compensation_effect_key, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![saga_id, index as i64, name, forward_key, compensation_key, now_ms],
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn start_business_command_saga(
+    root: &Path,
+    command_id: &str,
+    command_type: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        registered_business_command_saga(command_type).is_some(),
+        "no native saga definition registered for `{command_type}`"
+    );
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    register_business_command_saga_tx(&tx, command_id, command_type, epoch_millis())?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn claim_business_command_saga_step(
+    root: &Path,
+    command_id: &str,
+    step_name: &str,
+    compensation: bool,
+) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let saga_id = format!("saga:{command_id}");
+    let column = if compensation {
+        "compensation_status"
+    } else {
+        "forward_status"
+    };
+    let attempts = if compensation {
+        "compensation_attempts"
+    } else {
+        "forward_attempts"
+    };
+    let step: Option<(String, i64, String)> = tx.query_row(
+        &format!("SELECT s.{column}, s.step_index, g.phase FROM business_command_saga_steps s JOIN business_command_sagas g ON g.saga_id = s.saga_id WHERE s.saga_id = ?1 AND s.step_name = ?2"),
+        params![saga_id, step_name],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional()?;
+    let (status, step_index, saga_phase) =
+        step.with_context(|| format!("no registered saga step `{step_name}` for `{command_id}`"))?;
+    if status == "completed" {
+        tx.commit()?;
+        return Ok(false);
+    }
+    if compensation {
+        anyhow::ensure!(
+            saga_phase == "compensating" || saga_phase == "manual_intervention",
+            "saga is not compensating"
+        );
+        anyhow::ensure!(
+            status != "not_required",
+            "compensation was not requested for saga step `{step_name}`"
+        );
+        let later_pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM business_command_saga_steps
+             WHERE saga_id = ?1 AND step_index > ?2 AND compensation_status IN ('pending', 'claimed', 'failed')",
+            params![saga_id, step_index],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            later_pending == 0,
+            "saga compensation must run in reverse step order"
+        );
+    } else {
+        anyhow::ensure!(saga_phase == "forward", "saga is not in forward phase");
+        let earlier_incomplete: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM business_command_saga_steps
+             WHERE saga_id = ?1 AND step_index < ?2 AND forward_status != 'completed'",
+            params![saga_id, step_index],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            earlier_incomplete == 0,
+            "saga forward steps must run in registered order"
+        );
+    }
+    let now_ms = epoch_millis();
+    tx.execute(
+        &format!("UPDATE business_command_saga_steps SET {column} = 'claimed', {attempts} = {attempts} + 1, updated_at_ms = ?3 WHERE saga_id = ?1 AND step_name = ?2"),
+        params![saga_id, step_name, now_ms],
+    )?;
+    tx.execute(
+        "UPDATE business_command_sagas SET current_step = (SELECT step_index FROM business_command_saga_steps WHERE saga_id = ?1 AND step_name = ?2), updated_at_ms = ?3 WHERE saga_id = ?1",
+        params![saga_id, step_name, now_ms],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+pub(crate) fn business_command_saga_step_evidence(
+    root: &Path,
+    command_id: &str,
+    step_name: &str,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let raw: String = conn.query_row(
+        "SELECT evidence_json FROM business_command_saga_steps WHERE saga_id = ?1 AND step_name = ?2",
+        params![format!("saga:{command_id}"), step_name],
+        |row| row.get(0),
+    )?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+pub(crate) fn record_business_command_saga_step_evidence(
+    root: &Path,
+    command_id: &str,
+    step_name: &str,
+    evidence: &Value,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let changed = conn.execute(
+        "UPDATE business_command_saga_steps SET evidence_json = ?3, updated_at_ms = ?4
+         WHERE saga_id = ?1 AND step_name = ?2 AND forward_status = 'claimed'",
+        params![
+            format!("saga:{command_id}"),
+            step_name,
+            serde_json::to_string(evidence)?,
+            epoch_millis(),
+        ],
+    )?;
+    anyhow::ensure!(changed == 1, "saga step `{step_name}` is not claimed");
+    Ok(())
+}
+
+pub(crate) fn complete_business_command_saga_step(
+    root: &Path,
+    command_id: &str,
+    step_name: &str,
+    compensation: bool,
+    evidence: &Value,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let saga_id = format!("saga:{command_id}");
+    let column = if compensation {
+        "compensation_status"
+    } else {
+        "forward_status"
+    };
+    let now_ms = epoch_millis();
+    let changed = tx.execute(
+        &format!("UPDATE business_command_saga_steps SET {column} = 'completed', evidence_json = ?3, error_message = NULL, updated_at_ms = ?4 WHERE saga_id = ?1 AND step_name = ?2 AND {column} IN ('claimed', 'completed')"),
+        params![saga_id, step_name, serde_json::to_string(evidence)?, now_ms],
+    )?;
+    anyhow::ensure!(
+        changed == 1,
+        "saga step `{step_name}` was not durably claimed"
+    );
+    if compensation {
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM business_command_saga_steps WHERE saga_id = ?1 AND compensation_status IN ('pending', 'claimed', 'failed')",
+            params![saga_id], |row| row.get(0),
+        )?;
+        if pending == 0 {
+            tx.execute("UPDATE business_command_sagas SET phase = 'compensated', compensation_status = 'completed', updated_at_ms = ?2 WHERE saga_id = ?1", params![saga_id, now_ms])?;
+        }
+    } else {
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM business_command_saga_steps WHERE saga_id = ?1 AND forward_status != 'completed'",
+            params![saga_id], |row| row.get(0),
+        )?;
+        if pending == 0 {
+            tx.execute("UPDATE business_command_sagas SET phase = 'completed', current_step = total_steps, updated_at_ms = ?2 WHERE saga_id = ?1", params![saga_id, now_ms])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub(crate) fn fail_business_command_saga_step(
+    root: &Path,
+    command_id: &str,
+    step_name: &str,
+    error_message: &str,
+    compensation: bool,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let saga_id = format!("saga:{command_id}");
+    let column = if compensation {
+        "compensation_status"
+    } else {
+        "forward_status"
+    };
+    let now_ms = epoch_millis();
+    tx.execute(
+        &format!("UPDATE business_command_saga_steps SET {column} = 'failed', error_message = ?3, updated_at_ms = ?4 WHERE saga_id = ?1 AND step_name = ?2"),
+        params![saga_id, step_name, error_message, now_ms],
+    )?;
+    if compensation {
+        tx.execute("UPDATE business_command_sagas SET phase = 'manual_intervention', compensation_status = 'failed', updated_at_ms = ?2 WHERE saga_id = ?1", params![saga_id, now_ms])?;
+    } else {
+        tx.execute(
+            "UPDATE business_command_saga_steps SET compensation_status = 'pending', updated_at_ms = ?2
+             WHERE saga_id = ?1 AND forward_status = 'completed'",
+            params![saga_id, now_ms],
+        )?;
+        let compensation_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM business_command_saga_steps WHERE saga_id = ?1 AND compensation_status = 'pending'",
+            params![saga_id], |row| row.get(0),
+        )?;
+        tx.execute(
+            "UPDATE business_command_sagas SET phase = ?2, compensation_status = ?3, updated_at_ms = ?4 WHERE saga_id = ?1",
+            params![
+                saga_id,
+                if compensation_count == 0 { "compensated" } else { "compensating" },
+                if compensation_count == 0 { "completed" } else { "pending" },
+                now_ms,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub(crate) fn claim_business_command_waiting_dependencies(
     root: &Path,
     claim: BusinessCommandClaimRequest,
@@ -3770,6 +4047,26 @@ pub(crate) fn complete_business_control_command(
     if phase == "terminal" {
         tx.commit()?;
         return Ok(());
+    }
+    let saga_phase: Option<String> = tx
+        .query_row(
+            "SELECT phase FROM business_command_sagas WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(saga_phase) = saga_phase.as_deref() {
+        if terminal_status == "completed" {
+            anyhow::ensure!(
+                saga_phase == "completed",
+                "terminal success rejected: command saga is `{saga_phase}`"
+            );
+        } else {
+            anyhow::ensure!(
+                matches!(saga_phase, "compensated" | "manual_intervention"),
+                "terminal failure rejected until saga compensation is durably captured (phase `{saga_phase}`)"
+            );
+        }
     }
     crate::business_os::command_lifecycle::validate_execution_phase_transition(&phase, "terminal")?;
     let next_version = version.saturating_add(1);
@@ -4361,6 +4658,22 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
         )
         .optional()?
         .unwrap_or_default();
+    let saga = conn
+        .query_row(
+            "SELECT saga_id, phase, current_step, total_steps, compensation_status
+         FROM business_command_sagas WHERE command_id = ?1",
+            params![command_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
     let status = if execution_phase == "terminal" {
         terminal_status.as_str()
     } else if execution_phase == "waiting_dependencies" {
@@ -4397,6 +4710,22 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
         Value::String(task_id.clone()),
     );
     object.insert("task_id".to_string(), Value::String(task_id));
+    if let Some((saga_id, saga_phase, saga_step, saga_total_steps, compensation_status)) = saga {
+        object.insert("saga_id".to_string(), Value::String(saga_id));
+        object.insert("saga_phase".to_string(), Value::String(saga_phase));
+        object.insert("saga_step".to_string(), Value::from(saga_step));
+        object.insert(
+            "saga_total_steps".to_string(),
+            Value::from(saga_total_steps),
+        );
+        object.insert(
+            "compensation_status".to_string(),
+            Value::String(compensation_status),
+        );
+        if execution_phase != "terminal" {
+            object.insert("pending_consistency".to_string(), Value::Bool(true));
+        }
+    }
     let (route_status, task_status) = if execution_phase == "terminal" {
         match terminal_status.as_str() {
             "completed" => ("handled", "completed"),
@@ -10400,6 +10729,38 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY(command_id, effect_key),
             FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_sagas (
+            saga_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE,
+            saga_kind TEXT NOT NULL,
+            phase TEXT NOT NULL CHECK(phase IN ('forward', 'compensating', 'completed', 'compensated', 'manual_intervention')),
+            current_step INTEGER NOT NULL DEFAULT 0,
+            total_steps INTEGER NOT NULL,
+            compensation_status TEXT NOT NULL DEFAULT 'not_started',
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            FOREIGN KEY(command_id) REFERENCES business_command_aggregates(command_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS business_command_saga_steps (
+            saga_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            step_name TEXT NOT NULL,
+            forward_effect_key TEXT NOT NULL,
+            compensation_effect_key TEXT NOT NULL,
+            forward_status TEXT NOT NULL DEFAULT 'pending' CHECK(forward_status IN ('pending', 'claimed', 'completed', 'failed')),
+            compensation_status TEXT NOT NULL DEFAULT 'not_required' CHECK(compensation_status IN ('not_required', 'pending', 'claimed', 'completed', 'failed')),
+            forward_attempts INTEGER NOT NULL DEFAULT 0,
+            compensation_attempts INTEGER NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '{{}}',
+            error_message TEXT,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(saga_id, step_index),
+            UNIQUE(saga_id, forward_effect_key),
+            UNIQUE(saga_id, compensation_effect_key),
+            FOREIGN KEY(saga_id) REFERENCES business_command_sagas(saga_id)
         );
 
         CREATE TABLE IF NOT EXISTS business_command_results (
@@ -17850,6 +18211,204 @@ mod tests {
             )
             .expect("count control command rows");
         assert_eq!(counts, (1, 2, 4));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registered_saga_blocks_premature_success_and_persists_compensation() {
+        let root = business_command_test_root("ctox-business-command-saga");
+        let mut claim = business_command_claim("command-saga-1", "sha256:saga");
+        claim.command_type = "ctox.module.set_visible".to_string();
+        claim_business_control_command(&root, claim).expect("claim control command");
+        start_business_command_saga(&root, "command-saga-1", "ctox.module.set_visible")
+            .expect("start registered saga");
+
+        let premature = complete_business_control_command(
+            &root,
+            "command-saga-1",
+            "completed",
+            &json!({"ok": true}),
+            None,
+        )
+        .expect_err("terminal success before saga completion must fail");
+        assert!(premature.to_string().contains("terminal success rejected"));
+
+        assert!(claim_business_command_saga_step(
+            &root,
+            "command-saga-1",
+            "persist_visibility",
+            false,
+        )
+        .expect("claim first step"));
+        complete_business_command_saga_step(
+            &root,
+            "command-saga-1",
+            "persist_visibility",
+            false,
+            &json!({"previous_visible": false}),
+        )
+        .expect("complete first step");
+        claim_business_command_saga_step(&root, "command-saga-1", "project_catalog", false)
+            .expect("claim second step");
+        fail_business_command_saga_step(
+            &root,
+            "command-saga-1",
+            "project_catalog",
+            "projection failed",
+            false,
+        )
+        .expect("fail second step");
+        assert!(claim_business_command_saga_step(
+            &root,
+            "command-saga-1",
+            "persist_visibility",
+            true,
+        )
+        .expect("claim compensation"));
+        complete_business_command_saga_step(
+            &root,
+            "command-saga-1",
+            "persist_visibility",
+            true,
+            &json!({"restored_visible": false}),
+        )
+        .expect("complete compensation");
+        complete_business_control_command(
+            &root,
+            "command-saga-1",
+            "failed",
+            &json!({"ok": false}),
+            Some("projection failed"),
+        )
+        .expect("terminal failure after compensation");
+        let projection =
+            business_command_projection(&root, "command-saga-1").expect("project saga fields");
+        assert_eq!(projection["saga_phase"], "compensated");
+        assert_eq!(projection["compensation_status"], "completed");
+        assert_eq!(projection["saga_total_steps"], 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registered_saga_replays_claimed_effect_and_keeps_failed_compensation_visible() {
+        let root = business_command_test_root("ctox-business-command-saga-crash-replay");
+        let mut claim = business_command_claim("command-saga-crash", "sha256:saga-crash");
+        claim.command_type = "ctox.module.set_visible".to_string();
+        claim_business_control_command(&root, claim).expect("claim control command");
+        start_business_command_saga(&root, "command-saga-crash", "ctox.module.set_visible")
+            .expect("start saga");
+
+        let out_of_order =
+            claim_business_command_saga_step(&root, "command-saga-crash", "project_catalog", false)
+                .expect_err("second forward effect must wait for the first");
+        assert!(out_of_order.to_string().contains("registered order"));
+
+        assert!(claim_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            false,
+        )
+        .expect("claim first forward effect"));
+        let evidence = json!({"module_id": "notes", "previous_visible": false, "visible": true});
+        record_business_command_saga_step_evidence(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            &evidence,
+        )
+        .expect("persist pre-effect evidence");
+
+        // Simulate a process restart after the effect evidence commit but
+        // before the step completion commit. Registration is idempotent and
+        // the same step is re-claimable with its evidence intact.
+        start_business_command_saga(&root, "command-saga-crash", "ctox.module.set_visible")
+            .expect("restart saga registration");
+        assert_eq!(
+            business_command_saga_step_evidence(&root, "command-saga-crash", "persist_visibility",)
+                .expect("recover effect evidence"),
+            evidence,
+        );
+        assert!(claim_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            false,
+        )
+        .expect("reclaim interrupted effect"));
+        complete_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            false,
+            &evidence,
+        )
+        .expect("complete replayed effect");
+        assert!(!claim_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            false,
+        )
+        .expect("completed effect is idempotent"));
+
+        claim_business_command_saga_step(&root, "command-saga-crash", "project_catalog", false)
+            .expect("claim projection effect");
+        fail_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "project_catalog",
+            "projection failed",
+            false,
+        )
+        .expect("start compensation");
+        claim_business_command_saga_step(&root, "command-saga-crash", "persist_visibility", true)
+            .expect("claim compensation");
+        fail_business_command_saga_step(
+            &root,
+            "command-saga-crash",
+            "persist_visibility",
+            "visibility restore failed",
+            true,
+        )
+        .expect("persist failed compensation");
+
+        let premature_success = complete_business_control_command(
+            &root,
+            "command-saga-crash",
+            "completed",
+            &json!({"ok": true}),
+            None,
+        )
+        .expect_err("manual intervention saga must never report success");
+        assert!(premature_success
+            .to_string()
+            .contains("terminal success rejected"));
+        complete_business_control_command(
+            &root,
+            "command-saga-crash",
+            "failed",
+            &json!({"ok": false, "code": "saga_compensation_failed"}),
+            Some("saga_compensation_failed"),
+        )
+        .expect("terminal failure retains manual intervention evidence");
+        let projection = business_command_projection(&root, "command-saga-crash")
+            .expect("project failed compensation");
+        assert_eq!(projection["saga_phase"], "manual_intervention");
+        assert_eq!(projection["compensation_status"], "failed");
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open saga database");
+        let attempts: i64 = conn
+            .query_row(
+                "SELECT forward_attempts FROM business_command_saga_steps WHERE saga_id = 'saga:command-saga-crash' AND step_name = 'persist_visibility'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read durable retry count");
+        assert_eq!(
+            attempts, 2,
+            "crash replay must be visible as a second attempt"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

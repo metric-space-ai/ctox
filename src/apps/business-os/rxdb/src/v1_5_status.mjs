@@ -41,6 +41,10 @@ export const V1_5_STATUS_FIELDS = Object.freeze([
   'localPushChangedSinceScannedRows',
   'localPushChangedSinceScanLimitHits',
   'localPushChangedSinceMaxScannedRows',
+  'clockSkewDetected',
+  'nativeClockOffsetMs',
+  'nativeClockObservedAtMs',
+  'code',
 ]);
 
 export function createV1_5StatusState() {
@@ -77,6 +81,10 @@ export function createV1_5StatusState() {
     localPushChangedSinceScannedRows: 0,
     localPushChangedSinceScanLimitHits: 0,
     localPushChangedSinceMaxScannedRows: 0,
+    clockSkewDetected: false,
+    nativeClockOffsetMs: 0,
+    nativeClockObservedAtMs: null,
+    code: null,
   };
 }
 

@@ -1,5 +1,35 @@
 const HLC_NODE_STORAGE_KEY = 'ctox.businessOs.hlcNodeId.v1';
 let cachedNodeId = null;
+let nativeClockOffsetMs = 0;
+let nativeClockObservedAtMs = null;
+let clockSkewDetected = false;
+const CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1000;
+
+export function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
+  nativeClockOffsetMs = Math.trunc(nativeTimeMs) - Math.trunc(observedAtMs);
+  nativeClockObservedAtMs = Math.trunc(observedAtMs);
+  clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
+  return hybridLogicalClockStatus();
+}
+
+export function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {
+  return Math.max(0, Math.trunc(Number(nowMs) || 0) + nativeClockOffsetMs);
+}
+
+export function hybridLogicalClockStatus() {
+  return {
+    code: clockSkewDetected ? 'clock_skew_detected' : null,
+    clockSkewDetected,
+    nativeClockOffsetMs,
+    nativeClockObservedAtMs,
+  };
+}
+
+export function isFutureHybridLogicalClock(value, nowMs = correctedHybridLogicalClockNowMs()) {
+  const parsed = parseHybridLogicalClock(value);
+  return Boolean(parsed && parsed.physicalMs > nowMs + CLOCK_SKEW_LIMIT_MS);
+}
 
 export function hybridLogicalClockNodeId() {
   if (cachedNodeId) return cachedNodeId;
@@ -16,11 +46,13 @@ export function hybridLogicalClockNodeId() {
 }
 
 export function nextHybridLogicalClock(previous, {
-  nowMs = Date.now(),
+  nowMs = null,
   nodeId = hybridLogicalClockNodeId(),
 } = {}) {
   const prior = parseHybridLogicalClock(previous);
-  const wall = Math.max(0, Math.floor(Number(nowMs) || 0));
+  const wall = nowMs === null || nowMs === undefined
+    ? correctedHybridLogicalClockNowMs()
+    : Math.max(0, Math.floor(Number(nowMs) || 0));
   const physicalMs = Math.max(wall, prior?.physicalMs || 0);
   const logical = prior && physicalMs === prior.physicalMs ? prior.logical + 1 : 0;
   return formatHybridLogicalClock({ physicalMs, logical, nodeId });

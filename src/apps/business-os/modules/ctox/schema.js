@@ -213,7 +213,8 @@ export const collections = {
       active: { type: 'boolean' },
       created_at_ms: { type: 'number' },
       updated_at_ms: { type: 'number' },
-      is_deleted: { type: 'boolean' }
+      is_deleted: { type: 'boolean' },
+      profile: { type: 'object', additionalProperties: true }
     },
     required: ['id', 'display_name', 'role', 'active', 'updated_at_ms'],
     additionalProperties: true
