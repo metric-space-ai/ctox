@@ -209,17 +209,14 @@ function handleTerminationSignal(signal) {
   runSummary.terminationSignal = signal;
   console.error(`rxdb soak received ${signal}; forwarding to active matrix child`);
   if (!activeMatrixChild?.pid) {
-    terminateKnownSmokeProcesses(signal);
     writeRunSummary(false);
     process.exit(1);
   }
   terminateProcessTree(activeMatrixChild.pid, signal);
-  terminateKnownSmokeProcesses(signal);
   forceExitTimer = setTimeout(() => {
     if (activeMatrixChild?.pid) {
       terminateProcessTree(activeMatrixChild.pid, 'SIGKILL');
     }
-    terminateKnownSmokeProcesses('SIGKILL');
     writeRunSummary(false);
     process.exit(1);
   }, 30_000);
@@ -264,45 +261,6 @@ function collectDescendantPids(rootPid) {
     stack.push(...(childrenByParent.get(pid) || []));
   }
   return result;
-}
-
-function terminateKnownSmokeProcesses(signal) {
-  const ownPid = process.pid;
-  for (const pid of findKnownSmokePids()) {
-    if (pid === ownPid) continue;
-    try {
-      process.kill(pid, signal);
-    } catch {}
-  }
-}
-
-function findKnownSmokePids() {
-  let lines = [];
-  try {
-    lines = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split(/\r?\n/);
-  } catch {
-    return [];
-  }
-  const rootFragment = root.replace(/\\/g, '/');
-  return lines
-    .map((line) => {
-      const match = line.trim().match(/^(\d+)\s+(.*)$/);
-      return match ? { pid: Number(match[1]), command: match[2] } : null;
-    })
-    .filter(Boolean)
-    .filter(({ command }) => {
-      const normalized = command.replace(/\\/g, '/');
-      if (normalized.includes('src/core/rxdb/tools/browser_rust_smoke_matrix.js')) return true;
-      if (normalized.includes('src/core/rxdb/tools/browser_rust_smoke.js')) return true;
-      if (normalized.includes('src/core/rxdb/tools/local_signaling_server.js')) return true;
-      if (normalized.includes('runtime/build/core-rxdb-integration-target/debug/ctox')) return true;
-      if (normalized.includes('ctox-rxdb-smoke') && normalized.includes('Google Chrome for Testing')) return true;
-      if (normalized.includes('ctox-rxdb-smoke') && normalized.includes('chrome_crashpad_handler')) return true;
-      return false;
-    })
-    .filter(({ command }) => command.replace(/\\/g, '/').includes(rootFragment) || command.includes('ctox-rxdb-smoke'))
-    .map(({ pid }) => pid)
-    .filter((pid) => Number.isFinite(pid));
 }
 
 function readJsonFile(file) {

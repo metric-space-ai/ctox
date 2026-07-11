@@ -105,7 +105,19 @@ const root = path.resolve(__dirname, '../../../..');
 const runtimeRootProvided = !!process.env.CTOX_SMOKE_ROOT;
 const runtimeRoot = process.env.CTOX_SMOKE_ROOT || fs.mkdtempSync(path.join(os.tmpdir(), 'ctox-rxdb-smoke-'));
 const keepSmokeArtifacts = process.env.CTOX_SMOKE_KEEP_ARTIFACTS === '1';
+const smokeRunId = process.env.CTOX_SMOKE_RUN_ID || `smoke-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+const smokeProcessLifecyclePath = process.env.SMOKE_PROCESS_LIFECYCLE_PATH || '';
 const smokeChildren = new Set();
+const smokeProcessLifecycle = {
+  schema: 'ctox.rxdb.smoke_process_lifecycle.v1',
+  runId: smokeRunId,
+  mode: process.env.SMOKE_MODE || 'rust-to-browser',
+  parent: processIdentity(process.pid),
+  startedAt: new Date().toISOString(),
+  startupPhase: 'bootstrap',
+  events: [],
+};
+recordSmokeProcessEvent('smoke_started');
 const restoreProtectedBusinessOsSources = protectBusinessOsSourceFiles();
 const smokeRootPrepareStartedAt = Date.now();
 prepareSmokeRoot(runtimeRoot);
@@ -542,21 +554,116 @@ async function captureBusinessOsVisualScreenshotEvidence(page) {
   return evidence;
 }
 
-function trackSmokeChild(child) {
+function processIdentity(pid) {
+  const identity = { pid: Number(pid) || null, ppid: null, pgid: null };
+  if (!identity.pid || process.platform === 'win32') return identity;
+  try {
+    const result = spawnSync('ps', ['-o', 'ppid=', '-o', 'pgid=', '-p', String(identity.pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const [ppid, pgid] = String(result.stdout || '').trim().split(/\s+/).map(Number);
+    if (Number.isFinite(ppid)) identity.ppid = ppid;
+    if (Number.isFinite(pgid)) identity.pgid = pgid;
+  } catch {
+    // Process-group diagnostics are best effort on non-POSIX hosts.
+  }
+  return identity;
+}
+
+function writeSmokeProcessLifecycle() {
+  smokeProcessLifecycle.endedAt = new Date().toISOString();
+  smokeProcessLifecycle.startupPhase = smokeProcessLifecycle.startupPhase || 'unknown';
+  if (!smokeProcessLifecyclePath) return;
+  try {
+    fs.mkdirSync(path.dirname(smokeProcessLifecyclePath), { recursive: true });
+    fs.writeFileSync(smokeProcessLifecyclePath, `${JSON.stringify(smokeProcessLifecycle, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`[smoke-process-lifecycle] write failed: ${error?.message || error}\n`);
+  }
+}
+
+function recordSmokeProcessEvent(type, details = {}) {
+  smokeProcessLifecycle.events.push({
+    at: new Date().toISOString(),
+    elapsedMs: Date.now() - Date.parse(smokeProcessLifecycle.startedAt),
+    type,
+    phase: smokeProcessLifecycle.startupPhase,
+    ...details,
+  });
+  writeSmokeProcessLifecycle();
+}
+
+function setSmokeStartupPhase(phase) {
+  if (!phase || smokeProcessLifecycle.startupPhase === phase) return;
+  smokeProcessLifecycle.startupPhase = phase;
+  recordSmokeProcessEvent('phase_changed', { phase });
+}
+
+function trackSmokeChild(child, kind = 'child') {
   if (!child) return child;
+  child.__ctoxSmokeOwner = smokeRunId;
+  child.__ctoxSmokeKind = kind;
   smokeChildren.add(child);
-  child.once('exit', () => smokeChildren.delete(child));
+  recordSmokeProcessEvent('child_spawn_requested', {
+    kind,
+    child: processIdentity(child.pid),
+  });
+  child.once('spawn', () => {
+    recordSmokeProcessEvent('child_spawned', {
+      kind,
+      child: processIdentity(child.pid),
+    });
+  });
+  child.once('error', (error) => {
+    recordSmokeProcessEvent('child_spawn_error', {
+      kind,
+      child: processIdentity(child.pid),
+      error: error?.message || String(error),
+    });
+  });
+  child.once('exit', (code, signal) => {
+    smokeChildren.delete(child);
+    recordSmokeProcessEvent('child_exited', {
+      kind,
+      child: processIdentity(child.pid),
+      code,
+      signal,
+      signalSource: child.__ctoxTerminationRequest || (signal ? 'unknown_external_source' : null),
+    });
+  });
   return child;
 }
 
-function killTrackedSmokeChildren(signal = 'SIGTERM') {
+function terminateOwnedSmokeChild(child, signal, cleanupOwner, reason) {
+  if (!child || child.__ctoxSmokeOwner !== smokeRunId) return false;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
+  child.__ctoxTerminationRequest = { cleanupOwner, reason, signal, requestedAt: new Date().toISOString() };
+  recordSmokeProcessEvent('child_termination_requested', {
+    kind: child.__ctoxSmokeKind || 'child',
+    child: processIdentity(child.pid),
+    cleanupOwner,
+    reason,
+    signal,
+  });
+  try {
+    return child.kill(signal);
+  } catch (error) {
+    recordSmokeProcessEvent('child_termination_failed', {
+      kind: child.__ctoxSmokeKind || 'child',
+      child: processIdentity(child.pid),
+      cleanupOwner,
+      reason,
+      signal,
+      error: error?.message || String(error),
+    });
+    return false;
+  }
+}
+
+function killTrackedSmokeChildren(signal = 'SIGTERM', cleanupOwner = 'smoke-parent', reason = 'shutdown') {
   for (const child of smokeChildren) {
-    if (child.exitCode !== null || child.signalCode !== null) continue;
-    try {
-      child.kill(signal);
-    } catch {
-      // Best-effort cleanup during process shutdown.
-    }
+    terminateOwnedSmokeChild(child, signal, cleanupOwner, reason);
   }
 }
 
@@ -589,12 +696,18 @@ function protectBusinessOsSourceFiles() {
     }
   };
   process.once('exit', () => {
-    killTrackedSmokeChildren('SIGKILL');
+    killTrackedSmokeChildren('SIGKILL', 'process-exit-handler', 'parent-exit');
     restore();
+    writeSmokeProcessLifecycle();
   });
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, () => {
-      killTrackedSmokeChildren('SIGTERM');
+      recordSmokeProcessEvent('parent_signal_received', {
+        signal,
+        signalSource: 'unknown_external_source',
+        parent: processIdentity(process.pid),
+      });
+      killTrackedSmokeChildren('SIGTERM', 'parent-signal-handler', `parent-received-${signal}`);
       restore();
       process.exit(signal === 'SIGINT' ? 130 : 143);
     });
@@ -1315,6 +1428,7 @@ async function startSignalingServer() {
 }
 
 async function startExternalSignalingServer() {
+  setSmokeStartupPhase('signaling-start');
   const script = path.join(root, 'src/core/rxdb/tools/local_signaling_server.js');
   const startupWaitMs = Number(process.env.SMOKE_SIGNALING_START_WAIT_MS || '20000');
   const child = trackSmokeChild(spawn(process.execPath, [script, String(signalingPort)], {
@@ -1323,9 +1437,10 @@ async function startExternalSignalingServer() {
       ...process.env,
       SIGNALING_HOST: '127.0.0.1',
       SIGNALING_PORT: String(signalingPort),
+      CTOX_SMOKE_RUN_ID: smokeRunId,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-  }));
+  }), 'signaling-server');
   child.__ctoxExternalSignaling = true;
   let resolveListening;
   let rejectListening;
@@ -1350,9 +1465,10 @@ async function startExternalSignalingServer() {
   try {
     await waitForChildReady(child.__ctoxListening, startupWaitMs, 'signaling server');
     await waitForTcpPort('127.0.0.1', signalingPort, startupWaitMs, child);
+    setSmokeStartupPhase('signaling-ready');
     return child;
   } catch (error) {
-    child.kill('SIGTERM');
+    terminateOwnedSmokeChild(child, 'SIGTERM', 'signaling-startup', 'startup-failed');
     await new Promise((resolve) => {
       const timeout = setTimeout(resolve, 1000);
       child.once('exit', () => {
@@ -1360,7 +1476,9 @@ async function startExternalSignalingServer() {
         resolve();
       });
     });
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) {
+      terminateOwnedSmokeChild(child, 'SIGKILL', 'signaling-startup', 'startup-failed-timeout');
+    }
     throw error;
   }
 }
@@ -1619,10 +1737,10 @@ function startInlineSignalingServer() {
 async function stopSignalingServer(server) {
   if (!server) return;
   if (server.__ctoxExternalSignaling) {
-    server.kill('SIGINT');
+    terminateOwnedSmokeChild(server, 'SIGINT', 'smoke-finalizer', 'graceful-signaling-stop');
     await withHostTimeout(new Promise((resolve) => server.once('exit', resolve)), 5000);
     if (server.exitCode === null && server.signalCode === null) {
-      server.kill('SIGKILL');
+      terminateOwnedSmokeChild(server, 'SIGKILL', 'smoke-finalizer', 'graceful-signaling-stop-timeout');
       await withHostTimeout(new Promise((resolve) => server.once('exit', resolve)), 2000);
     }
     return;
@@ -2707,10 +2825,12 @@ function staleRustSeedChunkGeneration(seed) {
 
 async function stopChild(child) {
   if (!child || child.exitCode !== null) return;
-  child.kill('SIGINT');
+  terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
     const timer = setTimeout(() => {
-      if (child.exitCode === null) child.kill('SIGKILL');
+      if (child.exitCode === null) {
+        terminateOwnedSmokeChild(child, 'SIGKILL', 'smoke-finalizer', 'graceful-stop-timeout');
+      }
       resolve();
     }, 15000);
     child.once('exit', () => {
@@ -2721,6 +2841,7 @@ async function stopChild(child) {
 }
 
 function startCtoxServer() {
+  setSmokeStartupPhase('ctox-start');
   const env = {
     ...process.env,
     CTOX_BUSINESS_OS_SIGNALING_URLS: signalingUrl,
@@ -2729,6 +2850,7 @@ function startCtoxServer() {
     CARGO_TARGET_DIR: path.join(root, 'runtime/build/core-rxdb-integration-target'),
     CTOX_BROWSER_AUTOMATION_MODULE: process.env.CTOX_BROWSER_AUTOMATION_MODULE || playwrightModule,
     CTOX_WEBRTC_UDP_BIND_ADDR: process.env.CTOX_WEBRTC_UDP_BIND_ADDR || '127.0.0.1:0',
+    CTOX_SMOKE_RUN_ID: smokeRunId,
   };
   const browserExecutable = process.env.CTOX_BROWSER_EXECUTABLE || existingChromeExecutable();
   if (browserExecutable) env.CTOX_BROWSER_EXECUTABLE = browserExecutable;
@@ -2739,7 +2861,7 @@ function startCtoxServer() {
     cwd: root,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-  }));
+  }), 'ctox-business-os');
   let resolveListening;
   let rejectListening;
   let sawListening = false;
@@ -2752,6 +2874,7 @@ function startCtoxServer() {
     process.stdout.write(`[ctox] ${d}`);
     if (text.includes('CTOX Business OS listening')) {
       sawListening = true;
+      setSmokeStartupPhase('ctox-listening-output');
       resolveListening?.();
     }
   });
@@ -2781,7 +2904,10 @@ async function waitForCtoxServerListening(child, ms = 60000) {
       socket.once('connect', () => finish(true));
       socket.once('error', () => finish(false));
     });
-    if (connected) return;
+    if (connected) {
+      setSmokeStartupPhase('ctox-ready');
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`timeout waiting for ctox TCP listener on 127.0.0.1:${businessPort}`);
@@ -14174,11 +14300,21 @@ function ensureCtoxSmokeBinary() {
     console.log(`outer_phase_timings=${JSON.stringify(outerPhaseTimings)}`);
     emitBrowserDiagnostics();
   } finally {
+    setSmokeStartupPhase('cleanup');
     if (browser) await withHostTimeout(browser.close(), 5000).catch(() => {});
     if (browserUserDataDir) removeSmokePath(browserUserDataDir);
     if (codingAgentSmoke?.cleanupWorkspace) removeSmokePath(codingAgentSmoke.workspaceRoot);
     await stopChild(ctox);
     await stopSignalingServer(signaling);
+    recordSmokeProcessEvent('smoke_cleanup_complete');
+    const unknownSignals = smokeProcessLifecycle.events.filter((event) => (
+      event.type === 'child_exited'
+      && event.signal
+      && event.signalSource === 'unknown_external_source'
+    )).length;
+    console.log(`smoke_process_lifecycle_run_id=${smokeRunId}`);
+    console.log(`smoke_process_lifecycle_event_count=${smokeProcessLifecycle.events.length}`);
+    console.log(`smoke_process_lifecycle_unknown_signals=${unknownSignals}`);
     if (!runtimeRootProvided && !keepSmokeArtifacts) removeSmokePath(runtimeRoot);
   }
 })().then(() => {

@@ -793,8 +793,11 @@ for (const [index, mode] of modes.entries()) {
     );
     const stdoutPath = `${attemptLogPrefix}.stdout.log`;
     const stderrPath = `${attemptLogPrefix}.stderr.log`;
+    const processLifecyclePath = `${attemptLogPrefix}.process-lifecycle.json`;
     const attemptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ctox-rxdb-smoke-'));
     env.CTOX_SMOKE_ROOT = attemptRoot;
+    env.CTOX_SMOKE_RUN_ID = `matrix-${process.pid}-${index}-${attempt}-${Date.now()}`;
+    env.SMOKE_PROCESS_LIFECYCLE_PATH = processLifecyclePath;
     const stdoutFd = fs.openSync(stdoutPath, 'w');
     const stderrFd = fs.openSync(stderrPath, 'w');
     let result;
@@ -814,8 +817,10 @@ for (const [index, mode] of modes.entries()) {
     const durationMs = Date.now() - attemptStartedAt;
     const stdout = readTextFile(stdoutPath);
     const stderr = readTextFile(stderrPath);
+    const processLifecycle = readJsonFile(processLifecyclePath);
     try { fs.unlinkSync(stdoutPath); } catch {}
     try { fs.unlinkSync(stderrPath); } catch {}
+    try { fs.unlinkSync(processLifecyclePath); } catch {}
     if (process.env.CTOX_SMOKE_KEEP_ARTIFACTS !== '1') removeTempPath(attemptRoot);
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
@@ -864,6 +869,7 @@ for (const [index, mode] of modes.entries()) {
       durationMs,
       ok: lastStatus === 0 && !lastSignal,
       error: result.error ? { code: result.error.code || '', message: result.error.message || '' } : null,
+      processLifecycle,
       context: smokeAttemptContextFromEvidence(evidence),
       evidenceKeys: Object.keys(evidence).sort(),
       evidence,
@@ -1047,6 +1053,14 @@ function readGitRevision() {
   }
 }
 
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function smokeAttemptContextFromEvidence(evidence) {
   const keyValue = (suffix) => {
     const key = Object.keys(evidence || {}).find((candidate) => candidate.endsWith(suffix));
@@ -1116,6 +1130,27 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
       require(Number.isInteger(attempt.signalingPort) && attempt.signalingPort > 0, `${attemptPrefix}.signalingPort`);
       require(Number.isFinite(attempt.durationMs) && attempt.durationMs >= 0, `${attemptPrefix}.durationMs`);
       require(typeof attempt.ok === 'boolean', `${attemptPrefix}.ok`);
+      require(attempt.processLifecycle && typeof attempt.processLifecycle === 'object', `${attemptPrefix}.processLifecycle`);
+      if (attempt.processLifecycle && typeof attempt.processLifecycle === 'object') {
+        const lifecycle = attempt.processLifecycle;
+        require(lifecycle.schema === 'ctox.rxdb.smoke_process_lifecycle.v1', `${attemptPrefix}.processLifecycle.schema`);
+        require(typeof lifecycle.runId === 'string' && lifecycle.runId.length > 0, `${attemptPrefix}.processLifecycle.runId`);
+        require(Number.isInteger(lifecycle.parent?.pid) && lifecycle.parent.pid > 0, `${attemptPrefix}.processLifecycle.parent.pid`);
+        require(Number.isInteger(lifecycle.parent?.ppid) && lifecycle.parent.ppid > 0, `${attemptPrefix}.processLifecycle.parent.ppid`);
+        require(Array.isArray(lifecycle.events) && lifecycle.events.length > 0, `${attemptPrefix}.processLifecycle.events`);
+        if (options.final && attempt.ok === true && Array.isArray(lifecycle.events)) {
+          const unknownSignal = lifecycle.events.some((event) => (
+            event?.type === 'child_exited'
+            && event?.signal
+            && event?.signalSource === 'unknown_external_source'
+          ));
+          require(!unknownSignal, `${attemptPrefix}.processLifecycle.unknown_child_signal`);
+          require(
+            lifecycle.events.some((event) => event?.type === 'smoke_cleanup_complete'),
+            `${attemptPrefix}.processLifecycle.cleanup_complete`,
+          );
+        }
+      }
       require(attempt.evidence && typeof attempt.evidence === 'object', `${attemptPrefix}.evidence`);
       require(Array.isArray(attempt.evidenceKeys), `${attemptPrefix}.evidenceKeys`);
       require(attempt.warningBudget && typeof attempt.warningBudget === 'object', `${attemptPrefix}.warningBudget`);
@@ -1241,6 +1276,21 @@ function makeSmokeMatrixSummarySelfTestArtifact() {
         durationMs: 12000,
         ok: true,
         error: null,
+        processLifecycle: {
+          schema: 'ctox.rxdb.smoke_process_lifecycle.v1',
+          runId: 'matrix-self-test',
+          mode: 'business-os-agent-scope-ui',
+          parent: { pid: 1234, ppid: 1233, pgid: 1234 },
+          startedAt: '2026-06-18T00:00:00.000Z',
+          endedAt: '2026-06-18T00:00:12.000Z',
+          startupPhase: 'cleanup',
+          events: [{
+            at: '2026-06-18T00:00:12.000Z',
+            elapsedMs: 12000,
+            type: 'smoke_cleanup_complete',
+            phase: 'cleanup',
+          }],
+        },
         context: {
           authState: 'authenticated',
           actorRole: 'user',
