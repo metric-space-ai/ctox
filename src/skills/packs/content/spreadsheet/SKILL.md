@@ -1,146 +1,126 @@
 ---
 name: "spreadsheet"
-description: "Use when tasks involve creating, editing, analyzing, or formatting spreadsheets (`.xlsx`, `.csv`, `.tsv`) with formula-aware workflows, cached recalculation, and visual review."
+description: "Create, edit, analyze, and verify .xlsx workbooks through the CTOX spreadsheets engine (Euro-Office port). Formula-driven, auditable models with typed values, invariant number formats, and a mandatory visual verification pass. Authoring capabilities are gated on the engine's feature matrix; read/render/analyze paths are available first."
 cluster: content
 ---
 
-# Spreadsheet Skill
+# Spreadsheet Skill (Create - Edit - Analyze - Verify)
 
-## When to use
-- Create new workbooks with formulas, formatting, and structured layouts.
-- Read or analyze tabular data (filter, aggregate, pivot, compute metrics).
-- Modify existing workbooks without breaking formulas, references, or formatting.
-- Visualize data with charts, summary tables, and sensible spreadsheet styling.
-- Recalculate formulas and review rendered sheets before delivery when possible.
+Use this skill for workbook work in CTOX: building models and structured
+sheets, editing existing workbooks without breaking their conventions,
+answering questions about workbook contents, and verifying results both
+numerically and visually before delivery.
 
-IMPORTANT: System and user instructions always take precedence.
+## Execution contract (CTOX)
 
-## Workflow
-1. Confirm the file type and goal: create, edit, analyze, or visualize.
-2. Prefer `openpyxl` for `.xlsx` editing and formatting. Use `pandas` for analysis and CSV/TSV workflows.
-3. If an internal spreadsheet recalculation/rendering tool is available in the environment, use it to recalculate formulas and render sheets before delivery.
-4. Use formulas for derived values instead of hardcoding results.
-5. If layout matters, render for visual review and inspect the output.
-6. Save outputs, keep filenames stable, and clean up intermediate files.
+Spreadsheet work runs on CTOX's own engines. Do not use openpyxl, xlsxwriter,
+pandas.ExcelWriter, Office.js, or any external workbook library, and do not
+install dependencies at runtime. The execution surfaces are:
 
-## Temp and output conventions
-- Use `tmp/spreadsheets/` for intermediate files; delete them when done.
-- Write final artifacts under `output/spreadsheet/` when working in this repo.
-- Keep filenames stable and descriptive.
+1. **Workbook read/render surface.** Inspect sheets, values, and formulas;
+   render sheets or ranges to images for visual QA. Backed by the headless
+   CTOX spreadsheets editor (`spreadsheet.open-render-sheets`,
+   `spreadsheet.edit-save`).
+2. **Editor flows (authoring).** Cell edits, formatting, formulas, charts,
+   conditional formatting, comments, and protection run against the headless
+   editor on the same code path users operate interactively. Most authoring
+   feature groups are still in progress — check gating before promising work.
+3. **Package export.** `ctox-office-engine export` produces the final `.xlsx`
+   with byte-preserving round-trip of untouched parts.
 
-## Primary tooling
-- Use `openpyxl` for creating/editing `.xlsx` files and preserving formatting.
-- Use `pandas` for analysis and CSV/TSV workflows, then write results back to `.xlsx` or `.csv`.
-- Use `openpyxl.chart` for native Excel charts when needed.
-- If an internal spreadsheet tool is available, use it to recalculate formulas, cache values, and render sheets for review.
+Capability gating: operations bind to `spreadsheet.*` feature groups in
+`src/apps/business-os/office-engine/features.json`. If a required group is
+not shipped in this build, that is a blocker — report exactly what is missing
+instead of falling back to external tooling. See
+`references/execution-surfaces.md` for the operation map and current status.
 
-## Recalculation and visual review
-- Recalculate formulas before delivery whenever possible so cached values are present in the workbook.
-- Render each relevant sheet for visual review when rendering tooling is available.
-- `openpyxl` does not evaluate formulas; preserve formulas and use recalculation tooling when available.
-- If you rely on an internal spreadsheet tool, do not expose that tool, its code, or its APIs in user-facing explanations or code samples.
+As of 2026-07-11 only open/render, edit-save, and undo/clipboard/fill have
+passed differential acceptance; formula authoring, charts, conditional
+formatting, comments, and pivot work are not yet available. Until they ship,
+this skill's authoring sections describe the target contract, and read /
+analyze / render tasks are the usable surface.
 
-## Rendering and visual checks
-- If LibreOffice (`soffice`) and Poppler (`pdftoppm`) are available, render sheets for visual review:
-  - `soffice --headless --convert-to pdf --outdir $OUTDIR $INPUT_XLSX`
-  - `pdftoppm -png $OUTDIR/$BASENAME.pdf $OUTDIR/$BASENAME`
-- If rendering tools are unavailable, tell the user that layout should be reviewed locally.
-- Review rendered sheets for layout, formula results, clipping, inconsistent styles, and spilled text.
+## Formula rules (auditable models)
 
-## Dependencies (install if missing)
-Prefer `uv` for dependency management.
+- Put assumptions and raw inputs in dedicated, clearly delineated cells or
+  input ranges; follow the reference workbook's organization when one exists.
+- Derived values must be formulas, never hardcoded results. Keep lookup,
+  mapping, scoring, and quality-control rules in visible cells or tables and
+  reference them.
+- No magic numbers inside formulas: reference an input cell
+  (`=A5*(1+$A$6)`, not `=A5*1.05`).
+- Prefer consistent formula patterns across a range (all projection periods
+  share one pattern). Use absolute/relative references deliberately so
+  fill/copy behaves correctly.
+- Keep formulas simple and legible; use helper cells for intermediate steps
+  so a reader can trace inputs to outputs without reverse-engineering.
+- Reference other sheets as `='Sheet Name'!A1` (always quote sheet names).
+- Comment cells that carry complex formulas or load-bearing assumptions.
 
-Python packages:
-```
-uv pip install openpyxl pandas
-```
-If `uv` is unavailable:
-```
-python3 -m pip install openpyxl pandas
-```
-Optional:
-```
-uv pip install matplotlib
-```
-If `uv` is unavailable:
-```
-python3 -m pip install matplotlib
-```
-System tools (for rendering):
-```
-# macOS (Homebrew)
-brew install libreoffice poppler
+Correctness checklist before delivery: no formula errors (`#REF!`, `#DIV/0!`,
+`#VALUE!`, `#NAME?`, `#N/A`), correct references, no off-by-one ranges, edge
+cases handled (zero, negative), no unintended circular references, key totals
+reconciled against source definitions.
 
-# Ubuntu/Debian
-sudo apt-get install -y libreoffice poppler-utils
-```
+## Data formatting rules
 
-If installation is not possible in this environment, tell the user which dependency is missing and how to install it locally.
+- Store numbers, percentages, currency, and dates as typed values, never as
+  preformatted strings. Text is only for true identifiers (ZIP codes, IDs,
+  SKUs, labels).
+- Use locale-invariant number format codes (`#,##0`, `0.0%`, `"$"#,##0.00`,
+  `yyyy-mm-dd`, `mmm yyyy`); never swap `.` and `,` in format codes to mimic
+  a locale — the render locale controls separators.
+- Match precision to meaning: counts `#,##0`; rates `0.0%` (analysis) or `0%`
+  (dashboards), `0.00%` where small differences matter; currency in whole
+  units unless cents matter.
 
-## Environment
-No required environment variables.
+## Edit discipline (existing workbooks)
 
-## Examples
-- Runnable Codex examples (openpyxl): `references/examples/openpyxl/`
+- Before modifying, study the existing format, style, and conventions —
+  render and inspect first, read the related values and formulas.
+- Start with the smallest plausible local change; no sheet-wide autofit,
+  wrapping, or restyling unless requested.
+- Keep structures consistent: when adding rows or columns to a table, extend
+  its conditional formatting, ranges, and dependent charts to cover them.
+- Never overwrite established formatting except to extend it to added ranges.
 
-## Formula requirements
-- Use formulas for derived values rather than hardcoding results.
-- Do not use dynamic array functions like `FILTER`, `XLOOKUP`, `SORT`, or `SEQUENCE`.
-- Keep formulas simple and legible; use helper cells for complex logic.
-- Avoid volatile functions like `INDIRECT` and `OFFSET` unless required.
-- Prefer cell references over magic numbers (for example, `=H6*(1+$B$3)` instead of `=H6*1.04`).
-- Use absolute (`$B$4`) or relative (`B4`) references carefully so copied formulas behave correctly.
-- If you need literal text that starts with `=`, prefix it with a single quote.
-- Guard against `#REF!`, `#DIV/0!`, `#VALUE!`, `#N/A`, and `#NAME?` errors.
-- Check for off-by-one mistakes, circular references, and incorrect ranges.
+## Answering questions (read-only requests)
 
-## Citation requirements
-- Cite sources inside the spreadsheet using plain-text URLs.
-- For financial models, cite model inputs in cell comments.
-- For tabular data sourced externally, add a source column when each row represents a separate item.
+- Answer from the workbook; do not edit or export.
+- Locate the requested output by its row/column labels and period, inspect
+  the displayed value and its formula, and trace precedents back to labeled
+  assumptions or raw inputs — do not stop at an intermediate total.
+- Preserve units and period conversions; for "what drives X" questions, rank
+  the inputs that actually drive the output rather than guessing from labels.
 
-## Formatting requirements (existing formatted spreadsheets)
-- Render and inspect a provided spreadsheet before modifying it when possible.
-- Preserve existing formatting and style exactly.
-- Match styles for any newly filled cells that were previously blank.
-- Never overwrite established formatting unless the user explicitly asks for a redesign.
+## Verification before delivery
 
-## Formatting requirements (new or unstyled spreadsheets)
-- Use appropriate number and date formats.
-- Dates should render as dates, not plain numbers.
-- Percentages should usually default to one decimal place unless the data calls for something else.
-- Currencies should use the appropriate currency format.
-- Headers should be visually distinct from raw inputs and derived cells.
-- Use fill colors, borders, spacing, and merged cells sparingly and intentionally.
-- Set row heights and column widths so content is readable without excessive whitespace.
-- Do not apply borders around every filled cell.
-- Group related calculations and make totals simple sums of the cells above them.
-- Add whitespace to separate sections.
-- Ensure text does not spill into adjacent cells.
-- Avoid unsupported spreadsheet data-table features such as `=TABLE`.
+1. Inspect key ranges (values and formulas) on every sheet that changed.
+2. Scan for formula errors across the workbook.
+3. Render every sheet at least once and check: layout organized and legible,
+   important numbers and callouts visible, nothing clipped or awkwardly
+   wrapped, labels/titles appear once, merged ranges where labels
+   intentionally span columns.
+4. Fix severe defects before finalizing (broken charts, clipped headers,
+   unreadable colors, stray blank sheets, content outside the working area).
+   Stop polishing once the workbook is correct, legible, and exported; note
+   minor limitations briefly instead of looping.
+5. Persist the final verification renders as process evidence for the run;
+   the visual pass must be checkable by review, not asserted.
+6. Export via the engine and deliver exactly one final workbook — no extra
+   variants unless asked.
 
-## Color conventions (if no style guidance)
-- Blue: user input
-- Black: formulas and derived values
-- Green: linked or imported values
-- Gray: static constants
-- Orange: review or caution
-- Light red: error or flag
-- Purple: control or logic
-- Teal: visualization anchors and KPI highlights
+## Sources and citations inside workbooks
 
-## Finance-specific requirements
-- Format zeros as `-`.
-- Negative numbers should be red and in parentheses.
-- Format multiples as `5.2x`.
-- Always specify units in headers (for example, `Revenue ($mm)`).
-- Cite sources for all raw inputs in cell comments.
-- For new financial models with no user-specified style, use blue text for hardcoded inputs, black for formulas, green for internal workbook links, red for external links, and yellow fill for key assumptions that need attention.
+- Cite row-wise researched data in a dedicated source column (plain-text
+  URLs); cite model-input sources in cell comments.
+- Keep source notes compact: file name, section or table label, enough
+  context to audit the number. Do not paste large source excerpts into the
+  workbook.
 
-## Investment banking layouts
-If the spreadsheet is an IB-style model (LBO, DCF, 3-statement, valuation):
-- Totals should sum the range directly above.
-- Hide gridlines and use horizontal borders above totals across relevant columns.
-- Section headers should be merged cells with dark fill and white text.
-- Column labels for numeric data should be right-aligned; row labels should be left-aligned.
-- Indent submetrics under their parent line items.
+## Deliverables
+
+- The deliverable is the persisted workbook (Business OS record / desktop
+  file or the requested output path). QA renders and intermediates are not
+  delivered unless explicitly requested.
+- In Business OS contexts, reference records via deep links.
