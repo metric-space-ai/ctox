@@ -12,17 +12,24 @@ Umsetzungsstand:
   Semantik, OOXML-Grundlagen, Finalisierung, Liefer-Checkliste).
 - `spreadsheet`-Skill v2: portiert inkl. Gating-Referenz (Commit `e3068225d`);
   vertieft um `references/charts-and-models.md`.
-- **Ebene-B-Ops Slice 1 implementiert** (`src/core/office-engine/src/ops.rs`,
-  Commit `810b6fb05`): `comments-extract`, `a11y-audit`, `privacy-scrub`,
-  `tracked-changes-accept`, `protection-set` — deterministische
-  OOXML-Transformationen, unberührte Parts byte-identisch, CLI-Dispatch in
-  `ctox-office-engine`, 18 Tests grün plus Real-Fixture-Smoke (der `inspect`
-  des Ports akzeptiert transformierte Pakete). Noch offen aus der Op-Liste:
-  `redact`, `merge`, `comments add|resolve|strip`, `tracked-changes
-  reject|replace`, Style-Lint/Normalize, Struktur-Audits, Feld-
-  Materialisierung, Wasserzeichen, Tabellen-Konvertierung — sowie die
-  `business_commands`-Fläche (wartet auf die committete Server-Welle des
-  Port-Agenten, um `mod`-Verdrahtung ohne Kollision zu setzen).
+- **Ebene-B-Ops Slice 1+2 implementiert** (`src/core/office-engine/src/ops.rs`,
+  Commits `810b6fb05` + `a00d35d25`): `comments-extract|add|resolve|strip`,
+  `a11y-audit`, `privacy-scrub`, `redact` (längenerhaltende Maskierung,
+  Begriffe + E-Mail/Telefon-Muster), `tracked-changes-accept|reject` (reject
+  verweigert `*PrChange` statt zu raten), `protection-set`, `style-lint`,
+  `fields-report`, `table-export` — deterministische OOXML-Transformationen,
+  unberührte Parts byte-identisch, CLI-Dispatch in `ctox-office-engine`,
+  29 Tests grün plus Real-Fixture-Smoke. Noch offen aus der Op-Liste:
+  `merge`, `tracked-changes replace`, Style-Normalize, A11y-Safe-Fixes,
+  Feld-Materialisierung, Wasserzeichen, Tabellen-Import.
+- **Gating-Guard** (`src/scripts/check-office-skill-gating.mjs`, Commit
+  `e5d0dd216`): diffst die execution-surfaces-Tabellen gegen `features.json`,
+  schlägt bei Drift oder unreferenzierten Gruppen fehl. Hat unmittelbar die
+  Matrix-Re-Baseline vom 2026-07-11 erkannt (differential_passed →
+  oracle_captured); Tabellen und Skill-Prosa folgen jetzt dem Ist-Stand.
+- Weiterhin extern blockiert: `business_commands`-Fläche der Ops
+  (`business_os/mod.rs`/`server.rs` in-flight beim Port-Agenten) sowie
+  Phase 2/3 (keine Gruppe `shipped`; Re-Baseline hat Statusse regressiert).
 
 ## Lizenz-Randbedingung (Umsetzungserkenntnis)
 
