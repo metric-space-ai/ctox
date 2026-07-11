@@ -9,9 +9,10 @@ fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let operation = args.next().context(
         "operation is required: inspect|export|comments-extract|comments-strip|\
-         comments-resolve|comments-add|a11y-audit|privacy-scrub|redact|\
-         tracked-changes-accept|tracked-changes-reject|protection-set|\
-         table-export|fields-report|style-lint",
+         comments-resolve|comments-add|a11y-audit|a11y-fix|privacy-scrub|redact|\
+         tracked-changes-accept|tracked-changes-reject|tracked-changes-replace|\
+         protection-set|table-export|fields-report|fields-materialize|\
+         style-lint|watermark-audit|watermark-remove|merge-append",
     )?;
     // Batch document operations (Ebene B) take the input package directly.
     match operation.as_str() {
@@ -163,6 +164,82 @@ fn main() -> anyhow::Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&ops::style_lint(&bytes)?)?
             );
+            return Ok(());
+        }
+        "fields-materialize" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let prefixes: Vec<String> = args.collect();
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (materialized, report) = ops::fields_materialize(&bytes, &prefixes)?;
+            write_output(&output, &materialized)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        "watermark-audit" => {
+            let input = args.next().context("input package path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&ops::watermark_audit(&bytes)?)?
+            );
+            return Ok(());
+        }
+        "watermark-remove" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let all = match args.next().as_deref() {
+                None => false,
+                Some("--all") => true,
+                Some(other) => bail!("unexpected argument: {other}"),
+            };
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (removed, count) = ops::watermark_remove(&bytes, all)?;
+            write_output(&output, &removed)?;
+            println!("{{\"removed\": {count}}}");
+            return Ok(());
+        }
+        "a11y-fix" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let mut image_alt = false;
+            let mut table_headers = false;
+            for arg in args {
+                match arg.as_str() {
+                    "--image-alt-from-name" => image_alt = true,
+                    "--table-headers" => table_headers = true,
+                    other => bail!("unexpected argument: {other}"),
+                }
+            }
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (fixed, report) = ops::a11y_fix(&bytes, image_alt, table_headers)?;
+            write_output(&output, &fixed)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        "tracked-changes-replace" => {
+            let input = args.next().context("input package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            let find = args.next().context("find text is required")?;
+            let replace = args.next().context("replacement text is required")?;
+            let author = args.next().context("author is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let (replaced, report) = ops::tracked_replace(&bytes, &find, &replace, &author)?;
+            write_output(&output, &replaced)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        "merge-append" => {
+            let base = args.next().context("base package path is required")?;
+            let appendix = args.next().context("appendix package path is required")?;
+            let output = args.next().context("output package path is required")?;
+            ensure_no_more(args)?;
+            let base_bytes = fs::read(&base).with_context(|| format!("read {base}"))?;
+            let appendix_bytes = fs::read(&appendix).with_context(|| format!("read {appendix}"))?;
+            write_output(&output, &ops::merge_append(&base_bytes, &appendix_bytes)?)?;
             return Ok(());
         }
         _ => {}

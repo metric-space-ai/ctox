@@ -1670,6 +1670,972 @@ fn snippet(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// fields materialize
+// ---------------------------------------------------------------------------
+
+/// Instruction prefixes that are safe to flatten: their cached results are
+/// position-independent. PAGE/NUMPAGES stay live — materializing them would
+/// freeze one page's number into every page.
+const MATERIALIZE_DEFAULT: &[&str] = &["REF", "PAGEREF", "SEQ"];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MaterializeReport {
+    pub materialized: usize,
+    pub kept_live: usize,
+}
+
+/// Replace matching fields with their cached display text so headless
+/// renders are deterministic. Only fields whose instruction starts with one
+/// of `prefixes` (default REF/PAGEREF/SEQ) are flattened.
+pub fn fields_materialize(
+    package: &[u8],
+    prefixes: &[String],
+) -> anyhow::Result<(Vec<u8>, MaterializeReport)> {
+    let prefixes: Vec<String> = if prefixes.is_empty() {
+        MATERIALIZE_DEFAULT.iter().map(|p| p.to_string()).collect()
+    } else {
+        prefixes.to_vec()
+    };
+    let mut parts = read_parts(package)?;
+    let mut report = MaterializeReport {
+        materialized: 0,
+        kept_live: 0,
+    };
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+
+        // Decide per field (in document order) whether it is flattened.
+        let text = std::str::from_utf8(&xml).with_context(|| format!("{name} is not UTF-8"))?;
+        let doc =
+            roxmltree::Document::parse(text).with_context(|| format!("failed to parse {name}"))?;
+        let mut complex_decisions = Vec::new();
+        let mut simple_decisions = Vec::new();
+        let mut current_instr = String::new();
+        let mut in_field = false;
+        for node in doc.descendants() {
+            match node.tag_name().name() {
+                "fldChar" => {
+                    match node
+                        .attributes()
+                        .find(|a| a.name() == "fldCharType")
+                        .map(|a| a.value())
+                        .unwrap_or("")
+                    {
+                        "begin" => {
+                            in_field = true;
+                            current_instr.clear();
+                        }
+                        "end" => {
+                            if in_field {
+                                complex_decisions
+                                    .push(instruction_matches(&current_instr, &prefixes));
+                                in_field = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "instrText" => {
+                    if in_field {
+                        if let Some(text) = node.text() {
+                            current_instr.push_str(text);
+                        }
+                    }
+                }
+                "fldSimple" => {
+                    let instr = node
+                        .attributes()
+                        .find(|a| a.name() == "instr")
+                        .map(|a| a.value())
+                        .unwrap_or("");
+                    simple_decisions.push(instruction_matches(instr, &prefixes));
+                }
+                _ => {}
+            }
+        }
+
+        let (transformed, materialized, kept) =
+            materialize_xml(&xml, &complex_decisions, &simple_decisions)
+                .with_context(|| format!("failed to materialize fields in {name}"))?;
+        report.materialized += materialized;
+        report.kept_live += kept;
+        parts.insert(name, transformed);
+    }
+    Ok((write_parts(&parts)?, report))
+}
+
+fn instruction_matches(instruction: &str, prefixes: &[String]) -> bool {
+    let trimmed = instruction.trim_start();
+    prefixes.iter().any(|prefix| {
+        trimmed
+            .strip_prefix(prefix.as_str())
+            .map(|rest| rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\\'))
+            .unwrap_or(false)
+    })
+}
+
+fn materialize_xml(
+    xml: &[u8],
+    complex_decisions: &[bool],
+    simple_decisions: &[bool],
+) -> anyhow::Result<(Vec<u8>, usize, usize)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut complex_index = 0usize;
+    let mut simple_index = 0usize;
+    let mut flatten_active = false; // current complex field is being flattened
+    let mut in_instr_phase = false; // between begin and separate
+    let mut instr_skip_depth = 0usize; // instrText subtree skip
+    let mut simple_unwrap_depth = 0usize;
+    let mut materialized = 0usize;
+    let mut kept = 0usize;
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(&start);
+                if instr_skip_depth > 0 {
+                    instr_skip_depth += 1;
+                    continue;
+                }
+                match name.as_str() {
+                    "w:fldSimple" => {
+                        let flatten = simple_decisions.get(simple_index).copied().unwrap_or(false);
+                        simple_index += 1;
+                        if flatten {
+                            materialized += 1;
+                            simple_unwrap_depth += 1;
+                            continue;
+                        }
+                        kept += 1;
+                        writer.write_event(Event::Start(start.into_owned()))?;
+                    }
+                    "w:instrText" | "w:delInstrText" if flatten_active && in_instr_phase => {
+                        instr_skip_depth = 1;
+                    }
+                    _ => writer.write_event(Event::Start(start.into_owned()))?,
+                }
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if instr_skip_depth > 0 {
+                    instr_skip_depth -= 1;
+                    continue;
+                }
+                if name == "w:fldSimple" && simple_unwrap_depth > 0 {
+                    simple_unwrap_depth -= 1;
+                    continue;
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            Event::Empty(start) => {
+                let name = qname_string(&start);
+                if instr_skip_depth > 0 {
+                    continue;
+                }
+                if name == "w:fldChar" {
+                    let fld_type = attr_value(&start, "w:fldCharType")?.unwrap_or_default();
+                    match fld_type.as_str() {
+                        "begin" => {
+                            let flatten = complex_decisions
+                                .get(complex_index)
+                                .copied()
+                                .unwrap_or(false);
+                            complex_index += 1;
+                            flatten_active = flatten;
+                            in_instr_phase = true;
+                            if flatten {
+                                materialized += 1;
+                                continue; // drop the begin marker
+                            }
+                            kept += 1;
+                        }
+                        "separate" => {
+                            in_instr_phase = false;
+                            if flatten_active {
+                                continue; // drop the separator
+                            }
+                        }
+                        "end" => {
+                            let was_flattening = flatten_active;
+                            flatten_active = false;
+                            in_instr_phase = false;
+                            if was_flattening {
+                                continue; // drop the end marker
+                            }
+                        }
+                        _ => {}
+                    }
+                    writer.write_event(Event::Empty(start.into_owned()))?;
+                    continue;
+                }
+                if name == "w:fldSimple" {
+                    // Cached-result-free simple field: nothing to keep either way.
+                    let flatten = simple_decisions.get(simple_index).copied().unwrap_or(false);
+                    simple_index += 1;
+                    if flatten {
+                        materialized += 1;
+                        continue;
+                    }
+                    kept += 1;
+                    writer.write_event(Event::Empty(start.into_owned()))?;
+                    continue;
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            Event::Text(text) => {
+                if instr_skip_depth > 0 {
+                    continue;
+                }
+                writer.write_event(Event::Text(text.into_owned()))?;
+            }
+            other => writer.write_event(other.into_owned())?,
+        }
+    }
+    Ok((writer.into_inner(), materialized, kept))
+}
+
+fn attr_value(start: &BytesStart<'_>, key: &str) -> anyhow::Result<Option<String>> {
+    for attr in start.attributes() {
+        let attr = attr.context("bad attribute")?;
+        if String::from_utf8_lossy(attr.key.as_ref()) == key {
+            return Ok(Some(attr.unescape_value()?.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// watermark audit / remove
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WatermarkFinding {
+    pub part: String,
+    pub shape_id: String,
+    pub is_watermark: bool,
+}
+
+fn header_parts(parts: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+    parts
+        .keys()
+        .filter(|name| {
+            (name.starts_with("word/header") || name.starts_with("word/footer"))
+                && name.ends_with(".xml")
+        })
+        .cloned()
+        .collect()
+}
+
+/// List VML picture objects in headers/footers; watermark heuristics match
+/// the shape id Word assigns to watermark objects.
+pub fn watermark_audit(package: &[u8]) -> anyhow::Result<Vec<WatermarkFinding>> {
+    let parts = read_parts(package)?;
+    let mut findings = Vec::new();
+    for name in header_parts(&parts) {
+        let xml = parts.get(&name).expect("header part present");
+        let text = std::str::from_utf8(xml).with_context(|| format!("{name} is not UTF-8"))?;
+        let doc =
+            roxmltree::Document::parse(text).with_context(|| format!("failed to parse {name}"))?;
+        for pict in doc
+            .descendants()
+            .filter(|node| node.tag_name().name() == "pict")
+        {
+            for shape in pict
+                .descendants()
+                .filter(|node| node.tag_name().name() == "shape")
+            {
+                let id = shape
+                    .attributes()
+                    .find(|a| a.name() == "id")
+                    .map(|a| a.value().to_string())
+                    .unwrap_or_default();
+                findings.push(WatermarkFinding {
+                    part: name.clone(),
+                    is_watermark: id.contains("WaterMark") || id.contains("Watermark"),
+                    shape_id: id,
+                });
+            }
+        }
+    }
+    Ok(findings)
+}
+
+/// Remove watermark picture objects from headers/footers. With `all`, every
+/// VML pict in headers/footers is removed, not just recognized watermarks.
+pub fn watermark_remove(package: &[u8], all: bool) -> anyhow::Result<(Vec<u8>, usize)> {
+    let audit = watermark_audit(package)?;
+    let mut parts = read_parts(package)?;
+    let mut removed = 0usize;
+    for name in header_parts(&parts) {
+        let has_target = audit
+            .iter()
+            .any(|f| f.part == name && (all || f.is_watermark));
+        if !has_target {
+            continue;
+        }
+        let xml = parts.get(&name).expect("header part present").clone();
+        let (transformed, count) = remove_picts_xml(&xml, all)?;
+        removed += count;
+        parts.insert(name, transformed);
+    }
+    Ok((write_parts(&parts)?, removed))
+}
+
+fn remove_picts_xml(xml: &[u8], all: bool) -> anyhow::Result<(Vec<u8>, usize)> {
+    // Two-pass per pict: cheap approach — stream and drop w:pict subtrees
+    // whose raw slice contains a watermark id (or all of them).
+    let text = std::str::from_utf8(xml).context("header part is not UTF-8")?;
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut skip_depth = 0usize;
+    let mut removed = 0usize;
+    loop {
+        let position = reader.buffer_position() as usize;
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                if skip_depth > 0 {
+                    skip_depth += 1;
+                    continue;
+                }
+                if qname_string(&start) == "w:pict" {
+                    // Look ahead in the raw text for the matching close tag to
+                    // decide whether this pict is a watermark.
+                    let rest = &text[position..];
+                    let end = rest.find("</w:pict>").unwrap_or(rest.len());
+                    let slice = &rest[..end];
+                    if all || slice.contains("WaterMark") || slice.contains("Watermark") {
+                        skip_depth = 1;
+                        removed += 1;
+                        continue;
+                    }
+                }
+                writer.write_event(Event::Start(start.into_owned()))?;
+            }
+            Event::End(end) => {
+                if skip_depth > 0 {
+                    skip_depth -= 1;
+                    continue;
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            Event::Empty(start) => {
+                if skip_depth > 0 {
+                    continue;
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            other => {
+                if skip_depth == 0 {
+                    writer.write_event(other.into_owned())?;
+                }
+            }
+        }
+    }
+    Ok((writer.into_inner(), removed))
+}
+
+// ---------------------------------------------------------------------------
+// a11y fix
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct A11yFixReport {
+    pub image_alts_set: usize,
+    pub table_headers_marked: usize,
+}
+
+/// Apply safe accessibility fixes: derive missing image alt text from the
+/// drawing name, and mark each table's first row as a repeating header row.
+pub fn a11y_fix(
+    package: &[u8],
+    image_alt_from_name: bool,
+    table_headers: bool,
+) -> anyhow::Result<(Vec<u8>, A11yFixReport)> {
+    if !image_alt_from_name && !table_headers {
+        bail!("nothing to fix: pass --image-alt-from-name and/or --table-headers");
+    }
+    let mut parts = read_parts(package)?;
+    let mut report = A11yFixReport {
+        image_alts_set: 0,
+        table_headers_marked: 0,
+    };
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+        let (transformed, alts, headers) = a11y_fix_xml(&xml, image_alt_from_name, table_headers)?;
+        report.image_alts_set += alts;
+        report.table_headers_marked += headers;
+        parts.insert(name, transformed);
+    }
+    Ok((write_parts(&parts)?, report))
+}
+
+fn a11y_fix_xml(
+    xml: &[u8],
+    image_alt_from_name: bool,
+    table_headers: bool,
+) -> anyhow::Result<(Vec<u8>, usize, usize)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut alts = 0usize;
+    let mut headers = 0usize;
+    // Stack of per-table state: has the first row been seen yet?
+    let mut table_stack: Vec<bool> = Vec::new();
+    // When inside the first row and waiting to see whether it has a trPr.
+    let mut pending_header_row = false;
+    let mut row_depth = 0usize;
+    loop {
+        match reader.read_event().context("XML parse error")? {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(&start);
+                match name.as_str() {
+                    "w:tbl" => {
+                        table_stack.push(false);
+                        writer.write_event(Event::Start(start.into_owned()))?;
+                    }
+                    "w:tr" => {
+                        row_depth += 1;
+                        let is_first = table_stack.last().map(|seen| !seen).unwrap_or(false);
+                        if let Some(seen) = table_stack.last_mut() {
+                            *seen = true;
+                        }
+                        writer.write_event(Event::Start(start.into_owned()))?;
+                        if table_headers && is_first && row_depth == table_stack.len() {
+                            pending_header_row = true;
+                        }
+                    }
+                    "w:trPr" if pending_header_row => {
+                        // Row property block exists: append the header mark
+                        // inside it.
+                        writer.write_event(Event::Start(start.into_owned()))?;
+                        writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+                        headers += 1;
+                        pending_header_row = false;
+                    }
+                    _ => {
+                        if pending_header_row {
+                            // First child is not a trPr: create one.
+                            writer.write_event(Event::Start(BytesStart::new("w:trPr")))?;
+                            writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+                            writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                                "w:trPr",
+                            )))?;
+                            headers += 1;
+                            pending_header_row = false;
+                        }
+                        writer.write_event(Event::Start(start.into_owned()))?;
+                    }
+                }
+            }
+            Event::Empty(start) => {
+                let name = qname_string(&start);
+                if pending_header_row && name != "w:trPr" {
+                    writer.write_event(Event::Start(BytesStart::new("w:trPr")))?;
+                    writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:trPr")))?;
+                    headers += 1;
+                    pending_header_row = false;
+                }
+                if image_alt_from_name && name == "wp:docPr" {
+                    let descr = attr_value(&start, "descr")?.unwrap_or_default();
+                    if descr.trim().is_empty() {
+                        let alt = attr_value(&start, "name")?
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or_else(|| "Figure".to_string());
+                        let mut rebuilt = BytesStart::new("wp:docPr");
+                        for attr in start.attributes() {
+                            let attr = attr.context("bad attribute")?;
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            if key == "descr" {
+                                continue;
+                            }
+                            rebuilt.push_attribute((key.as_str(), attr.unescape_value()?.as_ref()));
+                        }
+                        rebuilt.push_attribute(("descr", alt.as_str()));
+                        alts += 1;
+                        writer.write_event(Event::Empty(rebuilt))?;
+                        continue;
+                    }
+                }
+                writer.write_event(Event::Empty(start.into_owned()))?;
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                match name.as_str() {
+                    "w:tbl" => {
+                        table_stack.pop();
+                    }
+                    "w:tr" => {
+                        row_depth = row_depth.saturating_sub(1);
+                        if pending_header_row {
+                            // Empty first row: still mark it.
+                            writer.write_event(Event::Start(BytesStart::new("w:trPr")))?;
+                            writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+                            writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                                "w:trPr",
+                            )))?;
+                            headers += 1;
+                            pending_header_row = false;
+                        }
+                    }
+                    _ => {}
+                }
+                writer.write_event(Event::End(end.into_owned()))?;
+            }
+            other => writer.write_event(other.into_owned())?,
+        }
+    }
+    Ok((writer.into_inner(), alts, headers))
+}
+
+// ---------------------------------------------------------------------------
+// tracked-changes replace
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackedReplaceReport {
+    pub replacements: usize,
+    /// Runs containing the term whose structure was too complex to split
+    /// safely (multiple text nodes, nested content, or already revised).
+    pub skipped_complex_runs: usize,
+}
+
+/// Replace literal text with a tracked deletion + insertion pair, authored
+/// as a proper revision. Only simple runs (one text node) are restructured;
+/// complex matches are reported, never guessed at.
+pub fn tracked_replace(
+    package: &[u8],
+    find: &str,
+    replace: &str,
+    author: &str,
+) -> anyhow::Result<(Vec<u8>, TrackedReplaceReport)> {
+    if find.is_empty() {
+        bail!("find text must not be empty");
+    }
+    let mut parts = read_parts(package)?;
+    let mut report = TrackedReplaceReport {
+        replacements: 0,
+        skipped_complex_runs: 0,
+    };
+    // Revision ids must be unique per document.
+    let mut next_id = {
+        let document = parts
+            .get("word/document.xml")
+            .context("package has no word/document.xml")?;
+        let text = std::str::from_utf8(document).context("document.xml is not UTF-8")?;
+        let doc = roxmltree::Document::parse(text).context("failed to parse document.xml")?;
+        doc.descendants()
+            .filter_map(|node| {
+                node.attributes()
+                    .find(|a| a.name() == "id")
+                    .and_then(|a| a.value().parse::<u64>().ok())
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
+    };
+    let date = revision_date();
+    let story_names: Vec<String> = parts
+        .keys()
+        .filter(|name| is_story_part(name))
+        .cloned()
+        .collect();
+    for name in story_names {
+        let xml = parts.get(&name).expect("story part present").clone();
+        ensure_conventional_prefix(&xml, &name)?;
+        let (transformed, made, skipped, used_ids) =
+            tracked_replace_xml(&xml, find, replace, author, &date, next_id)?;
+        next_id += used_ids;
+        report.replacements += made;
+        report.skipped_complex_runs += skipped;
+        parts.insert(name, transformed);
+    }
+    Ok((write_parts(&parts)?, report))
+}
+
+/// ISO-8601 UTC timestamp for revision attributes, derived from the system
+/// clock (civil-from-days conversion, no external time dependency).
+fn revision_date() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let days = (seconds / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    let rem = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+struct SimpleRun {
+    rpr: Vec<Event<'static>>,
+    text: String,
+    space_preserve: bool,
+}
+
+fn tracked_replace_xml(
+    xml: &[u8],
+    find: &str,
+    replace: &str,
+    author: &str,
+    date: &str,
+    first_id: u64,
+) -> anyhow::Result<(Vec<u8>, usize, usize, u64)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut writer = Writer::new(Vec::new());
+    let mut replacements = 0usize;
+    let mut skipped = 0usize;
+    let mut next_id = first_id;
+    let mut revision_depth = 0usize; // inside w:ins/w:del: pass through
+    let mut buffer: Option<Vec<Event<'static>>> = None;
+    loop {
+        let event = reader.read_event().context("XML parse error")?.into_owned();
+        match &event {
+            Event::Eof => break,
+            Event::Start(start) => {
+                let name = qname_string(start);
+                if name == "w:ins" || name == "w:del" {
+                    revision_depth += 1;
+                }
+                if name == "w:r" && revision_depth == 0 && buffer.is_none() {
+                    buffer = Some(vec![event.clone()]);
+                    continue;
+                }
+            }
+            Event::End(end) => {
+                let name = String::from_utf8_lossy(end.name().as_ref()).to_string();
+                if name == "w:ins" || name == "w:del" {
+                    revision_depth = revision_depth.saturating_sub(1);
+                }
+                if name == "w:r" {
+                    if let Some(mut events) = buffer.take() {
+                        events.push(event.clone());
+                        match analyze_simple_run(&events) {
+                            Some(run) if run.text.contains(find) => {
+                                emit_tracked_replacement(
+                                    &mut writer,
+                                    &run,
+                                    find,
+                                    replace,
+                                    author,
+                                    date,
+                                    &mut next_id,
+                                )?;
+                                replacements += run.text.matches(find).count();
+                            }
+                            Some(_) => {
+                                for buffered in events {
+                                    writer.write_event(buffered)?;
+                                }
+                            }
+                            None => {
+                                let contains = events.iter().any(|buffered| {
+                                    matches!(buffered, Event::Text(text)
+                                        if String::from_utf8_lossy(text.as_ref()).contains(find))
+                                });
+                                if contains {
+                                    skipped += 1;
+                                }
+                                for buffered in events {
+                                    writer.write_event(buffered)?;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(events) = buffer.as_mut() {
+            events.push(event);
+            continue;
+        }
+        writer.write_event(event)?;
+    }
+    Ok((
+        writer.into_inner(),
+        replacements,
+        skipped,
+        next_id - first_id,
+    ))
+}
+
+/// A run qualifies for splitting when it is exactly: w:r, optional w:rPr
+/// subtree, one w:t with one text node, end.
+fn analyze_simple_run(events: &[Event<'static>]) -> Option<SimpleRun> {
+    let mut rpr: Vec<Event<'static>> = Vec::new();
+    let mut text: Option<String> = None;
+    let mut space_preserve = false;
+    let mut index = 1; // skip Start(w:r)
+                       // Optional rPr subtree.
+    if let Some(Event::Start(start)) = events.get(index) {
+        if qname_string(start) == "w:rPr" {
+            let mut depth = 0usize;
+            loop {
+                let event = events.get(index)?;
+                match event {
+                    Event::Start(_) => depth += 1,
+                    Event::End(_) => {
+                        depth -= 1;
+                        rpr.push(event.clone());
+                        index += 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                rpr.push(event.clone());
+                index += 1;
+            }
+        }
+    }
+    if let Some(Event::Empty(start)) = events.get(index) {
+        if qname_string(start) == "w:rPr" {
+            rpr.push(events[index].clone());
+            index += 1;
+        }
+    }
+    // Exactly one w:t with one text node.
+    match events.get(index) {
+        Some(Event::Start(start)) if qname_string(start) == "w:t" => {
+            space_preserve = start
+                .attributes()
+                .flatten()
+                .any(|attr| attr.key.as_ref() == b"xml:space");
+            index += 1;
+        }
+        _ => return None,
+    }
+    match events.get(index) {
+        Some(Event::Text(value)) => {
+            text = Some(String::from_utf8_lossy(value.as_ref()).to_string());
+            index += 1;
+        }
+        _ => return None,
+    }
+    match events.get(index) {
+        Some(Event::End(end)) if end.name().as_ref() == b"w:t" => index += 1,
+        _ => return None,
+    }
+    match events.get(index) {
+        Some(Event::End(end)) if end.name().as_ref() == b"w:r" => index += 1,
+        _ => return None,
+    }
+    if index != events.len() {
+        return None;
+    }
+    text.map(|text| SimpleRun {
+        rpr,
+        text,
+        space_preserve,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_tracked_replacement(
+    writer: &mut Writer<Vec<u8>>,
+    run: &SimpleRun,
+    find: &str,
+    replace: &str,
+    author: &str,
+    date: &str,
+    next_id: &mut u64,
+) -> anyhow::Result<()> {
+    let emit_run = |writer: &mut Writer<Vec<u8>>, tag: &str, content: &str| -> anyhow::Result<()> {
+        writer.write_event(Event::Start(BytesStart::new("w:r")))?;
+        for event in &run.rpr {
+            writer.write_event(event.clone())?;
+        }
+        let mut text_elem = BytesStart::new(tag);
+        text_elem.push_attribute(("xml:space", "preserve"));
+        writer.write_event(Event::Start(text_elem))?;
+        writer.write_event(Event::Text(quick_xml::events::BytesText::new(content)))?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new(tag)))?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:r")))?;
+        Ok(())
+    };
+    let mut remaining = run.text.as_str();
+    let _ = run.space_preserve;
+    while let Some(position) = remaining.find(find) {
+        let before = &remaining[..position];
+        if !before.is_empty() {
+            emit_run(writer, "w:t", before)?;
+        }
+        let del_id = *next_id;
+        let ins_id = *next_id + 1;
+        *next_id += 2;
+        let mut del = BytesStart::new("w:del");
+        del.push_attribute(("w:id", del_id.to_string().as_str()));
+        del.push_attribute(("w:author", author));
+        del.push_attribute(("w:date", date));
+        writer.write_event(Event::Start(del))?;
+        emit_run(writer, "w:delText", find)?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:del")))?;
+        let mut ins = BytesStart::new("w:ins");
+        ins.push_attribute(("w:id", ins_id.to_string().as_str()));
+        ins.push_attribute(("w:author", author));
+        ins.push_attribute(("w:date", date));
+        writer.write_event(Event::Start(ins))?;
+        emit_run(writer, "w:t", replace)?;
+        writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:ins")))?;
+        remaining = &remaining[position + find.len()..];
+    }
+    if !remaining.is_empty() {
+        emit_run(writer, "w:t", remaining)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// merge append
+// ---------------------------------------------------------------------------
+
+/// Relationship types the appended document may use; anything else (media,
+/// hyperlinks, headers, comments, embedded parts) would need id rebasing and
+/// is refused rather than silently dropped.
+const MERGE_SAFE_REL_SUFFIXES: &[&str] = &[
+    "/styles",
+    "/settings",
+    "/webSettings",
+    "/fontTable",
+    "/theme",
+    "/numbering",
+];
+
+/// Append the body content of `appendix` to `base`, separated by a page
+/// break. The base document's styles win; appendix content referencing
+/// styles or numbering the base lacks degrades to defaults.
+pub fn merge_append(base: &[u8], appendix: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let appendix_parts = read_parts(appendix)?;
+    if let Some(rels) = appendix_parts.get("word/_rels/document.xml.rels") {
+        let text = std::str::from_utf8(rels).context("appendix rels part is not UTF-8")?;
+        let doc = roxmltree::Document::parse(text).context("failed to parse appendix rels")?;
+        for rel in doc
+            .descendants()
+            .filter(|node| node.tag_name().name() == "Relationship")
+        {
+            let rel_type = rel
+                .attributes()
+                .find(|a| a.name() == "Type")
+                .map(|a| a.value())
+                .unwrap_or("");
+            if !MERGE_SAFE_REL_SUFFIXES
+                .iter()
+                .any(|suffix| rel_type.ends_with(suffix))
+            {
+                bail!(
+                    "appendix document uses relationship type {rel_type}; merging documents \
+                     with media, hyperlinks, headers, or comments is not supported yet"
+                );
+            }
+        }
+    }
+    let appendix_doc = appendix_parts
+        .get("word/document.xml")
+        .context("appendix has no word/document.xml")?;
+    ensure_conventional_prefix(appendix_doc, "appendix word/document.xml")?;
+    let appendix_text =
+        std::str::from_utf8(appendix_doc).context("appendix document.xml is not UTF-8")?;
+    let body_inner = extract_body_content(appendix_text)?;
+
+    let mut parts = read_parts(base)?;
+    let base_doc = parts
+        .get("word/document.xml")
+        .context("base has no word/document.xml")?
+        .clone();
+    ensure_conventional_prefix(&base_doc, "word/document.xml")?;
+    let base_text = std::str::from_utf8(&base_doc).context("base document.xml is not UTF-8")?;
+
+    let page_break = "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>";
+    let insertion = format!("{page_break}{body_inner}");
+    // Insert before the base body's trailing section properties, or before
+    // </w:body> when the base has no sectPr.
+    let merged = if let Some(position) = base_text.rfind("<w:sectPr") {
+        let mut result = String::with_capacity(base_text.len() + insertion.len());
+        result.push_str(&base_text[..position]);
+        result.push_str(&insertion);
+        result.push_str(&base_text[position..]);
+        result
+    } else {
+        String::from_utf8(append_before_root_end(
+            base_text.as_bytes(),
+            "w:body",
+            &insertion,
+        )?)
+        .context("merged document is not UTF-8")?
+    };
+    parts.insert("word/document.xml".to_string(), merged.into_bytes());
+    write_parts(&parts)
+}
+
+fn extract_body_content(document_xml: &str) -> anyhow::Result<String> {
+    let start = document_xml
+        .find("<w:body>")
+        .or_else(|| document_xml.find("<w:body "))
+        .context("appendix document has no w:body")?;
+    let open_end = document_xml[start..]
+        .find('>')
+        .map(|offset| start + offset + 1)
+        .context("malformed w:body start tag")?;
+    let close = document_xml
+        .rfind("</w:body>")
+        .context("appendix document has no closing w:body")?;
+    let mut inner = document_xml[open_end..close].to_string();
+    // Drop the appendix's trailing section properties; the base's page
+    // geometry governs the merged document.
+    if let Some(position) = inner.rfind("<w:sectPr") {
+        let after = inner[position..]
+            .find("</w:sectPr>")
+            .map(|offset| position + offset + "</w:sectPr>".len());
+        if let Some(end) = after {
+            inner.replace_range(position..end, "");
+        } else if inner[position..].contains("/>") {
+            // Self-closing sectPr.
+            let end = inner[position..]
+                .find("/>")
+                .map(|offset| position + offset + 2)
+                .unwrap_or(inner.len());
+            inner.replace_range(position..end, "");
+        }
+    }
+    Ok(inner)
+}
+
+// ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
@@ -2066,5 +3032,145 @@ mod tests {
         let codes: Vec<&str> = findings.iter().map(|f| f.code.as_str()).collect();
         assert!(codes.contains(&"fake-bullet"));
         assert!(codes.contains(&"fake-heading"));
+    }
+
+    fn build_slice3_docx() -> Vec<u8> {
+        let document = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+  <w:body>
+    <w:p>
+      <w:r><w:rPr><w:b/></w:rPr><w:t>Replace the target word here.</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+      <w:r><w:instrText xml:space="preserve"> REF anchor1 </w:instrText></w:r>
+      <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+      <w:r><w:t>Cached Ref</w:t></w:r>
+      <w:r><w:fldChar w:fldCharType="end"/></w:r>
+      <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+      <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+      <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+      <w:r><w:t>7</w:t></w:r>
+      <w:r><w:fldChar w:fldCharType="end"/></w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:drawing><wp:inline><wp:docPr id="3" name="Chart 3"/></wp:inline></w:drawing>
+      </w:r>
+    </w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>h1</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t>v1</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+        let header = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+  <w:p><w:r><w:pict><v:shape id="PowerPlusWaterMarkObject1" o:spid="_x0000_s2049"><v:textpath string="DRAFT"/></v:shape></w:pict></w:r></w:p>
+</w:hdr>"#;
+        let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        for (name, content) in [
+            ("[Content_Types].xml", content_types),
+            ("word/document.xml", document),
+            ("word/header1.xml", header),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn fields_materialize_flattens_ref_keeps_page_live() {
+        let package = build_slice3_docx();
+        let (materialized, report) = fields_materialize(&package, &[]).unwrap();
+        assert_eq!(report.materialized, 1);
+        assert_eq!(report.kept_live, 1);
+        let document = part_text(&materialized, "word/document.xml");
+        assert!(document.contains("Cached Ref"));
+        assert!(!document.contains("REF anchor1"));
+        // The PAGE field survives with instruction and markers.
+        assert!(document.contains("PAGE"));
+        assert!(document.contains("fldChar"));
+    }
+
+    #[test]
+    fn watermark_audit_and_remove() {
+        let package = build_slice3_docx();
+        let findings = watermark_audit(&package).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_watermark);
+        let (removed, count) = watermark_remove(&package, false).unwrap();
+        assert_eq!(count, 1);
+        let header = part_text(&removed, "word/header1.xml");
+        assert!(!header.contains("WaterMark"));
+        assert!(!header.contains("w:pict"));
+        assert!(watermark_audit(&removed).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a11y_fix_sets_alt_text_and_table_headers() {
+        let package = build_slice3_docx();
+        let (fixed, report) = a11y_fix(&package, true, true).unwrap();
+        assert_eq!(report.image_alts_set, 1);
+        assert_eq!(report.table_headers_marked, 1);
+        let document = part_text(&fixed, "word/document.xml");
+        assert!(document.contains("descr=\"Chart 3\""));
+        assert!(document.contains("w:tblHeader"));
+        // Second row stays unmarked.
+        assert_eq!(document.matches("w:tblHeader").count(), 1);
+        // Findings that the audit reported are now gone.
+        let findings = a11y_audit(&fixed).unwrap();
+        let codes: Vec<&str> = findings.iter().map(|f| f.code.as_str()).collect();
+        assert!(!codes.contains(&"image-missing-alt"));
+        assert!(!codes.contains(&"table-missing-header-row"));
+    }
+
+    #[test]
+    fn tracked_replace_creates_revision_pair() {
+        let package = build_slice3_docx();
+        let (replaced, report) = tracked_replace(&package, "target", "chosen", "Bob").unwrap();
+        assert_eq!(report.replacements, 1);
+        assert_eq!(report.skipped_complex_runs, 0);
+        let document = part_text(&replaced, "word/document.xml");
+        assert!(document.contains("<w:del "));
+        assert!(document.contains("<w:ins "));
+        assert!(document.contains("w:author=\"Bob\""));
+        assert!(document.contains(">target</w:delText>"));
+        assert!(document.contains(">chosen</w:t>"));
+        // Formatting of the split run is preserved.
+        assert!(document.matches("<w:b/>").count() >= 3);
+        // Accepting the tracked replacement yields the new text (split
+        // across runs, so check the segments and the absence of the old).
+        let accepted = accept_tracked_changes(&replaced).unwrap();
+        let document = part_text(&accepted, "word/document.xml");
+        assert!(document.contains("Replace the "));
+        assert!(document.contains("chosen"));
+        assert!(document.contains(" word here."));
+        assert!(!document.contains("target"));
+        // Rejecting restores the original.
+        let rejected = reject_tracked_changes(&replaced).unwrap();
+        let document = part_text(&rejected, "word/document.xml");
+        assert!(document.contains("target"));
+        assert!(!document.contains("chosen"));
+    }
+
+    #[test]
+    fn merge_append_joins_bodies_with_page_break() {
+        let base = build_slice3_docx();
+        let appendix = build_slice2_docx();
+        // slice2 has a comments relationship -> must refuse.
+        assert!(merge_append(&base, &appendix).is_err());
+        // A plain appendix merges.
+        let plain = build_slice3_docx();
+        let merged = merge_append(&base, &plain).unwrap();
+        let document = part_text(&merged, "word/document.xml");
+        assert!(document.contains("w:br w:type=\"page\""));
+        assert_eq!(document.matches("Replace the target word here.").count(), 2);
     }
 }
