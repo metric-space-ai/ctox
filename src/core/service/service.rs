@@ -34424,6 +34424,14 @@ Use shell tools to create or update these files."
             "first attempt started",
         )
         .expect("project first start");
+        let first_lease = channels::load_queue_task(&root, &task_id)
+            .expect("load first queue lease")
+            .expect("first queue lease exists");
+        assert_eq!(
+            first_lease.lease_owner.as_deref(),
+            Some(CHANNEL_ROUTER_LEASE_OWNER)
+        );
+        assert!(first_lease.leased_at.is_some());
 
         let not_before = "2099-01-01T00:00:00Z";
         release_retryable_worker_messages(
@@ -34500,6 +34508,14 @@ Use shell tools to create or update these files."
             "retry attempt started",
         )
         .expect("project retry start");
+        let retry_lease = channels::load_queue_task(&root, &task_id)
+            .expect("load retry queue lease")
+            .expect("retry queue lease exists");
+        assert_eq!(
+            retry_lease.lease_owner.as_deref(),
+            Some(CHANNEL_ROUTER_LEASE_OWNER)
+        );
+        assert!(retry_lease.leased_at.is_some());
         let running_context = channels::inspect_business_command_for_task(&root, &task_id)
             .expect("inspect running retry")
             .expect("linked command");

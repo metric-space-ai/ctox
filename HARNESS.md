@@ -100,6 +100,14 @@ It first reconciles ticket state, runs dispatch preflights, emits due schedules,
 syncs configured ticket sources, routes assigned internal work, and only then leases
 bounded inbound work into `QueuedPrompt` slices.
 
+Queue leasing is `pending`-only. The router writes the lease owner, lease time,
+and 15-minute expiry; Business Command transitions to `leased` and `running`
+validate and preserve those fields. A lease missing any of them is invalid and
+is reconciled immediately: the linked command returns to `retry_wait` and the
+same queue row returns to `pending`. Complete leases are renewed every 60
+seconds while their worker remains active and are reclaimed after expiry
+independent of the prior owner.
+
 ## Worker Slice Flow
 
 `start_prompt_worker(...)` is the outer harness entry point for a leased slice.

@@ -4375,15 +4375,42 @@ pub(crate) fn transition_business_command_for_task(
         );
     }
     let now = now_iso_string();
-    set_routing_status(
-        &tx,
-        task_id,
-        persisted_route,
-        &now,
-        "business-command-terminal-owner",
-        reason,
-        error_message.or_else(|| (normalized_route == "failed").then_some(reason)),
-    )?;
+    if persisted_route == "leased" {
+        let owned_lease = tx
+            .query_row(
+                "SELECT lease_owner, leased_at, lease_expires_at
+                 FROM communication_routing_state
+                 WHERE message_key=?1 AND route_status='leased'",
+                params![task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .is_some_and(|(owner, leased_at, expires_at)| {
+                owner.is_some_and(|value| !value.trim().is_empty())
+                    && leased_at.is_some_and(|value| !value.trim().is_empty())
+                    && expires_at.is_some_and(|value| !value.trim().is_empty())
+            });
+        anyhow::ensure!(
+            owned_lease,
+            "business command `{command_id}` requires an owned, expiring queue lease before `{to_phase}`"
+        );
+    } else {
+        set_routing_status(
+            &tx,
+            task_id,
+            persisted_route,
+            &now,
+            "business-command-terminal-owner",
+            reason,
+            error_message.or_else(|| (normalized_route == "failed").then_some(reason)),
+        )?;
+    }
     let next_version = version.saturating_add(1);
     let now_ms = epoch_millis();
     let result_json = result.map(serde_json::to_string).transpose()?;
@@ -6053,8 +6080,15 @@ pub fn release_stale_queue_task_leases(
         JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE m.direction = 'inbound'
           AND r.route_status = 'leased'
-          AND r.lease_expires_at IS NOT NULL
-          AND datetime(r.lease_expires_at) <= datetime('now')
+          AND (
+                r.lease_owner IS NULL
+             OR trim(r.lease_owner) = ''
+             OR r.leased_at IS NULL
+             OR trim(r.leased_at) = ''
+             OR r.lease_expires_at IS NULL
+             OR trim(r.lease_expires_at) = ''
+             OR datetime(r.lease_expires_at) <= datetime('now')
+          )
         ORDER BY r.leased_at ASC, r.updated_at ASC
         LIMIT 128
         "#,
@@ -6067,6 +6101,18 @@ pub fn release_stale_queue_task_leases(
     let mut released = Vec::new();
     for message_key in candidates {
         if active_message_keys.contains(&message_key) {
+            continue;
+        }
+        if transition_business_command_for_task(
+            root,
+            &message_key,
+            "pending",
+            None,
+            None,
+            Some("stale or ownerless queue lease recovered"),
+            "stale or ownerless queue lease recovered",
+        )? {
+            released.push(message_key);
             continue;
         }
         enforce_queue_route_status_transition(
@@ -14671,6 +14717,56 @@ mod tests {
             .expect("missing queue task");
         assert_eq!(reloaded.route_status, "pending");
         assert!(reloaded.lease_owner.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ownerless_queue_task_lease_releases_immediately() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-ownerless-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "ownerless lease".to_string(),
+                prompt: "Recover this incomplete queue lease.".to_string(),
+                thread_key: "queue/ownerless".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect("failed to lease queue task");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state
+             SET lease_owner=NULL, leased_at=NULL
+             WHERE message_key=?1",
+            params![created.message_key],
+        )
+        .expect("make queue lease ownerless");
+        drop(conn);
+
+        let released = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
+            .expect("failed to release ownerless queue lease");
+        assert_eq!(released, vec![created.message_key.clone()]);
+        let reloaded = load_queue_task(&root, &created.message_key)
+            .expect("failed to load queue task")
+            .expect("missing queue task");
+        assert_eq!(reloaded.route_status, "pending");
+        assert!(reloaded.lease_owner.is_none());
+        assert!(reloaded.leased_at.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
