@@ -4636,6 +4636,11 @@ pub(crate) fn record_business_command_review(
         return Ok(false);
     };
     anyhow::ensure!(from_phase != "terminal", "cannot review a terminal command");
+    let retryable_hold = review_status == "held"
+        && evidence
+            .get("retryable_hold")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let changed = tx.execute(
         "UPDATE business_command_results
          SET review_status = ?3, validation_status = ?4, review_evidence_json = ?5,
@@ -4656,7 +4661,7 @@ pub(crate) fn record_business_command_review(
     );
     let to_phase = if review_status == "passed" && validation_status == "passed" {
         "validating"
-    } else if review_status == "failed" || validation_status == "failed" {
+    } else if review_status == "failed" || validation_status == "failed" || retryable_hold {
         "retry_wait"
     } else {
         "blocked"
@@ -18893,6 +18898,78 @@ mod tests {
             )
             .expect("count attempt results");
         assert_eq!(result_count, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unavailable_review_waits_for_retry_without_blocking_command() {
+        let root = business_command_test_root("ctox-business-command-review-unavailable");
+        let claimed = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-review-unavailable", "sha256:review-unavailable"),
+            QueueTaskCreateRequest {
+                title: "Retry unavailable review".to_string(),
+                prompt: "Answer from supplied facts.".to_string(),
+                thread_key: "business-os/tests/review-unavailable".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key": "command-review-unavailable"})),
+            },
+        )
+        .expect("claim command");
+        let task_id = claimed.task.message_key;
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "attempt one lease",
+        )
+        .expect("lease command");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "attempt one",
+        )
+        .expect("run command");
+        persist_business_command_worker_result(&root, &task_id, "correct answer")
+            .expect("persist typed result");
+        record_business_command_review(
+            &root,
+            &task_id,
+            "held",
+            "pending",
+            &json!({"retryable_hold": true, "reason": "reviewer unavailable"}),
+        )
+        .expect("record retryable review hold");
+
+        let projection = business_command_projection(&root, "command-review-unavailable")
+            .expect("load projection");
+        assert_eq!(projection["execution_phase"], "retry_wait");
+        assert_eq!(projection["terminal_status"], "none");
+        assert_eq!(projection["retryable"], true);
+
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "review retry lease",
+        )
+        .expect("retry_wait must be leasable");
+        let projection = business_command_projection(&root, "command-review-unavailable")
+            .expect("reload projection");
+        assert_eq!(projection["execution_phase"], "leased");
         let _ = fs::remove_dir_all(root);
     }
 

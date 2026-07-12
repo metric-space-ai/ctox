@@ -235,6 +235,9 @@ typed disposition:
 persisted as dormant blocked work and can only be woken by its referenced
 event. Technical, missing-review-evidence, and missing-artifact holds consume
 the finite review budget with exponential backoff; they cannot cycle forever.
+Their linked Business OS command remains `retry_wait`, not `blocked`, so the
+same command/task identity can be leased again after the durable cooldown.
+Only `WaitingExternal` remains dormant `blocked` until its referenced event.
 
 Only approved work can move into terminal handling. For communication and other
 artifact-producing work, the outcome witness checks that required durable

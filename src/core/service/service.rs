@@ -8879,6 +8879,7 @@ fn record_typed_business_command_review(
     turn_id: &str,
     thread_key: Option<&str>,
 ) -> Result<()> {
+    let retryable_hold = completion_review_disposition_is_retryable_hold(disposition);
     let (review_status, validation_status) = match disposition {
         CompletionReviewDisposition::Approved { .. }
         | CompletionReviewDisposition::NoSend { .. } => ("passed", "passed"),
@@ -8902,6 +8903,7 @@ fn record_typed_business_command_review(
             "app_validation": app_validation,
             "turn_id": turn_id,
             "thread_key": thread_key,
+            "retryable_hold": retryable_hold,
         }),
     )?;
     anyhow::ensure!(
@@ -8928,6 +8930,20 @@ fn record_typed_business_command_review(
         },
     );
     Ok(())
+}
+
+fn completion_review_disposition_is_retryable_hold(
+    disposition: &CompletionReviewDisposition,
+) -> bool {
+    matches!(
+        disposition,
+        CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical { .. }
+                | review::HoldReason::MissingReviewEvidence
+                | review::HoldReason::MissingArtifact,
+            ..
+        }
+    )
 }
 
 fn is_cv_print_parser_queue_job(job: &QueuedPrompt) -> bool {
@@ -33556,6 +33572,34 @@ Use shell tools to create or update these files."
             }
             other => panic!("unavailable review must fail closed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn only_budgeted_review_holds_move_business_commands_to_retry_wait() {
+        for reason in [
+            review::HoldReason::Technical {
+                policy_id: "review-runtime".to_string(),
+            },
+            review::HoldReason::MissingReviewEvidence,
+            review::HoldReason::MissingArtifact,
+        ] {
+            assert!(completion_review_disposition_is_retryable_hold(
+                &CompletionReviewDisposition::Hold {
+                    reason,
+                    summary: "retry later".to_string(),
+                }
+            ));
+        }
+
+        assert!(!completion_review_disposition_is_retryable_hold(
+            &CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::WaitingExternal(crate::mission::plan::WaitRef {
+                    entity_type: "approval".to_string(),
+                    entity_id: "approval-1".to_string(),
+                }),
+                summary: "wait for approval".to_string(),
+            }
+        ));
     }
 
     #[test]
