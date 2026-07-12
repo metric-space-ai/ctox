@@ -35874,6 +35874,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
             | "ctox.appsec.report.export"
             | "ctox.appsec.authz.plan"
             | "ctox.appsec.authz.credential_proof_template"
+            | "ctox.appsec.authz.credential_proof_from_evidence"
             | "ctox.appsec.authz.preflight"
             | "ctox.appsec.authz.run"
             | "ctox.appsec.authz.build_matrix"
@@ -36028,6 +36029,42 @@ fn handle_appsec_business_command(
             }
             if command.payload.get("force").and_then(Value::as_bool) == Some(true) {
                 args.push("--force".to_string());
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.authz.credential_proof_from_evidence" => {
+            let run = appsec_payload_string(&command.payload, "run")
+                .or_else(|| appsec_payload_string(&command.payload, "run_artifact"))
+                .or_else(|| appsec_payload_string(&command.payload, "run-artifact"))
+                .context(
+                    "ctox.appsec.authz.credential_proof_from_evidence payload.run is required",
+                )?;
+            let evidence_dir = appsec_payload_string(&command.payload, "evidence_dir")
+                .or_else(|| appsec_payload_string(&command.payload, "evidence-dir"))
+                .context("ctox.appsec.authz.credential_proof_from_evidence payload.evidence_dir is required")?;
+            let run_path = workspace_bound_path(root, &run, "run")?;
+            let evidence_dir = workspace_bound_path(root, &evidence_dir, "evidence_dir")?;
+            args.extend([
+                "authz".to_string(),
+                "credential-proof-from-evidence".to_string(),
+                "--run".to_string(),
+                run_path.display().to_string(),
+                "--evidence-dir".to_string(),
+                evidence_dir.display().to_string(),
+            ]);
+            if let Some(base_proof) = appsec_payload_string(&command.payload, "base_proof")
+                .or_else(|| appsec_payload_string(&command.payload, "base-proof"))
+                .or_else(|| appsec_payload_string(&command.payload, "credential_proof"))
+                .or_else(|| appsec_payload_string(&command.payload, "credential-proof"))
+            {
+                let proof_path = workspace_bound_path(root, &base_proof, "base_proof")?;
+                args.extend(["--base-proof".to_string(), proof_path.display().to_string()]);
+            }
+            if let Some(out) = appsec_payload_string(&command.payload, "out")
+                .or_else(|| appsec_payload_string(&command.payload, "output"))
+            {
+                let out_path = workspace_bound_path(root, &out, "out")?;
+                args.extend(["--out".to_string(), out_path.display().to_string()]);
             }
             args.push("--json".to_string());
         }

@@ -1204,6 +1204,18 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             ]),
         ),
         write_tool(
+            "appsec_authz_credential_proof_from_evidence",
+            "Use this when an authorized external agent needs to convert redacted CTOX web-stack login evidence into a credential proof with login liveness status. This writes no secret values.",
+            object_schema(vec![
+                required_string("run"),
+                required_string("evidence_dir"),
+                optional_string("state_dir"),
+                optional_string("base_proof"),
+                optional_string("credential_proof"),
+                optional_string("out"),
+            ]),
+        ),
+        write_tool(
             "appsec_authz_preflight",
             "Use this before a live authenticated AppSec authz run to validate redacted subjects, credential references, optional Web-Stack evidence, and next commands without reading secret values or starting browser work.",
             object_schema(vec![
@@ -2499,6 +2511,9 @@ fn call_tool_inner(
         "appsec_authz_credential_proof_template" => serde_json::to_value(
             appsec_authz_credential_proof_template(root, &context, &arguments)?,
         )?,
+        "appsec_authz_credential_proof_from_evidence" => serde_json::to_value(
+            appsec_authz_credential_proof_from_evidence(root, &context, &arguments)?,
+        )?,
         "appsec_authz_preflight" => {
             serde_json::to_value(appsec_authz_preflight(root, &context, &arguments)?)?
         }
@@ -2839,6 +2854,61 @@ fn appsec_authz_credential_proof_template(
         object.insert(
             "mcp_tool".to_string(),
             Value::String("appsec_authz_credential_proof_template".to_string()),
+        );
+        object.insert(
+            "module_id".to_string(),
+            Value::String(APPSEC_MCP_MODULE_ID.to_string()),
+        );
+        object.insert(
+            "state_dir".to_string(),
+            Value::String(path_string(&state_dir)),
+        );
+    }
+    Ok(output)
+}
+
+fn appsec_authz_credential_proof_from_evidence(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        "appsec_authz_credential_proof_from_evidence",
+        arguments,
+    )?;
+    let state_dir = appsec_mcp_state_dir(root, arguments)?;
+    let run = required_arg(arguments, "run")?;
+    let evidence_dir = required_arg(arguments, "evidence_dir")?;
+    let run_path = appsec_mcp_workspace_path(root, "run", &run)?;
+    let evidence_dir = appsec_mcp_workspace_path(root, "evidence_dir", &evidence_dir)?;
+    let mut args = vec![
+        "--state-dir".to_string(),
+        path_string(&state_dir),
+        "authz".to_string(),
+        "credential-proof-from-evidence".to_string(),
+        "--run".to_string(),
+        path_string(&run_path),
+        "--evidence-dir".to_string(),
+        path_string(&evidence_dir),
+    ];
+    if let Some(base_proof) = optional_string_arg(arguments, "base_proof")
+        .or_else(|| optional_string_arg(arguments, "credential_proof"))
+    {
+        let proof_path = appsec_mcp_workspace_path(root, "base_proof", &base_proof)?;
+        args.extend(["--base-proof".to_string(), path_string(&proof_path)]);
+    }
+    if let Some(out) = optional_string_arg(arguments, "out") {
+        let out_path = appsec_mcp_workspace_path(root, "out", &out)?;
+        args.extend(["--out".to_string(), path_string(&out_path)]);
+    }
+    args.push("--json".to_string());
+    let mut output = crate::run_projected_appsec_command(root, &args)?;
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "mcp_tool".to_string(),
+            Value::String("appsec_authz_credential_proof_from_evidence".to_string()),
         );
         object.insert(
             "module_id".to_string(),
@@ -4671,6 +4741,7 @@ fn business_os_mcp_policy_decision(
         | "appsec_lab_run"
         | "appsec_authz_plan"
         | "appsec_authz_credential_proof_template"
+        | "appsec_authz_credential_proof_from_evidence"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
@@ -5125,6 +5196,7 @@ fn enforce_argument_scope_policy(
         | "appsec_tools_doctor"
         | "appsec_authz_plan"
         | "appsec_authz_credential_proof_template"
+        | "appsec_authz_credential_proof_from_evidence"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_status"
@@ -5225,6 +5297,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "appsec_lab_run"
         | "appsec_authz_plan"
         | "appsec_authz_credential_proof_template"
+        | "appsec_authz_credential_proof_from_evidence"
         | "appsec_authz_preflight"
         | "appsec_authz_run"
         | "appsec_authz_build_matrix"
@@ -6542,6 +6615,9 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_authz_credential_proof_template"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "appsec_authz_credential_proof_from_evidence"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "appsec_authz_preflight"));
