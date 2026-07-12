@@ -100,13 +100,29 @@ def ensure_column(
     column: str,
     ddl: str,
 ) -> None:
+    ensure_supported_column_migration(table, column, ddl)
     columns = {
-        row[1]
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        row[0]
+        for row in conn.execute("SELECT name FROM pragma_table_info(?)", (table,)).fetchall()
     }
     if column in columns:
         return
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.execute('ALTER TABLE "discovery_run" ADD COLUMN "skill_key" TEXT NOT NULL DEFAULT \'discovery_graph\'')
+
+
+ALLOWED_COLUMN_DDL = {"TEXT NOT NULL DEFAULT 'discovery_graph'"}
+
+
+def allowed_column_ddl(value: str) -> str:
+    if value not in ALLOWED_COLUMN_DDL:
+        raise ValueError(f"unsupported column DDL: {value!r}")
+    return value
+
+
+def ensure_supported_column_migration(table: str, column: str, ddl: str) -> None:
+    if table != "discovery_run" or column != "skill_key":
+        raise ValueError(f"unsupported column migration: {table}.{column}")
+    allowed_column_ddl(ddl)
 
 
 def stable_id(prefix: str, payload: str) -> str:
@@ -142,32 +158,38 @@ def ensure_run(
         """,
         (run_id, skill_key or "discovery_graph", scope_json or "{}", effective_started_at, effective_finished_at),
     )
-    updates = []
-    values = []
-    if skill_key is not None:
-        updates.append("skill_key = ?")
-        values.append(skill_key)
-    if scope_json is not None:
-        updates.append("scope_json = ?")
-        values.append(scope_json)
-    if started_at is not None:
-        updates.append("started_at = CASE WHEN started_at > ? THEN ? ELSE started_at END")
-        values.extend([started_at, started_at])
-    if finished_at is not None:
-        updates.append("finished_at = ?")
-        values.append(finished_at)
-    if status is not None:
-        updates.append("status = ?")
-        values.append(status)
-    if note is not None:
-        updates.append("note = ?")
-        values.append(note)
-    if updates:
-        values.append(run_id)
-        conn.execute(
-            f"UPDATE discovery_run SET {', '.join(updates)} WHERE run_id = ?",
-            values,
-        )
+    conn.execute(
+        """
+        UPDATE discovery_run
+        SET
+            skill_key = CASE WHEN ? THEN ? ELSE skill_key END,
+            scope_json = CASE WHEN ? THEN ? ELSE scope_json END,
+            started_at = CASE
+                WHEN ? THEN CASE WHEN started_at > ? THEN ? ELSE started_at END
+                ELSE started_at
+            END,
+            finished_at = CASE WHEN ? THEN ? ELSE finished_at END,
+            status = CASE WHEN ? THEN ? ELSE status END,
+            note = CASE WHEN ? THEN ? ELSE note END
+        WHERE run_id = ?
+        """,
+        (
+            skill_key is not None,
+            skill_key,
+            scope_json is not None,
+            scope_json,
+            started_at is not None,
+            started_at,
+            started_at,
+            finished_at is not None,
+            finished_at,
+            status is not None,
+            status,
+            note is not None,
+            note,
+            run_id,
+        ),
+    )
 
 
 def capture_time_bounds(captures: list[dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
@@ -429,22 +451,46 @@ def mark_missing_inactive(
     seen_ids: list[str],
     skill_key: str,
 ) -> None:
-    skill_filter = "last_run_id IN (SELECT run_id FROM discovery_run WHERE skill_key = ?)"
-    if seen_ids:
-        placeholders = ", ".join("?" for _ in seen_ids)
-        conn.execute(
-            f"""
-            UPDATE {table}
-            SET is_active = 0
-            WHERE {skill_filter} AND {id_column} NOT IN ({placeholders})
+    inactive_table_identifiers(table, id_column)
+    seen = set(seen_ids)
+    if table == "discovery_entity":
+        rows = conn.execute(
+            """
+            SELECT entity_id
+            FROM discovery_entity
+            WHERE last_run_id IN (SELECT run_id FROM discovery_run WHERE skill_key = ?)
             """,
-            [skill_key, *seen_ids],
-        )
-    else:
-        conn.execute(
-            f"UPDATE {table} SET is_active = 0 WHERE {skill_filter}",
             (skill_key,),
+        ).fetchall()
+        stale_ids = [(row[0],) for row in rows if row[0] not in seen]
+        conn.executemany(
+            "UPDATE discovery_entity SET is_active = 0 WHERE entity_id = ?",
+            stale_ids,
         )
+        return
+    rows = conn.execute(
+        """
+        SELECT relation_id
+        FROM discovery_relation
+        WHERE last_run_id IN (SELECT run_id FROM discovery_run WHERE skill_key = ?)
+        """,
+        (skill_key,),
+    ).fetchall()
+    stale_ids = [(row[0],) for row in rows if row[0] not in seen]
+    conn.executemany(
+        "UPDATE discovery_relation SET is_active = 0 WHERE relation_id = ?",
+        stale_ids,
+    )
+
+
+def inactive_table_identifiers(table: str, id_column: str) -> tuple[str, str]:
+    allowed = {
+        "discovery_entity": {"entity_id"},
+        "discovery_relation": {"relation_id"},
+    }
+    if id_column not in allowed.get(table, set()):
+        raise ValueError(f"unsupported inactive marker target: {table}.{id_column}")
+    return table, id_column
 
 
 def store_graph(conn: sqlite3.Connection, payload: Dict[str, Any]) -> Dict[str, Any]:

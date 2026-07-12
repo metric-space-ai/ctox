@@ -11,17 +11,92 @@ def open_db(db_path: str) -> sqlite3.Connection:
 
 
 def summary(conn: sqlite3.Connection, skill_key: str | None = None) -> dict:
-    run_where = ""
-    entity_join = ""
-    relation_join = ""
-    coverage_where = ""
-    params: list[str] = []
     if skill_key:
-        run_where = "WHERE skill_key = ?"
-        entity_join = "JOIN discovery_run r ON r.run_id = e.last_run_id WHERE r.skill_key = ?"
-        relation_join = "JOIN discovery_run r ON r.run_id = rel.last_run_id WHERE r.skill_key = ?"
-        coverage_where = "AND r.skill_key = ?"
-        params = [skill_key]
+        run_rows = conn.execute(
+            """
+            SELECT run_id, skill_key, status, started_at, finished_at
+            FROM discovery_run
+            WHERE skill_key = ?
+            ORDER BY started_at DESC
+            """,
+            (skill_key,),
+        )
+        entity_rows = conn.execute(
+            """
+            SELECT
+                e.kind,
+                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
+            FROM discovery_entity e
+            JOIN discovery_run r ON r.run_id = e.last_run_id
+            WHERE r.skill_key = ?
+            GROUP BY e.kind
+            ORDER BY e.kind
+            """,
+            (skill_key,),
+        )
+        relation_rows = conn.execute(
+            """
+            SELECT
+                rel.relation,
+                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
+            FROM discovery_relation rel
+            JOIN discovery_run r ON r.run_id = rel.last_run_id
+            WHERE r.skill_key = ?
+            GROUP BY rel.relation
+            ORDER BY rel.relation
+            """,
+            (skill_key,),
+        )
+        coverage_rows = conn.execute(
+            """
+            SELECT e.natural_key, e.title, e.attrs_json
+            FROM discovery_entity e
+            JOIN discovery_run r ON r.run_id = e.last_run_id
+            WHERE e.kind = 'coverage_gap' AND e.is_active = 1 AND r.skill_key = ?
+            ORDER BY e.natural_key
+            """,
+            (skill_key,),
+        )
+    else:
+        run_rows = conn.execute(
+            """
+            SELECT run_id, skill_key, status, started_at, finished_at
+            FROM discovery_run
+            ORDER BY started_at DESC
+            """
+        )
+        entity_rows = conn.execute(
+            """
+            SELECT
+                e.kind,
+                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
+            FROM discovery_entity e
+            GROUP BY e.kind
+            ORDER BY e.kind
+            """
+        )
+        relation_rows = conn.execute(
+            """
+            SELECT
+                rel.relation,
+                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
+                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
+            FROM discovery_relation rel
+            GROUP BY rel.relation
+            ORDER BY rel.relation
+            """
+        )
+        coverage_rows = conn.execute(
+            """
+            SELECT e.natural_key, e.title, e.attrs_json
+            FROM discovery_entity e
+            WHERE e.kind = 'coverage_gap' AND e.is_active = 1
+            ORDER BY e.natural_key
+            """
+        )
     runs = [
         {
             "run_id": row[0],
@@ -30,15 +105,7 @@ def summary(conn: sqlite3.Connection, skill_key: str | None = None) -> dict:
             "started_at": row[3],
             "finished_at": row[4],
         }
-        for row in conn.execute(
-            f"""
-            SELECT run_id, skill_key, status, started_at, finished_at
-            FROM discovery_run
-            {run_where}
-            ORDER BY started_at DESC
-            """,
-            params,
-        )
+        for row in run_rows
     ]
     entities = [
         {
@@ -46,19 +113,7 @@ def summary(conn: sqlite3.Connection, skill_key: str | None = None) -> dict:
             "active": row[1],
             "inactive": row[2],
         }
-        for row in conn.execute(
-            f"""
-            SELECT
-                e.kind,
-                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
-                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
-            FROM discovery_entity e
-            {entity_join}
-            GROUP BY e.kind
-            ORDER BY e.kind
-            """,
-            params,
-        )
+        for row in entity_rows
     ]
     relations = [
         {
@@ -66,19 +121,7 @@ def summary(conn: sqlite3.Connection, skill_key: str | None = None) -> dict:
             "active": row[1],
             "inactive": row[2],
         }
-        for row in conn.execute(
-            f"""
-            SELECT
-                rel.relation,
-                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_count,
-                SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_count
-            FROM discovery_relation rel
-            {relation_join}
-            GROUP BY rel.relation
-            ORDER BY rel.relation
-            """,
-            params,
-        )
+        for row in relation_rows
     ]
     coverage_gaps = [
         {
@@ -86,17 +129,7 @@ def summary(conn: sqlite3.Connection, skill_key: str | None = None) -> dict:
             "title": row[1],
             "attrs": json.loads(row[2]),
         }
-        for row in conn.execute(
-            f"""
-            SELECT e.natural_key, e.title, e.attrs_json
-            FROM discovery_entity e
-            {"JOIN discovery_run r ON r.run_id = e.last_run_id" if skill_key else ""}
-            WHERE e.kind = 'coverage_gap' AND e.is_active = 1
-            {coverage_where}
-            ORDER BY e.natural_key
-            """,
-            params,
-        )
+        for row in coverage_rows
     ]
     return {
         "runs": runs,

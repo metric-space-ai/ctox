@@ -1728,7 +1728,7 @@ def table_names(conn: sqlite3.Connection) -> list[str]:
 
 
 def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({quote_identifier(table)})")}
+    return {str(row["name"]) for row in conn.execute("SELECT name FROM pragma_table_info(?)", (table,))}
 
 
 def inspect_table(conn: sqlite3.Connection, table: str) -> dict[str, Any]:
@@ -1811,10 +1811,17 @@ def inspect_desktop_file_chunks(
 ) -> dict[str, Any]:
     table = "ctox_business_os__desktop_file_chunks__v0"
     columns = table_columns(conn, table)
-    quoted = quote_identifier(table)
-    row_count = query_scalar(conn, f"SELECT COUNT(*) FROM {quoted}")
-    select_deleted = ", deleted" if "deleted" in columns else ""
-    rows = conn.execute(f"SELECT data{select_deleted} FROM {quoted} LIMIT ?", (max_rows + 1,)).fetchall()
+    row_count = query_scalar(conn, 'SELECT COUNT(*) FROM "ctox_business_os__desktop_file_chunks__v0"')
+    if "deleted" in columns:
+        rows = conn.execute(
+            'SELECT data, deleted FROM "ctox_business_os__desktop_file_chunks__v0" LIMIT ?',
+            (max_rows + 1,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT data FROM "ctox_business_os__desktop_file_chunks__v0" LIMIT ?',
+            (max_rows + 1,),
+        ).fetchall()
     truncated = len(rows) > max_rows
     if truncated:
         rows = rows[:max_rows]
