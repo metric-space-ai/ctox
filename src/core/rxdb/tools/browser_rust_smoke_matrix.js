@@ -183,7 +183,7 @@ const modeEvidenceRequirements = {
       business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,iot,nachweise,placements,submissions,support,threads',
       business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,policy-denied-render-skipped,policy-denied-render-skipped,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,policy-denied-render-skipped,app-store-view-scope,browser-address-refresh,policy-denied-render-skipped,creator-expert-accordion,policy-denied-render-skipped,reports-filter-controls,policy-denied-render-skipped,appsec-coverage-findings-tabs,consent-primary-form-input,credentials-write-only-form-input,policy-denied-render-skipped,policy-denied-render-skipped,esign-primary-form-input,intake-primary-form-input,interviews-primary-form-input,policy-denied-render-skipped,nachweise-primary-form-input,placements-primary-form-input,submissions-primary-form-input,policy-denied-render-skipped,threads-search-and-filter',
       business_os_ui_interacted_modules: 'ctox,documents,knowledge,research',
-      business_os_ui_interaction_names: 'ctox-zoom,policy-denied-render-skipped,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
+      business_os_ui_interaction_names: 'ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
       business_os_ui_desktop_opened: 1,
       business_os_visual_workspace_visible: 1,
     },
