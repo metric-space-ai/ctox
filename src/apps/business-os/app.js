@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260712-agent-scope-v1';
+const APP_BUILD = '20260712-system-data-scope-v1';
 
 ensureShellStylesheets();
 
@@ -4944,11 +4944,33 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'desktop_icons',
     'desktop_layout',
   ]),
+  documents: Object.freeze([
+    'business_commands',
+    'documents',
+    'document_versions',
+    'document_blob_chunks',
+    'document_runbooks',
+    'knowledge_items',
+    'knowledge_runbooks',
+    'knowledge_tables',
+  ]),
   knowledge: Object.freeze([
     'business_commands',
     'knowledge_items',
     'knowledge_runbooks',
     'knowledge_tables',
+  ]),
+  research: Object.freeze([
+    'business_commands',
+    'business_chats',
+    'ctox_queue_tasks',
+    'research_tasks',
+    'research_runs',
+    'research_notes',
+    'knowledge_tables',
+    'documents',
+    'document_versions',
+    'document_blob_chunks',
   ]),
   reports: Object.freeze([
     'business_commands',
