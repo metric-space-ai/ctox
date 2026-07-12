@@ -13351,6 +13351,106 @@ fn resolve_business_os_installed_app_root_for_native_peer(root: &Path) -> PathBu
     root.join("business-os")
 }
 
+fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<Value>> {
+    let operations = if let Some(array) = spec.as_array() {
+        array.clone()
+    } else {
+        spec.get("operations")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    for operation in &operations {
+        let object = operation
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("declarative migration operation must be an object"))?;
+        let op = object.get("op").and_then(Value::as_str).unwrap_or_default();
+        match op {
+            "set_from_first_truthy" => {
+                anyhow::ensure!(
+                    object.get("field").and_then(Value::as_str).is_some()
+                        && object.get("paths").and_then(Value::as_array).is_some(),
+                    "set_from_first_truthy migration needs field and paths"
+                );
+            }
+            "set_boolean" => {
+                anyhow::ensure!(
+                    object.get("field").and_then(Value::as_str).is_some(),
+                    "set_boolean migration needs field"
+                );
+            }
+            other => anyhow::bail!("unsupported declarative migration operation {other}"),
+        }
+    }
+    Ok(operations)
+}
+
+fn apply_native_declarative_migration(old_doc: &Value, spec: &Value) -> anyhow::Result<Value> {
+    let operations = native_declarative_migration_operations(spec)?;
+    let mut migrated = old_doc.as_object().cloned().unwrap_or_default();
+    for operation in operations {
+        let object = operation
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("declarative migration operation must be an object"))?;
+        let field = object
+            .get("field")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match object.get("op").and_then(Value::as_str).unwrap_or_default() {
+            "set_from_first_truthy" => {
+                let paths = object
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let next = paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(|path| native_declarative_path_value(old_doc, path))
+                    .find(|value| native_declarative_value_is_truthy(value))
+                    .cloned()
+                    .or_else(|| object.get("default").cloned())
+                    .unwrap_or(Value::Null);
+                migrated.insert(field.to_owned(), next);
+            }
+            "set_boolean" => {
+                let path = object.get("path").and_then(Value::as_str).unwrap_or(field);
+                migrated.insert(
+                    field.to_owned(),
+                    Value::Bool(
+                        native_declarative_path_value(old_doc, path)
+                            .is_some_and(native_declarative_value_is_truthy),
+                    ),
+                );
+            }
+            other => anyhow::bail!("unsupported declarative migration operation {other}"),
+        }
+    }
+    Ok(Value::Object(migrated))
+}
+
+fn native_declarative_path_value<'a>(source: &'a Value, path: &str) -> Option<&'a Value> {
+    if path.trim().is_empty() {
+        return None;
+    }
+    let mut current = source;
+    for segment in path.split('.') {
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
+}
+
+fn native_declarative_value_is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
 fn business_os_schema(name: &str, primary_key: &str) -> RxJsonSchema {
     let schema = business_os_schema_contract()
         .get(name)
@@ -14941,6 +15041,49 @@ mod tests {
             }
             assert_eq!(actual_hash, expected_hash, "schema hash for {collection}");
         }
+    }
+
+    #[test]
+    fn native_declarative_migration_matches_browser_operations() {
+        let old_doc = json!({
+            "id": "cmd-1",
+            "module": "creator",
+            "nested": {
+                "enabled": "yes"
+            },
+            "already": "kept"
+        });
+        let spec = json!({
+            "operations": [
+                {
+                    "op": "set_from_first_truthy",
+                    "field": "inbound_channel",
+                    "paths": ["inbound_channel", "module"],
+                    "default": ""
+                },
+                {
+                    "op": "set_boolean",
+                    "field": "nested_enabled",
+                    "path": "nested.enabled"
+                }
+            ]
+        });
+
+        let migrated = apply_native_declarative_migration(&old_doc, &spec)
+            .expect("native declarative migration applies");
+
+        assert_eq!(
+            migrated.get("inbound_channel").and_then(Value::as_str),
+            Some("creator")
+        );
+        assert_eq!(
+            migrated.get("nested_enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            migrated.get("already").and_then(Value::as_str),
+            Some("kept")
+        );
     }
 
     #[tokio::test]

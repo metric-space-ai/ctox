@@ -27362,6 +27362,17 @@ pub(super) fn ensure_legacy_collection_grants(
     Ok(())
 }
 
+fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
+    business_os_schema_contract_for_store()
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn ensure_default_sync_collection_grants(root: &Path) -> anyhow::Result<()> {
+    ensure_legacy_collection_grants(root, &business_os_collection_names_for_legacy_grants())
+}
+
 /// Whether server-authoritative per-collection sync authorization is enforced.
 /// Default ON: the policy matrix is deny-by-exception for admin-only
 /// collections, and browsers now carry native-signed capability tokens in the
@@ -27388,6 +27399,11 @@ pub fn issue_business_os_capability_token(
     user_id: &str,
     now_ms: i64,
 ) -> anyhow::Result<(String, i64)> {
+    // The browser resolves this token before the first WebRTC handshake. Ensure
+    // deterministic baseline grants before reading capability_epoch; otherwise
+    // native peer startup can insert grants moments later and invalidate the
+    // freshly issued token before its first collection fetch.
+    ensure_default_sync_collection_grants(root)?;
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, user_id.trim())?
@@ -38922,6 +38938,28 @@ mod tests {
             verify_capability_actor(root.path(), &grant_token).is_none(),
             "grant changes must invalidate an already-issued capability"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn capability_token_survives_idempotent_sync_grant_materialization() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "operator1", "user")?;
+        let now = now_ms() as i64;
+        let (token, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+
+        ensure_default_sync_collection_grants(root.path())?;
+
+        assert!(
+            verify_capability_actor(root.path(), &token).is_some(),
+            "startup grant reconciliation must not stale a freshly issued sync token"
+        );
+        assert!(capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "business_module_catalog",
+            BusinessOsPermission::DataRead
+        ));
         Ok(())
     }
 
