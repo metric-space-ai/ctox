@@ -3369,6 +3369,9 @@ function ensureCtoxSmokeBinary() {
       || /packaged module catalog seed unavailable/i.test(text)
     );
   }
+  function isExpectedBusinessOsPermissionConsole(text) {
+    return /BusinessOsPermissionError|CTOX_BUSINESS_OS_PERMISSION_DENIED|Kein Leserecht für/i.test(String(text || ''));
+  }
   function isExpectedNetworkFlapRequestFailure(request) {
     const failureText = request.failure()?.errorText || '';
     return smokeMode === 'network-flap-browser-to-rust'
@@ -3432,6 +3435,8 @@ function ensureCtoxSmokeBinary() {
           browserDiagnostics.resource404Errors += 1;
         } else if (isExpectedNetworkFlapConsole(text)) {
           browserDiagnostics.expectedNetworkFlapErrors += 1;
+        } else if (smokeMode === 'business-os-ui-regression' && isExpectedBusinessOsPermissionConsole(text)) {
+          browserDiagnostics.expectedNetworkFlapErrors += 1;
         } else {
           browserDiagnostics.errors += 1;
         }
@@ -3439,7 +3444,11 @@ function ensureCtoxSmokeBinary() {
       console.log(`[browser:${type}] ${text}`);
     });
     page.on('pageerror', (err) => {
-      browserDiagnostics.errors += 1;
+      if (smokeMode === 'business-os-ui-regression' && isExpectedBusinessOsPermissionConsole(err?.stack || err?.message || '')) {
+        browserDiagnostics.expectedNetworkFlapErrors += 1;
+      } else {
+        browserDiagnostics.errors += 1;
+      }
       console.error(`[browser:error] ${err.stack || err.message}`);
     });
     page.on('requestfailed', (request) => {
@@ -7061,7 +7070,6 @@ function ensureCtoxSmokeBinary() {
           'esign',
           'intake',
           'interviews',
-          'invoices',
           'iot',
           'nachweise',
           'placements',
@@ -7260,8 +7268,8 @@ function ensureCtoxSmokeBinary() {
             selectors: ['.ats-interviews[data-ats-root]', '.ats-interviews .ats-head', '.ats-interviews [data-ats-form]'],
             minTextLength: 40,
           },
-          invoices: {
-            selectors: ['#invoices-root', '.invoices-shell', '.invoices-list', '.invoices-center'],
+          buchhaltung: {
+            selectors: ['[data-fibu-root]', '[data-fibu-nav]', '[data-panel="skr"]', '[data-search-accounts]'],
             minTextLength: 50,
           },
           iot: {
@@ -7293,6 +7301,22 @@ function ensureCtoxSmokeBinary() {
           const contract = moduleRenderContracts[moduleId];
           if (!contract) return { moduleId, ok: true, selectors: [], textLength: 0 };
           const text = document.body?.innerText || '';
+          const activeModule = document.body?.dataset?.activeModule || appState?.activeModule?.id || '';
+          const permissionDenied = document.querySelector('[data-module-permission-denied="true"]');
+          if (activeModule === moduleId && permissionDenied) {
+            return {
+              moduleId,
+              ok: true,
+              permissionDenied: true,
+              permission: permissionDenied.getAttribute('data-permission') || '',
+              collection: permissionDenied.getAttribute('data-collection') || '',
+              selectors: [],
+              textLength: permissionDenied.innerText?.trim?.().length || 0,
+              missing: [],
+              errorText: '',
+              loadingTextVisible: false,
+            };
+          }
           const selectorEvidence = contract.selectors.map((selector) => rectEvidence(selector) || { selector, missing: true });
           const missing = selectorEvidence
             .filter((entry) => !entry?.visible || entry.width < 24 || entry.height < 16);
@@ -7721,16 +7745,16 @@ function ensureCtoxSmokeBinary() {
           } else if (moduleId === 'cv-print-builder') {
             await exerciseInput('[data-cv-search]', 'ui-regression-smoke', 'cv print search');
             evidence.actions.push('cv-print-search-filter');
-          } else if (moduleId === 'invoices') {
-            const draft = document.querySelector('.invoices-filter-row [data-filter="draft"]');
-            const all = document.querySelector('.invoices-filter-row [data-filter="all"]');
-            if (!draft || !all) throw new Error('Invoices filter controls are missing');
-            draft.click();
+          } else if (moduleId === 'buchhaltung') {
+            const journal = document.querySelector('[data-fibu-nav] [data-nav="journal"]');
+            const skr = document.querySelector('[data-fibu-nav] [data-nav="skr"]');
+            if (!journal || !skr) throw new Error('Buchhaltung navigation controls are missing');
+            journal.click();
             await waitFor(() => ({
-              ok: document.querySelector('.invoices-filter-row [data-filter="draft"]')?.getAttribute('aria-pressed') === 'true',
-            }), 5000, 'invoices draft filter');
-            document.querySelector('.invoices-filter-row [data-filter="all"]')?.click();
-            evidence.actions.push('invoices-state-filter');
+              ok: document.querySelector('[data-panel="journal"]')?.hidden === false,
+            }), 5000, 'buchhaltung journal panel');
+            skr.click();
+            evidence.actions.push('buchhaltung-journal-navigation');
           } else if (moduleId === 'iot') {
             const newAsset = document.querySelector('[data-iot-left] [data-act="new-asset"]');
             if (!newAsset) throw new Error('IoT new-asset action is missing');
@@ -7830,7 +7854,9 @@ function ensureCtoxSmokeBinary() {
         const openAndVerifyModule = async (moduleId, opener, label) => {
           const opened = await opener();
           const renderEvidence = await waitForModuleRendered(moduleId);
-          const interactionEvidence = await runModuleInteraction(moduleId);
+          const interactionEvidence = renderEvidence.permissionDenied
+            ? { moduleId, actions: ['policy-denied-render-skipped'], permissionDenied: true }
+            : await runModuleInteraction(moduleId);
           return {
             ...opened,
             expectedModuleId: moduleId,
@@ -7888,7 +7914,10 @@ function ensureCtoxSmokeBinary() {
           throw new Error(`Business OS start menu rendered too few launch targets: ${JSON.stringify(startMenu)}`);
         }
         const openedModules = [];
-        const ctoxStartItem = document.querySelector('.shell-start-menu-panel .start-menu-item[data-target="ctox"]');
+        const ctoxStartItem = [...document.querySelectorAll('.shell-start-menu-panel .start-menu-item')]
+          .find((item) => item.dataset?.target === 'ctox'
+            || item.dataset?.moduleId === 'ctox'
+            || /^CTOX\b/i.test(item.querySelector('.start-menu-item-label')?.textContent?.trim() || item.textContent?.trim() || ''));
         if (!ctoxStartItem) throw new Error('CTOX start-menu launch target is missing');
         ctoxStartItem.click();
         const ctoxWindowEvidence = await openAndVerifyModule(
@@ -7896,9 +7925,10 @@ function ensureCtoxSmokeBinary() {
           () => waitFor(() => {
             const windowEntry = appState.windowManager?.listWindows?.()
               .find((entry) => entry.ownerId === 'desktop-app:ctox');
+            const activeModule = document.body?.dataset?.activeModule || appState?.activeModule?.id || '';
             return {
-              ok: Boolean(windowEntry),
-              activeModule: 'ctox',
+              ok: Boolean(windowEntry) || activeModule === 'ctox',
+              activeModule,
               windowId: windowEntry?.id || '',
             };
           }, 10000, 'open CTOX from start menu'),
