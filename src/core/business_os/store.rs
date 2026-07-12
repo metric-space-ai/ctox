@@ -14012,6 +14012,25 @@ fn list_business_activity_events(
             "payload": payload
         }));
     }
+    append_reconstructed_module_lifecycle_activity(&conn, &mut events, limit as usize)?;
+    events.sort_by(|left, right| {
+        let left_ts = left
+            .get("observed_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let right_ts = right
+            .get("observed_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        right_ts.cmp(&left_ts).then_with(|| {
+            right
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(left.get("id").and_then(Value::as_str).unwrap_or_default())
+        })
+    });
+    events.truncate(limit as usize);
     let count = events.len();
     Ok(serde_json::json!({
         "ok": true,
@@ -14019,6 +14038,197 @@ fn list_business_activity_events(
         "events": events,
         "count": count
     }))
+}
+
+fn reconstructed_module_lifecycle_event_type(
+    command_type: &str,
+    status: &str,
+) -> Option<&'static str> {
+    module_lifecycle_audit_event_type(command_type, status)
+}
+
+fn module_lifecycle_summary_from_projection(document: &Value) -> Value {
+    let payload = document.get("payload").unwrap_or(&Value::Null);
+    let result = document.get("result").unwrap_or(&Value::Null);
+    let command_type = document
+        .get("command_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let record_id = document
+        .get("record_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let module_id = result
+        .get("module_id")
+        .or_else(|| payload.get("module_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| (!record_id.trim().is_empty()).then_some(record_id))
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let version_id = result
+        .get("version_id")
+        .or_else(|| payload.get("version_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let data_access_review = if command_type == "ctox.module.release" {
+        let from_result = release_audit_review_from_result(result, &module_id, &version_id);
+        if from_result.is_null() {
+            payload
+                .get("data_access_review")
+                .cloned()
+                .unwrap_or(Value::Null)
+        } else {
+            from_result
+        }
+    } else {
+        Value::Null
+    };
+    serde_json::json!({
+        "ok": result
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        "module_id": module_id,
+        "version_id": version_id,
+        "target_version": lifecycle_audit_string(
+            result.get("target_version").or_else(|| payload.get("target_version"))
+        ),
+        "release_channel": lifecycle_audit_string(
+            result.get("release_channel").or_else(|| payload.get("release_channel"))
+        ),
+        "source_version_id": lifecycle_audit_string(
+            result.get("source_version_id").or_else(|| payload.get("source_version_id"))
+        ),
+        "rollback_version_id": lifecycle_audit_string(
+            result.get("rollback_version_id").or_else(|| payload.get("rollback_version_id"))
+        ),
+        "business_module_release_ids": result
+            .get("business_module_release_ids")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "rolled_back_at_ms": result
+            .get("rolled_back_at_ms")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "release_check": result
+            .get("release_check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "rollback_check": result
+            .get("rollback_check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "check": result
+            .get("check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "operation": result
+            .get("operation")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "error": result
+            .get("error")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "data_access_review": data_access_review
+    })
+}
+
+fn append_reconstructed_module_lifecycle_activity(
+    conn: &Connection,
+    events: &mut Vec<Value>,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let mut seen = events
+        .iter()
+        .filter_map(|event| {
+            let command_id = event
+                .get("payload")
+                .and_then(|payload| payload.get("command_id"))
+                .and_then(Value::as_str)?;
+            let event_type = event.get("type").and_then(Value::as_str)?;
+            Some((command_id.to_owned(), event_type.to_owned()))
+        })
+        .collect::<HashSet<_>>();
+    let mut stmt = conn.prepare(
+        "SELECT record_id, payload_json, updated_at_ms
+         FROM business_records
+         WHERE collection = 'business_commands'
+           AND deleted = 0
+         ORDER BY updated_at_ms DESC, record_id DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![(limit.saturating_mul(4)).max(16) as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    for row in rows {
+        if events.len() >= limit {
+            break;
+        }
+        let (record_id, payload_json, updated_at_ms) = row?;
+        let document: Value = match serde_json::from_str(&payload_json) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let status = document
+            .get("status")
+            .or_else(|| document.get("terminal_status"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(status, "completed" | "failed") {
+            continue;
+        }
+        let command_type = document
+            .get("command_type")
+            .or_else(|| document.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(event_type) = reconstructed_module_lifecycle_event_type(command_type, status)
+        else {
+            continue;
+        };
+        let command_id = document
+            .get("command_id")
+            .or_else(|| document.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or(record_id.as_str())
+            .to_owned();
+        if !seen.insert((command_id.clone(), event_type.to_owned())) {
+            continue;
+        }
+        let actor = policy_audit_actor_context_from_client_context(document.get("client_context"));
+        let payload = serde_json::json!({
+            "event_type": event_type,
+            "command_id": command_id,
+            "module": document.get("module").and_then(Value::as_str).unwrap_or("ctox"),
+            "command_type": command_type,
+            "record_id": document.get("record_id").and_then(Value::as_str),
+            "actor": actor,
+            "status": status,
+            "summary": module_lifecycle_summary_from_projection(&document),
+            "observed_at_ms": updated_at_ms,
+            "reconstructed_from": "business_commands"
+        });
+        events.push(serde_json::json!({
+            "id": format!("reconstructed_{event_type}_{command_id}"),
+            "event_id": Value::Null,
+            "collection": "business_commands",
+            "record_id": command_id,
+            "type": event_type,
+            "command_type": event_type,
+            "observed_at_ms": updated_at_ms,
+            "payload": payload
+        }));
+    }
+    Ok(())
 }
 
 fn business_os_support_diagnostics_export(
@@ -16750,6 +16960,28 @@ fn policy_audit_actor_context(root: &Path, command: &BusinessCommand) -> Value {
         .and_then(|value| value.get("display_name"))
         .or_else(|| actor.and_then(|value| value.get("name")))
         .or_else(|| client_context.get("display_name"))
+        .and_then(Value::as_str)
+        .unwrap_or(id);
+    serde_json::json!({
+        "id": id,
+        "display_name": display_name,
+        "trusted": false
+    })
+}
+
+fn policy_audit_actor_context_from_client_context(client_context: Option<&Value>) -> Value {
+    let actor = client_context
+        .and_then(|context| context.get("actor"))
+        .or_else(|| client_context.and_then(|context| context.get("user")));
+    let id = actor
+        .and_then(|value| value.get("id"))
+        .or_else(|| client_context.and_then(|context| context.get("user_id")))
+        .and_then(Value::as_str)
+        .unwrap_or("rxdb-command");
+    let display_name = actor
+        .and_then(|value| value.get("display_name"))
+        .or_else(|| actor.and_then(|value| value.get("name")))
+        .or_else(|| client_context.and_then(|context| context.get("display_name")))
         .and_then(Value::as_str)
         .unwrap_or(id);
     serde_json::json!({
@@ -46551,6 +46783,15 @@ mod tests {
                 .unwrap_or_default()
                 > 0
         );
+        conn.execute(
+            "DELETE FROM business_events
+             WHERE command_type IN (
+                'business_os.module.release.succeeded',
+                'business_os.module.rollback.succeeded'
+             )",
+            [],
+        )?;
+        drop(conn);
 
         let activity = accept_rxdb_business_command(
             root,
@@ -46581,12 +46822,20 @@ mod tests {
                 == Some("business_os.module.release.succeeded")
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_inventory_release_audit")
+                && event
+                    .pointer("/payload/reconstructed_from")
+                    .and_then(Value::as_str)
+                    == Some("business_commands")
         }));
         assert!(events.iter().any(|event| {
             event.get("type").and_then(Value::as_str)
                 == Some("business_os.module.rollback.succeeded")
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_inventory_rollback_audit")
+                && event
+                    .pointer("/payload/reconstructed_from")
+                    .and_then(Value::as_str)
+                    == Some("business_commands")
         }));
         Ok(())
     }
