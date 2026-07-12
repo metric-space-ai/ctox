@@ -336,8 +336,12 @@ fn run(root: &Path, args: &[String]) -> anyhow::Result<Value> {
 fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     let run_id = sanitize(flag(args, "--run-id").context("--run-id is required")?)?;
     let manifest = read_manifest(root, &run_id)?;
-    let approvals = documents(root, "ctox_task_approval_requests")?;
-    let notifications = documents(root, "user_notifications")?;
+    // Scope human-route evidence to this run. Reading the collection-wide
+    // 2,000-row projection window can omit a fresh notification on long-lived
+    // instances and falsely report a correctly routed task as lost.
+    let run_window_start_ms = manifest.created_at_ms.saturating_sub(1);
+    let approvals = documents_since(root, "ctox_task_approval_requests", run_window_start_ms)?;
+    let notifications = documents_since(root, "user_notifications", run_window_start_ms)?;
     let mut counts = BTreeMap::<String, usize>::new();
     let mut results = Vec::new();
     for case in &manifest.cases {
@@ -642,14 +646,17 @@ fn result_text(value: &Value) -> String {
     })
     .unwrap_or_default()
 }
-fn documents(root: &Path, collection: &str) -> anyhow::Result<Vec<Value>> {
-    Ok(
-        crate::business_os::store::pull_collection_records(root, collection, None, Some(2_000))?
-            .get("documents")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-    )
+fn documents_since(root: &Path, collection: &str, since_ms: i64) -> anyhow::Result<Vec<Value>> {
+    Ok(crate::business_os::store::pull_collection_records(
+        root,
+        collection,
+        Some(since_ms),
+        Some(2_000),
+    )?
+    .get("documents")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default())
 }
 fn field(value: &Value, key: &str) -> String {
     value
@@ -734,6 +741,45 @@ mod tests {
         let result = run(root.path(), &["--dry-run".into()]).unwrap();
         assert_eq!(result["selected_count"], 100);
         assert!(!root.path().join(RUNS_DIR).exists());
+    }
+
+    #[test]
+    fn human_route_evidence_window_excludes_older_instance_notifications() {
+        let root = tempfile::tempdir().unwrap();
+        let conn = crate::business_os::store::open_store(root.path()).unwrap();
+        for (record_id, updated_at_ms, thread_id) in [
+            ("old-notification", 100_i64, "business-os/threads/old"),
+            (
+                "current-notification",
+                300_i64,
+                "business-os/threads/current",
+            ),
+        ] {
+            let payload = json!({
+                "id": record_id,
+                "_rev": format!("rev-{record_id}"),
+                "_deleted": false,
+                "thread_id": thread_id,
+                "updated_at_ms": updated_at_ms
+            });
+            conn.execute(
+                "INSERT INTO business_records
+                    (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+                 VALUES ('user_notifications', ?1, ?2, 0, ?3, ?4)",
+                rusqlite::params![
+                    record_id,
+                    format!("rev-{record_id}"),
+                    updated_at_ms,
+                    serde_json::to_string(&payload).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let evidence = documents_since(root.path(), "user_notifications", 200).unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(field(&evidence[0], "id"), "current-notification");
     }
 
     #[test]

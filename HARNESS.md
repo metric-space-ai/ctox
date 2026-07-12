@@ -476,6 +476,24 @@ ctox process-mining prune --sqlite-access-window 200000
 Codex subagent analyzer and exits non-zero when either layer is not provably
 bounded.
 
+## Business OS Acceptance Bench
+
+`ctox business-os harness-bench` provides 100 small live tasks across ten
+Business OS families. Eighty cases must finish with a reviewed chat answer;
+ten must create a durable approval plus Threads notification; ten must create
+a visible escalation plus notification. `status` reports any terminal task
+without its required route as `lost_between_chairs`.
+
+Human-route evidence reads are scoped to the selected run's creation time.
+They must not use the collection-wide 2,000-record window, because a long-lived
+instance can otherwise omit a fresh notification and produce a false loss.
+
+```bash
+ctox business-os harness-bench catalog
+ctox business-os harness-bench run --confirm-live --run-id <id> --actor <requester> --reviewer <other-user>
+ctox business-os harness-bench status --run-id <id> --fail-on-inflight
+```
+
 ## Source References
 
 These are the main implementation files for the current harness behavior:
