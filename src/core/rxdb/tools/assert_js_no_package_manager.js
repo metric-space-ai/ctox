@@ -177,7 +177,7 @@ function assertDynamicSmokeTests() {
     'tests/no-package-manager-import-smoke.mjs',
   ];
   for (const test of tests) {
-    const file = path.join(root, test);
+    const file = rxdbPath(test);
     if (!fs.existsSync(file)) {
       offenders.push(`${test}: missing`);
       continue;
@@ -191,7 +191,7 @@ function assertDynamicSmokeTests() {
 }
 
 function assertText(relativePath, rules) {
-  const file = path.join(root, relativePath);
+  const file = rxdbPath(relativePath);
   if (!fs.existsSync(file)) {
     offenders.push(`${relativePath}: missing`);
     return;
@@ -207,7 +207,7 @@ function assertText(relativePath, rules) {
 function walk(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const file = path.join(dir, entry.name);
+    const file = childPath(dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...walk(file));
     } else {
@@ -215,6 +215,30 @@ function walk(dir) {
     }
   }
   return out;
+}
+
+function rxdbPath(relativePath) {
+  return safeRelativePath(root, relativePath);
+}
+
+function safeRelativePath(base, relativePath) {
+  const value = String(relativePath || '');
+  if (!value || path.isAbsolute(value)) {
+    throw new Error(`unsafe relative path: ${JSON.stringify(relativePath)}`);
+  }
+  const normalized = path.normalize(value);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`path escapes base: ${JSON.stringify(relativePath)}`);
+  }
+  return `${base}${path.sep}${normalized}`;
+}
+
+function childPath(dir, entryName) {
+  const name = String(entryName || '');
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+    throw new Error(`unsafe directory entry: ${JSON.stringify(entryName)}`);
+  }
+  return `${dir}${path.sep}${name}`;
 }
 
 function relative(file) {

@@ -228,7 +228,7 @@ function summarizeGateResults({ staticResults, declarativeMigration, nativeResul
 }
 
 function runStaticCheck(check) {
-  const source = fs.readFileSync(path.join(root, check.path), 'utf8');
+  const source = fs.readFileSync(repoPath(check.path), 'utf8');
   const missing = check.needles.filter((needle) => !source.includes(needle));
   return {
     id: check.id,
@@ -236,6 +236,18 @@ function runStaticCheck(check) {
     ok: missing.length === 0,
     missing,
   };
+}
+
+function repoPath(relativePath) {
+  const value = String(relativePath || '');
+  if (!value || path.isAbsolute(value)) {
+    throw new Error(`unsafe relative path: ${JSON.stringify(relativePath)}`);
+  }
+  const normalized = path.normalize(value);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`path escapes repository root: ${JSON.stringify(relativePath)}`);
+  }
+  return `${root}${path.sep}${normalized}`;
 }
 
 function runCommand({ id, command, args, env = process.env, proves = [] }) {

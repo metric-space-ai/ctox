@@ -152,7 +152,7 @@ const catalog = {
   security_source_hash_paths: requiredSecuritySourceHashes,
   security_source_hashes: Object.fromEntries(requiredSecuritySourceHashes.map((relativePath) => [
     relativePath,
-    sha256File(path.join(root, relativePath)),
+    sha256File(repoPath(relativePath)),
   ])),
   templates,
 };
@@ -197,11 +197,11 @@ function template(id, schema, fileName, fields) {
 }
 
 function writeTemplates(dir, entries) {
-  const absoluteDir = path.resolve(dir);
+  const absoluteDir = operatorOutputDir(dir);
   fs.mkdirSync(absoluteDir, { recursive: true });
   for (const entry of entries) {
     fs.writeFileSync(
-      path.join(absoluteDir, path.basename(entry.template_path)),
+      childPath(absoluteDir, path.basename(entry.template_path)),
       `${JSON.stringify(entry.artifact, null, 2)}\n`,
     );
   }
@@ -249,6 +249,41 @@ function runSelfTest(candidate) {
 
 function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function repoPath(relativePath) {
+  const value = String(relativePath || '');
+  if (!value || path.isAbsolute(value)) {
+    throw new Error(`unsafe relative path: ${JSON.stringify(relativePath)}`);
+  }
+  const normalized = path.normalize(value);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`path escapes repository root: ${JSON.stringify(relativePath)}`);
+  }
+  return `${root}${path.sep}${normalized}`;
+}
+
+function childPath(dir, entryName) {
+  const name = String(entryName || '');
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+    throw new Error(`unsafe file name: ${JSON.stringify(entryName)}`);
+  }
+  return `${dir}${path.sep}${name}`;
+}
+
+function operatorOutputDir(dir) {
+  const value = String(dir || '');
+  if (!value || value.includes('\0')) {
+    throw new Error(`unsafe output dir: ${JSON.stringify(dir)}`);
+  }
+  const normalized = path.normalize(value);
+  if (path.isAbsolute(normalized)) {
+    return normalized;
+  }
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`output dir escapes working directory: ${JSON.stringify(dir)}`);
+  }
+  return `${process.cwd()}${path.sep}${normalized}`;
 }
 
 function flagValue(flag) {

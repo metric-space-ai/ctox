@@ -214,11 +214,11 @@ function numericOrNull(value) {
 }
 
 function defaultEvidenceLogPath(gateName) {
-  return path.join(root, 'runtime/build', `ctox-sync-production-readiness-95-${gateName || 'operational'}-evidence-log.json`);
+  return runtimeBuildPath(`ctox-sync-production-readiness-95-${safeSlug(gateName || 'operational')}-evidence-log.json`);
 }
 
 function defaultMeasurementsPath(gateName) {
-  return path.join(root, 'runtime/build', `ctox-sync-production-readiness-95-${gateName || 'operational'}-measurements.json`);
+  return runtimeBuildPath(`ctox-sync-production-readiness-95-${safeSlug(gateName || 'operational')}-measurements.json`);
 }
 
 function defaultOutputPath(gateName) {
@@ -228,7 +228,23 @@ function defaultOutputPath(gateName) {
     record_workbench_30_day_pilot: 'ctox-sync-production-readiness-95-record-workbench-pilot.json',
     workflow_30_day_pilot: 'ctox-sync-production-readiness-95-workflow-pilot.json',
   };
-  return path.join(root, 'runtime/build', outputNames[gateName] || 'ctox-sync-production-readiness-95-operational-gate.json');
+  return runtimeBuildPath(outputNames[gateName] || 'ctox-sync-production-readiness-95-operational-gate.json');
+}
+
+function runtimeBuildPath(fileName) {
+  const name = String(fileName || '');
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+    fail(`unsafe runtime build file name: ${JSON.stringify(fileName)}`);
+  }
+  return `${root}${path.sep}runtime${path.sep}build${path.sep}${name}`;
+}
+
+function safeSlug(value) {
+  const slug = String(value || '');
+  if (!/^[a-z0-9_][a-z0-9_-]*$/i.test(slug)) {
+    fail(`unsafe gate name: ${JSON.stringify(value)}`);
+  }
+  return slug;
 }
 
 function runSelfTest() {

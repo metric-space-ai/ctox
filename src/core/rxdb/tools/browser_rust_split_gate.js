@@ -88,7 +88,7 @@ if (signalingPortBase + selectedModes.length * portStride > 65535) {
 
 const runnerLock = acquireRunnerLock('split-gate');
 fs.mkdirSync(resultDir, { recursive: true });
-const summaryPath = path.join(resultDir, `cycle-${String(cycle).padStart(2, '0')}-group-${String(groupIndex).padStart(2, '0')}.json`);
+const summaryPath = childPath(resultDir, `cycle-${String(cycle).padStart(2, '0')}-group-${String(groupIndex).padStart(2, '0')}.json`);
 writeSummary();
 
 Promise.all(selectedModes.map((mode, index) => runMode(mode, index)))
@@ -112,8 +112,8 @@ Promise.all(selectedModes.map((mode, index) => runMode(mode, index)))
 
 function runMode(mode, index) {
   const id = `${String(cycle).padStart(2, '0')}-${String(groupIndex).padStart(2, '0')}-${String(index).padStart(2, '0')}-${slug(mode)}`;
-  const matrixResultPath = path.join(resultDir, `${id}.matrix.json`);
-  const logPath = path.join(resultDir, `${id}.log`);
+  const matrixResultPath = childPath(resultDir, `${id}.matrix.json`);
+  const logPath = childPath(resultDir, `${id}.log`);
   const out = fs.openSync(logPath, 'w');
   const err = fs.openSync(logPath, 'a');
   const env = {
@@ -214,6 +214,14 @@ function parsePositiveInteger(name, value, options = {}) {
 
 function slug(value) {
   return String(value).replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function childPath(dir, entryName) {
+  const name = String(entryName || '');
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+    fail(`unsafe result file name: ${JSON.stringify(entryName)}`);
+  }
+  return `${dir}${path.sep}${name}`;
 }
 
 function acquireRunnerLock(owner) {

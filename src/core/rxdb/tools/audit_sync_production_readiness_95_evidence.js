@@ -286,7 +286,7 @@ function auditSecuritySignoffArtifact(signoff) {
         blockers.push(`source_hash_invalid:${relativePath}`);
         continue;
       }
-      const absolutePath = path.join(root, relativePath);
+      const absolutePath = repoPath(relativePath);
       if (!fs.existsSync(absolutePath)) {
         blockers.push(`source_hash_missing_file:${relativePath}`);
         continue;
@@ -497,7 +497,7 @@ function runSelfTest() {
     ])),
     source_hashes: Object.fromEntries(requiredSecuritySourceHashes.map((relativePath) => [
       relativePath,
-      sha256File(path.join(root, relativePath)),
+      sha256File(repoPath(relativePath)),
     ])),
   }));
   assertHasBlocker('security signoff missing required source hash', auditSecuritySignoffArtifact({
@@ -639,6 +639,18 @@ function isSha256(value) {
 
 function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function repoPath(relativePath) {
+  const value = String(relativePath || '');
+  if (!value || path.isAbsolute(value)) {
+    throw new Error(`unsafe relative path: ${JSON.stringify(relativePath)}`);
+  }
+  const normalized = path.normalize(value);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`path escapes repository root: ${JSON.stringify(relativePath)}`);
+  }
+  return `${root}${path.sep}${normalized}`;
 }
 
 function gate(id, artifactPath, ok, blockers, details = {}) {
