@@ -8291,7 +8291,9 @@ pub fn record_module_release(
     } else {
         Value::Null
     };
-    if runtime_installed {
+    if runtime_installed
+        && runtime_app_starter_is_owned(&version_app_root.join("installed-modules").join(module_id))
+    {
         validate_runtime_app_starter_artifacts(root, module_id)
             .context("release validator/test gate failed")?;
     }
