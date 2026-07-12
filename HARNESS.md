@@ -359,6 +359,15 @@ proofs, review evidence, approval decisions, secrets, and queue state live
 under the protected runtime store and are written only by server-side typed
 state-machine commands.
 
+Agent-facing typed Business OS mutations follow the same boundary. In
+particular, `ctox business-os commands dispatch` parses the command document in
+the worker process but sends it over the local service socket for validation,
+admission, projection, and evidence persistence by the daemon. The worker CLI
+does not open the CLI turn ledger or write either runtime database directly.
+If a service socket exists but cannot be reached, dispatch fails closed; direct
+in-process dispatch is reserved for explicit offline use without a service
+socket.
+
 ## Harness Flow Renderer
 
 `ctox harness-flow` is an evidence renderer, not the executor.

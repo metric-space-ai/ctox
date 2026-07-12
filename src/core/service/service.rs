@@ -882,6 +882,12 @@ enum ServiceIpcRequest {
     KnowledgeData {
         argv: Vec<String>,
     },
+    /// Validate and persist a typed Business OS command inside the daemon.
+    /// Sandboxed workers may connect to the service socket, but cannot write
+    /// the protected runtime/evidence store directly.
+    BusinessCommandDispatch {
+        document: serde_json::Value,
+    },
 }
 
 #[cfg(unix)]
@@ -2627,6 +2633,38 @@ pub fn run_knowledge_data(root: &Path, argv: &[String]) -> Result<()> {
     crate::knowledge::handle_knowledge_command(root, argv)
 }
 
+/// Dispatch an agent-authored Business OS command through the daemon-owned
+/// state machine whenever the service is running.
+///
+/// A present service socket is authoritative: connection or protocol errors
+/// are returned instead of falling back to a direct SQLite write from the
+/// sandboxed caller. Direct dispatch remains available only for intentional
+/// offline CLI use, where no service socket exists.
+pub fn dispatch_business_command(
+    root: &Path,
+    document: serde_json::Value,
+) -> Result<serde_json::Value> {
+    #[cfg(unix)]
+    {
+        if service_socket_path(root).exists() {
+            return match send_service_ipc_request(
+                root,
+                ServiceIpcRequest::BusinessCommandDispatch { document },
+            )? {
+                ServiceIpcResponse::Json { payload, .. } => Ok(payload),
+                ServiceIpcResponse::Error { message } => {
+                    anyhow::bail!("daemon rejected Business OS command: {message}")
+                }
+                response => anyhow::bail!(
+                    "daemon returned an unexpected Business OS command response: {response:?}"
+                ),
+            };
+        }
+    }
+
+    crate::business_os::store::accept_rxdb_business_command(root, document)
+}
+
 /// Operator-supplied outbound-email intent attached to a chat submission.
 ///
 /// When present, the agent's reply will be routed through the reviewed
@@ -3167,6 +3205,17 @@ fn handle_service_ipc_request(
             // connection — not by a sandboxed CLI subprocess that may have
             // its writes silently discarded on sandbox teardown.
             match crate::knowledge::dispatch_capturing(root, &argv) {
+                Ok(payload) => Ok(ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }),
+                Err(err) => Ok(ServiceIpcResponse::Error {
+                    message: err.to_string(),
+                }),
+            }
+        }
+        ServiceIpcRequest::BusinessCommandDispatch { document } => {
+            match crate::business_os::store::accept_rxdb_business_command(root, document) {
                 Ok(payload) => Ok(ServiceIpcResponse::Json {
                     status: 200,
                     payload,
@@ -4728,6 +4777,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // Knowledge writes hit Polars + Parquet; bulk imports can run for
         // seconds even on modest tables. 30s is conservative.
         ServiceIpcRequest::KnowledgeData { .. } => Duration::from_secs(30),
+        ServiceIpcRequest::BusinessCommandDispatch { .. } => Duration::from_secs(30),
     }
 }
 
@@ -26030,6 +26080,63 @@ Business OS command:
     }
 
     #[test]
+    fn business_command_ipc_dispatches_in_daemon_state_machine() {
+        let root = temp_root("business-command-ipc-dispatch");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let response = handle_service_ipc_request(
+            ServiceIpcRequest::BusinessCommandDispatch {
+                document: json!({
+                    "id": "cmd-ipc-thread-note",
+                    "module": "threads",
+                    "command_type": "threads.note.create",
+                    "record_id": "case-ipc-1",
+                    "payload": {
+                        "body": "Bitte serverseitig pruefen.",
+                        "source_context": {
+                            "module": "threads",
+                            "record_type": "thread",
+                            "record_id": "case-ipc-1"
+                        }
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "ipc-worker",
+                            "display_name": "IPC Worker",
+                            "role": "user"
+                        }
+                    }
+                }),
+            },
+            &root,
+            state,
+        )
+        .expect("daemon-side Business OS dispatch should respond");
+
+        let payload = match response {
+            ServiceIpcResponse::Json { status, payload } => {
+                assert_eq!(status, 200);
+                payload
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let conn = crate::business_os::store::open_store(&root)
+            .expect("Business OS store should open after dispatch");
+        let persisted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM business_commands WHERE command_id = ?1",
+                ["cmd-ipc-thread-note"],
+                |row| row.get(0),
+            )
+            .expect("dispatched command should be queryable");
+        assert_eq!(persisted, 1);
+    }
+
+    #[test]
     fn chat_submit_preserves_explicit_thread_key_when_queued() {
         let root = temp_root("chat-submit-thread-key");
         let mut shared = SharedState::default();
@@ -26882,6 +26989,54 @@ Business OS command:
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn business_command_dispatch_uses_service_socket_when_present() {
+        let root = temp_root("business-command-service-socket");
+        let socket_path = service_socket_path(&root);
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let response = serde_json::to_string(&ServiceIpcResponse::Json {
+            status: 200,
+            payload: json!({
+                "ok": true,
+                "status": "completed",
+                "command_id": "cmd-ipc-roundtrip"
+            }),
+        })
+        .unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            reader.read_line(&mut request).unwrap();
+            assert!(request.contains("\"business_command_dispatch\""));
+            assert!(request.contains("\"cmd-ipc-roundtrip\""));
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(b"\n").unwrap();
+            stream.flush().unwrap();
+        });
+
+        let accepted = dispatch_business_command(
+            &root,
+            json!({
+                "id": "cmd-ipc-roundtrip",
+                "module": "threads",
+                "command_type": "threads.note.create"
+            }),
+        )
+        .expect("socket-routed dispatch should return daemon payload");
+        handle.join().unwrap();
+
+        assert_eq!(
+            accepted.get("command_id").and_then(Value::as_str),
+            Some("cmd-ipc-roundtrip")
+        );
+        assert!(
+            !root.join("runtime/business-os.sqlite3").exists(),
+            "the caller must not fall back to a direct Business OS store write"
+        );
     }
 
     #[test]

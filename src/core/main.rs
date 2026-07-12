@@ -363,6 +363,17 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             {
                 return true;
             }
+            // This is an agent-facing mutation, but the CLI process does not
+            // own it: the typed document is sent to the daemon, which performs
+            // policy/state-machine validation and records durable evidence.
+            // Starting the CLI ledger here would require a forbidden direct
+            // write to runtime/ctox.sqlite3 from the worker sandbox.
+            "business-os" | "business"
+                if args.get(1).map(String::as_str) == Some("commands")
+                    && args.get(2).map(String::as_str) == Some("dispatch") =>
+            {
+                return true;
+            }
             _ => {}
         }
     }
@@ -4505,6 +4516,21 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn business_command_dispatch_skips_caller_side_turn_ledger() {
+        let dispatch = ["business-os", "commands", "dispatch", "--json", "{}"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(super::skips_cli_turn_ledger(&dispatch));
+
+        let inspect = ["business-os", "commands", "inspect", "command-1"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(!super::skips_cli_turn_ledger(&inspect));
+    }
 
     #[test]
     fn continuity_update_rejects_missing_conversation_id() {

@@ -2579,10 +2579,11 @@ fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<(
         Some("dispatch") => {
             // Agent-facing entry point for writeback commands (e.g. the
             // `outbound.pipeline.write_outreach_draft` draft writeback). The
-            // document is fed through the exact same RxDB command-bus path the
-            // native peer uses — no HTTP, no external gateway.
+            // document is fed through the daemon-owned RxDB command-bus path
+            // the native peer uses — no HTTP, external gateway, or direct
+            // protected-store write from the sandboxed worker.
             let document = read_command_document(args)?;
-            let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
+            let accepted = crate::service::dispatch_business_command(root, document)?;
             print_json(&accepted)
         }
         Some("--help") | Some("-h") | None => {
