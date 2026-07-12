@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260712-system-data-scope-v1';
+const APP_BUILD = '20260713-runtime-capability-scope-v1';
 
 ensureShellStylesheets();
 
@@ -4742,9 +4742,9 @@ function createModuleContext(mod, overrides = {}) {
 
 function createRuntimeCapabilityFacade(mod) {
   const runtimeInstalled = isRuntimeInstalledModule(mod);
-  const guardedDataFacade = Boolean(createDynamicAppDataGuard(mod));
   const scopedSystemCollections = scopedSystemCollectionsForModule(mod);
   const scopedSystemFacade = Boolean(scopedSystemCollections);
+  const guardedDataFacade = !scopedSystemFacade && Boolean(createDynamicAppDataGuard(mod));
   return Object.freeze({
     version: 'business-os-runtime-capabilities-v1',
     module_id: mod?.id || '',

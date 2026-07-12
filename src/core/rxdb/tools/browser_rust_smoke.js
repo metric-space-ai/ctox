@@ -10876,7 +10876,10 @@ function ensureCtoxSmokeBinary() {
                 'support_reporting_rollups',
               ],
             },
-          ]);
+          // Trusted system apps use the shell-owned scoped facade and are
+          // covered by the system-scope contract/UI smoke, not this
+          // grant-driven third-party app guard matrix.
+          ].filter((spec) => !['documents', 'research'].includes(spec.id)));
           const launchTargets = typeof smoke.listLaunchTargets === 'function'
             ? smoke.listLaunchTargets()
             : [];
@@ -11049,7 +11052,9 @@ function ensureCtoxSmokeBinary() {
             { id: 'creator', allowed: 'business_commands', foreign: 'ctox_runtime_settings' },
             { id: 'ctox', allowed: 'business_commands', foreign: 'business_module_catalog' },
             { id: 'desktop', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'documents', allowed: 'business_commands', foreign: 'ctox_runtime_settings' },
             { id: 'knowledge', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'research', allowed: 'business_commands', foreign: 'ctox_runtime_settings' },
             { id: 'reports', allowed: 'business_commands', foreign: 'business_module_catalog' },
             { id: 'tickets', allowed: 'business_commands', foreign: 'business_module_catalog' },
           ]);
