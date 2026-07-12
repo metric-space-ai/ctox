@@ -268,14 +268,25 @@ fn run(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             json!({"ok":true,"dry_run":true,"run_id":run_id,"selected_count":items.len(),"cases":items.iter().map(|case| &case.id).collect::<Vec<_>>() }),
         );
     }
+    if items.iter().any(|case| case.route != "completed") {
+        anyhow::ensure!(
+            actor != reviewer,
+            "human-route bench cases require --reviewer to name a user other than --actor"
+        );
+    }
     let created_at_ms = now_ms();
     let mut submitted = Vec::new();
     for case in items {
         let thread_id = format!("bench_{}_{}", run_id, case.id.to_ascii_lowercase());
         let command_id = thread_id.clone();
         let routing = match case.route {
-            "approval" => format!(" Persist exactly one Human approval through the typed Threads command surface, assign it to `{reviewer}`, requester `{actor}`, and bind it to `business-os/threads/{thread_id}`. Mentioning approval in prose is insufficient."),
-            "escalation" => format!(" Persist the escalation through the typed Threads command surface for `{reviewer}` under `business-os/threads/{thread_id}`. A prose-only blocker is insufficient."),
+            "approval" | "escalation" => typed_threads_routing_instruction(
+                &case,
+                &actor,
+                &reviewer,
+                &thread_id,
+                &command_id,
+            )?,
             _ => " This is answer-only work: return the concise answer and perform no mutation or external effect.".to_string(),
         };
         let instruction = format!("{}{}", case.instruction, routing);
@@ -396,7 +407,6 @@ fn evaluate(
         status.as_str(),
         "failed" | "blocked" | "cancelled" | "error"
     );
-    let thread_status = thread.map(|value| field(value, "status"));
     let approval = approvals.iter().any(|value| {
         matches!(
             field(value, "status").as_str(),
@@ -411,13 +421,7 @@ fn evaluate(
                 "approval, thread and notification are durable".into(),
             )
         }
-        "escalation"
-            if visible
-                && (approval
-                    || thread_status
-                        .as_deref()
-                        .is_some_and(|value| matches!(value, "blocked" | "needs_review"))) =>
-        {
+        "escalation" if visible => {
             return (
                 State::AwaitingHuman,
                 "escalation and notification are durable in Threads".into(),
@@ -517,9 +521,98 @@ fn review_passed(context: &Value) -> bool {
     matches!((reviewed_version, completed_version), (Some(reviewed), Some(completed)) if completed > reviewed)
 }
 fn command_status(value: &Value) -> String {
-    pointer(value, &["/status", "/task_status", "/route_status"])
-        .unwrap_or_else(|| "unknown".into())
-        .to_ascii_lowercase()
+    [
+        "/terminal_status",
+        "/task_status",
+        "/route_status",
+        "/execution_phase",
+        "/status",
+    ]
+    .iter()
+    .find_map(|path| {
+        value
+            .pointer(path)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "none")
+    })
+    .unwrap_or("unknown")
+    .to_ascii_lowercase()
+}
+
+fn typed_threads_routing_instruction(
+    case: &BenchCase,
+    actor: &str,
+    reviewer: &str,
+    thread_id: &str,
+    command_id: &str,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        actor != reviewer,
+        "human-route bench cases require distinct requester and reviewer users"
+    );
+    let thread_key = format!("business-os/threads/{thread_id}");
+    let route_command_id = format!("route_{command_id}");
+    let source_context = json!({
+        "module": case.module,
+        "record_type": "harness_bench",
+        "record_id": command_id,
+        "label": format!("Harness Bench {}", case.id),
+        "deep_link": format!("#threads?thread={thread_id}")
+    });
+    let command = if case.route == "approval" {
+        json!({
+            "id": route_command_id,
+            "module": "threads",
+            "command_type": "threads.ctox_approval.request",
+            "record_id": command_id,
+            "payload": {
+                "approval_request_id": format!("approval_{command_id}"),
+                "thread_id": thread_key,
+                "title": format!("[Harness Bench {}] Human-Freigabe", case.id),
+                "prompt": format!("Prüfe die vorbereitete Aktion für {} und entscheide über Freigabe oder Ablehnung.", case.id),
+                "reviewer_user_id": reviewer,
+                "target_module": case.module,
+                "target_record_id": command_id,
+                "target_command_type": "business_os.chat.task",
+                "source_context": source_context
+            },
+            "client_context": {
+                "source": "business-os-harness-bench",
+                "actor": {"id": actor, "display_name": actor, "role": "user"}
+            }
+        })
+    } else {
+        json!({
+            "id": route_command_id,
+            "module": "threads",
+            "command_type": "threads.note.create",
+            "record_id": command_id,
+            "payload": {
+                "thread_id": thread_key,
+                "title": format!("[Harness Bench {}] Eskalation", case.id),
+                "body": format!("{} benötigt eine menschliche Entscheidung. Es wurde keine geschützte Aktion ausgeführt.", case.id),
+                "message_type": "mention",
+                "target_user_ids": [reviewer],
+                "source_context": source_context
+            },
+            "client_context": {
+                "source": "business-os-harness-bench",
+                "actor": {"id": actor, "display_name": actor, "role": "user"}
+            }
+        })
+    };
+    let dispatch = format!(
+        "ctox business-os commands dispatch --json {}",
+        shell_single_quote(&serde_json::to_string(&command)?)
+    );
+    Ok(format!(
+        " Persist the required human route through the typed Threads command surface for `{reviewer}` under `{thread_key}`. Before your final answer, run exactly this idempotent command with the execution tool and verify that it reports success:\n`{dispatch}`\nThis command is permitted by the Business OS chat rules: it does not write SQLite or RxDB directly; CTOX validates and applies the typed command server-side. A prose-only approval or escalation is insufficient."
+    ))
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 fn result_text(value: &Value) -> String {
     [
@@ -539,16 +632,6 @@ fn result_text(value: &Value) -> String {
             .unwrap_or_else(|| value.to_string())
     })
     .unwrap_or_default()
-}
-fn pointer(value: &Value, paths: &[&str]) -> Option<String> {
-    paths.iter().find_map(|path| {
-        value
-            .pointer(path)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
 }
 fn documents(root: &Path, collection: &str) -> anyhow::Result<Vec<Value>> {
     Ok(
@@ -642,6 +725,46 @@ mod tests {
         let result = run(root.path(), &["--dry-run".into()]).unwrap();
         assert_eq!(result["selected_count"], 100);
         assert!(!root.path().join(RUNS_DIR).exists());
+    }
+
+    #[test]
+    fn command_status_prefers_durable_execution_state_over_admission_status() {
+        let blocked = json!({
+            "status": "accepted",
+            "execution_phase": "blocked",
+            "task_status": "blocked",
+            "route_status": "blocked",
+            "terminal_status": "none"
+        });
+        assert_eq!(command_status(&blocked), "blocked");
+        let completed = json!({
+            "status": "accepted",
+            "task_status": "completed",
+            "terminal_status": "completed"
+        });
+        assert_eq!(command_status(&completed), "completed");
+    }
+
+    #[test]
+    fn human_route_instruction_uses_an_idempotent_typed_threads_command() {
+        let case = cases()
+            .into_iter()
+            .find(|case| case.id == "H081")
+            .expect("approval case");
+        let instruction = typed_threads_routing_instruction(
+            &case,
+            "local-dev",
+            "alice",
+            "bench_run_h081",
+            "bench_run_h081",
+        )
+        .expect("routing instruction");
+        assert!(instruction.contains("threads.ctox_approval.request"));
+        assert!(instruction.contains("route_bench_run_h081"));
+        assert!(instruction.contains("approval_bench_run_h081"));
+        assert!(instruction.contains("reviewer_user_id"));
+        assert!(instruction.contains("alice"));
+        assert!(instruction.contains("commands dispatch --json"));
     }
 
     #[test]
@@ -787,6 +910,34 @@ mod tests {
                 Some(&thread),
                 None,
                 &[approval],
+                1,
+            )
+            .0,
+            State::AwaitingHuman
+        )
+    }
+
+    #[test]
+    fn escalation_with_visible_open_thread_is_awaiting_human() {
+        let case = SubmittedCase {
+            id: "H091".into(),
+            family: "escalation".into(),
+            module: "x".into(),
+            route: "escalation".into(),
+            terms: vec![],
+            command_id: "c".into(),
+            task_id: "t".into(),
+            thread_id: "h".into(),
+        };
+        let thread = json!({"status":"open"});
+        assert_eq!(
+            evaluate(
+                &case,
+                Some(&json!({"status":"accepted","task_status":"blocked"})),
+                None,
+                Some(&thread),
+                None,
+                &[],
                 1,
             )
             .0,
