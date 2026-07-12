@@ -527,6 +527,30 @@ impl PersistentSession {
         )
     }
 
+    /// Start a reviewer-profile session with an authoritative empty tool set.
+    ///
+    /// Semantic answer review receives the complete bounded contract inline,
+    /// so any restored or active tool would add cost and broaden the evidence
+    /// surface without improving the verdict. The read-only reviewer sandbox
+    /// and reviewer session metadata remain enforced even though no tool can
+    /// be invoked.
+    pub fn start_review_without_tools(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+    ) -> Result<Self> {
+        Self::start_with_instructions_and_tool_mode(
+            root,
+            settings,
+            base_instructions,
+            true,  // disable_compaction
+            true,  // disable_active_tools
+            true,  // disable_mcp_servers
+            true,  // read_only_sandbox
+            false, // persistent_worker
+        )
+    }
+
     fn start_with_instructions_and_tool_mode(
         root: &Path,
         settings: &BTreeMap<String, String>,

@@ -8006,6 +8006,7 @@ fn run_completion_review(
         artifact_commitments: founder_commitments.clone(),
         commitment_backing: founder_commitment_backing.clone(),
         deterministic_evidence,
+        review_scope: completion_review_scope_for_job(root, job),
     };
     let mut outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if let Some(guard_outcome) = spreadsheet_attachment_guard_outcome(root, job, &review_request) {
@@ -10522,6 +10523,43 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
         .as_deref()
             == Some("business_os.chat.task")
     })
+}
+
+fn completion_review_scope_for_job(root: &Path, job: &QueuedPrompt) -> review::ReviewScope {
+    for message_key in &job.leased_message_keys {
+        let Ok(Some(context)) = channels::inspect_business_command_for_task(root, message_key)
+        else {
+            continue;
+        };
+        if let Some(scope) = completion_review_scope_from_command_context(&context) {
+            return scope;
+        }
+    }
+    review::ReviewScope::FullEvidence
+}
+
+fn completion_review_scope_from_command_context(context: &Value) -> Option<review::ReviewScope> {
+    let command_type = context
+        .pointer("/command/command_type")
+        .and_then(Value::as_str);
+    let mode = context
+        .pointer("/command/payload/mode")
+        .and_then(Value::as_str);
+    let dependencies_empty = context
+        .pointer("/command/payload/dependencies")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    let attachments_empty = context
+        .pointer("/command/payload/attachments")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    (command_type == Some("business_os.chat.task")
+        && mode == Some("data")
+        && dependencies_empty
+        && attachments_empty)
+        .then(|| review::ReviewScope::SemanticAnswerOnly {
+            policy_id: "business-os.data-chat.semantic-answer.v1".to_string(),
+        })
 }
 
 fn business_os_command_id_from_prompt(prompt: &str) -> Option<String> {
@@ -24298,6 +24336,29 @@ mod tests {
             turn_loop::conversation_id_for_thread_key(Some("self-work/wi-9")),
             "plain jobs resolve the assurance id directly from the thread key"
         );
+    }
+
+    #[test]
+    fn typed_data_chat_selects_semantic_review_but_actions_and_dependencies_do_not() {
+        let data = serde_json::json!({
+            "command": {
+                "command_type": "business_os.chat.task",
+                "payload": {"mode": "data", "dependencies": [], "attachments": []}
+            }
+        });
+        assert!(matches!(
+            completion_review_scope_from_command_context(&data),
+            Some(review::ReviewScope::SemanticAnswerOnly { .. })
+        ));
+
+        for context in [
+            serde_json::json!({"command":{"command_type":"business_os.chat.task","payload":{"mode":"action"}}}),
+            serde_json::json!({"command":{"command_type":"business_os.chat.task","payload":{"mode":"data","dependencies":[{"collection":"customers","record_id":"1"}]}}}),
+            serde_json::json!({"command":{"command_type":"business_os.chat.task","payload":{"mode":"data","attachments":[{"file_id":"1"}]}}}),
+            serde_json::json!({"command":{"command_type":"business_os.data.modify","payload":{"mode":"data"}}}),
+        ] {
+            assert_eq!(completion_review_scope_from_command_context(&context), None);
+        }
     }
 
     #[test]

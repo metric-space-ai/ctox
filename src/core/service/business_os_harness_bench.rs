@@ -279,11 +279,16 @@ fn run(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             _ => " This is answer-only work: return the concise answer and perform no mutation or external effect.".to_string(),
         };
         let instruction = format!("{}{}", case.instruction, routing);
+        let mode = if case.route == "completed" {
+            "data"
+        } else {
+            "action"
+        };
         let accepted = crate::business_os::store::accept_rxdb_business_command(
             root,
             json!({
                 "id":command_id,"command_id":command_id,"module":case.module,"command_type":"business_os.chat.task","record_id":format!("harness-bench/{run_id}/{}",case.id),"status":"pending_sync",
-                "payload":{"title":format!("[Harness Bench {}] {}",case.id,case.title),"instruction":instruction,"prompt":instruction,"user_message":instruction,"mode":"data","thread_key":format!("business-os/threads/{thread_id}"),"harness_bench":{"suite":SUITE,"run_id":run_id,"case_id":case.id,"route":case.route}},
+                "payload":{"title":format!("[Harness Bench {}] {}",case.id,case.title),"instruction":instruction,"prompt":instruction,"user_message":instruction,"mode":mode,"thread_key":format!("business-os/threads/{thread_id}"),"harness_bench":{"suite":SUITE,"run_id":run_id,"case_id":case.id,"route":case.route}},
                 "client_context":{"source":"business-os-harness-bench","module":case.module,"thread_key":format!("business-os/threads/{thread_id}"),"actor":{"id":actor,"display_name":actor,"role":"user"}},"created_at_ms":created_at_ms,"updated_at_ms":created_at_ms
             }),
         )?;
@@ -332,6 +337,11 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             "user_threads",
             &case.thread_id,
         )?;
+        let chat = crate::business_os::store::pull_collection_record(
+            root,
+            "business_chats",
+            &format!("chat_{}", case.command_id),
+        )?;
         let case_approvals = approvals
             .iter()
             .filter(|value| field(value, "thread_id") == case.thread_id)
@@ -345,18 +355,19 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             case,
             command.as_ref(),
             thread.as_ref(),
+            chat.as_ref(),
             &case_approvals,
             note_count,
         );
         *counts.entry(state.label().into()).or_default() += 1;
-        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":case.thread_id,"command_status":command.as_ref().map(command_status).unwrap_or_else(||"missing".into()),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
+        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":case.thread_id,"command_status":command.as_ref().map(command_status).unwrap_or_else(||"missing".into()),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"chat_status":chat.as_ref().map(|value|field(value,"tracking_status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
     }
     let bad = counts.get("failed").copied().unwrap_or(0)
         + counts.get("lost_between_chairs").copied().unwrap_or(0);
     let inflight = counts.get("in_flight").copied().unwrap_or(0);
     let fail_inflight = args.iter().any(|arg| arg == "--fail-on-inflight");
     Ok(
-        json!({"ok":bad==0 && (!fail_inflight || inflight==0),"settled":inflight==0,"schema":"ctox.business_os.harness_bench_status.v1","run_id":run_id,"case_count":manifest.cases.len(),"counts":counts,"invariant":"every case completes or has durable human routing in Threads; blocked/failed work without that route is lost_between_chairs","cases":results}),
+        json!({"ok":bad==0 && (!fail_inflight || inflight==0),"settled":inflight==0,"schema":"ctox.business_os.harness_bench_status.v1","run_id":run_id,"case_count":manifest.cases.len(),"counts":counts,"invariant":"every autonomous case completes in Business OS chat; every human case has durable Threads routing; blocked/failed work without its required route is lost_between_chairs","cases":results}),
     )
 }
 
@@ -364,6 +375,7 @@ fn evaluate(
     case: &SubmittedCase,
     command: Option<&Value>,
     thread: Option<&Value>,
+    chat: Option<&Value>,
     approvals: &[Value],
     notifications: usize,
 ) -> (State, String) {
@@ -413,10 +425,10 @@ fn evaluate(
             )
         }
         "completed" if completed => {
-            if thread_status.as_deref() != Some("completed") {
+            if !completed_business_chat_reply(chat, case) {
                 return (
                     State::Lost,
-                    "command completed without completed Threads projection".into(),
+                    "command completed without matching Business OS chat reply".into(),
                 );
             }
             let result = result_text(command).to_ascii_lowercase();
@@ -451,7 +463,7 @@ fn evaluate(
             }
             return (
                 State::Passed,
-                "answer, review, validation and Threads agree".into(),
+                "answer, review, validation and Business OS chat agree".into(),
             );
         }
         "completed" if failed => {
@@ -463,6 +475,20 @@ fn evaluate(
         _ => {}
     }
     (State::InFlight, format!("current status {status}"))
+}
+
+fn completed_business_chat_reply(chat: Option<&Value>, case: &SubmittedCase) -> bool {
+    chat.and_then(|value| value.get("messages"))
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                field(message, "role") == "ctox"
+                    && field(message, "status") == "completed"
+                    && field(message, "commandId") == case.command_id
+                    && field(message, "taskId") == case.task_id
+                    && !field(message, "text").is_empty()
+            })
+        })
 }
 
 fn review_passed(value: &Value) -> bool {
@@ -620,17 +646,20 @@ mod tests {
             thread_id: "h".into(),
         };
         let command = json!({"status":"completed","result":{"answer":"BENCH-001 aktiv","review_status":"passed","validation_status":"passed"}});
-        let thread = json!({"status":"completed"});
+        let chat = json!({"messages":[{"role":"ctox","status":"completed","commandId":"c","taskId":"t","text":"BENCH-001 aktiv"}]});
         assert_eq!(
-            evaluate(&case, Some(&command), Some(&thread), &[], 0).0,
+            evaluate(&case, Some(&command), None, Some(&chat), &[], 0).0,
             State::Passed
         );
         let unreviewed = json!({"status":"completed","result":{"answer":"BENCH-001 aktiv","review_status":"held","validation_status":"pending"}});
         assert_eq!(
-            evaluate(&case, Some(&unreviewed), Some(&thread), &[], 0).0,
+            evaluate(&case, Some(&unreviewed), None, Some(&chat), &[], 0).0,
             State::Failed
         );
-        assert_eq!(evaluate(&case, Some(&command), None, &[], 0).0, State::Lost);
+        assert_eq!(
+            evaluate(&case, Some(&command), None, None, &[], 0).0,
+            State::Lost
+        );
     }
 
     #[test]
@@ -646,9 +675,9 @@ mod tests {
             thread_id: "h".into(),
         };
         let command = json!({"status":"completed","result":{"answer":"BENCH-071 plus stale BENCH-070","review_status":"passed","validation_status":"passed"}});
-        let thread = json!({"status":"completed"});
+        let chat = json!({"messages":[{"role":"ctox","status":"completed","commandId":"c","taskId":"t","text":"BENCH-071 plus stale BENCH-070"}]});
         assert_eq!(
-            evaluate(&case, Some(&command), Some(&thread), &[], 0).0,
+            evaluate(&case, Some(&command), None, Some(&chat), &[], 0).0,
             State::Failed
         )
     }
@@ -666,7 +695,15 @@ mod tests {
             thread_id: "h".into(),
         };
         assert_eq!(
-            evaluate(&case, Some(&json!({"status":"blocked"})), None, &[], 0).0,
+            evaluate(
+                &case,
+                Some(&json!({"status":"blocked"})),
+                None,
+                None,
+                &[],
+                0,
+            )
+            .0,
             State::Lost
         );
     }
@@ -690,6 +727,7 @@ mod tests {
                 &case,
                 Some(&json!({"status":"blocked"})),
                 Some(&thread),
+                None,
                 &[approval],
                 1,
             )

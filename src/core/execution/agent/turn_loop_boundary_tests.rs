@@ -67,6 +67,7 @@ fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
 
     assert!(
         production.contains("start_review_with_read_only_tools")
+            && production.contains("start_review_without_tools")
             && production.contains("create_reviewer_scratch_workspace")
             && production.contains("SessionSource::SubAgent(SubAgentSource::Review)")
             && production.contains("SandboxMode::WorkspaceWrite")

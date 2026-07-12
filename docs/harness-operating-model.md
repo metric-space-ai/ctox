@@ -135,6 +135,12 @@ not acceptance of worker prose. `PASS_PROOF: prose_only` remains invalid, and
 the direct method is never sufficient for claimed file, command, message,
 deployment, record, or other state changes.
 
+For a typed Business OS data-chat command with no dependencies or attachments,
+that comparison runs in a tool-free semantic review session. Its prompt carries
+only the exact task contract and answer; it does not load workspace, runtime,
+continuity, mission, or the general review skill. Action-mode commands and data
+commands with dependencies or attachments stay on the full evidence reviewer.
+
 ## Witness Of Progress
 
 Every rejected review must have a witness before the same artifact can pass

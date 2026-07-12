@@ -34,7 +34,7 @@ ctox business-os harness-bench status --run-id acceptance-2026-07-12 --fail-on-i
 
 Filters (`--case`, `--family`, `--limit`) allow a cheap canary before the full
 run. A normal case passes only when answer markers, review, validation, and a
-completed Threads projection agree. A human case is accepted only when its
+matching completed `business_chats` reply agree. A human case is accepted only when its
 Approval/Escalation, Thread, and Notification are durable. A terminal task
 without the required human route is `lost_between_chairs` and fails the suite.
 

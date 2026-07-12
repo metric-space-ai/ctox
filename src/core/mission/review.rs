@@ -9,6 +9,17 @@ use crate::inference::runtime_env;
 
 const REVIEW_TIMEOUT_SECS: u64 = 900;
 const REVIEW_MAX_LEGS: usize = 3;
+const SEMANTIC_ANSWER_REVIEW_TIMEOUT_SECS: u64 = 120;
+
+const SEMANTIC_ANSWER_REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Semantic Answer Review.
+
+Review exactly one tool-free, answer-only Business OS result. The complete task contract and the answer are supplied in the assignment. Do not use tools, request more context, inspect a workspace, or evaluate unrelated mission state.
+
+PASS only when the answer is correct, complete, concise, and grounded in the supplied task contract. For PASS, emit PASS_PROOF: direct and record the reviewer-owned semantic comparison as `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...`.
+
+FAIL when the answer is wrong, incomplete, leaks another task, or the task/result claims a file change, state mutation, command execution, delivery, deployment, approval, escalation, or other external effect. This profile cannot verify side effects. Use a concrete rework finding; never claim a side effect was verified.
+
+Respond once in exactly the requested structured format. Do not call tools."#;
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Review.
 
@@ -122,6 +133,15 @@ PASS_PROOF contract:
 - VERDICT PASS is invalid unless PASS_PROOF is direct or trusted_external
 "#;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewScope {
+    #[default]
+    FullEvidence,
+    SemanticAnswerOnly {
+        policy_id: String,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CompletionReviewRequest {
     pub task_goal: String,
@@ -149,6 +169,9 @@ pub struct CompletionReviewRequest {
     /// the reviewer can see which skill contract the work was meant to follow.
     /// Soft signal only — None preserves prior behaviour.
     pub bound_skill: Option<String>,
+    /// Server-derived review scope. This narrows how evidence is gathered but
+    /// never exempts durable work from review.
+    pub review_scope: ReviewScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -623,6 +646,11 @@ fn run_external_review_legs(
     settings: &BTreeMap<String, String>,
     reasons: &[String],
 ) -> anyhow::Result<String> {
+    if matches!(request.review_scope, ReviewScope::SemanticAnswerOnly { .. }) {
+        let prompt = build_semantic_answer_review_prompt(request, reasons);
+        return run_semantic_answer_review_leg(root, request, settings, &prompt);
+    }
+
     let mut prompt = build_review_prompt(request, reasons);
     let mut last_report = String::new();
 
@@ -657,6 +685,37 @@ fn run_external_review_legs(
     }
 
     Ok(last_report)
+}
+
+fn run_semantic_answer_review_leg(
+    root: &Path,
+    request: &CompletionReviewRequest,
+    settings: &BTreeMap<String, String>,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    let mut session = PersistentSession::start_review_without_tools(
+        root,
+        settings,
+        Some(SEMANTIC_ANSWER_REVIEW_SYSTEM_PROMPT),
+    )
+    .map_err(|err| {
+        anyhow::anyhow!(
+            "semantic answer review could not start for {}: {}",
+            clip_text(&request.preview, 120),
+            err
+        )
+    })?;
+    let timeout = Duration::from_secs(SEMANTIC_ANSWER_REVIEW_TIMEOUT_SECS);
+    let report = session.run_turn(prompt, Some(timeout), None, Some(false), 0);
+    session.shutdown();
+    report.map_err(|err| {
+        anyhow::anyhow!(
+            "semantic answer review did not produce a verdict within {}s for {}: {}",
+            timeout.as_secs(),
+            clip_text(&request.preview, 120),
+            err
+        )
+    })
 }
 
 fn run_external_review_leg_with_wall_timeout(
@@ -1044,6 +1103,68 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         commitment_backing = commitment_backing,
         deterministic_evidence = deterministic_evidence,
         external_chat_specific_work = external_chat_specific_work,
+    )
+}
+
+fn build_semantic_answer_review_prompt(
+    request: &CompletionReviewRequest,
+    reasons: &[String],
+) -> String {
+    let policy_id = match &request.review_scope {
+        ReviewScope::SemanticAnswerOnly { policy_id } => policy_id.as_str(),
+        ReviewScope::FullEvidence => "unregistered",
+    };
+    let task_goal = request.task_goal.trim();
+    let task_prompt = request.task_prompt.trim();
+    let answer = request.artifact_text.trim();
+    let reason_block = if reasons.is_empty() {
+        "none".to_string()
+    } else {
+        reasons.join(", ")
+    };
+
+    format!(
+        "== SEMANTIC ANSWER REVIEW ==\n\
+Policy: {policy_id}\n\
+Trigger reasons: {reason_block}\n\
+\n\
+Task goal:\n\
+{task_goal}\n\
+\n\
+Exact task contract and supplied source material:\n\
+--- BEGIN TASK ---\n\
+{task_prompt}\n\
+--- END TASK ---\n\
+\n\
+Answer under review:\n\
+--- BEGIN ANSWER ---\n\
+{answer}\n\
+--- END ANSWER ---\n\
+\n\
+Compare the answer directly with this task. If either the task or answer requires or claims any mutation, command execution, persistence, approval, escalation, delivery, deployment, or live-state proof, return FAIL because this tool-free scope cannot verify it. Otherwise judge semantic correctness and completeness.\n\
+\n\
+Return exactly:\n\
+VERDICT: PASS|FAIL\n\
+MISSION_STATE: HEALTHY|UNHEALTHY\n\
+SUMMARY: <one sentence>\n\
+PASS_PROOF: direct|none\n\
+FAILED_GATES:\n\
+- <plain failed rule or none>\n\
+FINDINGS:\n\
+- <semantic finding or none>\n\
+CATEGORIZED_FINDINGS:\n\
+- id: <id> | category: rework | evidence: \"<evidence>\" | corrective_action: \"<action>\"\n\
+- <or none>\n\
+OPEN_ITEMS:\n\
+- <rework item or none>\n\
+PIPELINE_RESOLUTION: action=no_action_needed | target=none | rationale=\"answer-only task creates no follow-up work\"\n\
+EVIDENCE:\n\
+- source=reviewer | method=inspect_artifact | target=task contract and answer | result=<observed comparison>\n\
+HANDOFF:\n\
+- none\n\
+DISPOSITION: SEND\n\
+NO_SEND_REASON: NONE\n\
+WAIT_REF: none\n"
     )
 }
 
@@ -2041,6 +2162,34 @@ mod tests {
     }
 
     #[test]
+    fn semantic_answer_review_prompt_contains_only_the_bounded_contract() {
+        let request = CompletionReviewRequest {
+            task_goal: "return the record status".to_string(),
+            task_prompt: "Record BENCH-001 has status active. Return both values.".to_string(),
+            artifact_text: "BENCH-001 — active".to_string(),
+            workspace_root: "/must/not/be/rendered".to_string(),
+            runtime_db_path: "/must/not/be/rendered/runtime.sqlite3".to_string(),
+            review_skill_path: "/must/not/be/rendered/SKILL.md".to_string(),
+            review_scope: ReviewScope::SemanticAnswerOnly {
+                policy_id: "business-os.data-chat.semantic-answer.v1".to_string(),
+            },
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_semantic_answer_review_prompt(
+            &request,
+            &["durable_queue_or_ticket_work".to_string()],
+        );
+        assert!(rendered.contains("BENCH-001 — active"));
+        assert!(rendered.contains("method=inspect_artifact"));
+        assert!(rendered.contains("business-os.data-chat.semantic-answer.v1"));
+        assert!(!rendered.contains("/must/not/be/rendered"));
+        assert!(!rendered.contains("Open the review skill"));
+        assert!(!rendered.contains("Runtime DB"));
+        assert!(rendered.chars().count() < 4_000);
+        assert_eq!(SEMANTIC_ANSWER_REVIEW_TIMEOUT_SECS, 120);
+    }
+
+    #[test]
     fn review_system_prompt_requires_self_report_verification() {
         assert!(REVIEW_SYSTEM_PROMPT.contains(
             "Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only."
@@ -2093,6 +2242,7 @@ mod tests {
                 "Recent same-thread email: inbound founder requested QR code".to_string(),
                 "Recent meeting evidence: none found".to_string(),
             ],
+            review_scope: ReviewScope::FullEvidence,
         };
         let rendered = build_review_prompt(&request, &["founder_communication".to_string()]);
         assert!(rendered.contains("Artifact kind: reviewed_outbound_email_draft"));
