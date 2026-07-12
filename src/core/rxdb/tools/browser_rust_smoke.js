@@ -12119,7 +12119,19 @@ function ensureCtoxSmokeBinary() {
           await syncBusinessCollections(5000);
           const catalog = await catalogSnapshot();
           const module = moduleFromCatalog(catalog);
-          click('[data-scope="installed"]', 'installed scope before versions');
+          const installedScopeButton = document.querySelector('[data-scope="installed"]');
+          if (!installedScopeButton
+            || installedScopeButton.disabled
+            || installedScopeButton.getAttribute('aria-disabled') === 'true') {
+            return {
+              ok: false,
+              installedScopePresent: Boolean(installedScopeButton),
+              installedScopeDisabled: installedScopeButton?.disabled ?? null,
+              installedScopeAriaDisabled: installedScopeButton?.getAttribute('aria-disabled') || '',
+              activeModule: state.activeModule?.id || '',
+            };
+          }
+          installedScopeButton.click();
           const card = document.querySelector(`[data-app-id="${css(moduleId)}"]`);
           const versionsButton = card?.querySelector('[data-card-action="versions"]');
           const versions = Array.isArray(module?.version_state?.versions)
