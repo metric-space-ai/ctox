@@ -50,8 +50,18 @@ function inertObservable() {
   };
 }
 
-function createMockReplicationState() {
+function createMockReplicationState(collection = 'desktop_file_chunks') {
   const peerId = 'native-peer-1';
+  const peerStates = new Map([
+    [peerId, {
+      remoteProtocol: {
+        protocol: 'ctox-rxdb-protocol-v1',
+        capabilities: ['ctox-peer-session-v1', 'ctox-checkpoint-epoch-v1'],
+        peerSession: { role: 'ctox_instance', sessionId: peerId },
+        checkpoint: { state: 'advertised', epoch: 'epoch-1', collection },
+      },
+    }],
+  ]);
   return {
     peer: {
       connections: new Map([
@@ -63,15 +73,10 @@ function createMockReplicationState() {
     },
     peerStates$: {
       getValue() {
-        return new Map([
-          [peerId, {
-            remoteProtocol: {
-              peerSession: { role: 'ctox_instance', sessionId: peerId },
-            },
-          }],
-        ]);
+        return peerStates;
       },
-      subscribe() {
+      subscribe(callback) {
+        callback(peerStates);
         return { unsubscribe() {} };
       },
     },
@@ -94,7 +99,7 @@ function createMockReplicationState() {
   };
 }
 
-function createMockSyncRuntime() {
+function createMockSyncRuntime({ emitProtocolCallback = true } = {}) {
   const starts = [];
   const cancels = [];
   const db = {
@@ -112,13 +117,15 @@ function createMockSyncRuntime() {
           pull: options.pull ?? null,
           push: options.push ?? null,
         });
-        options.ctox?.onPeerProtocol?.({
-          protocol: 'ctox-rxdb-protocol-v1',
-          capabilities: ['ctox-peer-session-v1', 'ctox-checkpoint-epoch-v1'],
-          peerSession: { role: 'ctox_instance', sessionId: 'native-peer-1' },
-          checkpoint: { state: 'advertised', epoch: 'epoch-1' },
-        });
-        const state = createMockReplicationState();
+        if (emitProtocolCallback) {
+          options.ctox?.onPeerProtocol?.({
+            protocol: 'ctox-rxdb-protocol-v1',
+            capabilities: ['ctox-peer-session-v1', 'ctox-checkpoint-epoch-v1'],
+            peerSession: { role: 'ctox_instance', sessionId: 'native-peer-1' },
+            checkpoint: { state: 'advertised', epoch: 'epoch-1', collection: options.collection?.name },
+          });
+        }
+        const state = createMockReplicationState(options.collection?.name);
         const cancel = state.cancel;
         state.cancel = async () => {
           cancels.push(options.collection?.name || '');
@@ -137,6 +144,21 @@ function createMockSyncRuntime() {
     },
   });
   return { runtime, starts, cancels };
+}
+
+{
+  const { runtime } = createMockSyncRuntime({ emitProtocolCallback: false });
+  const lease = await runtime.leaseCollection('desktop_file_chunks', 'peer-state-protocol-backfill-smoke');
+  const diagnostics = runtime.diagnostics.collections.desktop_file_chunks;
+  assert.deepEqual(
+    diagnostics.remotePeerSession,
+    { role: 'ctox_instance', sessionId: 'native-peer-1' },
+    'live peer state backfills a protocol callback missed during bridge startup',
+  );
+  assert.equal(diagnostics.remoteCheckpoint?.epoch, 'epoch-1');
+  assert.equal(diagnostics.peerGeneration, 1);
+  await lease.release();
+  await runtime.stop();
 }
 
 {

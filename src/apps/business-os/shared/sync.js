@@ -949,6 +949,38 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   });
   subscriptions.push({ unsubscribe: unregisterSignalingErrorHandler });
   let nativePeerOpenWatchdog = null;
+  const recordRemotePeerProtocol = (info) => {
+    const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
+    const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
+    const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
+    nativePeerProtocolReady = !checkpointError && hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint);
+    recordCollection?.(collection, {
+      remoteProtocol: info?.protocol || null,
+      remoteCapabilities,
+      remotePeerSession: info?.peerSession || null,
+      remoteCheckpoint,
+      peerSessionSeenAt: new Date().toISOString(),
+      ...(checkpointError
+        ? {
+            status: 'error',
+            connectionStatus: 'error',
+            lastError: checkpointError,
+          }
+        : {
+            status: 'connected',
+            connectionStatus: 'connected',
+            connectedAt: new Date().toISOString(),
+            reconnectingSince: null,
+            lastError: null,
+            lastLifecycleEvent: null,
+          }),
+    });
+    if (nativePeerProtocolReady && nativePeerOpenWatchdog) {
+      clearTimeout(nativePeerOpenWatchdog);
+      nativePeerOpenWatchdog = null;
+    }
+    if (checkpointError) onFatalPeerError?.(checkpointError);
+  };
   const replicationState = await rxdb.replicateWebRTC({
     collection: rxCollection,
     // Phase 3: pass the BARE sync room so every collection multiplexes onto a
@@ -962,39 +994,20 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       expectedNativePeerId: String(config?.native_peer_id || config?.nativePeerId || '').trim(),
       capabilityTokenProvider: getBusinessOsCapabilityToken,
       onPeerProtocol(info) {
-        const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
-        const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
-        const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
-        nativePeerProtocolReady = !checkpointError && hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint);
-        recordCollection?.(collection, {
-          remoteProtocol: info?.protocol || null,
-          remoteCapabilities,
-          remotePeerSession: info?.peerSession || null,
-          remoteCheckpoint,
-          peerSessionSeenAt: new Date().toISOString(),
-          ...(checkpointError
-            ? {
-                status: 'error',
-                connectionStatus: 'error',
-                lastError: checkpointError,
-              }
-            : {
-                status: 'connected',
-                connectionStatus: 'connected',
-                connectedAt: new Date().toISOString(),
-                reconnectingSince: null,
-                lastError: null,
-                lastLifecycleEvent: null,
-              }),
-        });
-        if (nativePeerProtocolReady && nativePeerOpenWatchdog) {
-          clearTimeout(nativePeerOpenWatchdog);
-          nativePeerOpenWatchdog = null;
-        }
-        if (checkpointError) onFatalPeerError?.(checkpointError);
+        recordRemotePeerProtocol(info);
       },
     },
   });
+  if (replicationState?.peerStates$ && typeof replicationState.peerStates$.subscribe === 'function') {
+    const peerProtocolSubscription = replicationState.peerStates$.subscribe((peerStates) => {
+      if (stopped || !peerStates || typeof peerStates.values !== 'function') return;
+      for (const entry of peerStates.values()) {
+        if (entry?.remoteProtocol?.peerSession?.role !== 'ctox_instance') continue;
+        recordRemotePeerProtocol(entry.remoteProtocol);
+      }
+    });
+    subscriptions.push(peerProtocolSubscription);
+  }
   const recordTransportStatus = (status) => {
     if (stopped) return;
     const frameTransport = sanitizeReplicationTransportStatus(status);
