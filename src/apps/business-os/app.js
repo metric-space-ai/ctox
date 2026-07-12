@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260712-activity-fallback-v3';
+const APP_BUILD = '20260712-agent-scope-v1';
 
 ensureShellStylesheets();
 
@@ -5367,6 +5367,9 @@ function createContextActionsFacade(moduleLike) {
       if (!commandType) throw new Error(`Unsupported context action: ${action}`);
       const commandId = options.command_id || `cmd_${crypto.randomUUID()}`;
       const moduleId = moduleLike?.id || context.module || 'ctox';
+      const extraClientContext = options.client_context && typeof options.client_context === 'object'
+        ? options.client_context
+        : {};
       return state.commandBus.dispatch({
         id: commandId,
         command_id: commandId,
@@ -5397,6 +5400,7 @@ function createContextActionsFacade(moduleLike) {
           source_module: moduleId,
           context_version: 2,
           context: context.context_v2 || context,
+          ...extraClientContext,
         },
       }, { until: 'local' });
     },
@@ -11670,6 +11674,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
         })}
       </div>
       <p class="ctox-context-mode-help" data-ctox-context-mode-help></p>
+      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <label class="ctox-context-user-row" hidden>
         <span class="ctox-context-user-label">${escapeHtml(reviewerLabel)}</span>
         <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(reviewerPlaceholder)}">
@@ -11884,6 +11889,19 @@ function showGlobalCtoxContextMenu(context, x, y) {
         context,
         prompt: instruction,
         title,
+        client_context: {
+          source: 'business-os-global-context',
+          action: 'context-chat',
+          mode,
+          target: mode === 'app' ? 'app' : (mode === 'ask' ? 'read' : 'data'),
+          column: context.column,
+          record_type: context.record_type,
+          record_id: context.record_id || mod.id,
+          module_id: mod.id,
+          app_id: mod.id,
+          actor: agentScope.actor,
+          visible_scope: agentScope,
+        },
       });
       openBusinessChat({
         title,

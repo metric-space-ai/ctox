@@ -90,6 +90,8 @@ export async function mount(ctx) {
   render();
 
   // 5. Initialize CTOX unified context menu
+  state.contextMenuCleanup?.();
+  state.contextMenuCleanup = initAppStoreContextMenu(state);
 
   // Setup resizer
   const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
@@ -2244,6 +2246,7 @@ function initAppStoreContextMenu(state) {
     if (event.key === 'Escape') hideAppStoreContextMenu(state);
   };
 
+  host?.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
@@ -2253,6 +2256,7 @@ function initAppStoreContextMenu(state) {
     } else {
       host?.setAttribute('data-ctox-local-context-menu', previousLocalContextMenu);
     }
+    host?.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideAppStoreContextMenu(state);

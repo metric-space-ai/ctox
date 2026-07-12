@@ -8768,36 +8768,80 @@ function ensureCtoxSmokeBinary() {
           });
         };
         const openGlobalContextMenu = async () => {
-          const target = document.querySelector('[data-agent-scope-fixture]')
-            || document.querySelector('[data-module-content]')
-            || document.querySelector('[data-module-root]');
-          if (!target) throw new Error('agent scope fixture DOM target is missing');
-          const rect = target.getBoundingClientRect();
-          target.dispatchEvent(new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            button: 2,
-            clientX: Math.max(24, Math.round(rect.left + 12)),
-            clientY: Math.max(24, Math.round(rect.top + 12)),
-          }));
-          return waitFor(() => {
-            const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-            const panel = menu?.querySelector('.ctox-agent-scope') || null;
-            const rows = scopeRowsFromPanel(panel);
+          let contextMenuDispatchCount = 0;
+          let lastContextMenuEventPrevented = false;
+          return waitFor(async () => {
+            if (state.activeModule?.id !== targetModule.id
+              || !document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)) {
+              applyAgentScopeState();
+              await state.openModule(targetModule.id, { force: true, asModule: true });
+            }
+            let target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)
+              || document.querySelector('[data-module-content]')
+              || document.querySelector('[data-module-root]');
+            let menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+            let panel = menu?.querySelector('.ctox-agent-scope') || null;
+            let rows = scopeRowsFromPanel(panel);
+            if (!(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || ''))) {
+              if (!target) {
+                return {
+                  ok: false,
+                  rows,
+                  text: panel?.textContent?.trim() || '',
+                  activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+                  fixture: Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
+                  dispatchCount: contextMenuDispatchCount,
+                  reason: 'agent scope fixture DOM target is missing',
+                };
+              }
+              const rect = target.getBoundingClientRect();
+              lastContextMenuEventPrevented = !target.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                button: 2,
+                buttons: 2,
+                composed: true,
+                clientX: Math.max(24, Math.round(rect.left + 12)),
+                clientY: Math.max(24, Math.round(rect.top + 12)),
+              }));
+              contextMenuDispatchCount += 1;
+              menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+              panel = menu?.querySelector('.ctox-agent-scope') || null;
+              rows = scopeRowsFromPanel(panel);
+            }
+            menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+            panel = menu?.querySelector('.ctox-agent-scope') || null;
+            rows = scopeRowsFromPanel(panel);
             return {
               ok: Boolean(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || '')),
               rows,
               text: panel?.textContent?.trim() || '',
+              eventPrevented: lastContextMenuEventPrevented,
+              dispatchCount: contextMenuDispatchCount,
+              activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+              fixture: Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
+              hidden: menu?.hidden ?? null,
             };
-          }, 5000, 'agent scope global context menu');
+          }, 20000, 'agent scope global context menu');
         };
         const submitGlobalContextMenu = async () => {
           let submittedDetail = null;
-          const listener = (event) => {
-            submittedDetail = JSON.parse(JSON.stringify(event.detail || {}));
-            event.stopImmediatePropagation?.();
+          const originalDispatch = state.commandBus?.dispatch;
+          if (typeof originalDispatch !== 'function') throw new Error('agent scope command bus dispatch is missing');
+          state.commandBus.dispatch = async function patchedAgentScopeDispatch(command, options) {
+            submittedDetail = JSON.parse(JSON.stringify({
+              text: command?.payload?.prompt || command?.payload?.user_message || command?.payload?.instruction || '',
+              module: command?.module || '',
+              source_title: targetModule.title,
+              command_type: command?.command_type || command?.type || '',
+              record_id: command?.record_id || '',
+              title: command?.payload?.title || '',
+              instruction: command?.payload?.instruction || '',
+              payload: command?.payload || {},
+              client_context: command?.client_context || {},
+            }));
+            return originalDispatch.call(this, command, options);
           };
-          window.addEventListener('ctox-business-os-chat-submit', listener, { capture: true, once: true });
           const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
           const form = menu?.querySelector('form');
           const textarea = menu?.querySelector('textarea');
@@ -8815,7 +8859,7 @@ function ensureCtoxSmokeBinary() {
               detail: submittedDetail,
             }), 5000, 'agent scope context submit detail');
           } finally {
-            window.removeEventListener('ctox-business-os-chat-submit', listener, { capture: true });
+            state.commandBus.dispatch = originalDispatch;
           }
         };
         const openAppStoreContextMenu = async () => {
