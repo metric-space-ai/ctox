@@ -98,8 +98,8 @@ if (selfTest) {
 const measurements = runGate();
 fs.mkdirSync(path.dirname(measurementsPath), { recursive: true });
 fs.writeFileSync(measurementsPath, `${JSON.stringify(measurements, null, 2)}\n`);
-if (measurements.ok !== true && !smokeBinaryPath) {
-  console.error(`ctox_sync_production_readiness_95_app_runtime_package_gate=0 output=${path.relative(root, measurementsPath)} reason=missing_smoke_binary`);
+if (measurements.ok !== true) {
+  console.error(`ctox_sync_production_readiness_95_app_runtime_package_gate=0 output=${path.relative(root, measurementsPath)} reason=gate_checks_failed`);
   process.exit(1);
 }
 execFileSync(process.execPath, [
@@ -279,6 +279,7 @@ function nativeCargoEnv() {
   return {
     ...process.env,
     CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS: process.env.CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS || '1',
+    CTOX_VOXTRAL_BUILD_GGML: process.env.CTOX_VOXTRAL_BUILD_GGML || '0',
   };
 }
 
@@ -354,7 +355,7 @@ function validateSmokeBinaryRevision(binaryPath) {
 
 function parseCtoxVersionCommit(value) {
   const text = String(value || '');
-  const match = text.match(/(?:^|-)g([0-9a-f]{7,40})(?:-|\\b)/i);
+  const match = text.match(/(?:^|-)g([0-9a-f]{7,40})(?:-|\b)/i);
   return match ? match[1].toLowerCase() : '';
 }
 
