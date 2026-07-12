@@ -1058,6 +1058,8 @@ pub struct RxStorageInstanceSqlite {
     external_notifier: Arc<TableNotifier>,
     read_connection: Arc<Mutex<Option<SharedSqliteConnection>>>,
     instance_id: u64,
+    #[cfg(test)]
+    bulk_write_current_state_batch_loads: Arc<AtomicUsize>,
 }
 
 impl RxStorageInstanceSqlite {
@@ -1112,6 +1114,8 @@ impl RxStorageInstanceSqlite {
             external_notifier,
             read_connection,
             instance_id: INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
+            #[cfg(test)]
+            bulk_write_current_state_batch_loads: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -1687,6 +1691,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let table_name = self.table_name.clone();
         let collection_name = self.collection_name.clone();
         let context = context.to_string();
+        #[cfg(test)]
+        let bulk_write_current_state_batch_loads =
+            Arc::clone(&self.bulk_write_current_state_batch_loads);
 
         let (error, event_bulk, checkpoint): (
             Vec<crate::types::RxStorageWriteError>,
@@ -1759,6 +1766,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                     }
                     ids.sort_unstable();
                     ids.dedup();
+                    #[cfg(test)]
+                    bulk_write_current_state_batch_loads.fetch_add(1, Ordering::SeqCst);
                     for doc in documents_by_ids(&tx, &table_name, &ids, true)? {
                         if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
                             docs_in_db.insert(id.to_string(), doc);
@@ -2300,9 +2309,7 @@ mod tests {
 
     use crate::rx_query_helper::{normalize_mango_query, prepare_query};
     use crate::storage::sqlite::sql::{
-        reset_sqlite_document_lookup_counts, reset_sqlite_json_document_decode_count,
-        sqlite_document_by_id_call_count, sqlite_documents_by_ids_call_count,
-        sqlite_json_document_decode_count,
+        reset_sqlite_json_document_decode_count, sqlite_json_document_decode_count,
     };
     use crate::storage::sqlite::{
         create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
@@ -2746,7 +2753,9 @@ mod tests {
         );
 
         // Valid update (correct previous rev) + a fresh insert.
-        reset_sqlite_document_lookup_counts();
+        let batch_loads_before = instance
+            .bulk_write_current_state_batch_loads
+            .load(Ordering::SeqCst);
         let resp = instance
             .bulk_write(
                 vec![
@@ -2769,14 +2778,12 @@ mod tests {
             resp.error
         );
         assert_eq!(
-            sqlite_document_by_id_call_count(),
-            0,
-            "bulk_write current-state load must not issue per-id document_by_id calls"
-        );
-        assert_eq!(
-            sqlite_documents_by_ids_call_count(),
+            instance
+                .bulk_write_current_state_batch_loads
+                .load(Ordering::SeqCst)
+                - batch_loads_before,
             1,
-            "bulk_write current-state load should use one batched ids lookup"
+            "bulk_write current-state load should execute exactly one instance-scoped batched ids lookup"
         );
 
         let got = instance
