@@ -745,6 +745,19 @@ where
                 let peer_session_id = peer_session_id.clone();
                 tokio::spawn(async move {
                     let frame_collection = item.message.collection.clone();
+                    if item.message.method == "ctoxProtocol" {
+                        if let Some(token) = item
+                            .message
+                            .params
+                            .first()
+                            .and_then(|payload| payload.pointer("/peerSession/capabilityToken"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|token| !token.is_empty())
+                        {
+                            handler_task.set_peer_capability_token(&item.peer, token.to_string());
+                        }
+                    }
                     let result = match item.message.method.as_str() {
                         "token" => Value::String(storage_token),
                         "ctoxProtocol" => {
