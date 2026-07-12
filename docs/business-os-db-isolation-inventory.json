@@ -5,7 +5,7 @@
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
     "appsec-pentest": {
-      "title": "AppSec Pentest",
+      "title": "Deployment Audit",
       "manifest_path": "src/apps/business-os/modules/appsec-pentest/module.json",
       "source_path": "src/apps/business-os/modules/appsec-pentest",
       "install_scope": "core",
@@ -32,7 +32,7 @@
         "appsec_scanner_inventory",
         "business_commands"
       ],
-      "notes": "Scoped system exception: AppSec Pentest resolves durable AppSec projections and business_commands through the scoped system facade. The module uses Business OS guarded subscriptions plus command dispatch only; scanner execution, state sync, and active-scan approval mutations stay server-side."
+      "notes": "Scoped system exception: Deployment Audit resolves durable AppSec projections and business_commands through the scoped system facade. The module uses Business OS guarded subscriptions plus command dispatch only; scanner execution, state sync, and active-scan approval mutations stay server-side."
     },
     "app-store": {
       "title": "App Store",

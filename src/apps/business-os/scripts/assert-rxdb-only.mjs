@@ -152,10 +152,9 @@ function namedImportsFromClause(clause) {
 }
 
 function hasNamedExport(content, name) {
-  const escaped = escapeRegExp(name);
-  if (new RegExp(`export\\s+(?:async\\s+)?function\\s+${escaped}\\b`).test(content)) return true;
-  if (new RegExp(`export\\s+class\\s+${escaped}\\b`).test(content)) return true;
-  if (new RegExp(`export\\s+(?:const|let|var)\\s+${escaped}\\b`).test(content)) return true;
+  if (exportedDeclarations(content, /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b/g).has(name)) return true;
+  if (exportedDeclarations(content, /\bexport\s+class\s+([A-Za-z_$][\w$]*)\b/g).has(name)) return true;
+  if (exportedDeclarations(content, /\bexport\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/g).has(name)) return true;
   for (const block of content.matchAll(/export\s*\{([\s\S]*?)\}/g)) {
     const entries = block[1]
       .split(',')
@@ -170,8 +169,8 @@ function hasNamedExport(content, name) {
   return false;
 }
 
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function exportedDeclarations(content, pattern) {
+  return new Set([...String(content || '').matchAll(pattern)].map((match) => match[1]).filter(Boolean));
 }
 
 function contentForForbiddenHttpScan(file, content) {

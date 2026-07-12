@@ -670,8 +670,41 @@ function splitModes(value) {
 
 function extractStringArrayFromSource(filePath, constName) {
   const source = fs.readFileSync(filePath, 'utf8');
-  const escapedConstName = constName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = source.match(new RegExp(`const ${escapedConstName} = \\[([\\s\\S]*?)\\];`));
-  if (!match) throw new Error(`${constName} array not found in ${path.relative(root, filePath)}`);
-  return [...match[1].matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
+  const body = extractConstArrayBody(source, constName);
+  if (body == null) throw new Error(`${constName} array not found in ${path.relative(root, filePath)}`);
+  return [...body.matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
+}
+
+function extractConstArrayBody(source, constName) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(String(constName || ''))) return null;
+  const declaration = `const ${constName}`;
+  const start = String(source || '').indexOf(declaration);
+  if (start === -1) return null;
+  const equals = source.indexOf('=', start + declaration.length);
+  if (equals === -1) return null;
+  const open = source.indexOf('[', equals + 1);
+  if (open === -1) return null;
+  let depth = 0;
+  let quote = '';
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === '\\') {
+        index += 1;
+      } else if (char === quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '[') depth += 1;
+    if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return source.slice(open + 1, index);
+    }
+  }
+  return null;
 }

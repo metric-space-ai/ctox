@@ -31,9 +31,24 @@ if (typeof globalThis.DOMParser === 'undefined') {
     }
 
     getElementsByTagName(tagName) {
-      const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pattern = new RegExp(`<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}>`, 'g');
-      return Array.from(this.source.matchAll(pattern), (match) => new TestXmlElement(match[1]));
+      const name = String(tagName || '').trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name)) return [];
+      const results = [];
+      const lower = this.source.toLowerCase();
+      const openNeedle = `<${name.toLowerCase()}`;
+      const closeNeedle = `</${name.toLowerCase()}>`;
+      let cursor = 0;
+      while (cursor < lower.length) {
+        const open = lower.indexOf(openNeedle, cursor);
+        if (open === -1) break;
+        const openEnd = lower.indexOf('>', open + openNeedle.length);
+        if (openEnd === -1) break;
+        const close = lower.indexOf(closeNeedle, openEnd + 1);
+        if (close === -1) break;
+        results.push(new TestXmlElement(this.source.slice(openEnd + 1, close)));
+        cursor = close + closeNeedle.length;
+      }
+      return results;
     }
   }
 

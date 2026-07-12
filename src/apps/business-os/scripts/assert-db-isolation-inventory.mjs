@@ -162,23 +162,76 @@ function detectModuleDbAccessFromSource(source) {
   const normalized = String(source || '')
     .replace(/\?\.\(/g, '(')
     .replace(/\?\.(?=[A-Za-z_$\[])/g, '.');
-  const dbRootPattern = String.raw`(?:ctx|state\.ctx|STATE\.ctx|stateRef\.ctx)\.db`;
-  const aliases = [...normalized.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${dbRootPattern}(?!\s*(?:\.|\[))\b`, 'g'))]
-    .map((match) => match[1])
-    .filter(Boolean);
-  const dbRefs = [dbRootPattern, ...aliases.map(escapeRegExp)].join('|');
-  const dbRefPattern = String.raw`(?:${dbRefs})`;
+  const dbRoots = ['ctx.db', 'state.ctx.db', 'STATE.ctx.db', 'stateRef.ctx.db'];
+  const aliases = dbFacadeAliases(normalized, dbRoots);
+  const dbRefs = [...dbRoots, ...aliases];
   return {
-    usesRawDb: new RegExp(String.raw`\b${dbRefPattern}\s*(?:\.raw\b|\[\s*['"]raw['"]\s*\])`).test(normalized)
-      || new RegExp(String.raw`\bsetBusinessOsRawDatabase\??\.\([^)]*${dbRootPattern}\s*(?:\.raw\b|\[\s*['"]raw['"]\s*\])`).test(normalized),
-    usesCollectionPropertyAccess: new RegExp(String.raw`\b${dbRefPattern}\s*(?:\.(?!collection\s*\(|raw\b|collections\b)[A-Za-z_$][\w$]*\b|\.\s*\[[^\]]+\])`).test(normalized),
-    usesCollectionsProxy: new RegExp(String.raw`\b${dbRefPattern}\s*\.collections\b`).test(normalized),
-    usesCachedDbHandle: new RegExp(String.raw`\b__ctx__db\s*=\s*${dbRootPattern}\b|\bglobalThis\.[A-Za-z_$][\w$]*\s*=\s*${dbRootPattern}\b`).test(normalized),
+    usesRawDb: dbRefs.some((ref) => sourceHasDbRawAccess(normalized, ref)) || sourcePassesRawDbToSetter(normalized, dbRoots),
+    usesCollectionPropertyAccess: dbRefs.some((ref) => sourceHasDbCollectionPropertyAccess(normalized, ref)),
+    usesCollectionsProxy: dbRefs.some((ref) => sourceHasDbCollectionsProxy(normalized, ref)),
+    usesCachedDbHandle: sourceCachesDbHandle(normalized, dbRoots),
   };
 }
 
-function escapeRegExp(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function dbFacadeAliases(source, dbRoots) {
+  const aliases = [];
+  for (const match of String(source || '').matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+    const rhs = String(match[2] || '').trim();
+    if (dbRoots.some((root) => rhs === root)) aliases.push(match[1]);
+  }
+  return aliases;
+}
+
+function sourceHasDbRawAccess(source, ref) {
+  return refTails(source, ref).some((tail) => tail.startsWith('.raw') || /^\[\s*['"]raw['"]\s*\]/.test(tail));
+}
+
+function sourceHasDbCollectionsProxy(source, ref) {
+  return refTails(source, ref).some((tail) => tail.startsWith('.collections'));
+}
+
+function sourceHasDbCollectionPropertyAccess(source, ref) {
+  return refTails(source, ref).some((tail) => {
+    if (/^(?:\[\s*[^\]]+\]|\.\s*\[\s*[^\]]+\])/.test(tail)) return true;
+    const property = /^\.\s*([A-Za-z_$][\w$]*)\b/.exec(tail)?.[1] || '';
+    if (!property || property === 'raw' || property === 'collections') return false;
+    if (property === 'collection') return !tail.slice(tail.indexOf(property) + property.length).trimStart().startsWith('(');
+    return true;
+  });
+}
+
+function sourcePassesRawDbToSetter(source, dbRoots) {
+  for (const match of String(source || '').matchAll(/\bsetBusinessOsRawDatabase\??\.\(/g)) {
+    const call = source.slice(match.index || 0, Math.min(source.length, (match.index || 0) + 500));
+    if (dbRoots.some((root) => sourceHasDbRawAccess(call, root))) return true;
+  }
+  return false;
+}
+
+function sourceCachesDbHandle(source, dbRoots) {
+  for (const match of String(source || '').matchAll(/\b(?:__ctx__db|globalThis\.[A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+    const rhs = String(match[1] || '').trim();
+    if (dbRoots.some((root) => rhs === root)) return true;
+  }
+  return false;
+}
+
+function refTails(source, ref) {
+  const tails = [];
+  const text = String(source || '');
+  let cursor = 0;
+  while (cursor < text.length) {
+    const index = text.indexOf(ref, cursor);
+    if (index === -1) break;
+    const before = text[index - 1] || '';
+    const after = text[index + ref.length] || '';
+    const refIsIdentifier = /^[A-Za-z_$][\w$]*$/.test(ref);
+    const beforeOk = refIsIdentifier ? !/[A-Za-z0-9_$]/.test(before) : !/[A-Za-z0-9_$]/.test(before);
+    const afterOk = refIsIdentifier ? !/[A-Za-z0-9_$]/.test(after) : true;
+    if (beforeOk && afterOk) tails.push(text.slice(index + ref.length).trimStart());
+    cursor = index + ref.length;
+  }
+  return tails;
 }
 
 function readSourceFiles(root) {

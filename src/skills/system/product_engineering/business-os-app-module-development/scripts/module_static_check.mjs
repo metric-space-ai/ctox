@@ -304,6 +304,73 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function cssRules(css) {
+  const rules = [];
+  for (const match of String(css || '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    rules.push({ selector: match[1] || '', body: match[2] || '' });
+  }
+  return rules;
+}
+
+function cssSelectorContainsClass(selector, className) {
+  const needle = String(className || '').trim().toLowerCase();
+  if (!needle) return false;
+  const source = String(selector || '').toLowerCase();
+  let cursor = 0;
+  while (cursor < source.length) {
+    const index = source.indexOf(`.${needle}`, cursor);
+    if (index === -1) return false;
+    const after = source[index + needle.length + 1] || '';
+    if (!/[A-Za-z0-9_-]/.test(after)) return true;
+    cursor = index + 1;
+  }
+  return false;
+}
+
+function cssSelectorContainsHiddenClass(selector, className) {
+  const compact = String(selector || '').replace(/\s+/g, '').toLowerCase();
+  const needle = String(className || '').trim().toLowerCase();
+  return Boolean(needle && compact.includes(`.${needle}[hidden]`));
+}
+
+function jsIdentifierAt(source, index) {
+  const match = /^[A-Za-z_$][\w$]*/.exec(String(source || '').slice(index));
+  return match?.[0] || '';
+}
+
+function isIdentifierBoundary(source, index) {
+  return !/[A-Za-z0-9_$]/.test(String(source || '')[index] || '');
+}
+
+function containsIdentifierCall(source, name) {
+  const text = String(source || '');
+  const needle = String(name || '');
+  if (!needle) return false;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const index = text.indexOf(needle, cursor);
+    if (index === -1) return false;
+    if (isIdentifierBoundary(text, index - 1) && isIdentifierBoundary(text, index + needle.length)) {
+      const rest = text.slice(index + needle.length).trimStart();
+      if (rest.startsWith('(') || rest.startsWith('?.(')) return true;
+    }
+    cursor = index + needle.length;
+  }
+  return false;
+}
+
+function jsQuotedLiterals(source) {
+  const literals = [];
+  for (const match of String(source || '').matchAll(/(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g)) {
+    literals.push({
+      value: match[2] || '',
+      start: match.index || 0,
+      end: (match.index || 0) + match[0].length,
+    });
+  }
+  return literals;
+}
+
 function stripJsComments(text) {
   return String(text || '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -511,17 +578,15 @@ function collectHiddenModalClasses(html) {
 }
 
 function cssHasDisplayRuleForClass(css, className) {
-  const escaped = escapeRegExp(className);
-  return new RegExp(String.raw`\.[\w-]*\s*\.?${escaped}\b[^{]*\{[^}]*\bdisplay\s*:`, 'i').test(css)
-    || new RegExp(String.raw`\.${escaped}\b[^{]*\{[^}]*\bdisplay\s*:`, 'i').test(css);
+  return cssRules(css).some((rule) => cssSelectorContainsClass(rule.selector, className) && /\bdisplay\s*:/.test(rule.body));
 }
 
 function cssHidesHiddenClass(css, className) {
-  const escaped = escapeRegExp(className);
-  const classHidden = new RegExp(String.raw`\.${escaped}\s*\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b`, 'i');
-  const scopedClassHidden = new RegExp(String.raw`\.[\w-]+\s+\.${escaped}\s*\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b`, 'i');
   const globalHidden = /\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b/i;
-  return classHidden.test(css) || scopedClassHidden.test(css) || globalHidden.test(css);
+  return globalHidden.test(css) || cssRules(css).some((rule) => (
+    cssSelectorContainsHiddenClass(rule.selector, className)
+    && /\bdisplay\s*:\s*none\b/i.test(rule.body)
+  ));
 }
 
 function collectHiddenModalFailures(indexHtml, indexCss) {
@@ -578,7 +643,7 @@ function hasCommandBusDispatchInvocation(text) {
     dispatchAliases.add(match[1]);
   }
   for (const alias of dispatchAliases) {
-    if (new RegExp(String.raw`\b${escapeRegExp(alias)}\s*(?:\(|\?\.\s*\()`).test(source)) return true;
+    if (containsIdentifierCall(source, alias)) return true;
   }
 
   const busAliases = new Set();
@@ -660,19 +725,19 @@ function collectLegacyDbFacadeFailures(file, text) {
 }
 
 function indexJsHandlesDataAction(indexJs, action) {
-  const escaped = escapeRegExp(action);
-  return new RegExp(String.raw`\[data-[a-z0-9-]*action\s*=\s*["']${escaped}["']\]`, 'i').test(indexJs)
-    || new RegExp(String.raw`(?:===|==|case)\s*['"\`]${escaped}['"\`]`).test(indexJs)
-    || new RegExp(String.raw`['"\`]${escaped}['"\`]\s*:`).test(indexJs);
+  return jsContainsDataActionSelector(indexJs, action)
+    || jsComparesAgainstLiteral(indexJs, action)
+    || jsObjectKeyLiteralExists(indexJs, action);
 }
 
 function htmlDataActionIsSubmitControl(indexHtml, action) {
-  const escaped = escapeRegExp(action);
-  const tagWithAction = new RegExp(
-    String.raw`<\s*(?:button|input)\b(?=[^>]*\bdata-[a-z0-9-]*action\s*=\s*["']${escaped}["'])(?=[^>]*\btype\s*=\s*["']submit["'])[^>]*>`,
-    'i',
-  );
-  return tagWithAction.test(indexHtml);
+  for (const tag of String(indexHtml || '').matchAll(/<\s*(?:button|input)\b[^>]*>/gi)) {
+    const attrs = tag[0] || '';
+    if (htmlAttributeValue(attrs, 'type') !== 'submit') continue;
+    const actionValue = htmlDataActionValue(attrs);
+    if (actionValue === action) return true;
+  }
+  return false;
 }
 
 function hasBusinessOsChatTaskCommandType(text) {
@@ -684,9 +749,65 @@ function hasBusinessOsChatTaskCommandType(text) {
     constants.add(match[1]);
   }
   return Array.from(constants).some((name) => {
-    const escaped = escapeRegExp(name);
-    return new RegExp(String.raw`(?:command_type\s*:\s*${escaped}\b|["']command_type["']\s*:\s*${escaped}\b)`).test(text);
+    return jsCommandTypeReferencesIdentifier(text, name);
   });
+}
+
+function jsContainsDataActionSelector(source, action) {
+  const expected = String(action || '');
+  for (const literal of jsQuotedLiterals(source)) {
+    if (!literal.value.includes('[data-') || !literal.value.includes('action')) continue;
+    if (htmlDataActionValue(literal.value) === expected) return true;
+  }
+  return false;
+}
+
+function jsComparesAgainstLiteral(source, action) {
+  const text = String(source || '');
+  const expected = String(action || '');
+  for (const literal of jsQuotedLiterals(text)) {
+    if (literal.value !== expected) continue;
+    const before = text.slice(Math.max(0, literal.start - 12), literal.start).trimEnd();
+    if (before.endsWith('===') || before.endsWith('==') || /\bcase$/.test(before)) return true;
+  }
+  return false;
+}
+
+function jsObjectKeyLiteralExists(source, action) {
+  const text = String(source || '');
+  const expected = String(action || '');
+  for (const literal of jsQuotedLiterals(text)) {
+    if (literal.value !== expected) continue;
+    if (text.slice(literal.end).trimStart().startsWith(':')) return true;
+  }
+  return false;
+}
+
+function htmlAttributeValue(tag, name) {
+  const lowerName = String(name || '').toLowerCase();
+  for (const match of String(tag || '').matchAll(/\b([A-Za-z0-9_:-]+)\s*=\s*(['"])(.*?)\2/g)) {
+    if ((match[1] || '').toLowerCase() === lowerName) return match[3] || '';
+  }
+  return '';
+}
+
+function htmlDataActionValue(tag) {
+  for (const match of String(tag || '').matchAll(/\b(data-[A-Za-z0-9_-]*action)\s*=\s*(['"])(.*?)\2/g)) {
+    if ((match[1] || '').toLowerCase().endsWith('action')) return match[3] || '';
+  }
+  return '';
+}
+
+function jsCommandTypeReferencesIdentifier(source, name) {
+  const text = String(source || '');
+  const expected = String(name || '');
+  if (!expected) return false;
+  for (const match of text.matchAll(/(?:command_type|["']command_type["'])\s*:/g)) {
+    const valueStart = (match.index || 0) + match[0].length;
+    const value = jsIdentifierAt(text, valueStart + text.slice(valueStart).search(/\S|$/));
+    if (value === expected) return true;
+  }
+  return false;
 }
 
 function hasCtoxTicketCommandType(text) {
