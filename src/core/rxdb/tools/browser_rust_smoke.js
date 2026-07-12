@@ -15147,6 +15147,7 @@ function ensureCtoxSmokeBinary() {
     } else if (result.mode === 'business-os-threads-rightclick-ui') {
       console.log(`business_os_threads_rightclick_target_module=${result.targetModuleId || ''}`);
       console.log(`business_os_threads_rightclick_reviewer_id=${result.reviewerId || ''}`);
+      console.log(`business_os_threads_rightclick_thread_id=${result.threadId || ''}`);
       console.log(`business_os_threads_rightclick_data_command_id=${result.dataCommandId || ''}`);
       console.log(`business_os_threads_rightclick_ask_command_id=${result.askCommandId || ''}`);
       console.log(`business_os_threads_rightclick_app_command_id=${result.appCommandId || ''}`);
