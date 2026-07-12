@@ -73,9 +73,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-import xml.etree.ElementTree as ET
 from functools import lru_cache
 from os.path import abspath, basename, exists, expanduser, join, splitext
+from typing import Any
 from zipfile import ZipFile
 
 STYLE_TOKENS = [
@@ -106,12 +106,23 @@ def normalize_font_family_name(name: str) -> str:
     return s.strip()
 
 
-def _or_dummy(node: ET.Element | None) -> ET.Element:
+@lru_cache(maxsize=1)
+def _safe_xml():
+    try:
+        import defusedxml.ElementTree as safe_et  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "defusedxml is required to parse slide XML safely; install defusedxml"
+        ) from exc
+    return safe_et
+
+
+def _or_dummy(node: Any | None) -> Any:
     """Return the element if not None, otherwise a harmless dummy element.
 
     Avoids deprecated truthiness checks on Element instances (`elem or dummy`).
     """
-    return node if node is not None else ET.Element("dummy")
+    return node if node is not None else _safe_xml().Element("dummy")
 
 
 @lru_cache(maxsize=1)
@@ -240,6 +251,7 @@ def _split_odf_family_list(value: str) -> list[str]:
 
 
 def extract_used_fonts_from_pptx(pptx_path: str) -> dict[int, set[str]]:
+    safe_et = _safe_xml()
     by_slide: dict[int, set[str]] = {}
     with ZipFile(pptx_path, "r") as zf:
         for name in zf.namelist():
@@ -249,7 +261,7 @@ def extract_used_fonts_from_pptx(pptx_path: str) -> dict[int, set[str]]:
             m = re.search(r"(?i)slide(\d+)\.xml$", base)
             slide_num = int(m.group(1)) if m else None
             with zf.open(name) as f:
-                tree = ET.parse(f)
+                tree = safe_et.parse(f)
             root = tree.getroot()
             ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
             defaults = _collect_default_font_faces(root)
@@ -321,7 +333,7 @@ def _detect_script_tag(text: str) -> str:
     return "latin"
 
 
-def _collect_default_font_faces(root: ET.Element) -> dict[str, set[str]]:
+def _collect_default_font_faces(root: Any) -> dict[str, set[str]]:
     ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
     defaults: dict[str, set[str]] = {"latin": set(), "ea": set(), "cs": set(), "sym": set()}
     for defrpr in root.findall(".//a:defRPr", ns):
@@ -363,7 +375,7 @@ def _export_to_odp(pptx_path: str, user_profile: str, out_dir: str, stem: str) -
     return odp_path if exists(odp_path) else ""
 
 
-def _collect_face_map(root: ET.Element, ns: dict[str, str]) -> dict[str, str]:
+def _collect_face_map(root: Any, ns: dict[str, str]) -> dict[str, str]:
     face_map: dict[str, str] = {}
     decls = root.find("office:font-face-decls", ns)
     if decls is None:
@@ -380,7 +392,7 @@ def _collect_face_map(root: ET.Element, ns: dict[str, str]) -> dict[str, str]:
 
 
 def _families_from_text_properties(
-    tp: ET.Element, ns: dict[str, str], face_map: dict[str, str]
+    tp: Any, ns: dict[str, str], face_map: dict[str, str]
 ) -> set[str]:
     fams: set[str] = set()
     # Inspect current node for direct font-family
@@ -418,7 +430,7 @@ def _families_from_text_properties(
 
 
 def _extract_styles_from_container(
-    container: ET.Element | None, ns: dict[str, str], face_map: dict[str, str]
+    container: Any | None, ns: dict[str, str], face_map: dict[str, str]
 ) -> tuple[dict[str, set[str]], set[str]]:
     styles: dict[str, set[str]] = {}
     defaults: set[str] = set()
@@ -445,8 +457,8 @@ def _extract_styles_from_container(
 
 
 def _build_style_map(
-    content: ET.Element,
-    styles_root: ET.Element | None,
+    content: Any,
+    styles_root: Any | None,
     ns: dict[str, str],
     face_map: dict[str, str],
 ) -> tuple[dict[str, set[str]], set[str]]:
@@ -512,7 +524,7 @@ def _build_style_map(
 
 
 def _lookup_style_families(
-    style_name: str, ns: dict[str, str], face_map: dict[str, str], roots: list[ET.Element | None]
+    style_name: str, ns: dict[str, str], face_map: dict[str, str], roots: list[Any | None]
 ) -> set[str]:
     fams: set[str] = set()
     if not style_name:
@@ -548,11 +560,11 @@ def _lookup_style_families(
 
 
 def _collect_slide_families(
-    page: ET.Element,
+    page: Any,
     ns: dict[str, str],
     style_map: dict[str, set[str]],
     face_map: dict[str, str],
-    roots: list[ET.Element | None],
+    roots: list[Any | None],
     text_style_map: dict[str, set[str]] | None = None,
 ) -> set[str]:
     slide_fams: set[str] = set()
@@ -625,8 +637,9 @@ def _extract_slide_families_from_odp(odp_path: str) -> dict[int, set[str]]:
     with ZipFile(odp_path, "r") as zf:
         content_bytes = zf.read("content.xml")
         styles_bytes = zf.read("styles.xml") if "styles.xml" in zf.namelist() else None
-        content = ET.fromstring(content_bytes)
-        styles_root = ET.fromstring(styles_bytes) if styles_bytes is not None else None
+        safe_et = _safe_xml()
+        content = safe_et.fromstring(content_bytes)
+        styles_root = safe_et.fromstring(styles_bytes) if styles_bytes is not None else None
         styles_text = (
             styles_bytes.decode("utf-8", errors="ignore") if styles_bytes is not None else ""
         )
@@ -687,7 +700,7 @@ def _extract_slide_families_from_odp(odp_path: str) -> dict[int, set[str]]:
 
 
 def _build_master_page_map(
-    styles_root: ET.Element | None, ns: dict[str, str], style_map: dict[str, set[str]]
+    styles_root: Any | None, ns: dict[str, str], style_map: dict[str, set[str]]
 ) -> dict[str, set[str]]:
     master_map: dict[str, set[str]] = {}
     if styles_root is None:
