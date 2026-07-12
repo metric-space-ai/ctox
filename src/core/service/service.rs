@@ -1948,7 +1948,20 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
         }
         releasable_message_keys.push(message_key.clone());
     }
+    let mut updated = 0usize;
     for message_key in &releasable_message_keys {
+        if channels::transition_business_command_for_task(
+            root,
+            message_key,
+            "pending",
+            None,
+            None,
+            Some("released stale service lease during service boot"),
+            "released stale service lease during service boot",
+        )? {
+            updated += 1;
+            continue;
+        }
         channels::enforce_queue_route_status_transition(
             &conn,
             message_key,
@@ -1957,15 +1970,14 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
             "ctox-service-boot",
             "release_stale_service_communication_leases",
         )?;
-    }
-    let mut updated = 0usize;
-    for message_key in &releasable_message_keys {
         updated += conn.execute(
             r#"
             UPDATE communication_routing_state
             SET route_status='pending',
                 lease_owner=NULL,
                 leased_at=NULL,
+                lease_expires_at=NULL,
+                acked_at=NULL,
                 last_error='released stale service lease during service boot',
                 updated_at=?1
             WHERE message_key=?2
@@ -34750,6 +34762,93 @@ Use shell tools to create or update these files."
         assert_eq!(row.0, "pending");
         assert_eq!(row.1, None);
         assert_eq!(row.2, None);
+    }
+
+    #[test]
+    fn boot_releases_typed_command_lease_and_reopens_review_for_retry() {
+        let root = temp_root("boot-release-typed-command-review-lease");
+        let claimed = channels::claim_business_command_with_queue(
+            &root,
+            channels::BusinessCommandClaimRequest {
+                command_id: "command-boot-review-recovery".to_string(),
+                idempotency_key: "command-boot-review-recovery".to_string(),
+                payload_hash: "sha256:boot-review-recovery".to_string(),
+                module: "tests".to_string(),
+                command_type: "tests.command".to_string(),
+                record_id: "record-1".to_string(),
+                intent: json!({"payload": {"question": "supplied fact"}}),
+                created_at_ms: 1_700_000_000_000,
+            },
+            channels::QueueTaskCreateRequest {
+                title: "Recover review after restart".to_string(),
+                prompt: "Answer from the supplied fact.".to_string(),
+                thread_key: "business-os/tests/boot-review-recovery".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "idempotency_key": "command-boot-review-recovery"
+                })),
+            },
+        )
+        .expect("claim typed command");
+        let task_id = claimed.task.message_key;
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease typed command queue task");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "worker leased",
+        )
+        .expect("lease command");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "worker started",
+        )
+        .expect("start command");
+        channels::persist_business_command_worker_result(&root, &task_id, "correct answer")
+            .expect("persist result before simulated restart");
+
+        let repaired =
+            release_stale_service_communication_leases(&root).expect("release stale lease");
+        assert_eq!(repaired, 1);
+
+        let task = channels::load_queue_task(&root, &task_id)
+            .expect("load recovered task")
+            .expect("recovered task exists");
+        assert_eq!(task.route_status, "pending");
+        assert!(task.lease_owner.is_none());
+        assert!(task.leased_at.is_none());
+        let projection =
+            channels::business_command_projection(&root, "command-boot-review-recovery")
+                .expect("load recovered command");
+        assert_eq!(projection["execution_phase"], "retry_wait");
+        assert_eq!(projection["terminal_status"], "none");
+        assert_eq!(projection["retryable"], true);
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open recovered command database");
+        let transition_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM business_command_transitions
+                 WHERE command_id='command-boot-review-recovery'
+                   AND from_phase='awaiting_review'
+                   AND to_phase='retry_wait'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count restart recovery transition");
+        assert_eq!(transition_count, 1);
     }
 
     #[test]

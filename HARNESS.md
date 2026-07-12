@@ -106,7 +106,12 @@ validate and preserve those fields. A lease missing any of them is invalid and
 is reconciled immediately: the linked command returns to `retry_wait` and the
 same queue row returns to `pending`. Complete leases are renewed every 60
 seconds while their worker remains active and are reclaimed after expiry
-independent of the prior owner.
+independent of the prior owner. Boot recovery uses that same typed boundary:
+if a crash happened after a worker result reached `awaiting_review` but before
+review completed, the command moves to `retry_wait` while the linked queue
+lease, owner, timestamps, and expiry are cleared together. A restart can then
+open a new finite attempt without reviving a terminal command or losing the
+prior result evidence.
 
 ## Worker Slice Flow
 

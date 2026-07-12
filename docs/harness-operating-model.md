@@ -162,6 +162,14 @@ projection refresh happens before the lease transaction, and the returned task
 view is materialized before commit. Thus an acquisition error leaves the queue
 row pending; a committed lease is always returned to the dispatcher.
 
+Boot lease recovery preserves the same command/queue invariant. A linked
+Business Command in `leased`, `running`, `awaiting_review`, `validating`, or
+`retry_wait` is transitioned through the typed command state machine while the
+queue returns to `pending`; it is never repaired by changing only the queue
+row. In particular, a crash after typed result persistence reopens the command
+as `retry_wait`, retains the prior attempt result as evidence, and clears the
+queue lease owner, timestamps, and expiry before redispatch.
+
 While idle, the full router remains source-stamp gated, but an uncached pending
 queue count runs at most every 30 seconds. It is the durable wakeup backstop for
 WAL updates whose filesystem stamp is not observed in time; finding work clears
