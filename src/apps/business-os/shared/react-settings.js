@@ -2314,6 +2314,13 @@ async function loadBusinessActivity({ commandBus, db, session, sync } = {}) {
   const startedAtMs = Date.now();
   const maxWaitMs = 28000;
   let lastError = null;
+  await sync?.startCollection?.('business_commands')?.catch?.(() => {});
+  const immediateFallback = await waitForLocalBusinessActivityFallback({
+    db,
+    deadlineMs: startedAtMs + 2000,
+    minWaitMs: 2000,
+  });
+  if (immediateFallback?.events?.length) return immediateFallback;
   for (let attempt = 0; attempt < 5 && Date.now() - startedAtMs < maxWaitMs; attempt += 1) {
     try {
       const command = await dispatchModuleCommand({
@@ -2337,10 +2344,15 @@ async function loadBusinessActivity({ commandBus, db, session, sync } = {}) {
     } catch (error) {
       lastError = error;
       if (!isTransientActivityLoadError(error)) break;
-      const fallback = await loadLocalBusinessActivityFallback({ db });
-      if (fallback?.events?.length) return fallback;
       const elapsedMs = Date.now() - startedAtMs;
       if (elapsedMs >= maxWaitMs) break;
+      await sync?.startCollection?.('business_commands')?.catch?.(() => {});
+      const fallback = await waitForLocalBusinessActivityFallback({
+        db,
+        deadlineMs: startedAtMs + maxWaitMs,
+        minWaitMs: attempt === 0 ? 2500 : 1000,
+      });
+      if (fallback?.events?.length) return fallback;
       await delay(Math.min(500 + (attempt * 500), 2000));
       await sync?.startCollection?.('business_commands')?.catch?.(() => {});
     }
@@ -2372,8 +2384,25 @@ async function loadLocalBusinessActivityFallback({ db } = {}) {
   return events.length ? { ok: true, events } : null;
 }
 
+async function waitForLocalBusinessActivityFallback({ db, deadlineMs, minWaitMs = 0 } = {}) {
+  const startedAtMs = Date.now();
+  const deadline = Number(deadlineMs || 0) || startedAtMs;
+  let fallback = null;
+  do {
+    fallback = await loadLocalBusinessActivityFallback({ db });
+    if (fallback?.events?.length) return fallback;
+    if (Date.now() >= deadline || Date.now() - startedAtMs >= minWaitMs) break;
+    await delay(250);
+  } while (Date.now() < deadline);
+  return fallback;
+}
+
 function localBusinessCommandActivityEvent(command) {
-  const commandType = String(command?.command_type || command?.type || '');
+  const nativeEventType = String(command?.type || command?.payload?.event_type || '');
+  if (nativeEventType.startsWith('business_os.module.')) {
+    return localBusinessNativeActivityEvent(command, nativeEventType);
+  }
+  const commandType = String(command?.command_type || command?.type || command?.payload?.type || '');
   const status = String(command?.status || command?.terminal_status || '');
   const eventType = localBusinessCommandActivityType(commandType, status);
   if (!eventType) return null;
@@ -2399,6 +2428,38 @@ function localBusinessCommandActivityEvent(command) {
       summary: localBusinessCommandActivitySummary(commandType, command),
       observed_at_ms: observedAtMs,
       reconstructed_from: 'business_commands',
+    },
+  };
+}
+
+function localBusinessNativeActivityEvent(command, eventType) {
+  if (![
+    'business_os.module.release.succeeded',
+    'business_os.module.release.failed',
+    'business_os.module.rollback.succeeded',
+    'business_os.module.rollback.failed',
+  ].includes(eventType)) {
+    return null;
+  }
+  const commandId = String(command?.command_id || command?.id || command?.record_id || newId());
+  const payload = command?.payload || {};
+  const observedAtMs = Number(command?.observed_at_ms || command?.updated_at_ms || payload.observed_at_ms || Date.now());
+  return {
+    id: `local_activity_${eventType}_${commandId}`,
+    collection: 'business_commands',
+    record_id: String(command?.record_id || payload.record_id || commandId),
+    type: eventType,
+    command_type: eventType,
+    observed_at_ms: observedAtMs,
+    payload: {
+      ...payload,
+      event_type: eventType,
+      command_id: commandId,
+      record_id: command?.record_id || payload.record_id || '',
+      actor: payload.actor || command?.client_context?.actor || {},
+      summary: payload.summary || localBusinessCommandActivitySummary(String(command?.command_type || command?.payload?.type || ''), command),
+      observed_at_ms: observedAtMs,
+      reconstructed_from: payload.reconstructed_from || 'business_commands',
     },
   };
 }
