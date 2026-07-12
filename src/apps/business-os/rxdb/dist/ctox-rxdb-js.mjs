@@ -10658,19 +10658,48 @@ function elemMatch(actual, selector) {
   return Array.isArray(actual) && actual.some((item) => item && typeof item === "object" ? matchesSelector(item, selector) : item === selector);
 }
 function valueAtPath4(doc, path) {
-  return String(path || "").split(".").reduce((value, key) => value?.[key], doc);
+  const parts = pathSegments(path);
+  if (parts.some(isUnsafePathSegment)) return void 0;
+  return parts.reduce((value, key) => value?.[key], doc);
 }
 function setValueAtPath(doc, path, value) {
-  const parts = String(path || "").split(".").filter(Boolean);
+  const parts = assertSafePathSegments(path, "document path");
   if (!parts.length) return;
   let target = doc;
   for (const part of parts.slice(0, -1)) {
-    if (!target[part] || typeof target[part] !== "object") {
-      target[part] = {};
+    let next = ownValue(target, part);
+    if (!next || typeof next !== "object") {
+      next = {};
+      defineOwnValue(target, part, next);
     }
-    target = target[part];
+    target = next;
   }
-  target[parts[parts.length - 1]] = value;
+  defineOwnValue(target, parts[parts.length - 1], value);
+}
+function pathSegments(path) {
+  return String(path || "").split(".").filter(Boolean);
+}
+function isUnsafePathSegment(segment) {
+  return segment === "__proto__" || segment === "prototype" || segment === "constructor";
+}
+function assertSafePathSegments(path, label) {
+  const parts = pathSegments(path);
+  if (parts.some(isUnsafePathSegment)) {
+    throw new Error(`${label} contains unsafe prototype segment`);
+  }
+  return parts;
+}
+function ownValue(object, key) {
+  if (!object || typeof object !== "object" || !Object.hasOwn(object, key)) return void 0;
+  return Object.getOwnPropertyDescriptor(object, key)?.value;
+}
+function defineOwnValue(object, key, value) {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true
+  });
 }
 function primaryPathFromSchema2(schema) {
   const primary = schema?.primaryKey;
@@ -10682,6 +10711,7 @@ function normalizeDoc(doc, primaryPath) {
   if (!doc || typeof doc !== "object") {
     throw new TypeError("document must be an object");
   }
+  assertSafePathSegments(primaryPath, "primary key path");
   const normalized = { ...doc };
   const id = normalized.id || normalized._id || valueAtPath4(normalized, primaryPath);
   if (!id) {

@@ -42,10 +42,12 @@ export function validateDeclarativeMigrationSpec(spec = {}) {
       if (!operation.field || !Array.isArray(operation.paths)) {
         throw new Error('set_from_first_truthy migration needs field and paths');
       }
+      assertSafePathSegments(operation.field, 'set_from_first_truthy field');
       continue;
     }
     if (operation.op === 'set_boolean') {
       if (!operation.field) throw new Error('set_boolean migration needs field');
+      assertSafePathSegments(operation.field, 'set_boolean field');
       continue;
     }
     throw new Error(`unsupported declarative migration operation ${operation.op}`);
@@ -53,6 +55,7 @@ export function validateDeclarativeMigrationSpec(spec = {}) {
 }
 
 export function applyDeclarativeMigration(oldDoc, spec = {}) {
+  validateDeclarativeMigrationSpec(spec);
   const migrated = { ...(oldDoc || {}) };
   const operations = Array.isArray(spec) ? spec : (spec.operations || []);
   if (!Array.isArray(operations)) {
@@ -88,9 +91,31 @@ function firstTruthyPathValue(source, paths = [], fallback = undefined) {
 function pathValue(source, path) {
   if (!path || !source || typeof source !== 'object') return undefined;
   let current = source;
-  for (const segment of String(path).split('.')) {
+  for (const segment of pathSegments(path)) {
+    if (isUnsafePathSegment(segment)) return undefined;
     if (!current || typeof current !== 'object') return undefined;
-    current = current[segment];
+    current = ownValue(current, segment);
   }
   return current;
+}
+
+function pathSegments(path) {
+  return String(path || '').split('.').filter(Boolean);
+}
+
+function isUnsafePathSegment(segment) {
+  return segment === '__proto__' || segment === 'prototype' || segment === 'constructor';
+}
+
+function assertSafePathSegments(path, label) {
+  const parts = pathSegments(path);
+  if (parts.some(isUnsafePathSegment)) {
+    throw new Error(`${label} contains unsafe prototype segment`);
+  }
+  return parts;
+}
+
+function ownValue(object, key) {
+  if (!object || typeof object !== 'object' || !Object.hasOwn(object, key)) return undefined;
+  return Object.getOwnPropertyDescriptor(object, key)?.value;
 }

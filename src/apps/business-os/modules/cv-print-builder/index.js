@@ -2389,14 +2389,42 @@ function editableAttr(editable, path) {
 }
 
 function setPath(model, path, value) {
-  const parts = String(path).split('.');
+  const parts = safePathParts(path);
   let target = model;
   for (const part of parts.slice(0, -1)) {
-    target[part] = { ...(target[part] || {}) };
-    target = target[part];
+    const current = ownValue(target, part);
+    const next = current && typeof current === 'object' ? { ...current } : {};
+    defineOwnValue(target, part, next);
+    target = next;
   }
-  target[parts.at(-1)] = value;
+  defineOwnValue(target, parts.at(-1), value);
   return model;
+}
+
+function safePathParts(path) {
+  const parts = String(path || '').split('.').filter(Boolean);
+  if (!parts.length || parts.some(isUnsafePathSegment)) {
+    throw new Error('editable field path contains unsafe prototype segment');
+  }
+  return parts;
+}
+
+function isUnsafePathSegment(segment) {
+  return segment === '__proto__' || segment === 'prototype' || segment === 'constructor';
+}
+
+function ownValue(object, key) {
+  if (!object || typeof object !== 'object' || !Object.hasOwn(object, key)) return undefined;
+  return Object.getOwnPropertyDescriptor(object, key)?.value;
+}
+
+function defineOwnValue(object, key, value) {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
 }
 
 function buildIndexText(model) {

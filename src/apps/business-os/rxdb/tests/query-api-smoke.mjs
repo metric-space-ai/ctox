@@ -2,6 +2,7 @@ import { createRxDatabase, ctoxRxdbTestInternals } from '../dist/ctox-rxdb-js.mj
 
 const {
   matchesSelector,
+  normalizeDoc,
   normalizeQuery,
   normalizeSort,
   sortDocuments,
@@ -28,6 +29,17 @@ assert(byTitleAsc === 'a,b,c', `sort string mismatch: ${byTitleAsc}`);
 
 const directIdQuery = normalizeQuery('doc-1', 'id');
 assert(directIdQuery.selector.id === 'doc-1', 'string findOne query normalization failed');
+
+delete Object.prototype.ctoxRxdbPolluted;
+assertThrows(
+  () => normalizeDoc({ id: 'polluter' }, '__proto__.ctoxRxdbPolluted'),
+  /unsafe prototype segment/,
+  'normalizeDoc must reject prototype-polluting primary key paths',
+);
+assert(
+  Object.prototype.ctoxRxdbPolluted === undefined,
+  'normalizeDoc must not pollute Object.prototype through primary key paths',
+);
 
 const mangoQuery = normalizeQuery({ selector: { status: 'open' }, sort: [{ score: -1 }], skip: 1, limit: 2 }, 'id');
 assert(mangoQuery.skip === 1 && mangoQuery.limit === 2 && mangoQuery.sort[0].score === 'desc', 'mango query normalization failed');
@@ -223,6 +235,18 @@ console.log('ctox-rxdb-js query API smoke OK');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function assertThrows(fn, pattern, message) {
+  try {
+    fn();
+  } catch (error) {
+    if (!pattern.test(String(error?.message || error))) {
+      throw new Error(`${message}: unexpected error ${error?.message || error}`);
+    }
+    return;
+  }
+  throw new Error(message);
 }
 
 function createLiveStorage(seedDocs = []) {
