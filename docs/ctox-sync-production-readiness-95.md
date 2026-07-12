@@ -56,6 +56,8 @@ Required gates:
   checkpoint, conflict and command/Saga faults;
 - all artifacts include commit SHA, dirty flag, browser bundle hash, test binary
   hash, requested attempts and accepted attempts;
+- failed Browser/Rust attempts retain bounded stdout/stderr tails in the matrix
+  artifact so a no-retry failure remains diagnosable after runner cleanup;
 - release blocks if any gate used a retry or if evidence comes from a different
   commit.
 

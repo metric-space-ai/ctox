@@ -14728,53 +14728,70 @@ function ensureCtoxSmokeBinary() {
           const repairedChunkBridge = repairedBridges[1];
           appFileReplicationState = repairedFileBridge?.state || null;
           appChunkReplicationState = repairedChunkBridge?.state || null;
-          await bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000);
-          await bounded(appChunkReplicationState?.awaitInitialReplication?.(), 20000);
-          await bounded(appFileReplicationState?.awaitInSync?.(), 30000);
-          await bounded(appChunkReplicationState?.awaitInSync?.(), 30000);
-          await waitForNativePeerOpen(appFileReplicationState, 'desktop_files after native peer restart');
-          await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after native peer restart');
-          const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+          await Promise.all([
+            bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000),
+            bounded(appChunkReplicationState?.awaitInitialReplication?.(), 20000),
+          ]);
+          await Promise.all([
+            bounded(appFileReplicationState?.awaitInSync?.(), 30000),
+            bounded(appChunkReplicationState?.awaitInSync?.(), 30000),
+          ]);
+          await Promise.all([
+            waitForNativePeerOpen(appFileReplicationState, 'desktop_files after native peer restart'),
+            waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after native peer restart'),
+          ]);
+          const requiredRestartCollections = [
+            'business_module_catalog',
+            'ctox_runtime_settings',
+            'business_commands',
+            'ctox_queue_tasks',
+            'desktop_files',
+            'desktop_file_chunks',
+          ];
+          let advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
             timeoutMs: 60000,
-            requiredCollections: [
-              'business_module_catalog',
-              'ctox_runtime_settings',
-              'business_commands',
-              'ctox_queue_tasks',
-              'desktop_files',
-              'desktop_file_chunks',
-            ],
+            requiredCollections: requiredRestartCollections,
           });
-          const peerSessionsAfterRepair = advancedStatusAfterRepair?.sync?.peerSessions || [];
           const beforeByCollection = new Map(peerSessionsBeforeRestart.map((session) => [session.collection, session]));
-          const restartedSessions = peerSessionsAfterRepair.filter((session) => {
-            const before = beforeByCollection.get(session.collection);
-            return before
-              && before.peerSession
-              && session.peerSession
-              && before.peerSession !== session.peerSession
-              && Number(session.generation || 0) > Number(before.generation || 0);
-          });
-          const generationChanged = restartedSessions.length > 0;
-          if (!generationChanged) {
-            throw new Error(`Peer generation did not advance after native peer restart: ${JSON.stringify({
-              before: peerSessionsBeforeRestart,
-              after: peerSessionsAfterRepair,
-              advancedStatusAfterRepair,
-              mode: smokeMode,
-            }, null, 2)}`);
+          const restartEvidenceDeadline = Date.now() + 60000;
+          let restartedSessions = [];
+          let restartEvidenceProblems = [];
+          while (Date.now() < restartEvidenceDeadline) {
+            const peerSessionsAfterRepair = advancedStatusAfterRepair?.sync?.peerSessions || [];
+            const afterByCollection = new Map(peerSessionsAfterRepair.map((session) => [session.collection, session]));
+            restartEvidenceProblems = [];
+            restartedSessions = [];
+            for (const collection of requiredRestartCollections) {
+              const before = beforeByCollection.get(collection);
+              const after = afterByCollection.get(collection);
+              if (!before?.peerSession || !after?.peerSession) {
+                restartEvidenceProblems.push(`${collection}:missing_session`);
+                continue;
+              }
+              if (before.peerSession === after.peerSession
+                || Number(after.generation || 0) <= Number(before.generation || 0)) {
+                restartEvidenceProblems.push(`${collection}:generation_not_advanced`);
+                continue;
+              }
+              if (!after.checkpoint
+                || after.checkpoint.state !== 'advertised'
+                || !after.checkpoint.epoch
+                || after.checkpoint.collection !== collection) {
+                restartEvidenceProblems.push(`${collection}:checkpoint_not_advertised`);
+                continue;
+              }
+              restartedSessions.push(after);
+            }
+            if (restartEvidenceProblems.length === 0) break;
+            await delay(500);
+            advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({ includeCounts: false });
           }
-          const missingCheckpointEpoch = restartedSessions.filter((session) => (
-            !session?.checkpoint
-            || session.checkpoint.state !== 'advertised'
-            || !session.checkpoint.epoch
-            || session.checkpoint.collection !== session.collection
-          ));
-          if (missingCheckpointEpoch.length) {
-            throw new Error(`Restarted peer sessions did not refresh checkpoint epoch evidence: ${JSON.stringify({
-              missingCheckpointEpoch,
+          if (restartEvidenceProblems.length) {
+            throw new Error(`Critical peer sessions did not converge after native peer restart: ${JSON.stringify({
+              problems: restartEvidenceProblems,
+              requiredRestartCollections,
               before: peerSessionsBeforeRestart,
-              after: peerSessionsAfterRepair,
+              after: advancedStatusAfterRepair?.sync?.peerSessions || [],
               advancedStatusAfterRepair,
               mode: smokeMode,
             }, null, 2)}`);
@@ -14793,12 +14810,18 @@ function ensureCtoxSmokeBinary() {
               ];
           appFileReplicationState = stableFileBridges[0]?.state || appFileReplicationState;
           appChunkReplicationState = stableFileBridges[1]?.state || appChunkReplicationState;
-          await bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000);
-          await bounded(appChunkReplicationState?.awaitInitialReplication?.(), 20000);
-          await bounded(appFileReplicationState?.awaitInSync?.(), 30000);
-          await bounded(appChunkReplicationState?.awaitInSync?.(), 30000);
-          await waitForNativePeerOpen(appFileReplicationState, 'desktop_files after stable restart');
-          await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after stable restart');
+          await Promise.all([
+            bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000),
+            bounded(appChunkReplicationState?.awaitInitialReplication?.(), 20000),
+          ]);
+          await Promise.all([
+            bounded(appFileReplicationState?.awaitInSync?.(), 30000),
+            bounded(appChunkReplicationState?.awaitInSync?.(), 30000),
+          ]);
+          await Promise.all([
+            waitForNativePeerOpen(appFileReplicationState, 'desktop_files after stable restart'),
+            waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after stable restart'),
+          ]);
         }
       }
 

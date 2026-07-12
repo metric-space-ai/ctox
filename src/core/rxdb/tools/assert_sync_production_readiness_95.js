@@ -215,7 +215,7 @@ requireIncludes(releaseWorkflow, [
   'business-os-production-gate',
   'needs: rxdb-release-soak',
   'Download RxDB release soak evidence',
-  'actions/download-artifact@v7',
+  'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131',
   'name: rxdb-soak-summary',
   'node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --require-signed-off',
   'node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test',

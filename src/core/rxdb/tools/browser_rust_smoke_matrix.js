@@ -874,6 +874,12 @@ for (const [index, mode] of modes.entries()) {
       durationMs,
       ok: lastStatus === 0 && !lastSignal,
       error: result.error ? { code: result.error.code || '', message: result.error.message || '' } : null,
+      failureOutput: lastStatus !== 0 || lastSignal
+        ? {
+            stdoutTail: logTail(stdout),
+            stderrTail: logTail(stderr),
+          }
+        : null,
       processLifecycle,
       context: smokeAttemptContextFromEvidence(evidence),
       evidenceKeys: Object.keys(evidence).sort(),
@@ -974,6 +980,26 @@ function runSmokeMatrixSelfTest() {
   if (validProblems.length) {
     throw new Error(`Valid smoke summary fixture failed schema validation: ${validProblems.join(', ')}`);
   }
+  const configurationFailureSummary = JSON.parse(JSON.stringify(validSummary));
+  configurationFailureSummary.ok = false;
+  configurationFailureSummary.configurationError = 'missing smoke binary';
+  configurationFailureSummary.configuration = null;
+  configurationFailureSummary.modes = [];
+  configurationFailureSummary.source.artifactHashes.smokeBinarySha256 = null;
+  const configurationFailureProblems = validateSmokeMatrixSummaryArtifact(
+    configurationFailureSummary,
+    { final: false },
+  );
+  if (configurationFailureProblems.length) {
+    throw new Error(`Configuration-failure summary lost its diagnostic artifact: ${configurationFailureProblems.join(', ')}`);
+  }
+  assertSelfTestThrows('configuration failure accepted as final', () => {
+    validateSmokeMatrixSummaryArtifact(
+      configurationFailureSummary,
+      { final: true },
+      { throwOnError: true },
+    );
+  });
   assertSelfTestThrows('missing smoke artifact git revision', () => {
     validateSmokeMatrixSummaryArtifact({ ...validSummary, gitRevision: '' }, { final: true }, { throwOnError: true });
   });
@@ -1020,6 +1046,15 @@ function runSmokeMatrixSelfTest() {
   );
   if (!browserErrorBudgetProblems.includes('browser_error_count<=0')) {
     throw new Error('Browser-error budget self-test did not reject browser_error_count=1');
+  }
+  if (logTail('short diagnostic') !== 'short diagnostic') {
+    throw new Error('Failure-output log tail changed short diagnostics');
+  }
+  const longDiagnostic = `${'x'.repeat(20 * 1024)}diagnostic-suffix`;
+  const truncatedDiagnostic = logTail(longDiagnostic);
+  if (!truncatedDiagnostic.includes('diagnostic-suffix')
+    || Buffer.byteLength(truncatedDiagnostic.split('\n').slice(1).join('\n'), 'utf8') > 16 * 1024) {
+    throw new Error('Failure-output log tail did not retain a bounded diagnostic suffix');
   }
   console.log(`business_os_production_smoke_registry_modes=${businessOsProductionSmokeModes.join(',')}`);
   console.log('business_os_production_smoke_registry_self_test=1');
@@ -1119,6 +1154,8 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
   };
   require(candidate && typeof candidate === 'object', 'summary_object');
   if (!candidate || typeof candidate !== 'object') return finishSummaryValidation(problems, validationOptions);
+  const configurationFailed = typeof candidate.configurationError === 'string'
+    && candidate.configurationError.length > 0;
   require(candidate.schema === SMOKE_MATRIX_SUMMARY_SCHEMA, 'schema');
   require(candidate.schemaVersion === 1, 'schemaVersion');
   require(typeof candidate.repositoryRoot === 'string' && candidate.repositoryRoot.length > 0, 'repositoryRoot');
@@ -1131,7 +1168,9 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
     if (candidate.source.artifactHashes && typeof candidate.source.artifactHashes === 'object') {
       require(isSha256(candidate.source.artifactHashes.browserBundleSha256), 'source.artifactHashes.browserBundleSha256');
       require(typeof candidate.source.artifactHashes.smokeBinaryPath === 'string' && candidate.source.artifactHashes.smokeBinaryPath.length > 0, 'source.artifactHashes.smokeBinaryPath');
-      require(isSha256(candidate.source.artifactHashes.smokeBinarySha256), 'source.artifactHashes.smokeBinarySha256');
+      if (!configurationFailed || options.final) {
+        require(isSha256(candidate.source.artifactHashes.smokeBinarySha256), 'source.artifactHashes.smokeBinarySha256');
+      }
     }
   }
   require(typeof candidate.ctoxBin === 'string' && candidate.ctoxBin.length > 0, 'ctoxBin');
@@ -1140,7 +1179,9 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
   require(typeof candidate.requireEvidence === 'boolean', 'requireEvidence');
   require(Array.isArray(candidate.requestedModes) && candidate.requestedModes.length > 0, 'requestedModes');
   require(Array.isArray(candidate.modes), 'modes');
-  require(candidate.configuration && typeof candidate.configuration === 'object', 'configuration');
+  if (!configurationFailed || options.final) {
+    require(candidate.configuration && typeof candidate.configuration === 'object', 'configuration');
+  }
   if (candidate.configuration && typeof candidate.configuration === 'object') {
     const config = candidate.configuration;
     require(Number.isInteger(config.attempts) && config.attempts > 0, 'configuration.attempts');
@@ -1153,6 +1194,7 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
   require(typeof candidate.endedAt === 'string' && candidate.endedAt.length > 0, 'endedAt');
   require(typeof candidate.ok === 'boolean', 'ok');
   if (options.final) {
+    require(!configurationFailed, 'configurationError_absent');
     require(candidate.ok === true, 'ok=true');
     require(candidate.modes.length === candidate.requestedModes.length, 'modes_complete');
     const completedModes = new Set(candidate.modes.map((mode) => mode?.mode));
@@ -1461,6 +1503,14 @@ function readTextFile(file) {
   } catch {
     return '';
   }
+}
+
+function logTail(value, maxBytes = 16 * 1024) {
+  const text = String(value || '');
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let start = Math.max(0, text.length - maxBytes);
+  while (start < text.length && Buffer.byteLength(text.slice(start), 'utf8') > maxBytes) start += 1;
+  return `[truncated to final ${maxBytes} bytes]\n${text.slice(start)}`;
 }
 
 function removeTempPath(targetPath) {
