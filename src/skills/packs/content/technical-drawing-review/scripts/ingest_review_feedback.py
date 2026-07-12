@@ -43,7 +43,7 @@ def slugify(value: str, fallback: str = "feedback") -> str:
 
 
 def stable_id(*parts: str) -> str:
-    digest = hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:12]
     return digest
 
 

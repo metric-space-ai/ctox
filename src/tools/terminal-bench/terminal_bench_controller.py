@@ -45,7 +45,7 @@ def safe_slug(value: str) -> str:
 
 
 def short_validation_id(index: int, task: str, workspace: Path) -> str:
-    digest = hashlib.sha1(str(workspace).encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()[:12]
     task_slug = safe_slug(task)[:48]
     return f"{index:03d}-{task_slug}-{digest}"
 

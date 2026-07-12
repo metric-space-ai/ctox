@@ -32,6 +32,24 @@ function looksLikeSearchRequest(url) {
   }
 }
 
+function requireGoogleSearchUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("target-url must be an absolute Google HTTPS search URL");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    !(hostname === "www.google.com" || hostname === "google.com") ||
+    parsed.pathname !== "/search"
+  ) {
+    throw new Error("target-url must be scoped to https://www.google.com/search");
+  }
+  return parsed.toString();
+}
+
 function buildCookieHeader(cookies) {
   const byName = new Map();
   for (const cookie of cookies || []) {
@@ -77,6 +95,7 @@ if (!cdpUrl || !targetUrl || !outDir || !interactiveUnlockRaw || !waitTimeoutSec
 }
 
 const interactiveUnlock = interactiveUnlockRaw === "1";
+const safeTargetUrl = requireGoogleSearchUrl(targetUrl);
 const waitTimeoutMs = Number.parseInt(waitTimeoutSecsRaw, 10) * 1000;
 if (!Number.isFinite(waitTimeoutMs) || waitTimeoutMs <= 0) {
   usage();
@@ -120,7 +139,9 @@ cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
   );
 });
 
-await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+// safeTargetUrl is restricted to https://www.google.com/search before reaching Playwright.
+// nosemgrep: javascript.playwright.security.audit.playwright-goto-injection.playwright-goto-injection
+await page.goto(safeTargetUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
 try {
   await page.waitForLoadState("networkidle", { timeout: 10000 });
 } catch {}
@@ -135,7 +156,7 @@ if (interactiveUnlock && !usableSummary(summary)) {
 }
 
 const capturedCookies = await context.cookies([
-  targetUrl,
+  safeTargetUrl,
   "https://www.google.com/",
   "https://www.google.com/search",
 ]);

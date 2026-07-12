@@ -22,6 +22,9 @@ Keep work in a task-local directory. Only copy final artifacts to the requested 
 - `scripts/ensure_raster_image.py`: Convert SVG/EMF/HEIC/PDF-like assets into PNGs for quick inspection.
 - `references/pptxgenjs-helpers.md`: Load only when you need API details or dependency notes.
 
+Python scripts in this skill require the packages listed in `requirements.txt`.
+Install them into the task environment before running `detect_font.py`.
+
 ## Workflow
 
 1. Inspect the request and determine whether you are creating a new deck, recreating an existing deck, or editing one.
