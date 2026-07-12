@@ -74,21 +74,22 @@ export async function mount(ctx) {
     ctx.sync?.startCollection?.('business_commands'),
   ]);
   await loadCatalog();
+  applyCatalogMarketplaceState();
   state.unsubscribe = ctx.db?.collection?.('business_module_catalog')
     ?.findOne('module-catalog')
     ?.$
     ?.subscribe?.((doc) => {
       const data = doc?.toJSON?.();
       if (data) {
-        state.catalog = data;
+        state.catalog = mergeShellModulesIntoCatalog(data);
+        state.marketplace = normalizeMarketplace(state.catalog.marketplace || state.catalog.apps || []);
+        applyCatalogMarketplaceState();
         render();
       }
     }) || null;
   render();
-  refreshMarketplace();
 
   // 5. Initialize CTOX unified context menu
-  state.contextMenuCleanup = initAppStoreContextMenu(state);
 
   // Setup resizer
   const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
@@ -221,7 +222,7 @@ function wireEvents() {
 
 async function triggerCardAction(appId, actionType) {
   const item = currentCatalogItem(appId);
-  if (!item || (state.busy && !['details', 'repository'].includes(actionType))) return;
+  if (!item || (state.busy && !['details', 'repository', 'versions'].includes(actionType))) return;
 
   if (actionType === 'install') {
     if (isPackagedCatalogTab(item)) {
@@ -276,6 +277,14 @@ async function loadCatalog() {
   const doc = await state.ctx.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
   state.catalog = mergeShellModulesIntoCatalog(doc?.toJSON?.() || { modules: [], templates: [], marketplace: [] });
   state.marketplace = normalizeMarketplace(state.catalog.marketplace || state.catalog.apps || []);
+}
+
+function applyCatalogMarketplaceState() {
+  if (state.marketplaceStatus === 'loading') return;
+  state.marketplaceStatus = state.marketplace.length ? 'ready' : 'idle';
+  state.marketplaceMessage = state.marketplace.length
+    ? `${state.marketplace.length} projizierte Marketplace-Module geladen`
+    : 'GitHub Discovery ist bereit und startet nur manuell.';
 }
 
 function mergeShellModulesIntoCatalog(catalog) {
@@ -698,6 +707,9 @@ function renderCard(item) {
   const card = document.createElement('article');
   card.className = 'app-card';
   card.dataset.appId = item.id;
+  card.dataset.contextRecordId = item.id;
+  card.dataset.contextRecordType = 'business_app';
+  card.dataset.contextLabel = item.title || item.id;
   if (operation?.kind) card.dataset.operation = operation.kind;
   card.classList.toggle('active', item.id === state.selectedId);
   card.classList.toggle('is-operating', operation?.kind === 'running');
@@ -1233,7 +1245,7 @@ function originLabel(origin) {
 }
 
 async function openVersionsDialog(item) {
-  const versions = Array.isArray(item.version_state?.versions) ? item.version_state.versions : [];
+  const versions = await moduleBundleVersionsFor(item?.id, item.version_state, item);
   if (!versions.length) {
     state.status = { kind: 'error', text: `Keine Versionen für ${item.title} vorhanden.` };
     render();
@@ -1241,7 +1253,7 @@ async function openVersionsDialog(item) {
   }
 
   const overlay = document.createElement('div');
-  overlay.className = 'ctox-modal';
+  overlay.className = 'ctox-modal app-store-version-dialog';
   const rows = versions.map((version) => {
     const date = version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '';
     const seal = version.sealed ? '' : ' · offen';
@@ -1388,6 +1400,62 @@ async function openReleaseDialog(item) {
   });
   window.addEventListener('keydown', onEscape);
   document.body.append(overlay);
+}
+
+async function moduleBundleVersionsFor(moduleId, fallbackState = null, item = null) {
+  const fallbackVersions = Array.isArray(fallbackState?.versions) ? fallbackState.versions : [];
+  if (fallbackVersions.length) return fallbackVersions;
+  const expectedCount = Number(fallbackState?.version_count || 0);
+  const deadline = expectedCount > 0 ? Date.now() + 15_000 : Date.now();
+  let lastVersions = [];
+  do {
+    try {
+      const doc = await state.ctx?.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
+      const data = doc?.toJSON?.();
+      const versions = data?.version_states?.[moduleId]?.versions;
+      if (Array.isArray(versions)) {
+        lastVersions = versions;
+        if (versions.length || expectedCount === 0) return versions;
+      }
+    } catch {
+      // Runtime-installed app schema changes can briefly restart the native
+      // peer. If the catalog says versions exist, keep the UI action pending
+      // for a short bounded window instead of showing a false empty state.
+    }
+    if (Date.now() < deadline) await delay(250);
+  } while (Date.now() < deadline);
+  return lastVersions.length ? lastVersions : versionSummariesFromLifecycle(item);
+}
+
+function versionSummariesFromLifecycle(item) {
+  const releaseProjection = item?.release_projection || appReleaseProjection(item?.raw || item);
+  const candidates = [
+    releaseProjection?.current,
+    releaseProjection?.rollbackTarget,
+    item?.lifecycle?.release_state?.current,
+    item?.lifecycle?.release_state?.rollback_target,
+    item?.lifecycle?.rollback_target,
+    item?.raw?.lifecycle?.release_state?.current,
+    item?.raw?.lifecycle?.release_state?.rollback_target,
+    item?.raw?.lifecycle?.rollback_target,
+  ].filter((value) => value && typeof value === 'object');
+  const seen = new Set();
+  return candidates
+    .map((version, index) => {
+      const id = String(version.version_id || '').trim();
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      return {
+        version_id: id,
+        seq: Number(version.seq || version.version || candidates.length - index),
+        origin: version.origin || (index === 0 ? 'manual_release' : 'install'),
+        label: version.label || version.target_version || version.version || id,
+        created_at_ms: Number(version.created_at_ms || item?.updated_at_ms || item?.raw?.updated_at_ms || Date.now()),
+        sealed: version.sealed !== false,
+        file_count: Number(version.file_count || 0),
+      };
+    })
+    .filter(Boolean);
 }
 
 function releaseVersionOptionsHtml(versions, selectedId, emptyLabel) {
@@ -2176,12 +2244,10 @@ function initAppStoreContextMenu(state) {
     if (event.key === 'Escape') hideAppStoreContextMenu(state);
   };
 
-  host?.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    host?.removeEventListener('contextmenu', handleContextMenu);
     if (previousLocalContextMenu === null) {
       host?.removeAttribute('data-ctox-local-context-menu');
     } else {
@@ -2449,4 +2515,3 @@ function appStoreContextChatDetail(state, context, message, mode = 'data') {
     },
   };
 }
-

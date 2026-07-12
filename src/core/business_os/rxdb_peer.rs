@@ -17,7 +17,6 @@
 // Origin: CTOX
 // License: Apache-2.0
 
-use super::app_runtime;
 use super::browser_runtime::{browser_runtime_manager, BrowserSessionAutomationRequest};
 use super::command_lifecycle_generated::CTOX_COMMAND_LIFECYCLE_CAPABILITY;
 use super::store;
@@ -292,7 +291,6 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
     "ctox-checkpoint-generation-v2",
-    "ctox-app-runtime-v1",
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
@@ -351,8 +349,14 @@ const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
     BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
-const BUSINESS_RECORD_PROJECTION_PAGE_SIZE: usize = 25;
+// A cold peer start can legitimately inspect tens of thousands of persisted
+// module records.  Twenty-five rows per page turned that into thousands of
+// SQLite queries and lock hand-offs even when every destination document was
+// already current.  Keep the page bounded, but align it with the existing
+// write batch so one read/compare cycle can become one bulk write.
+const BUSINESS_RECORD_PROJECTION_PAGE_SIZE: usize = 250;
 const BUSINESS_RECORD_PROJECTION_WRITE_BATCH_SIZE: usize = 250;
+const BUSINESS_RECORD_PROJECTION_CURSOR_TABLE: &str = "__ctox_business_record_projection_cursors";
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
 // Browser-originated commands are user-visible control-plane work. Same-process
@@ -370,6 +374,7 @@ const THREADS_APP_RELEVANCE_SINCE_KEY_PREFIX: &str = "__threads_app_relevance_";
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
 const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
+const BROWSER_RUNTIME_FRAME_INTERVAL_MS: u64 = 1_000;
 const BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BROWSER_FRAME_GC_LIMIT: u64 = 256;
 const BROWSER_INPUT_EVENT_GC_LIMIT: u64 = 512;
@@ -402,10 +407,6 @@ const NATIVE_PEER_MIN_WORKER_THREADS: usize = 4;
 /// dedicated heartbeat thread has died/stalled, the watchdog shuts the peer
 /// down cleanly so the OS process lock is released for a fresh start.
 const NATIVE_PEER_WATCHDOG_INTERVAL_SECS: u64 = 15;
-/// Runtime-installed app schemas are an activation input, not a health probe.
-/// Detect them promptly so a client-only app does not sit behind the general
-/// 15-second watchdog cadence before its collections become native-visible.
-const NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS: u64 = 1;
 /// FIX 2: maximum tolerated heartbeat staleness before the watchdog considers
 /// its own liveness machinery wedged. Generously above the write interval and
 /// the published TTL so a healthy peer never trips it.
@@ -1595,13 +1596,15 @@ pub fn spawn_native_peer(
                     Ok(NativePeerExit::ConfigChanged) => {
                         eprintln!(
                             "[business-os] native rxdb peer sync config changed; \
-                             reconfiguring immediately"
+                             respawning in {}s",
+                            delay.as_secs()
                         );
                     }
                     Ok(NativePeerExit::RuntimeSchemaChanged) => {
                         eprintln!(
                             "[business-os] native rxdb peer runtime app schemas changed; \
-                             reconfiguring immediately"
+                             respawning in {}s",
+                            delay.as_secs()
                         );
                     }
                     Ok(NativePeerExit::CriticalChildExited) => {
@@ -1631,24 +1634,14 @@ pub fn spawn_native_peer(
                 {
                     delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
                 }
-                let immediate_reconfigure = matches!(
-                    result,
-                    Ok(NativePeerExit::ConfigChanged | NativePeerExit::RuntimeSchemaChanged)
-                );
-                if !immediate_reconfigure
-                    && native_peer_circuit_snapshot()
+                if native_peer_circuit_snapshot()
                     .get("state")
                     .and_then(Value::as_str)
                     != Some("open")
                 {
                     sleep_native_peer_supervisor(native_peer_retry_delay(delay));
                 }
-                if immediate_reconfigure {
-                    delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
-                } else {
-                    delay =
-                        (delay * 2).min(Duration::from_secs(NATIVE_PEER_RESPAWN_MAX_DELAY_SECS));
-                }
+                delay = (delay * 2).min(Duration::from_secs(NATIVE_PEER_RESPAWN_MAX_DELAY_SECS));
             }
             NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
             NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
@@ -2603,15 +2596,12 @@ pub fn browser_session_automation(
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        let session_id = request.session_id.trim().to_string();
-        let output = browser_session_automation_with_database(root, &database, request).await;
-        browser_runtime_manager().stop(&session_id).await;
-        // This CLI fallback is short-lived. Awaiting RxDB close here can leave
-        // browser-automation commands stuck after evidence is already produced,
-        // which blocks deployment-audit task execution. Let process teardown
-        // reclaim the temporary handle instead of making CLI completion depend
-        // on close liveness.
-        output
+        let output = browser_session_automation_with_database(root, &database, request).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(output)
     })
 }
 
@@ -2663,29 +2653,6 @@ async fn run_native_peer(
         ice_servers_from_sync_config(&sync.ice_servers)
     };
     let database_path = store::rxdb_store_path(&root);
-    match repair_stale_rxdb_collection_schema_versions(&root) {
-        Ok(result) => {
-            let repaired_tables = result
-                .get("repaired_tables")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let repaired_triggers = result
-                .get("repaired_triggers")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if repaired_tables > 0 || repaired_triggers > 0 {
-                eprintln!(
-                    "[business-os] repaired {repaired_tables} stale RxDB collection schema table(s) \
-                     and {repaired_triggers} trigger(s) before native peer startup"
-                );
-            }
-        }
-        Err(err) => {
-            eprintln!(
-                "[business-os] stale RxDB schema table repair failed before peer startup: {err:#}"
-            );
-        }
-    }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
 
@@ -2720,6 +2687,46 @@ async fn run_native_peer(
             "[business-os] skipping optional Business OS RxDB collection `{collection_name}` \
             (registration failed: {err})"
         );
+    }
+    // Schema-version cleanup must happen only after the declared additive
+    // migrations have copied and verified every old-version row. The former
+    // startup order repaired stale tables before registration; after a crash
+    // between v1 meta creation and data copy that could delete the only v0
+    // copy and then start an empty thread collection.
+    let migration = migrate_additive_native_rxdb_collection_versions(&root)?;
+    if migration
+        .get("migrated_rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        > 0
+    {
+        eprintln!(
+            "[business-os] migrated {} native RxDB row(s) across {} additive schema upgrade(s)",
+            migration["migrated_rows"], migration["migrated_collections"]
+        );
+    }
+    match repair_stale_rxdb_collection_schema_versions(&root) {
+        Ok(result) => {
+            let repaired_tables = result
+                .get("repaired_tables")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let repaired_triggers = result
+                .get("repaired_triggers")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if repaired_tables > 0 || repaired_triggers > 0 {
+                eprintln!(
+                    "[business-os] repaired {repaired_tables} stale RxDB collection schema table(s) \
+                     and {repaired_triggers} trigger(s) after verified migration"
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "[business-os] stale RxDB schema table repair failed after migration: {err:#}"
+            );
+        }
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
@@ -2988,10 +2995,6 @@ async fn run_native_peer(
     let mut watchdog =
         tokio::time::interval(Duration::from_secs(NATIVE_PEER_WATCHDOG_INTERVAL_SECS));
     watchdog.tick().await; // first tick fires immediately; consume it.
-    let mut runtime_schema_watch = tokio::time::interval(Duration::from_secs(
-        NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS,
-    ));
-    runtime_schema_watch.tick().await;
     let mut exit = NativePeerExit::Shutdown;
     let mut progress_stall_ticks = 0_u32;
     loop {
@@ -3086,16 +3089,14 @@ async fn run_native_peer(
                         );
                     }
                 }
-            }
-            _ = runtime_schema_watch.tick() => {
                 match native_peer_runtime_installed_schemas_changed(
                     &root,
                     &runtime_schema_fingerprint,
                 ) {
                     Ok(true) => {
                         eprintln!(
-                            "[business-os] native rxdb peer: runtime app schemas changed; \
-                             shutting down for immediate supervised reconfiguration"
+                            "[business-os] native rxdb peer watchdog: runtime app schemas changed; \
+                             shutting down for a supervised respawn"
                         );
                         exit = NativePeerExit::RuntimeSchemaChanged;
                         break;
@@ -3103,7 +3104,7 @@ async fn run_native_peer(
                     Ok(false) => {}
                     Err(err) => {
                         eprintln!(
-                            "[business-os] native rxdb peer runtime app schema check failed: {err:#}"
+                            "[business-os] native rxdb peer watchdog: runtime app schema check failed: {err:#}"
                         );
                     }
                 }
@@ -4353,14 +4354,26 @@ async fn sync_business_record_projections_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
-    let mut since_by_collection = HashMap::<String, i64>::new();
+    // The cursor lives in the destination RxDB file, not the source store. If
+    // the destination is removed, its cursors disappear with it and the next
+    // peer performs a correct full rebuild. Persisting the cursor prevents
+    // every ordinary daemon restart from reparsing and comparing gigabytes of
+    // unchanged command-result payloads.
+    let mut since_by_collection = load_business_record_projection_cursors(&root, &database)
+        .unwrap_or_else(|err| {
+            eprintln!(
+                "[business-os] load durable business-record projection cursors failed; \
+                 falling back to a full scan: {err:#}"
+            );
+            HashMap::new()
+        });
     let mut queue_chat_repair_stamp = None;
     let mut last_source_stamp = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
         let started = Instant::now();
         let result = async {
-            let source_stamp = business_record_projection_source_stamp(&root).await?;
+            let source_stamp = business_record_projection_source_stamp(&root, &database).await?;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(0);
             }
@@ -4775,6 +4788,7 @@ async fn browser_session_automation_with_database(
         next_seq,
         "browser.automation",
         command_created_at_ms,
+        0,
         output.get("error").and_then(Value::as_str),
     )
     .await?;
@@ -5171,7 +5185,7 @@ async fn accept_pending_business_command(
     })
     .await;
 
-    let mut accepted = match accepted_result {
+    let accepted = match accepted_result {
         Ok(Ok(val)) => val,
         Ok(Err(err)) => {
             eprintln!("[business-os] native business command store execution failed: {err:#}");
@@ -5191,12 +5205,8 @@ async fn accept_pending_business_command(
                     json!({ "id": command_id, "command_id": command_id })
                 };
                 if let Some(obj) = next.as_object_mut() {
-                    let error_message = err.to_string();
                     obj.insert("status".to_string(), Value::String("failed".to_string()));
-                    obj.insert("error".to_string(), Value::String(error_message.clone()));
-                    if let Some(code) = typed_app_action_error_code(&error_message) {
-                        obj.insert("error_code".to_string(), Value::String(code.to_owned()));
-                    }
+                    obj.insert("error".to_string(), Value::String(err.to_string()));
                     obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
                 }
                 incremental_upsert_document_with_repair(&commands, next, "failed business_command")
@@ -5211,37 +5221,6 @@ async fn accept_pending_business_command(
             return Err(err.into());
         }
     };
-
-    if command_type == app_runtime::APP_ACTION_COMMAND_TYPE
-        && accepted.get("already_accepted").and_then(Value::as_bool) != Some(true)
-    {
-        let snapshot = accepted
-            .get("_app_action_snapshot")
-            .cloned()
-            .context("app_runtime_reconfiguring: admitted action has no immutable snapshot")?;
-        let execution = app_runtime::execute(
-            root.as_path(),
-            database,
-            &command_id_from_document(&document)?,
-            &snapshot,
-        )
-        .await?;
-        let mut result = execution.result;
-        if let Some(object) = result.as_object_mut() {
-            if let Some(code) = execution.error_code {
-                object.insert("error_code".to_owned(), Value::String(code.to_owned()));
-            }
-            if let Some(message) = execution.error_message {
-                object.insert("error".to_owned(), Value::String(message));
-            }
-        }
-        accepted = store::finalize_runtime_app_action(
-            root.as_path(),
-            &document,
-            execution.status,
-            result,
-        )?;
-    }
 
     let command_id = accepted
         .get("command_id")
@@ -5432,6 +5411,9 @@ async fn accept_pending_business_command(
     if command_type.starts_with("threads.") {
         project_threads_command_result(root.clone(), database, &accepted).await?;
     }
+    if command_type.starts_with("sellify.") {
+        project_sellify_command_result(root.clone(), database, &accepted).await?;
+    }
     if command_type == "ctox.file.materialize" {
         if let Some(materialized_path) = accepted
             .get("result")
@@ -5535,30 +5517,6 @@ async fn accept_pending_business_command(
     }
 
     Ok(())
-}
-
-fn command_id_from_document(document: &Value) -> anyhow::Result<String> {
-    document
-        .get("command_id")
-        .or_else(|| document.get("id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .context("business command id is required")
-}
-
-fn typed_app_action_error_code(message: &str) -> Option<&'static str> {
-    [
-        "app_action_not_registered",
-        "app_action_input_invalid",
-        "app_action_permission_denied",
-        "app_action_definition_changed",
-        "app_runtime_reconfiguring",
-        "app_action_compensation_failed",
-    ]
-    .into_iter()
-    .find(|code| message.contains(code))
 }
 
 fn enrich_native_command_lifecycle(document: &mut Value, accepted: &Value) -> anyhow::Result<()> {
@@ -5750,6 +5708,40 @@ async fn project_threads_command_result(
     Ok(())
 }
 
+async fn project_sellify_command_result(
+    root: PathBuf,
+    database: &Arc<RxDatabase>,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let projections = accepted
+        .get("result")
+        .and_then(|result| result.get("projections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for projection in projections {
+        let Some(collection) = projection
+            .get("collection")
+            .and_then(Value::as_str)
+            .and_then(super::sellify::projection_collection)
+        else {
+            continue;
+        };
+        let Some(record_id) = projection
+            .get("record_id")
+            .or_else(|| projection.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    Ok(())
+}
+
 fn threads_projection_collection(collection: &str) -> Option<&'static str> {
     match collection {
         "user_threads" => Some("user_threads"),
@@ -5851,6 +5843,7 @@ async fn apply_browser_runtime_command(
             0,
             command_type,
             command_created_at_ms,
+            0,
             None,
         )
         .await?;
@@ -6091,6 +6084,7 @@ async fn apply_browser_runtime_command(
         next_seq,
         command_type,
         command_created_at_ms,
+        0,
         navigation_error.as_deref(),
     )
     .await?;
@@ -6197,6 +6191,7 @@ async fn mark_browser_session_runtime_error(
         frame_seq,
         command_type,
         command_created_at_ms,
+        0,
         Some(detail),
     )
     .await?;
@@ -6286,6 +6281,28 @@ async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::
         match drain_browser_session_inputs(database, &session_id).await {
             Ok(session_rows) => {
                 rows_touched = rows_touched.saturating_add(session_rows);
+                if session_rows == 0 {
+                    let session_doc =
+                        find_browser_document(database, "browser_sessions", &session_id).await?;
+                    let tab_id = session_doc
+                        .get("current_tab_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("browser_tab_default");
+                    let tab_doc = find_browser_document(database, "browser_tabs", tab_id).await?;
+                    if browser_session_needs_stream_frame(&session_doc, &tab_doc, now_ms() as u64) {
+                        if let Some(session) = manager.get(&session_id) {
+                            capture_and_store_browser_frame(
+                                database,
+                                &session,
+                                &session_id,
+                                None,
+                                0,
+                            )
+                            .await?;
+                            rows_touched = rows_touched.saturating_add(1);
+                        }
+                    }
+                }
             }
             Err(err) => {
                 eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
@@ -6295,6 +6312,19 @@ async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::
     rows_touched = rows_touched.saturating_add(gc_expired_browser_frames(database).await?);
     rows_touched = rows_touched.saturating_add(gc_consumed_browser_input_events(database).await?);
     Ok(rows_touched)
+}
+
+fn browser_session_needs_stream_frame(session: &Value, tab: &Value, now: u64) -> bool {
+    let status = session
+        .get("runtime_status")
+        .or_else(|| session.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let last_frame_at = tab
+        .get("last_frame_at_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    status == "active" && now.saturating_sub(last_frame_at) >= BROWSER_RUNTIME_FRAME_INTERVAL_MS
 }
 
 /// Replay all pending `browser_input_events` for one session against its live
@@ -6430,8 +6460,10 @@ async fn drain_browser_session_inputs(
     }
 
     if ok {
+        session.record_input_seq(max_seq);
         let nav = response.get("nav").cloned().unwrap_or(Value::Null);
-        capture_and_store_browser_frame(database, &session, session_id, Some(&nav)).await?;
+        capture_and_store_browser_frame(database, &session, session_id, Some(&nav), max_seq)
+            .await?;
         update_browser_session_input_state(database, session_id, max_seq).await?;
     }
     Ok(touched_rows)
@@ -6445,6 +6477,7 @@ async fn capture_and_store_browser_frame(
     session: &Arc<super::browser_runtime::LiveBrowserSession>,
     session_id: &str,
     nav_hint: Option<&Value>,
+    input_seq_floor: u64,
 ) -> anyhow::Result<()> {
     let manager = browser_runtime_manager();
     let screenshot = manager.request(session, "screenshot", json!({})).await?;
@@ -6549,10 +6582,51 @@ async fn capture_and_store_browser_frame(
         next_seq,
         "browser.input",
         now_ms() as u64,
+        input_seq_floor.max(session.last_input_seq()),
         None,
     )
     .await?;
+    reconcile_browser_session_input_state(database, session_id).await?;
     Ok(())
+}
+
+async fn reconcile_browser_session_input_state(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let last_input_seq = latest_consumed_browser_input_seq(database, session_id).await?;
+    update_browser_session_input_state(database, session_id, last_input_seq).await
+}
+
+async fn latest_consumed_browser_input_seq(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+) -> anyhow::Result<u64> {
+    let events_collection = database
+        .collection("browser_input_events")
+        .context("browser_input_events collection is not registered")?;
+    let consumed = events_collection
+        .find(Some(MangoQuery {
+            selector: Some(json!({
+                "session_id": { "$eq": session_id },
+                "status": { "$eq": "consumed" }
+            })),
+            sort: Some(vec![[("seq".to_string(), "desc".to_string())]
+                .into_iter()
+                .collect()]),
+            limit: Some(1),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query latest consumed browser input: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec latest consumed browser input query: {err}"))?;
+    Ok(consumed
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("seq"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0))
 }
 
 /// Recompute `last_input_seq` and the live pending input count on a session
@@ -6602,7 +6676,14 @@ async fn update_browser_session_input_state(
             "pending_input_count".to_string(),
             Value::from(pending_count),
         );
-        obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+        let previous_updated_at_ms = obj
+            .get("updated_at_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        obj.insert(
+            "updated_at_ms".to_string(),
+            Value::from((now_ms() as u64).max(previous_updated_at_ms.saturating_add(1))),
+        );
     }
     sessions
         .incremental_upsert(next)
@@ -6863,6 +6944,7 @@ async fn upsert_browser_session(
     frame_seq: u64,
     command_type: &str,
     command_created_at_ms: u64,
+    last_input_seq_floor: u64,
     error: Option<&str>,
 ) -> anyhow::Result<()> {
     let now = now_ms() as u64;
@@ -6880,18 +6962,22 @@ async fn upsert_browser_session(
     let preserved_last_input_seq = existing
         .get("last_input_seq")
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(last_input_seq_floor);
     let preserved_pending_input_count = existing
         .get("pending_input_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let mut payload = json!({
-        "browser_stream": "rxdb",
-        "last_command_type": command_type,
-        "last_command_created_at_ms": command_created_at_ms,
-        "runtime": "ctox-web-stack",
-        "updated_by": "native-rxdb-peer"
-    });
+    let mut payload = existing
+        .get("payload")
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    payload["browser_stream"] = Value::String("rxdb".to_string());
+    payload["last_command_type"] = Value::String(command_type.to_string());
+    payload["last_command_created_at_ms"] = Value::from(command_created_at_ms);
+    payload["runtime"] = Value::String("ctox-web-stack".to_string());
+    payload["updated_by"] = Value::String("native-rxdb-peer".to_string());
     if let Some(error) = error {
         payload["error"] = Value::String(error.to_string());
     }
@@ -7085,6 +7171,7 @@ async fn mark_browser_runtime_command_failed(
         0,
         "browser.runtime.failed",
         now_ms() as u64,
+        0,
         Some(&message),
     )
     .await?;
@@ -7536,7 +7623,7 @@ async fn sync_business_record_projections_with_database_if_changed(
     queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
     last_source_stamp: &mut Option<BusinessRecordProjectionSourceStamp>,
 ) -> anyhow::Result<usize> {
-    let source_stamp = business_record_projection_source_stamp(root).await?;
+    let source_stamp = business_record_projection_source_stamp(root, database).await?;
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);
     }
@@ -7555,10 +7642,11 @@ async fn sync_business_record_projections_with_database_if_changed(
 
 async fn business_record_projection_source_stamp(
     root: &Path,
+    database: &Arc<RxDatabase>,
 ) -> anyhow::Result<BusinessRecordProjectionSourceStamp> {
     let queue_stamp_root = root.to_path_buf();
     let store_stamp_root = root.to_path_buf();
-    let collections = business_record_projection_collections();
+    let collections = registered_business_record_projection_collections(database);
     let queue_chat_repair = queue_chat_repair_projection_stamp_async(&queue_stamp_root).await?;
     let (records, communication) = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>((
@@ -7605,7 +7693,7 @@ async fn sync_business_record_projections_with_database(
             support_intake_count.max_updated_at_ms.saturating_add(1),
         );
     }
-    let collections = business_record_projection_collections();
+    let collections = registered_business_record_projection_collections(database);
     let root = root.to_path_buf();
     let threads_relevance_commands_since_ms = *since_by_collection
         .get(THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY)
@@ -7764,7 +7852,93 @@ async fn sync_business_record_projections_with_database(
         )
         .await?;
     }
+    persist_business_record_projection_cursors(root.as_path(), since_by_collection)?;
     Ok(count)
+}
+
+fn load_business_record_projection_cursors(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<HashMap<String, i64>> {
+    let path = store::rxdb_store_path(root);
+    let conn = Connection::open(&path)
+        .with_context(|| format!("open projection cursor store {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure projection cursor store busy timeout")?;
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {BUSINESS_RECORD_PROJECTION_CURSOR_TABLE} (
+             collection TEXT PRIMARY KEY,
+             since_ms INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL
+         );"
+    ))
+    .context("create durable business-record projection cursor table")?;
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT collection, since_ms FROM {BUSINESS_RECORD_PROJECTION_CURSOR_TABLE}"
+        ))
+        .context("prepare durable business-record projection cursor load")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .context("load durable business-record projection cursors")?;
+    let mut cursors = HashMap::new();
+    for row in rows {
+        let (collection, since_ms) = row?;
+        // Generic collection cursors are valid only while the destination is
+        // registered. Synthetic relevance/intake keys begin with `__` and are
+        // retained because their destination is covered by the same RxDB file.
+        if !collection.starts_with("__") && database.collection(&collection).is_none() {
+            continue;
+        }
+        cursors.insert(collection, since_ms.max(0));
+    }
+    Ok(cursors)
+}
+
+fn persist_business_record_projection_cursors(
+    root: &Path,
+    cursors: &HashMap<String, i64>,
+) -> anyhow::Result<()> {
+    let path = store::rxdb_store_path(root);
+    let mut conn = Connection::open(&path)
+        .with_context(|| format!("open projection cursor store {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure projection cursor store busy timeout")?;
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {BUSINESS_RECORD_PROJECTION_CURSOR_TABLE} (
+             collection TEXT PRIMARY KEY,
+             since_ms INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL
+         );"
+    ))
+    .context("create durable business-record projection cursor table")?;
+    let transaction = conn
+        .transaction()
+        .context("begin durable business-record projection cursor write")?;
+    let updated_at_ms = now_ms().min(i64::MAX as u128) as i64;
+    {
+        let mut statement = transaction
+            .prepare(&format!(
+                "INSERT INTO {BUSINESS_RECORD_PROJECTION_CURSOR_TABLE}
+                     (collection, since_ms, updated_at_ms)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(collection) DO UPDATE SET
+                     since_ms = MAX(since_ms, excluded.since_ms),
+                     updated_at_ms = excluded.updated_at_ms"
+            ))
+            .context("prepare durable business-record projection cursor write")?;
+        for (collection, since_ms) in cursors {
+            statement
+                .execute(params![collection, (*since_ms).max(0), updated_at_ms])
+                .with_context(|| format!("persist projection cursor for {collection}"))?;
+        }
+    }
+    transaction
+        .commit()
+        .context("commit durable business-record projection cursors")?;
+    Ok(())
 }
 
 async fn reconcile_ctox_queue_task_projections(
@@ -13442,6 +13616,22 @@ fn business_record_projection_collections() -> Vec<String> {
         .collect()
 }
 
+/// Return only collections that survived native schema registration.
+///
+/// Runtime-installed modules may leave store records behind while an optional
+/// collection is deliberately skipped because its schema no longer matches
+/// the canonical contract.  The old projector still included those records in
+/// its source stamp and only discovered the missing RxDB collection after it
+/// had pulled a page.  That failed the entire pass, discarded every in-memory
+/// cursor, and restarted the same cold scan forever.  Registration is the
+/// authority for whether this peer can project a collection.
+fn registered_business_record_projection_collections(database: &Arc<RxDatabase>) -> Vec<String> {
+    business_record_projection_collections()
+        .into_iter()
+        .filter(|name| database.collection(name).is_some())
+        .collect()
+}
+
 /// FIX 4: the set of Business OS RxDB collections whose failure must abort the
 /// peer bring-up. These carry runtime data the daemon depends on (module
 /// catalog, runtime settings, command queue, queue tasks, desktop files +
@@ -13487,7 +13677,11 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
     let mut repaired_triggers = 0usize;
-    for (collection, _) in business_os_collections() {
+    let mut collections = collection_creators_for_root(root)
+        .into_keys()
+        .collect::<Vec<_>>();
+    collections.sort();
+    for collection in collections {
         let result = repair_rxdb_collection_schema_version_drift(root, &collection, false, true)?;
         repaired_tables += result
             .get("repaired_tables")
@@ -13516,6 +13710,429 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
     }))
 }
 
+/// Native rxdb-rs deliberately does not ship the upstream migration plugin.
+/// These entries therefore mirror only browser migrations that are explicitly
+/// declared as identity transforms. The storage envelope is identical across
+/// versions, so preserving the complete row is the lossless migration.
+const ADDITIVE_NATIVE_RXDB_IDENTITY_MIGRATIONS: &[(&str, i64, i64)] = &[
+    ("ctox_queue_tasks", 0, 1),
+    ("user_thread_messages", 0, 1),
+    ("user_threads", 0, 1),
+];
+
+#[derive(Debug, Clone)]
+struct NativeRxdbAdditiveMigration {
+    collection: String,
+    from_version: i64,
+    to_version: i64,
+    operations: Option<Vec<Value>>,
+    source: String,
+}
+
+fn native_rxdb_additive_migrations(
+    root: &Path,
+) -> anyhow::Result<Vec<NativeRxdbAdditiveMigration>> {
+    let mut migrations = ADDITIVE_NATIVE_RXDB_IDENTITY_MIGRATIONS
+        .iter()
+        .map(
+            |(collection, from_version, to_version)| NativeRxdbAdditiveMigration {
+                collection: (*collection).to_string(),
+                from_version: *from_version,
+                to_version: *to_version,
+                operations: Some(Vec::new()),
+                source: "packaged-identity-contract".to_string(),
+            },
+        )
+        .collect::<Vec<_>>();
+    let runtime_app_root = resolve_business_os_installed_app_root_for_native_peer(root);
+    for (dir_name, require_installed_marker) in
+        [("installed-modules", true), ("local-modules", false)]
+    {
+        let modules_root = runtime_app_root.join(dir_name);
+        if !modules_root.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&modules_root).with_context(|| {
+            format!(
+                "read runtime module migrations from {}",
+                modules_root.display()
+            )
+        })? {
+            let module_dir = entry?.path();
+            if !module_dir.is_dir() {
+                continue;
+            }
+            let manifest_path = module_dir.join("module.json");
+            let schema_path = module_dir.join("collections.schema.json");
+            if !manifest_path.is_file() || !schema_path.is_file() {
+                continue;
+            }
+            let manifest = read_json_file(&manifest_path)?;
+            if require_installed_marker
+                && !manifest_value_is_runtime_installed_for_native_peer(&manifest)
+            {
+                continue;
+            }
+            let declared = manifest
+                .get("collections")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<HashSet<_>>();
+            let document = read_json_file(&schema_path)?;
+            if document.get("schema_format").and_then(Value::as_str)
+                != Some("ctox-business-os-module-collections-v1")
+            {
+                anyhow::bail!(
+                    "runtime migration document {} has an unsupported schema_format",
+                    schema_path.display()
+                );
+            }
+            let collections = document
+                .get("collections")
+                .and_then(Value::as_object)
+                .context("runtime migration document has no collections object")?;
+            let strategies = document
+                .get("migration_strategies")
+                .and_then(Value::as_object);
+            for (collection, definition) in collections {
+                if !declared.contains(collection.as_str())
+                    || !is_runtime_module_collection_name(collection)
+                {
+                    continue;
+                }
+                let schema = definition
+                    .get("schema")
+                    .filter(|_| definition.get("primaryKey").is_none())
+                    .unwrap_or(definition);
+                let target_version = schema.get("version").and_then(Value::as_i64).unwrap_or(0);
+                if target_version <= 0 {
+                    continue;
+                }
+                let collection_strategies = strategies
+                    .and_then(|value| value.get(collection))
+                    .and_then(Value::as_object);
+                for to_version in 1..=target_version {
+                    let spec =
+                        collection_strategies.and_then(|value| value.get(&to_version.to_string()));
+                    migrations.push(NativeRxdbAdditiveMigration {
+                        collection: collection.clone(),
+                        from_version: to_version - 1,
+                        to_version,
+                        operations: spec
+                            .map(native_declarative_migration_operations)
+                            .transpose()
+                            .with_context(|| {
+                                format!(
+                                    "compile native migration v{to_version} for `{collection}` from {}",
+                                    schema_path.display()
+                                )
+                            })?,
+                        source: schema_path.display().to_string(),
+                    });
+                }
+            }
+        }
+    }
+    migrations.sort_by(|left, right| {
+        left.collection
+            .cmp(&right.collection)
+            .then(left.to_version.cmp(&right.to_version))
+    });
+    migrations.dedup_by(|left, right| {
+        left.collection == right.collection && left.to_version == right.to_version
+    });
+    Ok(migrations)
+}
+
+fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<Value>> {
+    let operations = spec
+        .as_array()
+        .or_else(|| spec.get("operations").and_then(Value::as_array))
+        .context("declarative migration spec must contain an operations array")?;
+    for operation in operations {
+        let op = operation
+            .get("op")
+            .and_then(Value::as_str)
+            .context("declarative migration operation must contain op")?;
+        match op {
+            "set_from_first_truthy" => {
+                if operation.get("field").and_then(Value::as_str).is_none()
+                    || operation.get("paths").and_then(Value::as_array).is_none()
+                {
+                    anyhow::bail!("set_from_first_truthy migration needs field and paths");
+                }
+            }
+            "set_boolean" => {
+                if operation.get("field").and_then(Value::as_str).is_none() {
+                    anyhow::bail!("set_boolean migration needs field");
+                }
+            }
+            other => anyhow::bail!("unsupported declarative migration operation {other}"),
+        }
+    }
+    Ok(operations.clone())
+}
+
+fn apply_native_declarative_migration(
+    document: &mut Value,
+    operations: &[Value],
+) -> anyhow::Result<()> {
+    for operation in operations {
+        let op = operation
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let field = operation
+            .get("field")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let value = match op {
+            "set_from_first_truthy" => operation
+                .get("paths")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .find_map(|path| {
+                    let value = value_at_dot_path(document, path)?;
+                    value_is_truthy(value).then(|| value.clone())
+                })
+                .or_else(|| operation.get("default").cloned())
+                .unwrap_or(Value::Null),
+            "set_boolean" => {
+                let path = operation
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or(field);
+                Value::Bool(value_at_dot_path(document, path).is_some_and(value_is_truthy))
+            }
+            other => anyhow::bail!("unsupported declarative migration operation {other}"),
+        };
+        document
+            .as_object_mut()
+            .context("native migration document must be an object")?
+            .insert(field.to_string(), value);
+    }
+    Ok(())
+}
+
+fn value_at_dot_path<'a>(document: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.')
+        .try_fold(document, |value, segment| value.get(segment))
+}
+
+fn value_is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Result<Value> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.is_file() {
+        return Ok(json!({
+            "ok": true,
+            "code": "ctox_rxdb_additive_schema_migration",
+            "database_path": database_path.display().to_string(),
+            "migrated_collections": 0,
+            "migrated_rows": 0,
+            "collections": []
+        }));
+    }
+
+    let mut conn = Connection::open(&database_path).with_context(|| {
+        format!(
+            "open native Business OS RxDB store {} for additive migration",
+            database_path.display()
+        )
+    })?;
+    conn.busy_timeout(Duration::from_secs(10))?;
+
+    let mut outcomes = Vec::new();
+    let mut migrated_collections = 0usize;
+    let mut migrated_rows = 0usize;
+    for migration in native_rxdb_additive_migrations(root)? {
+        let collection = migration.collection.as_str();
+        let from_version = migration.from_version;
+        let to_version = migration.to_version;
+        if expected_rxdb_collection_version_for_root(root, collection) < to_version {
+            anyhow::bail!(
+                "additive native RxDB migration contract for `{collection}` targets v{to_version}, \
+                 but the active schema expects v{}",
+                expected_rxdb_collection_version_for_root(root, collection)
+            );
+        }
+        let source_table = rxdb_collection_version_table_name(collection, from_version);
+        let destination_table = rxdb_collection_version_table_name(collection, to_version);
+        if !sqlite_table_exists(&conn, &source_table)? {
+            outcomes.push(json!({
+                "collection": collection,
+                "from_version": from_version,
+                "to_version": to_version,
+                "source_rows": 0,
+                "copied_rows": 0,
+                "status": "source_absent"
+            }));
+            continue;
+        }
+        let operations = migration.operations.as_ref().with_context(|| {
+            format!(
+                "runtime collection `{collection}` has persisted v{from_version} rows but {} \
+                 declares no migration_strategies.{collection}.{to_version}; old data was retained",
+                migration.source
+            )
+        })?;
+        if !sqlite_table_exists(&conn, &destination_table)? {
+            anyhow::bail!(
+                "cannot migrate native RxDB collection `{collection}`: destination table \
+                 `{destination_table}` has not been registered"
+            );
+        }
+
+        let source_rows = sqlite_table_row_count(&conn, &source_table)?;
+        let transaction = conn.transaction().with_context(|| {
+            format!("start additive RxDB migration transaction for {collection}")
+        })?;
+        let copied_rows = if operations.is_empty() {
+            transaction.execute(
+                &format!(
+                    "INSERT INTO {destination} (id, revision, deleted, lastWriteTime, data) \
+                     SELECT id, revision, deleted, lastWriteTime, data FROM {source} WHERE 1 \
+                     ON CONFLICT(id) DO UPDATE SET \
+                       revision = excluded.revision, \
+                       deleted = excluded.deleted, \
+                       lastWriteTime = excluded.lastWriteTime, \
+                       data = excluded.data \
+                     WHERE excluded.lastWriteTime > {destination}.lastWriteTime",
+                    source = quote_sqlite_identifier(&source_table),
+                    destination = quote_sqlite_identifier(&destination_table),
+                ),
+                [],
+            )
+            .with_context(|| {
+                format!(
+                    "copy native RxDB collection `{collection}` from v{from_version} to v{to_version}"
+                )
+            })?
+        } else {
+            migrate_native_rxdb_rows_with_operations(
+                &transaction,
+                collection,
+                &source_table,
+                &destination_table,
+                operations,
+            )?
+        };
+        let unverified_rows: i64 = transaction
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM {source} AS source \
+                     LEFT JOIN {destination} AS destination ON destination.id = source.id \
+                     WHERE destination.id IS NULL \
+                        OR destination.lastWriteTime < source.lastWriteTime",
+                    source = quote_sqlite_identifier(&source_table),
+                    destination = quote_sqlite_identifier(&destination_table),
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("verify additive RxDB migration for {collection}"))?;
+        if unverified_rows != 0 {
+            anyhow::bail!(
+                "additive native RxDB migration for `{collection}` left {unverified_rows} \
+                 unverified source row(s); the v{from_version} table was retained"
+            );
+        }
+        transaction
+            .commit()
+            .with_context(|| format!("commit additive RxDB migration for {collection}"))?;
+
+        migrated_collections += 1;
+        migrated_rows += copied_rows;
+        outcomes.push(json!({
+            "collection": collection,
+            "from_version": from_version,
+            "to_version": to_version,
+            "source_rows": source_rows,
+            "copied_rows": copied_rows,
+            "unverified_rows": 0,
+            "status": "verified"
+            ,"source": migration.source
+        }));
+    }
+
+    Ok(json!({
+        "ok": true,
+        "code": "ctox_rxdb_additive_schema_migration",
+        "database_path": database_path.display().to_string(),
+        "migrated_collections": migrated_collections,
+        "migrated_rows": migrated_rows,
+        "collections": outcomes
+    }))
+}
+
+fn migrate_native_rxdb_rows_with_operations(
+    transaction: &rusqlite::Transaction<'_>,
+    collection: &str,
+    source_table: &str,
+    destination_table: &str,
+    operations: &[Value],
+) -> anyhow::Result<usize> {
+    let rows = {
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT id, revision, deleted, lastWriteTime, data FROM {}",
+                quote_sqlite_identifier(source_table)
+            ))
+            .with_context(|| format!("prepare native migration read for {collection}"))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        mapped.collect::<Result<Vec<_>, _>>()?
+    };
+    let mut statement = transaction
+        .prepare(&format!(
+            "INSERT INTO {destination} (id, revision, deleted, lastWriteTime, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               revision = excluded.revision,
+               deleted = excluded.deleted,
+               lastWriteTime = excluded.lastWriteTime,
+               data = excluded.data
+             WHERE excluded.lastWriteTime > {destination}.lastWriteTime",
+            destination = quote_sqlite_identifier(destination_table),
+        ))
+        .with_context(|| format!("prepare native migration write for {collection}"))?;
+    let mut copied = 0usize;
+    for (id, revision, deleted, last_write_time, data) in rows {
+        let mut document = serde_json::from_str::<Value>(&data)
+            .with_context(|| format!("parse native migration document {collection}/{id}"))?;
+        apply_native_declarative_migration(&mut document, operations)
+            .with_context(|| format!("migrate native document {collection}/{id}"))?;
+        copied += statement.execute(params![
+            id,
+            revision,
+            deleted,
+            last_write_time,
+            serde_json::to_string(&document)?
+        ])?;
+    }
+    Ok(copied)
+}
+
 fn repair_rxdb_collection_schema_version_drift(
     root: &Path,
     collection: &str,
@@ -13532,7 +14149,7 @@ fn repair_rxdb_collection_schema_version_drift(
             "force": force,
             "collection": collection,
             "database_path": database_path.display().to_string(),
-            "expected_version": expected_rxdb_collection_version(collection),
+            "expected_version": expected_rxdb_collection_version_for_root(root, collection),
             "active_version": null,
             "expected_table_exists": false,
             "stale_tables": [],
@@ -13548,7 +14165,7 @@ fn repair_rxdb_collection_schema_version_drift(
         )
     })?;
     let _ = conn.busy_timeout(Duration::from_secs(10));
-    let expected_version = expected_rxdb_collection_version(collection);
+    let expected_version = expected_rxdb_collection_version_for_root(root, collection);
     let active_version = active_rxdb_collection_version(&conn, collection)?;
     let expected_table = rxdb_collection_version_table_name(collection, expected_version);
     let expected_table_exists = sqlite_table_exists(&conn, &expected_table)?;
@@ -13658,6 +14275,16 @@ fn expected_rxdb_collection_version(collection: &str) -> i64 {
         .get(collection)
         .and_then(|schema| schema.get("version"))
         .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+fn expected_rxdb_collection_version_for_root(root: &Path, collection: &str) -> i64 {
+    if business_os_schema_contract().contains_key(collection) {
+        return expected_rxdb_collection_version(collection);
+    }
+    collection_creators_for_root(root)
+        .get(collection)
+        .map(|creator| i64::from(creator.schema.version))
         .unwrap_or(0)
 }
 
@@ -13974,6 +14601,74 @@ mod tests {
     }
 
     #[test]
+    fn business_record_projection_only_scans_registered_collections() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            let documents = collection_creators()
+                .remove("documents")
+                .expect("documents collection creator");
+            database
+                .add_collections(HashMap::from([("documents".to_string(), documents)]))
+                .await
+                .expect("register documents collection");
+
+            assert_eq!(
+                registered_business_record_projection_collections(&database),
+                vec!["documents".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn durable_business_record_projection_cursors_round_trip_in_destination_store() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            let documents = collection_creators()
+                .remove("documents")
+                .expect("documents collection creator");
+            database
+                .add_collections(HashMap::from([("documents".to_string(), documents)]))
+                .await
+                .expect("register documents collection");
+
+            persist_business_record_projection_cursors(
+                root.path(),
+                &HashMap::from([
+                    ("documents".to_string(), 1_234),
+                    ("sellify_people".to_string(), 9_999),
+                    (SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY.to_string(), 5_678),
+                ]),
+            )
+            .expect("persist projection cursors");
+            let loaded = load_business_record_projection_cursors(root.path(), &database)
+                .expect("load projection cursors");
+
+            assert_eq!(loaded.get("documents"), Some(&1_234));
+            assert_eq!(
+                loaded.get(SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY),
+                Some(&5_678)
+            );
+            assert!(!loaded.contains_key("sellify_people"));
+        });
+    }
+
+    #[test]
     fn business_record_projection_sleep_backs_off_after_idle_round() {
         assert_eq!(
             business_record_projection_sleep_secs(0),
@@ -14177,6 +14872,36 @@ mod tests {
             browser_runtime_maintenance_sleep(u32::MAX),
             Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
         );
+    }
+
+    #[test]
+    fn browser_stream_capture_requires_an_active_session_and_due_frame() {
+        let now = 50_000;
+        let active_session = json!({ "runtime_status": "active" });
+        let stopped_session = json!({ "runtime_status": "stopped" });
+        let due_tab = json!({ "last_frame_at_ms": now - 2_000 });
+        let fresh_tab = json!({ "last_frame_at_ms": now - 100 });
+
+        assert!(browser_session_needs_stream_frame(
+            &active_session,
+            &due_tab,
+            now
+        ));
+        assert!(!browser_session_needs_stream_frame(
+            &stopped_session,
+            &due_tab,
+            now
+        ));
+        assert!(!browser_session_needs_stream_frame(
+            &active_session,
+            &fresh_tab,
+            now
+        ));
+        assert!(!browser_session_needs_stream_frame(
+            &json!({}),
+            &due_tab,
+            now
+        ));
     }
 
     #[test]
@@ -14506,6 +15231,183 @@ mod tests {
     }
 
     #[test]
+    fn runtime_installed_declarative_migration_is_discovered_and_copied() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules/subscriptions");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "subscriptions",
+                "entry": "installed-modules/subscriptions/index.html",
+                "install_scope": "installed",
+                "collections": ["subscriptions_records"]
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "migration_strategies": {
+                    "subscriptions_records": {
+                        "1": { "operations": [] }
+                    }
+                },
+                "collections": {
+                    "subscriptions_records": {
+                        "version": 1,
+                        "primaryKey": "id",
+                        "properties": {
+                            "id": { "type": "string", "maxLength": 120 },
+                            "title": { "type": "string" }
+                        },
+                        "required": ["id", "title"]
+                    }
+                }
+            }))?,
+        )?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        let path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&path)?;
+        for version in [0, 1] {
+            conn.execute(
+                &format!(
+                    "CREATE TABLE ctox_business_os__subscriptions_records__v{version} (
+                         id TEXT PRIMARY KEY,
+                         revision TEXT NOT NULL,
+                         deleted INTEGER NOT NULL,
+                         lastWriteTime INTEGER NOT NULL,
+                         data TEXT NOT NULL
+                     )"
+                ),
+                [],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO ctox_business_os__subscriptions_records__v0
+                 (id, revision, deleted, lastWriteTime, data)
+             VALUES ('sub-1', '1-a', 0, 1000, ?1)",
+            params![json!({ "id": "sub-1", "title": "Legacy" }).to_string()],
+        )?;
+        drop(conn);
+
+        let migrations = native_rxdb_additive_migrations(root.path())?;
+        assert!(migrations.iter().any(|migration| {
+            migration.collection == "subscriptions_records"
+                && migration.from_version == 0
+                && migration.to_version == 1
+                && migration.operations.as_ref().is_some_and(Vec::is_empty)
+        }));
+        let outcome = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(outcome["migrated_rows"], 1);
+        let conn = Connection::open(path)?;
+        let data: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__subscriptions_records__v1 WHERE id = 'sub-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&data)?["title"], "Legacy");
+        Ok(())
+    }
+
+    #[test]
+    fn native_declarative_migration_matches_browser_operations() -> anyhow::Result<()> {
+        let operations = native_declarative_migration_operations(&json!({
+            "operations": [
+                {
+                    "op": "set_from_first_truthy",
+                    "field": "channel",
+                    "paths": ["channel", "payload.channel"],
+                    "default": "email"
+                },
+                {
+                    "op": "set_boolean",
+                    "field": "is_favorite",
+                    "path": "legacy.favorite"
+                }
+            ]
+        }))?;
+        let mut document = json!({
+            "payload": { "channel": "letter" },
+            "legacy": { "favorite": 1 }
+        });
+        apply_native_declarative_migration(&mut document, &operations)?;
+        assert_eq!(document["channel"], "letter");
+        assert_eq!(document["is_favorite"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_migration_without_strategy_retains_old_table_and_fails_closed() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules/subscriptions");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "subscriptions",
+                "entry": "installed-modules/subscriptions/index.html",
+                "install_scope": "installed",
+                "collections": ["subscriptions_records"]
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "subscriptions_records": {
+                        "version": 1,
+                        "primaryKey": "id",
+                        "properties": { "id": { "type": "string", "maxLength": 120 } },
+                        "required": ["id"]
+                    }
+                }
+            }))?,
+        )?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        let path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&path)?;
+        for version in [0, 1] {
+            conn.execute(
+                &format!(
+                    "CREATE TABLE ctox_business_os__subscriptions_records__v{version} (
+                         id TEXT PRIMARY KEY, revision TEXT NOT NULL, deleted INTEGER NOT NULL,
+                         lastWriteTime INTEGER NOT NULL, data TEXT NOT NULL
+                     )"
+                ),
+                [],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO ctox_business_os__subscriptions_records__v0
+                 (id, revision, deleted, lastWriteTime, data)
+             VALUES ('sub-unsafe', '1-a', 0, 1000, '{\"id\":\"sub-unsafe\"}')",
+            [],
+        )?;
+        drop(conn);
+
+        let error = migrate_additive_native_rxdb_collection_versions(root.path())
+            .expect_err("persisted old rows without a declared strategy must fail closed");
+        assert!(format!("{error:#}").contains("declares no migration_strategies"));
+        let conn = Connection::open(path)?;
+        assert_eq!(
+            sqlite_table_row_count(&conn, "ctox_business_os__subscriptions_records__v0")?,
+            1
+        );
+        assert_eq!(
+            sqlite_table_row_count(&conn, "ctox_business_os__subscriptions_records__v1")?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn projection_upsert_detects_doc_cache_revision_errors() {
         let revision_error = rxdb::rx_error::new_rx_error("DOC_CACHE_REV", Some(json!({})));
         let lwt_error = rxdb::rx_error::new_rx_error("DOC_CACHE_LWT", Some(json!({})));
@@ -14657,6 +15559,168 @@ mod tests {
             ],
         )
         .expect("active v1 write must not reference removed stale v0 table");
+    }
+
+    #[test]
+    fn additive_thread_schema_migration_copies_and_verifies_before_cleanup() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
+        let path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os___rxdb_internal__v0 (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ctox_business_os__user_threads__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE ctox_business_os__user_threads__v1 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )
+        .expect("create migration tables");
+        conn.execute(
+            "INSERT INTO ctox_business_os___rxdb_internal__v0 (id, data, deleted)
+             VALUES ('collection|user_threads-1', ?1, 0)",
+            [json!({
+                "id": "collection|user_threads-1",
+                "key": "user_threads-1",
+                "context": "collection",
+                "data": {
+                    "name": "user_threads",
+                    "version": 1,
+                    "schemaHash": "test"
+                },
+                "_deleted": false
+            })
+            .to_string()],
+        )
+        .expect("insert active v1 meta");
+        conn.execute(
+            "INSERT INTO ctox_business_os__user_threads__v0
+             (id, revision, deleted, lastWriteTime, data) VALUES
+             ('thread-copy', '1-old', 0, 100, ?1),
+             ('thread-newer', '1-old', 0, 100, ?2)",
+            params![
+                json!({"id": "thread-copy", "title": "copy me", "updated_at_ms": 100}).to_string(),
+                json!({"id": "thread-newer", "title": "old", "updated_at_ms": 100}).to_string(),
+            ],
+        )
+        .expect("insert v0 rows");
+        conn.execute(
+            "INSERT INTO ctox_business_os__user_threads__v1
+             (id, revision, deleted, lastWriteTime, data)
+             VALUES ('thread-newer', '2-new', 0, 200, ?1)",
+            [json!({"id": "thread-newer", "title": "newer", "updated_at_ms": 200}).to_string()],
+        )
+        .expect("insert newer v1 row");
+        drop(conn);
+
+        let outcome = migrate_additive_native_rxdb_collection_versions(root.path())
+            .expect("run additive migration");
+        assert_eq!(outcome["migrated_collections"], 1);
+        assert_eq!(outcome["migrated_rows"], 1);
+
+        let conn = Connection::open(&path).expect("reopen after migration");
+        let copied: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__user_threads__v1 WHERE id = 'thread-copy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("copied thread");
+        assert_eq!(
+            serde_json::from_str::<Value>(&copied).unwrap()["title"],
+            "copy me"
+        );
+        let newer: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__user_threads__v1 WHERE id = 'thread-newer'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("newer thread");
+        assert_eq!(
+            serde_json::from_str::<Value>(&newer).unwrap()["title"],
+            "newer"
+        );
+        assert!(sqlite_table_exists(&conn, "ctox_business_os__user_threads__v0").unwrap());
+        drop(conn);
+
+        let cleanup =
+            repair_optional_rxdb_collection_schema_drift(root.path(), "user_threads", false, false)
+                .expect("cleanup verified v0 table");
+        assert_eq!(cleanup["repaired_tables"], 1);
+        let conn = Connection::open(&path).expect("reopen after cleanup");
+        assert!(!sqlite_table_exists(&conn, "ctox_business_os__user_threads__v0").unwrap());
+        assert!(sqlite_table_exists(&conn, "ctox_business_os__user_threads__v1").unwrap());
+    }
+
+    #[test]
+    fn additive_required_queue_schema_migration_preserves_v0_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
+        let path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__ctox_queue_tasks__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE ctox_business_os__ctox_queue_tasks__v1 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )
+        .expect("create queue migration tables");
+        conn.execute(
+            "INSERT INTO ctox_business_os__ctox_queue_tasks__v0
+             (id, revision, deleted, lastWriteTime, data)
+             VALUES ('queue-1', '1-old', 0, 100, ?1)",
+            [json!({
+                "id": "queue-1",
+                "title": "Preserve me",
+                "status": "pending",
+                "module": "tickets"
+            })
+            .to_string()],
+        )
+        .expect("insert v0 queue row");
+        drop(conn);
+
+        let outcome = migrate_additive_native_rxdb_collection_versions(root.path())
+            .expect("run required queue migration");
+        assert_eq!(outcome["migrated_collections"], 1);
+        assert_eq!(outcome["migrated_rows"], 1);
+        let conn = Connection::open(&path).expect("reopen queue store");
+        let copied: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__ctox_queue_tasks__v1 WHERE id = 'queue-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("copied queue row");
+        assert_eq!(
+            serde_json::from_str::<Value>(&copied).unwrap()["title"],
+            "Preserve me"
+        );
+        assert!(sqlite_table_exists(&conn, "ctox_business_os__ctox_queue_tasks__v0").unwrap());
     }
 
     #[test]
@@ -14997,9 +16061,12 @@ mod tests {
     async fn hot_business_os_schema_indexes_have_sqlite_query_plan_guards() {
         let root = tempfile::tempdir().expect("temp root");
         let database_path = root.path().join("hot-indexes.sqlite3");
-        let database = open_test_database(database_path.clone())
-            .await
-            .expect("open test database");
+        let database = open_test_database_with_name(
+            database_path.clone(),
+            RXDB_SQLITE_DATABASE_NAME.to_string(),
+        )
+        .await
+        .expect("open test database");
         database
             .add_collections(HashMap::from([
                 (
@@ -15191,7 +16258,7 @@ mod tests {
         conn.execute_batch("ANALYZE")
             .expect("analyze hot index test db");
         let business_commands_table = rxdb_test_table_name(&conn, "business_commands", 1);
-        let ctox_queue_tasks_table = rxdb_test_table_name(&conn, "ctox_queue_tasks", 0);
+        let ctox_queue_tasks_table = rxdb_test_table_name(&conn, "ctox_queue_tasks", 1);
         let desktop_file_chunks_table = rxdb_test_table_name(&conn, "desktop_file_chunks", 0);
         let document_blob_chunks_table = rxdb_test_table_name(&conn, "document_blob_chunks", 0);
         let spreadsheet_blob_chunks_table =
@@ -15557,12 +16624,14 @@ mod tests {
     }
 
     fn rxdb_test_table_name(conn: &Connection, collection: &str, version: i64) -> String {
-        conn.query_row(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 ORDER BY name",
-            params![format!("%__{collection}__v{version}")],
-            |row| row.get::<_, String>(0),
-        )
-        .expect("RxDB collection table exists")
+        let expected = rxdb_collection_version_table_name(collection, version);
+        if sqlite_table_exists(conn, &expected).expect("check RxDB collection table") {
+            return expected;
+        }
+        panic!(
+            "RxDB collection table {expected} exists; tables:\n{}",
+            sqlite_table_debug_list(conn)
+        );
     }
 
     fn quote_sqlite_identifier(identifier: &str) -> String {
@@ -15647,6 +16716,18 @@ mod tests {
             .expect("query index debug list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index debug list")
+            .join("\n")
+    }
+
+    fn sqlite_table_debug_list(conn: &Connection) -> String {
+        let mut statement = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .expect("prepare table debug list");
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query table debug list")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect table debug list")
             .join("\n")
     }
 

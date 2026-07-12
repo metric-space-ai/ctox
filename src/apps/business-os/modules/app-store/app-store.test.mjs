@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { __appStoreTestHooks as hooks } from './index.js';
 
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'index.js'), 'utf8');
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const css = readFileSync(resolve(moduleDir, 'index.css'), 'utf8');
+const html = readFileSync(resolve(moduleDir, 'index.html'), 'utf8');
+const presentationSource = `${css}\n${html}`;
+const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
 const permissionState = ({ role = 'user', userId = 'user-1', governance = {} } = {}) => ({
   ctx: {
@@ -35,6 +40,13 @@ test('creator navigation carries App Store return context', () => {
 
 test('marketplace sync labels explain loading and stale counts', () => {
   assert.equal(hooks.appCountLabel(0, 'marketplace', 'loading'), '0 Apps · Sync');
+  assert.match(
+    hooks.marketplaceStateLabel({
+      status: 'idle',
+      installedCount: 20,
+    }),
+    /Installed: 20/
+  );
   assert.equal(
     hooks.marketplaceStateLabel({
       status: 'ready',
@@ -54,6 +66,13 @@ test('marketplace sync labels explain loading and stale counts', () => {
     }),
     /Zeige letzten Stand: rate limited/
   );
+});
+
+test('marketplace discovery is explicit and not an automatic mount side effect', () => {
+  assert.match(source, /data-refresh-marketplace/);
+  assert.match(source, /refreshMarketplace\(\{ force: true \}\)/);
+  assert.doesNotMatch(source, /render\(\);\s*refreshMarketplace\(\);/);
+  assert.match(source, /GitHub Discovery ist bereit und startet nur manuell/);
 });
 
 test('scope matching keeps card badges and category counters aligned', () => {
@@ -552,4 +571,18 @@ test('origin labels are humanized for the timeline', () => {
   assert.equal(hooks.originLabel('rollback'), 'Rollback');
   assert.equal(hooks.originLabel('manual_release'), 'Release');
   assert.equal(hooks.originLabel('edit'), 'Bearbeitung');
+});
+
+test('presentation layer stays compact and shell-native', () => {
+  assert.doesNotMatch(presentationSource, forbiddenSurfacePattern);
+  assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(presentationSource, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.match(css, /grid-template-columns: var\(--app-store-left-width, 300px\) 8px minmax\(0, 1fr\)/);
+  assert.match(css, /@container business-app-window \(max-width: 820px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 520px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 640px\)/);
+  assert.match(css, /\.app-version-row[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
+  assert.match(css, /\.store-loading-overlay[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
+  assert.match(css, /\.app-release-data-row[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
 });

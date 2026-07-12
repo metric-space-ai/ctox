@@ -24,6 +24,30 @@ const requiredControls = Object.freeze([
   'audit_support_redaction',
   'external_effect_boundary',
   'release_artifact_integrity',
+  'sync_recovery_crypto_boundary',
+  'webrtc_peer_identity_transport',
+  'saga_idempotency_compensation',
+  'production_evidence_runbook_integrity',
+]);
+const requiredSourceHashes = Object.freeze([
+  '.github/workflows/release.yml',
+  '.github/workflows/rxdb-production-readiness.yml',
+  'docs/ctox-sync-production-readiness-95.md',
+  'docs/ctox-sync-production-readiness-runbooks.md',
+  'src/apps/business-os/scripts/assert-security-privacy-signoff.mjs',
+  'src/core/rxdb/tools/assert_sync_production_readiness_95.js',
+  'src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js',
+  'src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js',
+  'src/core/rxdb/tools/browser_rust_smoke_matrix.js',
+  'src/core/rxdb/tools/business_os_production_smoke_registry.js',
+  'src/core/rxdb/tools/print_sync_production_readiness_95_report.js',
+  'src/core/rxdb/tools/print_sync_production_readiness_95_templates.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js',
+  'src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js',
 ]);
 
 if (selfTest) {
@@ -76,6 +100,10 @@ function validateSecurityPrivacySignoff(candidate, options = {}) {
     }
   }
 
+  for (const relativePath of requiredSourceHashes) {
+    require(Object.hasOwn(candidate.source_hashes || {}, relativePath), `source_hash.${relativePath}.required`);
+  }
+
   for (const [relativePath, expectedHash] of Object.entries(candidate.source_hashes || {})) {
     require(typeof expectedHash === 'string' && expectedHash.length > 0, `source_hash.${relativePath}.value`);
     const absolutePath = path.join(root, relativePath);
@@ -114,6 +142,7 @@ function writeValidationArtifact(signoff, problems) {
     reviewed_at: signoff?.reviewed_at || null,
     evidence_revision: signoff?.evidence_revision || null,
     required_controls: requiredControls,
+    required_source_hashes: requiredSourceHashes,
     source_hashes_checked: Object.keys(signoff?.source_hashes || {}).sort(),
     problems,
     generated_at: new Date().toISOString(),
@@ -153,9 +182,10 @@ function runSelfTest() {
       control,
       { status: 'signed-off', evidence: ['docs/business-os-roles-permissions-plan.md'] },
     ])),
-    source_hashes: {
-      'docs/business-os-roles-permissions-plan.md': sha256File(path.join(root, 'docs/business-os-roles-permissions-plan.md')),
-    },
+    source_hashes: Object.fromEntries(requiredSourceHashes.map((relativePath) => [
+      relativePath,
+      sha256File(path.join(root, relativePath)),
+    ])),
     notes: [],
   };
   const validProblems = validateSecurityPrivacySignoff(fixture, { requireSignedOff: true });
@@ -183,9 +213,18 @@ function runSelfTest() {
   });
   assertThrows('source hash mismatch', () => {
     const broken = JSON.parse(JSON.stringify(fixture));
-    broken.source_hashes['docs/business-os-roles-permissions-plan.md'] = '0'.repeat(64);
+    broken.source_hashes['.github/workflows/release.yml'] = '0'.repeat(64);
     const problems = validateSecurityPrivacySignoff(broken, { requireSignedOff: true });
-    if (!problems.includes('source_hash.docs/business-os-roles-permissions-plan.md.match')) {
+    if (!problems.includes('source_hash..github/workflows/release.yml.match')) {
+      throw new Error(`unexpected problems: ${problems.join(',')}`);
+    }
+    throw new Error('expected');
+  });
+  assertThrows('missing required source hash', () => {
+    const broken = JSON.parse(JSON.stringify(fixture));
+    delete broken.source_hashes['.github/workflows/release.yml'];
+    const problems = validateSecurityPrivacySignoff(broken, { requireSignedOff: false });
+    if (!problems.includes('source_hash..github/workflows/release.yml.required')) {
       throw new Error(`unexpected problems: ${problems.join(',')}`);
     }
     throw new Error('expected');

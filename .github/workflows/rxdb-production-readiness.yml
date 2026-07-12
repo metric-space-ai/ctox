@@ -1,0 +1,151 @@
+name: RxDB Production Readiness 9.5
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+  PLAYWRIGHT_MODULE_PATH: /tmp/ctox-pw-smoke/node_modules/playwright
+
+jobs:
+  rxdb-production-readiness-95:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rxdb-production-readiness-95
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
+
+      - name: Install Playwright runtime
+        run: |
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+          mkdir -p /tmp/ctox-pw-smoke
+          npm --prefix /tmp/ctox-pw-smoke init -y
+          npm --prefix /tmp/ctox-pw-smoke install playwright@1.57.0
+          npm --prefix /tmp/ctox-pw-smoke exec playwright install --with-deps chromium
+
+      - name: Build CTOX smoke binary
+        run: cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+
+      - name: Validate 9.5 readiness contract
+        run: |
+          node --check src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node --check src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node --check src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_templates.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_report.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js
+          node src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
+          node src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_templates.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js --self-test
+          node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
+      - name: Run full 9.5 Browser/Rust matrix
+        run: |
+          node src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js \
+            --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+
+      - name: Run operational evidence gates
+        run: |
+          for gate in canary_72h native_restore_drill record_workbench_30_day_pilot workflow_30_day_pilot; do
+            node src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js \
+              --gate "$gate" \
+              --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+          done
+
+      - name: Run WAN/TURN matrix
+        run: |
+          node src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js \
+            --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+
+      - name: Run runbook exercises gate
+        run: |
+          node src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js \
+            --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+
+      - name: Run browser recovery matrix
+        run: |
+          node src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js \
+            --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+
+      - name: Run app runtime package gate
+        run: |
+          node src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js \
+            --smoke-binary runtime/build/core-rxdb-integration-target/debug/ctox
+
+      - name: Audit 9.5 readiness evidence
+        if: always()
+        run: |
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js || true
+
+      - name: Upload 9.5 readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctox-sync-production-readiness-95
+          path: |
+            runtime/build/ctox-sync-production-readiness-95-validation.json
+            runtime/build/ctox-sync-production-readiness-95-evidence-audit.json
+            runtime/build/ctox-sync-production-readiness-95-operator-report.json
+            runtime/build/ctox-sync-production-readiness-95-default-matrix.json
+            runtime/build/ctox-sync-production-readiness-95-business-os-matrix.json
+            runtime/build/ctox-sync-production-readiness-95-canary.json
+            runtime/build/ctox-sync-production-readiness-95-canary_72h-evidence-log.json
+            runtime/build/ctox-sync-production-readiness-95-canary_72h-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-restore-drill.json
+            runtime/build/ctox-sync-production-readiness-95-native_restore_drill-evidence-log.json
+            runtime/build/ctox-sync-production-readiness-95-native_restore_drill-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-record-workbench-pilot.json
+            runtime/build/ctox-sync-production-readiness-95-record_workbench_30_day_pilot-evidence-log.json
+            runtime/build/ctox-sync-production-readiness-95-record_workbench_30_day_pilot-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-workflow-pilot.json
+            runtime/build/ctox-sync-production-readiness-95-workflow_30_day_pilot-evidence-log.json
+            runtime/build/ctox-sync-production-readiness-95-workflow_30_day_pilot-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-runbook-exercise-log.json
+            runtime/build/ctox-sync-production-readiness-95-runbook-exercises-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-runbook-exercises.json
+            runtime/build/ctox-sync-production-readiness-95-wan-turn-local-matrix.json
+            runtime/build/ctox-sync-production-readiness-95-wan-turn-measurements.json
+            runtime/build/ctox-sync-production-readiness-95-wan-turn-matrix.json
+            runtime/build/ctox-sync-production-readiness-95-browser-recovery-matrix.json
+            runtime/build/ctox-sync-production-readiness-95-app-runtime-package-gate.json
+          if-no-files-found: error
+
+      - name: Enforce 9.5 readiness evidence
+        if: always()
+        run: node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --require-complete

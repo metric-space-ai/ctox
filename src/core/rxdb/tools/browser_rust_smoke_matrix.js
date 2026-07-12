@@ -50,6 +50,7 @@
  */
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const os = require('os');
 const {
@@ -68,12 +69,12 @@ const defaultModes = [
   'rust-to-browser',
   'browser-to-rust',
   'command-browser-to-rust',
-  'client-app-hot-registration-browser-to-rust',
-  'client-app-action-saga-browser-to-rust',
   'tickets-browser-to-rust',
   'business-os-ui-regression',
   'business-os-roles-permissions-ui',
   'business-os-dynamic-apps-ui',
+  'business-os-app-release-ui',
+  'business-os-app-audience-ui',
   'browser-lifecycle-ui',
   'browser-handoff-ui',
   'migration-version-browser-to-rust',
@@ -111,57 +112,6 @@ const modeEvidenceRequirements = {
   'browser-to-rust': { keys: ['readiness_payload', 'replicated_id'] },
   'command-browser-to-rust': {
     keys: ['command_id', 'task_id', 'task_count_for_command', 'status', 'task_status'],
-  },
-  'client-app-hot-registration-browser-to-rust': {
-    keys: [
-      'client_app_module_id',
-      'client_app_collection_count',
-      'client_app_hot_registered',
-      'client_app_offline_write',
-      'client_app_realtime_resumed',
-      'client_app_acl_denied',
-      'client_app_multi_tab_single_leader',
-      'client_app_leader_handover',
-      'client_app_second_profile_sync',
-      'client_app_second_profile_acl_denied',
-      'client_app_binary_hash_unchanged',
-    ],
-    minimums: { client_app_collection_count: 2 },
-    values: {
-      client_app_hot_registered: 1,
-      client_app_offline_write: 1,
-      client_app_realtime_resumed: 1,
-      client_app_acl_denied: 1,
-      client_app_multi_tab_single_leader: 1,
-      client_app_leader_handover: 1,
-      client_app_second_profile_sync: 1,
-      client_app_second_profile_acl_denied: 1,
-      client_app_binary_hash_unchanged: 1,
-    },
-  },
-  'client-app-action-saga-browser-to-rust': {
-    keys: [
-      'client_app_module_id',
-      'client_app_collection_count',
-      'client_app_action_command_id',
-      'client_app_action_idempotent',
-      'client_app_action_order_present',
-      'client_app_action_audit_present',
-      'client_app_action_compensated',
-      'client_app_action_failure_status',
-      'client_app_acl_denied',
-      'client_app_binary_hash_unchanged',
-    ],
-    minimums: { client_app_collection_count: 2 },
-    values: {
-      client_app_action_idempotent: 1,
-      client_app_action_order_present: 1,
-      client_app_action_audit_present: 1,
-      client_app_action_compensated: 1,
-      client_app_action_failure_status: 'failed',
-      client_app_acl_denied: 1,
-      client_app_binary_hash_unchanged: 1,
-    },
   },
   'tickets-browser-to-rust': {
     keys: ['command_id', 'task_id', 'status', 'ticket_key', 'ticket_source', 'ticket_title'],
@@ -228,10 +178,10 @@ const modeEvidenceRequirements = {
     },
     values: {
       business_os_ui_rendered_modules: 'ctox,documents,knowledge,research',
-      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,conversations-channel-filter,outbound-compact-view-toggle,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,coding-agents-settings-modal,app-store-view-scope,browser-address-refresh,calendar-new-event-drawer,creator-expert-accordion,notes-nav-filter,reports-filter-controls,spreadsheets-search-filter',
+      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,conversations-channel-filter,outbound-outreach-view-toggle,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,coding-agents-settings-modal,app-store-view-scope,browser-address-refresh,calendar-new-event-drawer,creator-expert-accordion,notes-nav-filter,reports-filter-controls,spreadsheets-search-filter,appsec-coverage-findings-tabs,consent-primary-form-input,credentials-write-only-form-input,customers-search-filter,cv-print-search-filter,esign-primary-form-input,intake-primary-form-input,interviews-primary-form-input,invoices-state-filter,iot-create-asset-form,nachweise-primary-form-input,placements-primary-form-input,submissions-primary-form-input,support-search-and-context-navigation,threads-search-and-filter',
       business_os_ui_interacted_modules: 'ctox,documents,knowledge,research',
       business_os_ui_interaction_names: 'ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
       business_os_ui_desktop_opened: 1,
@@ -633,6 +583,7 @@ const modeEvidenceRequirements = {
     values: { replicated_count: 20, updated_generation_changes: 4, added_count: 4 },
     minimums: { total_chunk_count: 20, max_chunk_count: 2 },
   },
+  ...businessOsProductionSmokeEvidenceRequirements,
   'workspace-agent-artifacts-background-rust-to-browser': {
     keys: [
       'replicated_count',
@@ -677,8 +628,8 @@ const startupReloadBudgetInput = process.env.SMOKE_STARTUP_RELOAD_BUDGET || '0';
 const startupHookWaitBudgetInput = process.env.SMOKE_STARTUP_HOOK_WAIT_BUDGET_MS || '60000';
 const fileChunkStatusStartupHookWaitBudgetInput = process.env.SMOKE_FILE_CHUNK_STATUS_STARTUP_HOOK_WAIT_BUDGET_MS || '12000';
 const browserWarningBudgetInput = process.env.SMOKE_BROWSER_WARNING_BUDGET;
-const browserErrorBudgetInput = process.env.SMOKE_BROWSER_ERROR_BUDGET || '0';
-const requestFailureBudgetInput = process.env.SMOKE_BROWSER_REQUEST_FAILURE_BUDGET || '0';
+const browserErrorBudgetInput = process.env.SMOKE_BROWSER_ERROR_BUDGET;
+const requestFailureBudgetInput = process.env.SMOKE_BROWSER_REQUEST_FAILURE_BUDGET;
 const assetResponseErrorBudgetInput = process.env.SMOKE_BROWSER_ASSET_RESPONSE_ERROR_BUDGET || '0';
 const networkFlapBrowserWarningBudgetInput = process.env.SMOKE_NETWORK_FLAP_BROWSER_WARNING_BUDGET;
 const networkFlapRequestFailureBudgetInput = process.env.SMOKE_NETWORK_FLAP_REQUEST_FAILURE_BUDGET;
@@ -691,6 +642,7 @@ const summary = {
   schemaVersion: 1,
   repositoryRoot: root,
   gitRevision: readGitRevision(),
+  source: sourceEvidence(),
   ctoxBin,
   resultPath,
   pagePath,
@@ -1106,6 +1058,38 @@ function readGitRevision() {
   }
 }
 
+function sourceEvidence() {
+  return {
+    commit: readGitRevision(),
+    dirty: Boolean(readGitStatusPorcelain()),
+    artifactHashes: {
+      browserBundleSha256: sha256File(path.join(root, 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs')),
+      smokeBinaryPath: ctoxBin,
+      smokeBinarySha256: sha256File(ctoxBin),
+    },
+  };
+}
+
+function readGitStatusPorcelain() {
+  try {
+    const result = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '--untracked-files=all'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return result.status === 0 ? String(result.stdout || '').trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function sha256File(filePath) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
 function readJsonFile(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -1139,6 +1123,17 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
   require(candidate.schemaVersion === 1, 'schemaVersion');
   require(typeof candidate.repositoryRoot === 'string' && candidate.repositoryRoot.length > 0, 'repositoryRoot');
   require(typeof candidate.gitRevision === 'string' && candidate.gitRevision.length >= 7, 'gitRevision');
+  require(candidate.source && typeof candidate.source === 'object', 'source');
+  if (candidate.source && typeof candidate.source === 'object') {
+    require(typeof candidate.source.commit === 'string' && candidate.source.commit.length >= 7, 'source.commit');
+    require(typeof candidate.source.dirty === 'boolean', 'source.dirty');
+    require(candidate.source.artifactHashes && typeof candidate.source.artifactHashes === 'object', 'source.artifactHashes');
+    if (candidate.source.artifactHashes && typeof candidate.source.artifactHashes === 'object') {
+      require(isSha256(candidate.source.artifactHashes.browserBundleSha256), 'source.artifactHashes.browserBundleSha256');
+      require(typeof candidate.source.artifactHashes.smokeBinaryPath === 'string' && candidate.source.artifactHashes.smokeBinaryPath.length > 0, 'source.artifactHashes.smokeBinaryPath');
+      require(isSha256(candidate.source.artifactHashes.smokeBinarySha256), 'source.artifactHashes.smokeBinarySha256');
+    }
+  }
   require(typeof candidate.ctoxBin === 'string' && candidate.ctoxBin.length > 0, 'ctoxBin');
   require(typeof candidate.resultPath === 'string' && candidate.resultPath.length > 0, 'resultPath');
   require(typeof candidate.pagePath === 'string' && candidate.pagePath.startsWith('/'), 'pagePath');
@@ -1263,6 +1258,10 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
   return finishSummaryValidation(problems, validationOptions);
 }
 
+function isSha256(value) {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value);
+}
+
 function requireProductionAttemptContext(context, attemptPrefix, require) {
   if (!context || typeof context !== 'object') return;
   for (const key of ['authState', 'actorRole', 'browserContext', 'tenantScope']) {
@@ -1309,6 +1308,15 @@ function makeSmokeMatrixSummarySelfTestArtifact() {
     schemaVersion: 1,
     repositoryRoot: root,
     gitRevision: '0123456789abcdef0123456789abcdef01234567',
+    source: {
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      dirty: false,
+      artifactHashes: {
+        browserBundleSha256: '0'.repeat(64),
+        smokeBinaryPath: ctoxBin,
+        smokeBinarySha256: '1'.repeat(64),
+      },
+    },
     ctoxBin,
     resultPath: defaultResultPath,
     pagePath: '/index.html',

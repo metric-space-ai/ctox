@@ -1,6 +1,6 @@
 # CTOX Sync Engine and Command Bus Hardening Plan
 
-Status: hardening reopened for recovery/supervision/saga wave; focused checks pass; commit-bound no-retry release soak pending
+Status: hardening reopened for recovery/supervision/saga wave; focused checks pass; commit-bound no-retry release soak pending; 9.5/10 production-readiness gates are tracked in `docs/ctox-sync-production-readiness-95.md`
 
 Scope: `ctox-rxdb`, browser IndexedDB, WebRTC replication, Business OS command ingestion, durable queue and harness writeback
 

@@ -643,7 +643,9 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
         // loop idle/active/error ticks, SQLite runtime counters incl. the
         // per-database external-poll wakeups — ride the heartbeat).
         Some("status") => {
-            let status = crate::business_os::native_peer_status(root);
+            let status = enrich_rxdb_peer_status_with_production_readiness(
+                crate::business_os::native_peer_status(root),
+            );
             if args.iter().any(|arg| arg == "--json") {
                 print_json(&status)
             } else {
@@ -674,6 +676,183 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os rxdb command `{other}`"),
     }
+}
+
+fn enrich_rxdb_peer_status_with_production_readiness(
+    mut status: serde_json::Value,
+) -> serde_json::Value {
+    let running = status
+        .get("running")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let replication_up = status
+        .get("replicationUp")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let heartbeat_fresh = status
+        .pointer("/heartbeat/fresh")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let health_error_total = status
+        .pointer("/health/errorTotal")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let command_consumer_alive = status
+        .pointer("/health_stages/command_consumer_alive")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let turn_credential_ready = status
+        .pointer("/health_stages/turn_credential_ready")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let circuit_state = status
+        .get("circuitBreaker")
+        .and_then(|value| value.get("state"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let critical_tasks_alive = status
+        .get("criticalTasks")
+        .and_then(|value| value.as_array())
+        .map(|tasks| {
+            !tasks.is_empty()
+                && tasks.iter().all(|task| {
+                    task.get("alive")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+                })
+        })
+        .unwrap_or(false);
+    let pending_sync_count = status
+        .pointer("/command_plane/pending_sync_count")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let oldest_pending_age_ms = status
+        .pointer("/command_plane/oldest_pending_age_ms")
+        .and_then(|value| value.as_u64());
+    let projection_outbox_age_ms = status.pointer("/health_stages/projection_outbox").cloned();
+
+    let missing_evidence = [
+        "release_soak_3x31_no_retry",
+        "nightly_soak_9x31_no_retry",
+        "full_matrix_min_40_no_retry",
+        "canary_72h",
+        "native_restore_drill",
+        "wan_turn_matrix",
+        "browser_recovery_matrix",
+        "app_runtime_package_gate",
+        "security_privacy_signoff",
+        "record_workbench_30_day_pilot",
+        "workflow_30_day_pilot",
+        "runbook_exercises",
+        "slo_samples",
+        "browser_journal",
+        "browser_recovery_export",
+    ];
+    let mut blockers = Vec::<String>::new();
+    if !running {
+        blockers.push("native_peer_not_running".to_owned());
+    }
+    if !replication_up {
+        blockers.push("replication_not_up".to_owned());
+    }
+    if !heartbeat_fresh {
+        blockers.push("heartbeat_not_fresh".to_owned());
+    }
+    if health_error_total > 0 {
+        blockers.push("native_peer_health_errors".to_owned());
+    }
+    if !command_consumer_alive {
+        blockers.push("command_consumer_not_alive".to_owned());
+    }
+    if !critical_tasks_alive {
+        blockers.push("critical_task_liveness_unproven".to_owned());
+    }
+    if !turn_credential_ready {
+        blockers.push("credentialed_turn_not_ready".to_owned());
+    }
+    if circuit_state != "closed" && circuit_state != "unknown" {
+        blockers.push(format!("signaling_circuit_{circuit_state}"));
+    }
+    if pending_sync_count > 0 {
+        blockers.push("pending_command_sync".to_owned());
+    }
+    blockers.extend(
+        missing_evidence
+            .iter()
+            .map(|evidence| format!("missing_evidence:{evidence}")),
+    );
+
+    let readiness = serde_json::json!({
+        "schema": "ctox.sync.production_readiness_95.status.v1",
+        "ready": blockers.is_empty(),
+        "ratingTarget": "9.5/10",
+        "sloTargets": {
+            "localSubmitP95Ms": 100,
+            "lanReplicationP95Ms": 2_000,
+            "wanReplicationP95Ms": 5_000,
+            "reconnectP95Ms": 60_000,
+            "convergencePercentWithinSlo": 99.9,
+            "nativeBackupRpoMs": 15 * 60 * 1_000,
+            "nativeBackupRtoMs": 60 * 60 * 1_000,
+        },
+        "liveness": {
+            "running": running,
+            "replicationUp": replication_up,
+            "heartbeatFresh": heartbeat_fresh,
+            "healthErrorTotal": health_error_total,
+            "commandConsumerAlive": command_consumer_alive,
+            "criticalTasksAlive": critical_tasks_alive,
+        },
+        "transport": {
+            "circuitBreakerState": circuit_state,
+            "turnCredentialReady": turn_credential_ready,
+        },
+        "commandPlane": {
+            "pendingSyncCount": pending_sync_count,
+            "oldestPendingAgeMs": oldest_pending_age_ms,
+            "projectionOutboxAgeMs": projection_outbox_age_ms.unwrap_or(serde_json::Value::Null),
+        },
+        "releaseGates": {
+            "releaseSoakModes": 31,
+            "releaseSoakCycles": 3,
+            "nightlySoakCycles": 9,
+            "nightlyTimeoutMinutes": 360,
+            "fullMatrixMinimumModes": 40,
+            "canaryHours": 72,
+            "pilotDays": 30,
+        },
+        "evidenceArtifacts": {
+            "templateCatalog": "node src/core/rxdb/tools/print_sync_production_readiness_95_templates.js",
+            "artifactBuilder": "node src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js --kind <gate> --input <measurements.json> --output <artifact.json>",
+            "fullMatrixRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js",
+            "operationalGateRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js --gate <gate>",
+            "releaseSoak": "rxdb-soak-summary.json",
+            "nightlySoak": "runtime/build/ctox-sync-production-readiness-95-nightly-soak.json",
+            "defaultMatrix": "runtime/build/ctox-sync-production-readiness-95-default-matrix.json",
+            "businessOsMatrix": "runtime/build/ctox-sync-production-readiness-95-business-os-matrix.json",
+            "canary": "runtime/build/ctox-sync-production-readiness-95-canary.json",
+            "nativeRestoreDrill": "runtime/build/ctox-sync-production-readiness-95-restore-drill.json",
+            "wanTurnMatrix": "runtime/build/ctox-sync-production-readiness-95-wan-turn-matrix.json",
+            "wanTurnRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js",
+            "browserRecoveryMatrix": "runtime/build/ctox-sync-production-readiness-95-browser-recovery-matrix.json",
+            "browserRecoveryRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js",
+            "appRuntimePackageGate": "runtime/build/ctox-sync-production-readiness-95-app-runtime-package-gate.json",
+            "appRuntimePackageRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js",
+            "recordWorkbenchPilot": "runtime/build/ctox-sync-production-readiness-95-record-workbench-pilot.json",
+            "workflowPilot": "runtime/build/ctox-sync-production-readiness-95-workflow-pilot.json",
+            "runbookExercises": "runtime/build/ctox-sync-production-readiness-95-runbook-exercises.json",
+            "runbookExercisesRunner": "node src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js",
+            "evidenceAudit": "runtime/build/ctox-sync-production-readiness-95-evidence-audit.json",
+            "operatorReport": "runtime/build/ctox-sync-production-readiness-95-operator-report.json"
+        },
+        "missingEvidence": missing_evidence,
+        "blockers": blockers,
+    });
+
+    if let Some(object) = status.as_object_mut() {
+        object.insert("productionReadiness".to_owned(), readiness);
+    }
+    status
 }
 
 // Compact human summary of `native_peer_status` for `rxdb status`. The full
@@ -746,6 +925,20 @@ fn render_rxdb_peer_status_text(status: &serde_json::Value) -> String {
             out.push_str(&format!("  {database}: {count}\n"));
         }
     }
+    if let Some(readiness) = status.get("productionReadiness") {
+        let ready = readiness
+            .get("ready")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let blocker_count = readiness
+            .get("blockers")
+            .and_then(|value| value.as_array())
+            .map(|values| values.len())
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "Production readiness 9.5: ready={ready} blockers={blocker_count}\n"
+        ));
+    }
     out.push_str("Full detail: ctox business-os rxdb status --json\n");
     out
 }
@@ -754,8 +947,6 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("create") => handle_business_os_app_create(root, &args[1..]),
         Some("modify") => handle_business_os_app_modify(root, &args[1..]),
-        Some("runtime") => handle_business_os_app_runtime(root, &args[1..]),
-        Some("access") => handle_business_os_app_access(root, &args[1..]),
         Some("validate") => {
             let module_id = args
                 .get(1)
@@ -896,96 +1087,6 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os app command `{other}`"),
     }
-}
-
-fn handle_business_os_app_runtime(root: &Path, args: &[String]) -> anyhow::Result<()> {
-    match args.first().map(String::as_str) {
-        Some("inspect") => {
-            let module_id = args
-                .get(1)
-                .filter(|value| !value.starts_with("--"))
-                .context("usage: ctox business-os app runtime inspect <module-id> --json")?;
-            print_json(&crate::business_os::inspect_app_runtime_module(
-                root, module_id,
-            )?)
-        }
-        Some("reconcile") => {
-            let module_id = args
-                .get(1)
-                .filter(|value| !value.starts_with("--"))
-                .context(
-                "usage: ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)",
-            )?;
-            let apply = args.iter().any(|value| value == "--apply");
-            let dry_run = args.iter().any(|value| value == "--dry-run");
-            anyhow::ensure!(
-                apply != dry_run,
-                "runtime reconcile requires exactly one of --dry-run or --apply"
-            );
-            let inspection = crate::business_os::inspect_app_runtime_module(root, module_id)?;
-            let peer_reconfiguration = if apply {
-                crate::business_os::restart_native_peer(root)?
-            } else {
-                serde_json::json!({ "status": "would_supervise" })
-            };
-            print_json(&serde_json::json!({
-                "ok": true,
-                "module_id": module_id,
-                "apply": apply,
-                "runtime_hash": inspection.get("runtime_hash"),
-                "actions": inspection.get("actions"),
-                "collections": inspection.get("collections"),
-                "peer_reconfiguration": peer_reconfiguration,
-                "manual_restart_required": false,
-                "backend_recompile_required": false,
-            }))
-        }
-        Some("--help") | Some("-h") | None => {
-            println!("usage:\n  ctox business-os app runtime inspect <module-id> --json\n  ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)");
-            Ok(())
-        }
-        Some(other) => anyhow::bail!("unknown business-os app runtime command `{other}`"),
-    }
-}
-
-fn handle_business_os_app_access(root: &Path, args: &[String]) -> anyhow::Result<()> {
-    let operation = args.first().map(String::as_str).unwrap_or_default();
-    anyhow::ensure!(
-        matches!(operation, "grant" | "revoke"),
-        "usage: ctox business-os app access grant|revoke <module-id> --subject <id> [--subject-type user|role] --permission data.read|data.write --collection <name> --reason <text>"
-    );
-    let module_id = args
-        .get(1)
-        .filter(|value| !value.starts_with("--"))
-        .context("module id is required")?;
-    let subject_id = flag_value(args, "--subject")
-        .or_else(|| flag_value(args, "--subject-id"))
-        .context("--subject is required")?;
-    let permission = flag_value(args, "--permission").context("--permission is required")?;
-    let collection = flag_value(args, "--collection").context("--collection is required")?;
-    let command_id = format!("cmd_app_access_{}_{}", operation, Uuid::new_v4());
-    let document = serde_json::json!({
-        "id": command_id.as_str(),
-        "command_id": command_id.as_str(),
-        "module": "ctox",
-        "command_type": format!("ctox.app.access.{operation}"),
-        "record_id": module_id,
-        "payload": {
-            "module_id": module_id,
-            "subject_type": flag_value(args, "--subject-type").unwrap_or("user"),
-            "subject_id": subject_id,
-            "permission": permission,
-            "collection": collection,
-            "reason": flag_value(args, "--reason").unwrap_or("Business OS app access CLI change"),
-        },
-        "client_context": {
-            "source": "ctox-cli.business-os-app-access",
-            "actor": business_os_app_cli_actor(args),
-        }
-    });
-    print_json(&crate::business_os::store::accept_rxdb_business_command(
-        root, document,
-    )?)
 }
 
 fn handle_business_os_app_create(root: &Path, args: &[String]) -> anyhow::Result<()> {
@@ -2026,7 +2127,6 @@ fn business_os_app_reference_candidates(
             "Do not copy layout.icon_svg or any inline SVG from source manifests. Runtime apps keep SVG markup in icon.svg.",
             "Do not copy store.installable into runtime-installed module.json.",
             "Do not copy layout.right unless the app truly needs a third pane and module.json includes layout.third_pane_justification.",
-            "Default to data_runtime.version=1, sync=realtime and scope=actor. Use ctx.db for CRUD and ctx.actions only for bounded declarative Sagas.",
             "The skill contract and validator override any source reference field that conflicts with runtime-installed app rules."
         ],
         "runtime_manifest_contract": {
@@ -2034,12 +2134,6 @@ fn business_os_app_reference_candidates(
             "install_scope": "installed",
             "icon": "Use icon.svg. Do not copy layout.icon_svg or inline SVG into module.json.",
             "store": "Do not set store.installable for runtime-installed modules.",
-            "data_runtime": {
-                "version": 1,
-                "sync": "realtime",
-                "scope": "actor",
-                "actions": {}
-            },
             "layout": "Prefer left + center or a modal/drawer. Use layout.right only with layout.third_pane_justification."
         },
         "modules": modules,
@@ -3752,10 +3846,6 @@ fn business_os_usage() -> String {
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os app bench status --run-id <id> [--validate]",
         )
         .replace(
-            "  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]",
-            "  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app runtime inspect <module-id> --json\n  ctox business-os app runtime reconcile <module-id> (--dry-run | --apply)\n  ctox business-os app access grant|revoke <module-id> --subject <id> [--subject-type user|role] --permission data.read|data.write --collection <name> --reason <text>",
-        )
-        .replace(
             "  ctox business-os peer start\n  ctox business-os desktop invite",
             "  ctox business-os peer start\n  ctox business-os auth issue-capability --user <user-id> [--display-name <name>] [--role chef|admin|founder|user] [--ensure-user]\n  ctox business-os desktop invite",
         )
@@ -4790,65 +4880,14 @@ const pageSignals = async () => {
   return { url: page.url(), title, form_state: formState, auth_signals: authSignals };
 };
 const waitForAuthTransition = async (previousUrl, timeoutMs = 12000) => {
-  const deadline = Date.now() + timeoutMs;
-  const bounded = async (promise) => promise.catch(() => null);
-  await Promise.race([
-    bounded(page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs })),
-    bounded(page.waitForLoadState("domcontentloaded", { timeout: timeoutMs })),
-    bounded(page.waitForLoadState("networkidle", { timeout: timeoutMs })),
-  ]).catch(() => null);
-  const remaining = Math.max(500, Math.min(2500, deadline - Date.now()));
-  await page.waitForTimeout(remaining).catch(() => null);
-  return pageSignals();
-};
-const waitForVerifySelector = async (selector, timeoutMs = 12000) => {
-  if (!selector) return null;
-  try {
-    await page.locator(selector).first().waitFor({ state: "visible", timeout: timeoutMs });
-    return true;
-  } catch {
-    return false;
-  }
-};
-const clickLoginEntryPoint = async () => {
-  const entrySelectors = [
-    "a:has-text('Sign in')",
-    "a:has-text('Log in')",
-    "a:has-text('Login')",
-    "a:has-text('Anmelden')",
-    "a:has-text('Einloggen')",
-    "a[href*='login' i]",
-    "a[href*='signin' i]",
-    "a[href*='sign-in' i]",
-    "a[href*='auth' i]",
-    "a[href*='dashboard' i]",
-    "button:has-text('Sign in')",
-    "button:has-text('Log in')",
-    "button:has-text('Login')",
-    "button:has-text('Anmelden')",
-    "button:has-text('Einloggen')",
-    "[role='button']:has-text('Sign in')",
-    "[role='button']:has-text('Log in')",
-    "[role='button']:has-text('Login')",
-    "[role='button']:has-text('Anmelden')",
-    "[role='button']:has-text('Einloggen')",
+  const waiters = [
+    page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => null),
+    page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs }).catch(() => null),
+    page.waitForTimeout(1200).catch(() => null),
   ];
-  for (const selector of entrySelectors) {
-    try {
-      const locator = page.locator(selector).first();
-      if ((await locator.count()) < 1) continue;
-      const href = await locator.getAttribute("href").catch(() => null);
-      if (href) {
-        const hrefUrl = new URL(href, page.url());
-        if (hrefUrl.origin !== targetOrigin) continue;
-      }
-      const previousUrl = page.url();
-      await locator.click({ timeout: 3500 });
-      const signals = await waitForAuthTransition(previousUrl, 12000);
-      return { mode: "click-login-entry", selector, href, after: signals };
-    } catch {}
-  }
-  return null;
+  await Promise.race(waiters).catch(() => null);
+  await page.waitForTimeout(500).catch(() => null);
+  return pageSignals();
 };
 const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
@@ -4859,18 +4898,7 @@ if (loginHint) {
 }
 let credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
 let loginTransition = null;
-let loginEntryTransition = null;
 let afterLoginStepSignals = null;
-if (!credentialField && !loginField) {
-  loginEntryTransition = await clickLoginEntryPoint();
-  if (loginEntryTransition) {
-    afterLoginStepSignals = loginEntryTransition.after || await pageSignals();
-    if (loginHint) {
-      loginField = await fillField("login", loginHint);
-    }
-    credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
-  }
-}
 if (!credentialField && loginField) {
   loginTransition = await clickSubmit(loginField);
   if (loginTransition) {
@@ -4890,7 +4918,6 @@ if (!credentialField) {
     credential_ref: credentialRef,
     login_hint_present: !!loginHint,
     login_transition: loginTransition,
-    login_entry_transition: loginEntryTransition,
     mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
     login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
     auth_signals: missingFieldSignals.auth_signals,
@@ -4907,7 +4934,7 @@ const credentialSubmitBaseSignals = await pageSignals();
 const afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
 let verifyFound = null;
 if (configuredVerifySelector) {
-  verifyFound = await waitForVerifySelector(configuredVerifySelector, 12000);
+  verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
 }
 const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
 const urlChanged = afterSignals.url !== beforeSignals.url;
@@ -4950,7 +4977,6 @@ return {
   credential_ref: credentialRef,
   login_hint_present: !!loginHint,
   login_transition: loginTransition,
-  login_entry_transition: loginEntryTransition,
   mfa_required: mfaRequired,
   login_error_detected: loginErrorDetected,
   auth_signals: authSignals,
@@ -5537,6 +5563,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rxdb_status_includes_production_readiness_contract() {
+        let status = enrich_rxdb_peer_status_with_production_readiness(serde_json::json!({
+            "running": true,
+            "replicationUp": true,
+            "heartbeat": {
+                "fresh": true,
+            },
+            "health": {
+                "errorTotal": 0,
+            },
+            "health_stages": {
+                "command_consumer_alive": true,
+                "turn_credential_ready": true,
+                "projection_outbox": 0,
+            },
+            "criticalTasks": [
+                { "name": "command-consumer", "alive": true }
+            ],
+            "circuitBreaker": {
+                "state": "closed",
+            },
+            "command_plane": {
+                "pending_sync_count": 0,
+                "oldest_pending_age_ms": null,
+            },
+        }));
+        assert_eq!(
+            status
+                .pointer("/productionReadiness/schema")
+                .and_then(serde_json::Value::as_str),
+            Some("ctox.sync.production_readiness_95.status.v1")
+        );
+        assert_eq!(
+            status
+                .pointer("/productionReadiness/sloTargets/wanReplicationP95Ms")
+                .and_then(serde_json::Value::as_u64),
+            Some(5_000)
+        );
+        assert_eq!(
+            status
+                .pointer("/productionReadiness/releaseGates/fullMatrixMinimumModes")
+                .and_then(serde_json::Value::as_u64),
+            Some(40)
+        );
+        assert!(status
+            .pointer("/productionReadiness/blockers")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers
+                .iter()
+                .any(|blocker| blocker == "missing_evidence:canary_72h")));
+        assert_eq!(
+            status
+                .pointer("/productionReadiness/evidenceArtifacts/wanTurnMatrix")
+                .and_then(serde_json::Value::as_str),
+            Some("runtime/build/ctox-sync-production-readiness-95-wan-turn-matrix.json")
+        );
+        assert_eq!(
+            status
+                .pointer("/productionReadiness/evidenceArtifacts/templateCatalog")
+                .and_then(serde_json::Value::as_str),
+            Some("node src/core/rxdb/tools/print_sync_production_readiness_95_templates.js")
+        );
+        assert!(status
+            .pointer("/productionReadiness/missingEvidence")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|evidence| evidence
+                .iter()
+                .any(|entry| entry == "app_runtime_package_gate")));
+        let rendered = render_rxdb_peer_status_text(&status);
+        assert!(rendered.contains("Production readiness 9.5:"));
+    }
+
+    #[test]
     fn web_stack_redaction_audit_reports_canary_without_echoing_value() {
         let root = tempfile::tempdir().expect("temp root");
         let runtime_dir = root.path().join("runtime");
@@ -5607,10 +5706,7 @@ mod tests {
         assert!(source.contains("login-error-detected"));
         assert!(source.contains("verify-selector-not-found"));
         assert!(source.contains("waitForAuthTransition"));
-        assert!(source.contains("waitForVerifySelector"));
         assert!(source.contains("login_transition"));
-        assert!(source.contains("clickLoginEntryPoint"));
-        assert!(source.contains("login_entry_transition"));
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));

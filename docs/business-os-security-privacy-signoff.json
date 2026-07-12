@@ -3,7 +3,7 @@
   "status": "pending-signoff",
   "reviewer": "TBD",
   "reviewed_at": "TBD",
-  "evidence_revision": "f2cdd6a8d276d3d70f0930ed8d73c4f641ecc9c6",
+  "evidence_revision": "4d1cc9e321030e1afa0260d137cab102b0366ece",
   "controls": {
     "dynamic_app_runtime_boundary": {
       "status": "pending",
@@ -60,21 +60,66 @@
         "src/core/rxdb/tools/browser_rust_smoke_matrix.js",
         "runtime/build/business-os-smoke-matrix-summary.json"
       ]
+    },
+    "sync_recovery_crypto_boundary": {
+      "status": "pending",
+      "evidence": [
+        "docs/ctox-sync-production-readiness-95.md",
+        "docs/ctox-sync-production-readiness-runbooks.md",
+        "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js"
+      ]
+    },
+    "webrtc_peer_identity_transport": {
+      "status": "pending",
+      "evidence": [
+        "docs/ctox-rxdb.md",
+        "src/core/rxdb/tools/browser_rust_smoke_matrix.js",
+        "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js"
+      ]
+    },
+    "saga_idempotency_compensation": {
+      "status": "pending",
+      "evidence": [
+        "docs/ctox-sync-production-readiness-95.md",
+        "docs/ctox-sync-production-readiness-runbooks.md",
+        "src/core/service/business_os.rs"
+      ]
+    },
+    "production_evidence_runbook_integrity": {
+      "status": "pending",
+      "evidence": [
+        ".github/workflows/rxdb-production-readiness.yml",
+        "src/core/rxdb/tools/assert_sync_production_readiness_95.js",
+        "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js",
+        "docs/ctox-sync-production-readiness-runbooks.md"
+      ]
     }
   },
   "source_hashes": {
-    "src/apps/business-os/app.js": "ec25ef4fd0ded5994c4aae5f529ad199e73b1da3857098da648807eae4d28ed7",
-    "src/apps/business-os/scripts/validate-app-module.test.mjs": "97c1c809f7e896235fdb2d1185891abb98dfaa92846d299dee31561e72f70944",
-    "src/core/business_os/store.rs": "c73369d7d1c41298eb72322efce7d2f46b7e003f9106af0ef517b7caf7932a4f",
-    "src/core/business_os/mcp_channel.rs": "ed9c03931b8435f99e52735aa7182a60454e2e87150e628b4b69e1ddb246509c",
-    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "83016eab861f27ae85a84845ccdd905aacae27d6814fb9fac0a3cf0e87655a22",
-    "src/core/rxdb/tools/business_os_production_smoke_registry.js": "e7460061b6ac9c6f1a87d979f8950d217119ca8ee7e54fb5d8f0c741771b036f",
-    ".github/workflows/release.yml": "c3d8255d918a95be999e3b8edaffb2fb3ae69773e0008587a4cd3fcac61639ab"
+    ".github/workflows/release.yml": "4f437bf7551deeddd42423f95d9c3614ad844380a4f76629f1ff2644c73a44a4",
+    ".github/workflows/rxdb-production-readiness.yml": "464c0ab63d61a2dd315c320290eb0296ae8554880cf98ebc050ad913392e4180",
+    "docs/ctox-sync-production-readiness-95.md": "ba0871bb612f242de3d395964c394a7f4a15098fd4f8c0f1bab83b94e91f298e",
+    "docs/ctox-sync-production-readiness-runbooks.md": "ee9c8ab96b93f50582c61cdc3dc8efb66802ae6f3d07970307da4943eb6c30b2",
+    "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "30d761ec41f4ae8f44b867fc9eb77f79c578e71ec96995a50a6d6cb445776bee",
+    "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "f9a38ae322476a2cd5f372c199d9dd98247b6a2b1174056f112be9b5154a5b9e",
+    "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "6680689434597cfe5b812cb66b151f741553b18ee2041c5c28a82197c9619696",
+    "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "fc9c3ed8efce75d9a1fb46f490bd2e8ae6cec12dbc71b6f65d3fcd75f947f868",
+    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "3df0f35fe6d0127d2f5a972991bc1bcbd650f5a77a62e7046522c607a913b28f",
+    "src/core/rxdb/tools/business_os_production_smoke_registry.js": "ae944b995a6c0505d6f55ac8b7b269394bf60f719c9bbb5878ece9199d83978d",
+    "src/core/rxdb/tools/print_sync_production_readiness_95_report.js": "b869981b857b2d7cfd9c13bbdaeab593e8c0727f838a0404befc060152d7bd14",
+    "src/core/rxdb/tools/print_sync_production_readiness_95_templates.js": "250a11b9db74046ae6a693eb5a89da290b00e058d51d4dedfe14eb9ac7bcb376",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js": "4dc82bea23b163b07f7f7adceeaef94c5c5a3e259df1b4276d336558b7aa077c",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js": "b02dd2ca2f6a2d9eebe0348dfb8fc91be5f912adb763618b9432ff68d3b4f389",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js": "5cd5cd0f28babaa593d2b8eed5bdb68fa7e53f5aa9224da10dc1a1e4d85edcc8",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js": "d2bdf35fddf02c14df36a052684d262a2a28b483e8a3df9a5bcd15e0164f0d35",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js": "18bc8865db683c380f4c8fcc7f5313ebb6f9222252aeb0005b91a4d2bb902d1e",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js": "fc4d09d3bdd6673e9bcbdcd42c5003524f4aba93633e8295a43456498122ef2e"
   },
   "notes": [
     "Runtime-installed apps are same-origin trusted generated apps, not sandboxed iframes.",
     "MCP external effects remain blocked for the current rollout.",
     "Pending signoff intentionally blocks release tags.",
+    "9.5 sync readiness adds pending controls for recovery crypto, peer identity, Saga compensation, and runbook/evidence integrity.",
     "Automated evidence hashes were prepared on 2026-06-18; controls remain pending until an explicit release/security reviewer signs off."
   ]
 }

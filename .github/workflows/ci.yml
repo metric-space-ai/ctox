@@ -182,7 +182,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           bash -n install.sh
-          bash tests/install_grepplus_shim_smoke.sh
+          bash tests/install_greppy_shim_smoke.sh
 
       - name: AppSec non-network fixture gates
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -205,6 +205,17 @@ jobs:
           node --check src/core/rxdb/tools/business_os_production_smoke_registry.js
           node --check src/core/rxdb/tools/print_soak_summary.js
           node --check src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node --check src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node --check src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node --check src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_templates.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_report.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js
           node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js
           node --check src/core/rxdb/tools/assert_js_no_package_manager.js
           node --check src/core/rxdb/tools/business_os_connection_modes_smoke.js
@@ -212,6 +223,7 @@ jobs:
           node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
+          node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           node --check src/apps/business-os/scripts/assert-module-conformance.mjs
           node --check src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
@@ -226,7 +238,21 @@ jobs:
           node src/apps/business-os/scripts/assert-module-context-contract.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-business-chat-layout.mjs
+          node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
+          node src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_templates.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js --self-test
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js || true
           node src/core/rxdb/tools/assert_js_fork_release_evidence.js
           node src/core/rxdb/tools/assert_js_no_package_manager.js
           SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
@@ -314,10 +340,12 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+          npm --prefix src/apps/business-os run qa:design-gates
+          node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
           SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
           SMOKE_MODES="$SMOKE_MODES" \
-          SMOKE_MATRIX_ATTEMPTS=2 \
+          SMOKE_MATRIX_ATTEMPTS=1 \
           SMOKE_PAGE_PATH=/index.html \
           SMOKE_MODE_TIMEOUT_MS=300000 \
           SMOKE_BROWSER_WARNING_BUDGET=0 \
@@ -332,7 +360,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: business-os-production-smoke-evidence
-          path: runtime/build/business-os-smoke-matrix-summary.json
+          path: |
+            runtime/build/business-os-smoke-matrix-summary.json
+            output/playwright/business-os-design-matrix/
+            output/playwright/business-os-design-diff/visual-diff.json
+            output/playwright/business-os-accessibility-contract.json
           if-no-files-found: error
 
       - name: Check

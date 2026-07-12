@@ -74,5 +74,9 @@ tmp_intersolar_*.js
 !/docs/business-os-app-development.md
 !/docs/business-os-app-platform-refactoring-plan.md
 !/docs/business-os.md
+!/docs/ctox-rxdb.md
+!/docs/ctox-sync-production-readiness-95.md
+!/docs/ctox-sync-production-readiness-runbooks.md
 !/docs/core_runtime_state_machine.md
 !/docs/harness-operating-model.md
+!/docs/ctox-office-port-plan.md

@@ -22,6 +22,7 @@ const smokeModes = extractSmokeModes(fs.readFileSync(path.join(__dirname, 'brows
 const workflowDefaultModes = extractWorkflowDefaultModes(workflow);
 const workflowRequiredModes = extractWorkflowRequiredModes(workflow);
 
+assertAtLeast('runner default modes', runnerModes, 33);
 assertUnique('runner default modes', runnerModes);
 assertUnique('smoke matrix default modes', matrixModes);
 assertUnique('smoke matrix evidence modes', evidenceModes);
@@ -47,7 +48,13 @@ assertIncludes(
 );
 assertIncludes(workflow, 'workflow_call:', 'soak workflow must be reusable by the release workflow');
 assertIncludes(workflow, 'schedule:', 'soak workflow must run nightly');
+assertIncludes(workflow, 'timeout-minutes: 360', 'nightly nine-cycle soak needs a production-readiness timeout budget');
 assertIncludes(workflow, "github.event_name == 'schedule' && '9'", 'nightly soak must run nine cycles');
+assertIncludes(
+  workflow,
+  "github.event_name == 'schedule' && 'runtime/build/ctox-sync-production-readiness-95-nightly-soak.json' || 'rxdb-soak-summary.json'",
+  'nightly soak must write the production-readiness artifact path while release soak keeps rxdb-soak-summary.json',
+);
 assertIncludes(
   workflow,
   'require_release_coverage:\n        description: "Fail unless all release smoke modes are included"\n        required: true\n        default: "true"',
@@ -86,6 +93,9 @@ function extractMatrixEvidenceModes(source) {
   const match = source.match(/const modeEvidenceRequirements = \{([\s\S]*?)\};\nconst modes = /);
   if (!match) fail('modeEvidenceRequirements map not found in browser_rust_smoke_matrix.js');
   const modes = [...match[1].matchAll(/^\s+'([^']+)':\s*\{/gm)].map((entry) => entry[1]);
+  if (match[1].includes('...businessOsProductionSmokeEvidenceRequirements')) {
+    modes.push(...businessOsProductionSmokeModes);
+  }
   if (!modes.length) fail('modeEvidenceRequirements map is empty');
   return modes;
 }
@@ -145,6 +155,12 @@ function assertUnique(label, values) {
   }
   if (duplicates.length) {
     fail(`${label} contains duplicate mode(s): ${duplicates.join(', ')}`);
+  }
+}
+
+function assertAtLeast(label, values, minimum) {
+  if (values.length < minimum) {
+    fail(`${label} coverage regressed below ${minimum}: got ${values.length}`);
   }
 }
 

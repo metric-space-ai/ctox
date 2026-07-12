@@ -24,9 +24,9 @@ const smokeBinaryPath = process.env.CTOX_BIN
 const defaultSoakModes = [
   'browser-to-rust',
   'command-browser-to-rust',
-  'client-app-hot-registration-browser-to-rust',
-  'client-app-action-saga-browser-to-rust',
   'tickets-browser-to-rust',
+  'business-os-app-release-ui',
+  'business-os-app-audience-ui',
   'migration-version-browser-to-rust',
   'command-burst-browser-to-rust',
   'command-reload-browser-to-rust',
