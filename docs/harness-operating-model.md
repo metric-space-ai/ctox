@@ -144,6 +144,19 @@ continuity, mission, or the general review skill. A missing durable text
 contract, action-mode command, or data command with dependencies or attachments
 stays on the full evidence reviewer.
 
+### Durable hold boundary
+
+Failure to persist the typed worker result or the review evidence is a
+technical completion hold, not successful completion and not an untyped queue
+release. For queue-backed Business OS commands, the hold boundary atomically
+updates the command phase, queue route, lease fields, finite retry count,
+backoff, and typed hold reason in the canonical SQLite store. A technical hold
+therefore leaves both identities retryable (`command=retry_wait`,
+`queue=pending`) or leaves both unchanged if the transaction fails. External
+waits use the same boundary with `command=blocked`, `queue=blocked`, and the
+durable `WaitRef`; exhausted technical holds terminalize command and queue
+together as failed.
+
 ## Witness Of Progress
 
 Every rejected review must have a witness before the same artifact can pass

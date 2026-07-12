@@ -27347,10 +27347,6 @@ Business OS command:
             }),
         );
         let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("state poisoned");
-            shared.busy = true;
-        }
 
         route_external_messages(&root, &state).expect("route meeting chat");
 
@@ -27375,10 +27371,6 @@ Business OS command:
             json!({ "priority": "normal" }),
         );
         let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("state poisoned");
-            shared.busy = true;
-        }
 
         route_external_messages(&root, &state).expect("route tui probe");
 
@@ -30735,6 +30727,26 @@ Business OS command:
         .expect("failed to point app queue task at app workspace root");
         channels::lease_queue_task(&root, &task_id, "ctox-service-test")
             .expect("failed to lease app queue task");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "worker leased app queue task",
+        )
+        .expect("failed to lease app command");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "worker started app command",
+        )
+        .expect("failed to start app command");
         age_queue_task_lease(&root, &task_id, 5);
         seed_business_os_app_artifacts(&app_workspace_root, "subscriptions");
         let task = channels::load_queue_task(&root, &task_id)

@@ -3133,19 +3133,38 @@ pub fn hold_leased_messages(
 ) -> Result<usize> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
+    ensure_queue_account(&mut conn)?;
+    let tx = conn.transaction()?;
     let now = now_iso_string();
     let mut updated = 0usize;
     for message_key in message_keys {
         match reason {
             HoldReason::WaitingExternal(wait_ref) => {
-                updated += ack_messages(
-                    &mut conn,
-                    std::slice::from_ref(message_key),
+                let command_transitioned = transition_business_command_for_task_in_transaction(
+                    &tx,
+                    message_key,
                     "blocked",
                     None,
-                    Some("waiting_external"),
+                    None,
+                    Some(summary.trim()),
+                    "waiting_external",
                 )?;
-                conn.execute(
+                if !command_transitioned {
+                    updated += ack_messages_in_transaction(
+                        &tx,
+                        std::slice::from_ref(message_key),
+                        "blocked",
+                        None,
+                        Some("waiting_external"),
+                    )?;
+                } else {
+                    updated += 1;
+                }
+                anyhow::ensure!(
+                    current_queue_route_status(&tx, message_key)? == "blocked",
+                    "waiting-external hold did not persist the linked queue route"
+                );
+                tx.execute(
                     r#"
                     UPDATE communication_routing_state
                     SET hold_reason='waiting_external', wait_entity_type=?2,
@@ -3165,7 +3184,7 @@ pub fn hold_leased_messages(
             HoldReason::Technical { .. }
             | HoldReason::MissingReviewEvidence
             | HoldReason::MissingArtifact => {
-                let previous_attempts: i64 = conn
+                let previous_attempts: i64 = tx
                     .query_row(
                         "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
                         params![message_key],
@@ -3197,14 +3216,31 @@ pub fn hold_leased_messages(
                         .min(3_600);
                     (Utc::now() + Duration::seconds(seconds)).to_rfc3339()
                 });
-                updated += ack_messages(
-                    &mut conn,
-                    std::slice::from_ref(message_key),
+                let command_transitioned = transition_business_command_for_task_in_transaction(
+                    &tx,
+                    message_key,
                     next_status,
-                    exhausted.then_some(summary.trim()),
-                    (!exhausted).then_some("budgeted_completion_hold"),
+                    None,
+                    None,
+                    Some(summary.trim()),
+                    "budgeted_completion_hold",
                 )?;
-                conn.execute(
+                if !command_transitioned {
+                    updated += ack_messages_in_transaction(
+                        &tx,
+                        std::slice::from_ref(message_key),
+                        next_status,
+                        exhausted.then_some(summary.trim()),
+                        (!exhausted).then_some("budgeted_completion_hold"),
+                    )?;
+                } else {
+                    updated += 1;
+                }
+                anyhow::ensure!(
+                    current_queue_route_status(&tx, message_key)? == next_status,
+                    "budgeted completion hold did not persist the linked queue route"
+                );
+                tx.execute(
                     r#"
                     UPDATE communication_routing_state
                     SET failure_class=?2, failure_attempt_count=?3,
@@ -3226,6 +3262,7 @@ pub fn hold_leased_messages(
             }
         }
     }
+    tx.commit()?;
     Ok(updated)
 }
 
@@ -4297,6 +4334,28 @@ pub(crate) fn transition_business_command_for_task(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     let tx = conn.transaction()?;
+    let transitioned = transition_business_command_for_task_in_transaction(
+        &tx,
+        task_id,
+        route_status,
+        result,
+        error_code,
+        error_message,
+        reason,
+    )?;
+    tx.commit()?;
+    Ok(transitioned)
+}
+
+fn transition_business_command_for_task_in_transaction(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    route_status: &str,
+    result: Option<&Value>,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+    reason: &str,
+) -> Result<bool> {
     let command_id = tx
         .query_row(
             "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
@@ -4305,7 +4364,6 @@ pub(crate) fn transition_business_command_for_task(
         )
         .optional()?;
     let Some(command_id) = command_id else {
-        tx.commit()?;
         return Ok(false);
     };
     let (from_phase, prior_terminal, version) = tx.query_row(
@@ -4348,7 +4406,6 @@ pub(crate) fn transition_business_command_for_task(
             terminal_status == prior_terminal || terminal_status == "none",
             "terminal command transition conflict for task `{task_id}`"
         );
-        tx.commit()?;
         return Ok(true);
     }
     crate::business_os::command_lifecycle::validate_execution_phase_transition(
@@ -4499,7 +4556,6 @@ pub(crate) fn transition_business_command_for_task(
         }),
         now_ms,
     )?;
-    tx.commit()?;
     Ok(true)
 }
 
@@ -11746,6 +11802,19 @@ fn ack_messages(
     failure_note: Option<&str>,
     ack_reason: Option<&str>,
 ) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let updated = ack_messages_in_transaction(&tx, message_keys, status, failure_note, ack_reason)?;
+    tx.commit()?;
+    Ok(updated)
+}
+
+fn ack_messages_in_transaction(
+    tx: &Transaction<'_>,
+    message_keys: &[String],
+    status: &str,
+    failure_note: Option<&str>,
+    ack_reason: Option<&str>,
+) -> Result<usize> {
     let now = now_iso_string();
     let acked_at = if matches!(status, "handled" | "cancelled") {
         Some(now.as_str())
@@ -11762,7 +11831,6 @@ fn ack_messages(
     } else {
         None
     };
-    let tx = conn.unchecked_transaction()?;
     let mut updated = 0usize;
     for message_key in message_keys {
         let previous_route_status = current_queue_route_status(&tx, message_key)?;
@@ -11801,7 +11869,6 @@ fn ack_messages(
             params![message_key],
         )?;
     }
-    tx.commit()?;
     Ok(updated)
 }
 
@@ -18771,6 +18838,7 @@ mod tests {
         )
         .expect("claim command");
         let task_id = claimed.task.message_key;
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
         transition_business_command_for_task(
             &root,
             &task_id,
@@ -18930,6 +18998,7 @@ mod tests {
         )
         .expect("claim command");
         let task_id = claimed.task.message_key;
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
         transition_business_command_for_task(
             &root,
             &task_id,
@@ -18960,6 +19029,9 @@ mod tests {
             &json!({"feedback": "fix it"}),
         )
         .expect("record rework");
+        ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
+            .expect("release first queue attempt");
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease second queue attempt");
         transition_business_command_for_task(
             &root,
             &task_id,
@@ -19016,6 +19088,7 @@ mod tests {
         )
         .expect("claim command");
         let task_id = claimed.task.message_key;
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
         transition_business_command_for_task(
             &root,
             &task_id,
@@ -19053,6 +19126,9 @@ mod tests {
         assert_eq!(projection["terminal_status"], "none");
         assert_eq!(projection["retryable"], true);
 
+        ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
+            .expect("release held queue attempt");
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease review retry queue attempt");
         transition_business_command_for_task(
             &root,
             &task_id,
@@ -19066,6 +19142,86 @@ mod tests {
         let projection = business_command_projection(&root, "command-review-unavailable")
             .expect("reload projection");
         assert_eq!(projection["execution_phase"], "leased");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn typed_result_persistence_hold_retries_command_and_queue_together() {
+        let root = business_command_test_root("ctox-business-command-result-hold");
+        let claimed = claim_business_command_with_queue(
+            &root,
+            business_command_claim("command-result-hold", "sha256:result-hold"),
+            QueueTaskCreateRequest {
+                title: "Retry typed result persistence".to_string(),
+                prompt: "Return a small supplied-fact answer.".to_string(),
+                thread_key: "business-os/tests/result-hold".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key": "command-result-hold"})),
+            },
+        )
+        .expect("claim command");
+        let task_id = claimed.task.message_key;
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "worker leased",
+        )
+        .expect("lease command");
+        transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "worker started",
+        )
+        .expect("start command");
+
+        hold_leased_messages(
+            &root,
+            std::slice::from_ref(&task_id),
+            &HoldReason::Technical {
+                policy_id: "typed-command-result-persist".to_string(),
+            },
+            "database is locked while persisting typed result",
+        )
+        .expect("persist atomic command and queue hold");
+
+        let task = load_queue_task(&root, &task_id)
+            .expect("load held queue task")
+            .expect("queue task exists");
+        assert_eq!(task.route_status, "pending");
+        assert!(task.lease_owner.is_none());
+        assert!(task.leased_at.is_none());
+        let projection = business_command_projection(&root, "command-result-hold")
+            .expect("load held command projection");
+        assert_eq!(projection["execution_phase"], "retry_wait");
+        assert_eq!(projection["terminal_status"], "none");
+        assert_eq!(projection["retryable"], true);
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+        let (attempts, retry_not_before, hold_reason): (i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT failure_attempt_count, retry_not_before, hold_reason FROM communication_routing_state WHERE message_key=?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("load durable hold metadata");
+        assert_eq!(attempts, 1);
+        assert!(retry_not_before.is_some());
+        assert_eq!(
+            hold_reason.as_deref(),
+            Some("technical:typed-command-result-persist")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

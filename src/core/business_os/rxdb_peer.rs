@@ -13989,6 +13989,18 @@ mod tests {
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    fn issue_test_capability(root: &Path, user_id: &str, role: &str) -> String {
+        store::issue_business_os_capability_token_for_managed_user(
+            root,
+            user_id,
+            user_id,
+            role,
+            now_ms() as i64,
+        )
+        .expect("issue Business OS test capability")
+        .0
+    }
+
     /// Idle-discipline ratchet (strategy rule: "idle must stay idle", see
     /// docs/ctox-os-framework-strategy.md). Every background loop in this
     /// file must engage one of the sanctioned idle strategies — interval
@@ -21148,6 +21160,36 @@ mod tests {
             channels::lease_queue_task(root.path(), &task_id, "ctox-service")
                 .expect("lease chat command queue task");
             let reply_text = "Sichtbare CTOX Antwort bleibt erhalten.";
+            channels::transition_business_command_for_task(
+                root.path(),
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "test worker leased chat command",
+            )
+            .expect("lease chat command");
+            channels::transition_business_command_for_task(
+                root.path(),
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "test worker started chat command",
+            )
+            .expect("start chat command");
+            channels::persist_business_command_worker_result(root.path(), &task_id, reply_text)
+                .expect("persist typed chat result");
+            channels::record_business_command_review(
+                root.path(),
+                &task_id,
+                "passed",
+                "passed",
+                &json!({"review": "PASS", "validation": "PASS"}),
+            )
+            .expect("persist chat review and validation");
             let completed = store::complete_business_command_from_queue_reply(
                 root.path(),
                 &task_id,
@@ -21383,6 +21425,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "tester", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -21407,7 +21450,8 @@ mod tests {
                             "display_name": "Tester",
                             "role": "admin",
                             "is_admin": true
-                        }
+                        },
+                        "capability_token": capability_token
                     },
                     "updated_at_ms": now_ms() as u64
                 }))
@@ -21482,6 +21526,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "tester", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -21506,7 +21551,8 @@ mod tests {
                             "display_name": "Tester",
                             "role": "admin",
                             "is_admin": true
-                        }
+                        },
+                        "capability_token": capability_token
                     },
                     "updated_at_ms": now_ms() as u64
                 }))
@@ -21592,6 +21638,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "tester", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -21624,7 +21671,8 @@ mod tests {
                                 "display_name": "Tester",
                                 "role": "admin",
                                 "is_admin": true
-                            }
+                            },
+                            "capability_token": capability_token.clone()
                         },
                         "updated_at_ms": now_ms() as u64
                     }))
@@ -21698,6 +21746,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "chef", "chef");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -21711,7 +21760,10 @@ mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "ctox",
                     "payload": { "title": "Task seed", "instruction": "test only" },
-                    "client_context": {},
+                    "client_context": {
+                        "actor": { "id": "chef", "display_name": "Chef" },
+                        "capability_token": capability_token.clone()
+                    },
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -21757,7 +21809,8 @@ mod tests {
                             "display_name": "Chef",
                             "role": "chef",
                             "is_admin": false
-                        }
+                        },
+                        "capability_token": capability_token
                     },
                     "updated_at_ms": now_ms() as u64
                 }))
@@ -21883,6 +21936,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "business-user", "user");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -21910,6 +21964,7 @@ mod tests {
                             "role": "user",
                             "is_admin": false
                         },
+                        "capability_token": capability_token,
                         "source": "test"
                     },
                     "updated_at_ms": now_ms() as u64
@@ -22013,6 +22068,7 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "chef", "chef");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -22026,7 +22082,11 @@ mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "source-demo",
                     "payload": { "module_id": "source-demo" },
-                    "client_context": { "source": "test" },
+                    "client_context": {
+                        "actor": { "id": "chef", "display_name": "Chef" },
+                        "capability_token": capability_token.clone(),
+                        "source": "test"
+                    },
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -22074,6 +22134,7 @@ mod tests {
                             "role": "chef",
                             "is_admin": false
                         },
+                        "capability_token": capability_token,
                         "source": "test"
                     },
                     "updated_at_ms": now_ms() as u64
@@ -22116,10 +22177,17 @@ mod tests {
     #[test]
     fn native_peer_consumes_pending_module_governance_commands() {
         let root = tempfile::tempdir().expect("temp root");
+        let admin_token = issue_test_capability(root.path(), "admin", "admin");
         let module_root = root.path().join("src/apps/business-os/modules/gov-demo");
         std::fs::create_dir_all(&module_root).expect("create module root");
         std::fs::write(root.path().join("src/apps/business-os/index.html"), "")
             .expect("write app index");
+        let validator = root
+            .path()
+            .join("src/apps/business-os/scripts/validate-app-module.mjs");
+        std::fs::create_dir_all(validator.parent().expect("validator parent"))
+            .expect("create validator directory");
+        std::fs::write(&validator, "process.exit(0);\n").expect("write validator stub");
         std::fs::write(
             module_root.join("module.json"),
             r#"{"id":"gov-demo","title":"Governance Demo v1"}"#,
@@ -22185,6 +22253,7 @@ mod tests {
                         "active": true
                     },
                     "client_context": {
+                        "capability_token": admin_token,
                         "actor": {
                             "id": "admin",
                             "display_name": "Admin",
@@ -22235,6 +22304,8 @@ mod tests {
                 )
                 .expect("seed workspace owner");
             drop(owner_conn);
+            let workspace_owner_token =
+                issue_test_capability(root.path(), "workspace-owner", "chef");
 
             commands
                 .insert(json!({
@@ -22252,6 +22323,7 @@ mod tests {
                         "active": true
                     },
                     "client_context": {
+                        "capability_token": workspace_owner_token,
                         "actor": {
                             "id": "workspace-owner",
                             "display_name": "Workspace Owner",
@@ -22294,6 +22366,7 @@ mod tests {
                 })
                 .unwrap_or(false);
             assert!(has_chef, "user_command={user_command}");
+            let chef_token = issue_test_capability(root.path(), "chef", "chef");
 
             commands
                 .insert(json!({
@@ -22311,6 +22384,7 @@ mod tests {
                         "active": true
                     },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22372,6 +22446,7 @@ mod tests {
                         "max_run_secs": 120
                     },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22415,6 +22490,7 @@ mod tests {
                     "inbound_channel": "ctox",
                     "payload": {},
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22466,6 +22542,7 @@ mod tests {
                     "inbound_channel": "gov-demo",
                     "payload": { "module_id": "gov-demo", "user_id": "module-owner", "active": true },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22515,6 +22592,7 @@ mod tests {
                         "layout": { "shell": "pane", "center": "module workspace" }
                     },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22570,6 +22648,7 @@ mod tests {
                         "title": "Installed From Template"
                     },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22603,6 +22682,7 @@ mod tests {
                     "inbound_channel": "installed-from-template",
                     "payload": { "module_id": "installed-from-template" },
                     "client_context": {
+                        "capability_token": chef_token.clone(),
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",
@@ -22647,6 +22727,7 @@ mod tests {
                         "inbound_channel": "gov-demo",
                         "payload": { "module_id": "gov-demo", "notes": notes },
                         "client_context": {
+                            "capability_token": chef_token.clone(),
                             "actor": {
                                 "id": "chef",
                                 "display_name": "Chef",
@@ -22707,6 +22788,7 @@ mod tests {
                     "inbound_channel": "gov-demo",
                     "payload": { "module_id": "gov-demo", "version_id": first_version_id.clone() },
                     "client_context": {
+                        "capability_token": chef_token,
                         "actor": {
                             "id": "chef",
                             "display_name": "Chef",

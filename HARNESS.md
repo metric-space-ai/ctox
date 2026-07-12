@@ -247,6 +247,14 @@ Their linked Business OS command remains `retry_wait`, not `blocked`, so the
 same command/task identity can be leased again after the durable cooldown.
 Only `WaitingExternal` remains dormant `blocked` until its referenced event.
 
+The hold transition is one SQLite transaction for queue-backed Business OS
+commands. It moves the command (`retry_wait`, `blocked`, or terminal `failed`),
+the linked queue route, the lease fields, the retry counter/backoff, and the
+typed hold metadata together. In particular, a successful model turn whose
+typed result or review evidence cannot be persisted must not leave a
+`running` command behind a `pending` queue row. Either the complete hold is
+durable or none of it is.
+
 Only approved work can move into terminal handling. For communication and other
 artifact-producing work, the outcome witness checks that required durable
 artifacts exist. The service then enforces reviewed terminal success through
