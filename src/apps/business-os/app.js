@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260711-app-runtime-v3';
+const APP_BUILD = '20260712-data-guard-v1';
 
 ensureShellStylesheets();
 
@@ -5234,12 +5234,28 @@ function guardAllowsCollectionPermission(guard, collectionName, permission) {
   // collection grant. Module-scope permissions decide lifecycle/open/modify
   // authority; they must not unlock arbitrary declared data collections.
   if (!guard.collections.has(name)) return false;
-  return canUseBusinessPermission({
-    session: state.session,
-    governance: state.governance,
-    permission,
-    scopeType: 'collection',
-    scopeId: name,
+  return hasReviewedCollectionDataGrant(name, permission);
+}
+
+function hasReviewedCollectionDataGrant(collectionName, permission) {
+  const collection = String(collectionName || '').trim();
+  if (!collection || !permission) return false;
+  const actor = actorContext(state.session);
+  const grants = state.governance?.permission_model?.explicit_grants
+    || state.governance?.governance?.permission_model?.explicit_grants
+    || [];
+  return (Array.isArray(grants) ? grants : []).some((grant) => {
+    if (!grant || grant.active === false) return false;
+    const grantId = String(grant.grant_id || '').trim();
+    if (grantId.startsWith('migration.sync.')) return false;
+    if (String(grant.permission || '') !== permission) return false;
+    if (String(grant.scope_type || '') !== 'collection') return false;
+    if (String(grant.scope_id || '').trim() !== collection) return false;
+    const subjectType = String(grant.subject_type || '').trim();
+    const subjectId = String(grant.subject_id || '').trim();
+    if (subjectType === 'user') return Boolean(actor.id) && subjectId === actor.id;
+    if (subjectType === 'role') return normalizeRole(subjectId) === actor.role;
+    return false;
   });
 }
 
@@ -6119,13 +6135,7 @@ function canUseModulePermission(mod, permission) {
 function canUseModuleDataPermission(mod, collectionName, permission) {
   const collection = String(collectionName || '').trim();
   if (!collection || !permission) return false;
-  return canUseBusinessPermission({
-    session: state.session,
-    governance: state.governance,
-    permission,
-    scopeType: 'collection',
-    scopeId: collection,
-  });
+  return hasReviewedCollectionDataGrant(collection, permission);
 }
 
 function openModuleEditDrawer(mod) {
