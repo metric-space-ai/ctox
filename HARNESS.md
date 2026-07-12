@@ -261,6 +261,12 @@ inside that transaction. A caller therefore cannot receive an error after the
 lease has already committed and accidentally leave a durable task without an
 active or buffered worker.
 
+The router's one-hour unchanged-source idle gate has a separate, cheap durable
+queue safety poll every 30 seconds. This uncached count is the WAL-safe wakeup
+backstop: a pending queue row cannot wait for a main-database file stamp or for
+the full idle-safety interval. When the count is zero, only the small poll timer
+is renewed and the full router remains asleep.
+
 Only approved work can move into terminal handling. For communication and other
 artifact-producing work, the outcome witness checks that required durable
 artifacts exist. The service then enforces reviewed terminal success through

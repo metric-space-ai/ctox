@@ -114,6 +114,7 @@ const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.insta
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 3600;
+const CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS: u64 = 30;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const CHANNEL_SYNC_BACKOFF_MAX_SECS: u64 = 900;
 const TICKET_SYNC_POLL_SECS: u64 = 60;
@@ -14208,11 +14209,39 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let source_stamp = channel_router_source_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(previous) = guard.as_ref() else {
-        return false;
+    let unchanged_elapsed = {
+        let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(previous) = guard.as_ref() else {
+            return false;
+        };
+        if !channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now) {
+            return false;
+        }
+        now.duration_since(previous.last_idle_pass)
     };
-    channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now)
+    if unchanged_elapsed < Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS) {
+        return true;
+    }
+    if channels::pending_queue_task_count_uncached(root)
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard
+            .as_ref()
+            .is_some_and(|previous| previous.root == root_path)
+        {
+            *guard = None;
+        }
+        return false;
+    }
+    // Keep the expensive full router asleep while still bounding the cheap
+    // durable-queue safety check. This avoids an eight-second idle DB poll.
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(previous) = guard.as_mut().filter(|previous| previous.root == root_path) {
+        previous.last_idle_pass = now;
+    }
+    true
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
@@ -35021,6 +35050,48 @@ Use shell tools to create or update these files."
         );
 
         clear_idle_durable_queue_empty_gate(&root);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn idle_router_safety_poll_reopens_for_pending_durable_queue() {
+        let root = temp_root("ctox-idle-router-pending-safety-poll");
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Pending safety-poll work".to_string(),
+                prompt: "Wake the idle router even when its source stamp appears unchanged."
+                    .to_string(),
+                thread_key: "queue/idle-router-safety-poll".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create pending queue task");
+        let settings = BTreeMap::new();
+        mark_idle_channel_router_pass(&root, &settings);
+        {
+            let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.as_mut().expect("idle router gate").last_idle_pass = Instant::now()
+                - Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS + 1);
+        }
+
+        assert!(
+            !should_skip_idle_channel_router_tick(&root, &settings),
+            "pending durable work must wake an unchanged idle router after the bounded safety poll"
+        );
+        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+        assert!(
+            gate.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "the stale idle gate must be cleared before durable dispatch"
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 

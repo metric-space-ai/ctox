@@ -162,6 +162,11 @@ projection refresh happens before the lease transaction, and the returned task
 view is materialized before commit. Thus an acquisition error leaves the queue
 row pending; a committed lease is always returned to the dispatcher.
 
+While idle, the full router remains source-stamp gated, but an uncached pending
+queue count runs at most every 30 seconds. It is the durable wakeup backstop for
+WAL updates whose filesystem stamp is not observed in time; finding work clears
+the idle gate immediately.
+
 ## Witness Of Progress
 
 Every rejected review must have a witness before the same artifact can pass
