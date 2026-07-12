@@ -149,6 +149,8 @@ function dispatchCtoxCommand(command, { timeoutMs = 12000 } = {}) {
     }, timeoutMs);
 
     function onMessage(event) {
+      if (event.origin !== window.location.origin) return;
+      if (!isTrustedShellMessageSource(event)) return;
       if (event.data?.type !== 'ctox-business-os-command-result') return;
       if (event.data.requestId !== requestId) return;
       done = true;
@@ -163,8 +165,12 @@ function dispatchCtoxCommand(command, { timeoutMs = 12000 } = {}) {
       requestId,
       surface: 'matching',
       command
-    }, '*');
+    }, window.location.origin);
   });
+}
+
+function isTrustedShellMessageSource(event) {
+  return event.source === window || event.source === parent;
 }
 
 function stableRecordId(prefix) {

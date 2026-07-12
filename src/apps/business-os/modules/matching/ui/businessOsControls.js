@@ -639,6 +639,8 @@ function initTheme() {
     });
   }
   window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (!isTrustedShellMessageSource(event)) return;
     if (event.data?.type !== 'ctox-business-os-preferences') return;
     applyTheme(event.data.theme);
   });
@@ -672,6 +674,8 @@ function initLanguage() {
     });
   }
   window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (!isTrustedShellMessageSource(event)) return;
     if (event.data?.type !== 'ctox-business-os-preferences') return;
     applyLanguage(event.data.language, { reloadForGerman: false });
   });
@@ -805,6 +809,8 @@ function dispatchCtoxCommand(command, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
     }, timeoutMs);
 
     function onMessage(event) {
+      if (event.origin !== window.location.origin) return;
+      if (!isTrustedShellMessageSource(event)) return;
       if (event.data?.type !== 'ctox-business-os-command-result') return;
       if (event.data.requestId !== requestId) return;
       done = true;
@@ -819,8 +825,12 @@ function dispatchCtoxCommand(command, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
       requestId,
       surface: 'matching',
       command
-    }, '*');
+    }, window.location.origin);
   });
+}
+
+function isTrustedShellMessageSource(event) {
+  return event.source === window || event.source === parent;
 }
 
 function commandContextFromElement(target) {

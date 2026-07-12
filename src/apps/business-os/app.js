@@ -1651,6 +1651,8 @@ function wireShellActions() {
     event.preventDefault();
   });
   window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (!isTrustedBusinessOsMessageSource(event)) return;
     if (event.data?.type === 'ctox-business-os-command') {
       handleModuleCommand(event);
     }
@@ -1816,6 +1818,15 @@ function wireShellActions() {
   });
   shellColumnResizeSync = setupShellColumnResizing();
   setupSyncToast();
+}
+
+function isTrustedBusinessOsMessageSource(event) {
+  if (!event) return false;
+  if (event.source === window) return true;
+  for (const frame of els.host?.querySelectorAll?.('iframe') || []) {
+    if (frame.contentWindow === event.source) return true;
+  }
+  return false;
 }
 
 // The old floating sync toast is intentionally disabled. Sync state is surfaced
@@ -3554,14 +3565,14 @@ async function handleModuleCommand(event) {
       requestId,
       ok: true,
       result,
-    }, '*');
+    }, event.origin);
   } catch (error) {
     event.source?.postMessage({
       type: 'ctox-business-os-command-result',
       requestId,
       ok: false,
       error: String(error?.message || error),
-    }, '*');
+    }, event.origin);
   }
 }
 
@@ -3597,9 +3608,24 @@ function postCurrentPreferencesToModule() {
     branding: brandingForPreferencePayload(state.workspaceBranding),
   };
   window.dispatchEvent(new CustomEvent('ctox-business-os-preferences', { detail }));
-  window.postMessage({ type: 'ctox-business-os-language', lang: detail.language }, '*');
+  window.postMessage({ type: 'ctox-business-os-language', lang: detail.language }, window.location.origin);
   for (const frame of els.host?.querySelectorAll?.('iframe') || []) {
-    frame.contentWindow?.postMessage({ type: 'ctox-business-os-preferences', ...detail }, '*');
+    if (isSameOriginFrame(frame)) {
+      frame.contentWindow?.postMessage(
+        { type: 'ctox-business-os-preferences', ...detail },
+        window.location.origin,
+      );
+    }
+  }
+}
+
+function isSameOriginFrame(frame) {
+  try {
+    const src = frame.getAttribute('src') || frame.src || '';
+    if (!src || frame.hasAttribute('srcdoc')) return false;
+    return new URL(src, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
   }
 }
 
