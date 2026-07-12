@@ -22129,21 +22129,27 @@ pub fn accept_rxdb_business_command_with_origin(
             // Get domains
             let mut stmt = conn.prepare("SELECT domain_name, dkim_selector, dkim_private_key, COALESCE(spf_record, ''), COALESCE(dmarc_record, '') FROM stalwart_domains")?;
             let domain_rows = stmt.query_map(params![], |row| {
-                let dkim_private_key = row.get::<_, String>(2)?;
-                let dkim_public_key = get_public_key(&dkim_private_key);
-                Ok(serde_json::json!({
-                    "domain_name": row.get::<_, String>(0)?,
-                    "dkim_selector": row.get::<_, String>(1)?,
-                    "dkim_private_key_set": !dkim_private_key.trim().is_empty(),
-                    "secret_value_revealed": false,
-                    "dkim_public_key": dkim_public_key,
-                    "spf_record": row.get::<_, String>(3)?,
-                    "dmarc_record": row.get::<_, String>(4)?,
-                }))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
             })?;
             let mut domains = Vec::new();
             for r in domain_rows {
-                domains.push(r?);
+                let (domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record) = r?;
+                let dkim_public_key = get_public_key(&dkim_private_key)?;
+                domains.push(serde_json::json!({
+                    "domain_name": domain_name,
+                    "dkim_selector": dkim_selector,
+                    "dkim_private_key_set": !dkim_private_key.trim().is_empty(),
+                    "secret_value_revealed": false,
+                    "dkim_public_key": dkim_public_key,
+                    "spf_record": spf_record,
+                    "dmarc_record": dmarc_record,
+                }));
             }
 
             // Get users
@@ -22218,29 +22224,8 @@ pub fn accept_rxdb_business_command_with_origin(
                 return Ok(outcome);
             }
 
-            // Generate private key if not provided
             let dkim_private_key = if dkim_private_key_opt.is_empty() {
-                // Try executing openssl command
-                if let Ok(output) = std::process::Command::new("openssl")
-                    .args(&[
-                        "genpkey",
-                        "-algorithm",
-                        "RSA",
-                        "-pkeyopt",
-                        "rsa_keygen_bits:2048",
-                        "-outform",
-                        "PEM",
-                    ])
-                    .output()
-                {
-                    if output.status.success() {
-                        String::from_utf8_lossy(&output.stdout).to_string()
-                    } else {
-                        get_fallback_private_key()
-                    }
-                } else {
-                    get_fallback_private_key()
-                }
+                generate_dkim_private_key()?
             } else {
                 dkim_private_key_opt
             };
@@ -22255,7 +22240,7 @@ pub fn accept_rxdb_business_command_with_origin(
                 params![domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record],
             )?;
 
-            let dkim_public_key = get_public_key(&dkim_private_key);
+            let dkim_public_key = get_public_key(&dkim_private_key)?;
 
             let outcome = serde_json::json!({
                 "domain_name": domain_name,
@@ -27339,80 +27324,68 @@ fn outbound_enforce_account_limit(
     Ok(())
 }
 
-fn get_public_key(private_key_pem: &str) -> String {
+fn generate_dkim_private_key() -> anyhow::Result<String> {
+    generate_dkim_private_key_with_program("openssl")
+}
+
+fn generate_dkim_private_key_with_program(program: &str) -> anyhow::Result<String> {
+    let output = std::process::Command::new(program)
+        .args([
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            "rsa_keygen_bits:2048",
+            "-outform",
+            "PEM",
+        ])
+        .output()
+        .with_context(|| format!("failed to start DKIM key generator `{program}`"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "DKIM key generation failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let private_key = String::from_utf8(output.stdout).context("DKIM private key is not UTF-8")?;
+    anyhow::ensure!(
+        private_key.contains("-----BEGIN PRIVATE KEY-----")
+            && private_key.contains("-----END PRIVATE KEY-----"),
+        "DKIM key generator returned an invalid private key"
+    );
+    Ok(private_key)
+}
+
+fn get_public_key(private_key_pem: &str) -> anyhow::Result<String> {
     use std::io::Read;
     use std::io::Write;
-    if private_key_pem == get_fallback_private_key() {
-        return get_fallback_public_key();
-    }
-    if let Ok(mut child) = std::process::Command::new("openssl")
+    let mut child = std::process::Command::new("openssl")
         .args(&["pkey", "-pubout", "-outform", "PEM"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(private_key_pem.as_bytes());
-        }
-
-        let mut output = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            let _ = stdout.read_to_string(&mut output);
-        }
-
-        if let Ok(status) = child.wait() {
-            if status.success() && !output.is_empty() {
-                return output;
-            }
-        }
+        .context("failed to start openssl for DKIM public-key derivation")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(private_key_pem.as_bytes())
+            .context("failed to pass DKIM private key to openssl")?;
     }
-    get_fallback_public_key()
-}
 
-fn get_fallback_public_key() -> String {
-    r#"-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8r+J1QCogIBQmEua3fE0
-eV/lbphvaNu6sa4KnkcmDDnCzBvj4qqBUe8JNTpKR2UiFmSD/XoAmNyrSwBysmL5
-r3U4FtlRkDCqeoyjsWIBqm67GfynXGws3GBVB+LP7RFcF/I8dJ7QnlBSC4JWT+62
-HlptCroMUOBq8eIsGz16HnK9CZQLJrYPVEI1fut1JnyuzW7DXcqYWfi8ebE2/pWO
-tM5WS1qii4KAMs6o6E5LiFbRiRmmv4PWd7SphZ5o48yUhZEkCi7Q4bAR9ZXJThjK
-4rV89P459E27G4BChV8r1RQ4H8rub2mtkQaFbEKi0JZFj/boy07fiS2yXFyLrR2B
-hwIDAQAB
------END PUBLIC KEY-----"#
-        .to_string()
-}
+    let mut output = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        stdout
+            .read_to_string(&mut output)
+            .context("failed to read derived DKIM public key")?;
+    }
 
-fn get_fallback_private_key() -> String {
-    r#"-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDyv4nVAKiAgFCY
-S5rd8TR5X+VumG9o27qxrgqeRyYMOcLMG+PiqoFR7wk1OkpHZSIWZIP9egCY3KtL
-AHKyYvmvdTgW2VGQMKp6jKOxYgGqbrsZ/KdcbCzcYFUH4s/tEVwX8jx0ntCeUFIL
-glZP7rYeWm0KugxQ4Grx4iwbPXoecr0JlAsmtg9UQjV+63UmfK7NbsNdyphZ+Lx5
-sTb+lY60zlZLWqKLgoAyzqjoTkuIVtGJGaa/g9Z3tKmFnmjjzJSFkSQKLtDhsBH1
-lclOGMritXz0/jn0TbsbgEKFXyvVFDgfyu5vaa2RBoVsQqLQlkWP9ujLTt+JLbJc
-XIutHYGHAgMBAAECggEAOC6cd+/vD86i2Jym+zcYLf9D2pTtNBem3fip/Hf7FllH
-/HV4CL3tsEjimK8lAeEmQoiBA+l4uehYvMMdyKufnjxC/wbNGdIporNqL2O/fvKh
-2yHemkVvHJIvG+Qiu3uJFQG7fEJFhl6QnplL4LQe8md7VUA6GX3XQqRWEPfpi6IP
-OUdVxuWPu6s2rgDrNiFA49vNYcShj0ilEKKjTl64dpTzTmlBKpiusRiGr99cPTBH
-LOitgdXT7rQ/HexkadBOQwj1oCgKTkIX0EL05ZUoJ2DVvqbmy5q47Ch4hIJDIuCh
-eUhXUefNkNvm0+zN7FU12jIMix+UhTE0A+SjUmNGAQKBgQD7C7898CcAQ2coTdfF
-NLlaJYCEBV3WwG+kkif71s7/wEfuqW2Rpnrdf+5DpVm6FWYuh4x/+y58TdoVtBkf
-A7f0d2FBRQobi82EqiF0cuijg8J0mxFpM72nyAEWdNT3moqPcFgB7QfjsES0HQqx
-swZtIhtUGAUxV2j2staoIee68wKBgQD3id9ZZRWysM5R5Ztc7Cbblz5t1Wuesr9M
-Z/I2Ae99UBzr5X6gONjC8FMIOav+EG7xXaNjnnihYM3sFerI9d/UqEJfYC/foDUV
-FhMHeuImWWWUPeWz0L1dvd6wKo1QxDIXgWBH4XOey4i1f36pZmufddNdqNJT63X+
-0RK6phpcHQKBgA162P77aSyzcdORMnfNV/KGNvtfymUgmh4NFwaHxz+mVHZ1NIPw
-m4JPPzz0oPfD9GOlNZ8dnqZgC8jEjeDDc1o2GsvFaECIZjWsaPV2whUdmxBlzy6F
-77YVoDFTfqf47V28W41m69iG+3lsYcme4kZz4WHHlGfM2L7+ZVZL08SPAoGAUXEB
-FO5XFzVojDVYyle/6Rt3pLdE8y+oFMFWRUKZwsbq3QnigWByoKBlER24YpyRg8Pl
-D8+BrMamuXf0iS2r+NFrFOoWliKllExw8lMRuMBM1VsQCfsxcngXnipB2ELUoDsm
-rD+WxLX+Qoix6ZYS7qHbasMyf/3GEpJC8TnZDlkCgYEAuvW1ffY9HHKQZMWC5aM3
-/Hw9V/yuPVN0h/KbahXBGkOuWlNbpzPpBRIlUOCEIQTEFEH+PTLLEHD3ZUuTJbpn
-8ZfRN7S3tepNQQrn7UO4dek0kdnyawMKq1vgrO4IUZP7YTRMu/YNsS9YahmS5jQ1
-W1zGjMP9KaO/lbRSW/NHasM=
------END PRIVATE KEY-----"#
-        .to_string()
+    let status = child.wait().context("failed to wait for openssl")?;
+    anyhow::ensure!(status.success(), "invalid DKIM private key");
+    anyhow::ensure!(
+        output.contains("-----BEGIN PUBLIC KEY-----")
+            && output.contains("-----END PUBLIC KEY-----"),
+        "openssl returned an invalid DKIM public key"
+    );
+    Ok(output)
 }
 
 fn stored_rxdb_business_command_outcome(
@@ -38181,6 +38154,15 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn dkim_generation_fails_closed_without_a_key_generator() {
+        let error = generate_dkim_private_key_with_program("ctox-missing-dkim-key-generator")
+            .expect_err("missing key generator must not produce a shared fallback key");
+        assert!(error
+            .to_string()
+            .contains("failed to start DKIM key generator"));
+    }
 
     #[test]
     fn document_links_preserve_selected_knowledge_snapshot() {
