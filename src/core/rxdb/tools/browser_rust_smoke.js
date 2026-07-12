@@ -8256,6 +8256,12 @@ function ensureCtoxSmokeBinary() {
         const allowedGlobalModes = buildGlobalCtoxContextModes({ canModify: true, labels });
         const deniedGlobalModeHtml = renderGlobalCtoxContextModeHtml({ canModify: false, labels });
         const allowedGlobalModeHtml = renderGlobalCtoxContextModeHtml({ canModify: true, labels });
+        const deniedGlobalModeValues = deniedGlobalModes.map((mode) => mode.value);
+        const allowedGlobalModeValues = allowedGlobalModes.map((mode) => mode.value);
+        const deniedGlobalModeLabels = deniedGlobalModes.map((mode) => mode.label);
+        const allowedGlobalModeLabels = allowedGlobalModes.map((mode) => mode.label);
+        const deniedAppMode = deniedGlobalModes.find((mode) => mode.value === 'app') || null;
+        const allowedAppMode = allowedGlobalModes.find((mode) => mode.value === 'app') || null;
         const allContextLabels = [
           ...teamDomContext.labels,
           ...sourceDomContext.labels,
@@ -8299,11 +8305,15 @@ function ensureCtoxSmokeBinary() {
           && roleDisplayName('founder') === 'App-Verantwortliche:r'
           && roleDisplayName('team') === 'Teammitglied'
           && labelsAreBusinessFacing(allContextLabels)
-          && deniedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask'
-          && allowedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
-          && !/value="app"|App ändern/.test(deniedGlobalModeHtml)
-          && /value="app"/.test(allowedGlobalModeHtml)
-          && /App ändern/.test(allowedGlobalModeHtml);
+          && deniedGlobalModeValues.join(',') === 'data,ask,app'
+          && allowedGlobalModeValues.join(',') === 'data,ask,app'
+          && deniedAppMode?.approvalRequired === true
+          && allowedAppMode?.approvalRequired === false
+          && deniedGlobalModeLabels.includes('App ändern')
+          && allowedGlobalModeValues.includes('app')
+          && allowedGlobalModeLabels.includes('App ändern')
+          && !/App modifizieren|Modul bearbeiten|Founder/i.test(deniedGlobalModeHtml)
+          && !/App modifizieren|Modul bearbeiten|Founder/i.test(allowedGlobalModeHtml);
         applySmokeActorState();
         await smoke.openSettingsDrawer({ initialTab: 'admin' });
         const settingsFallback = await waitFor(() => {
