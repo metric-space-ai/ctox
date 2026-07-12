@@ -21,7 +21,7 @@ Operate in strict read-only verification mode.
 You may use read-only shell/CLI/browser/database inspection to gather evidence. Do not mutate files, send messages, update tickets, apply patches, install packages, restart services, join meetings, or perform any worker action.
 Your current working directory is an empty disposable reviewer scratch workspace. The assignment's Workspace root remains the authoritative, read-only source. If a bounded check needs to write build output, copy only the relevant files into the scratch workspace and run it there. Never edit the authoritative workspace, never copy runtime/secret/evidence stores into scratch, and never treat scratch output as a production artifact.
 You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
-Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. The reviewer's core job is to independently verify the decisive completion claims against current files, runtime state, communication records, tickets, live surfaces, or trusted external systems. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
+Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. Independently verify decisive claims against the original task contract and, where applicable, files, runtime state, communication records, tickets, live surfaces, or trusted external systems. Never PASS from prose claims alone when the task requires an artifact, delivery proof, mutation, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
 When the assignment names a workspace root, that exact current workspace is the authority for workspace artifacts. Do not use same-named files, logs, summaries, or validator results from older runs, sibling workspaces, backups, or cache directories as proof for the current task.
 For workspace-backed or replayed/containerized tasks, absolute task paths such as `/app`, `/workspace`, or `/project` are not proof when inspected on the reviewer host. Map absolute task paths to the current workspace root or inspect them inside the correct target runtime/container. Host-global absolute paths are stale or cross-task evidence unless the assignment explicitly defines them as the authoritative live surface.
@@ -62,6 +62,8 @@ Compaction policy for review:
 Decision policy:
 - PASS only when the gates are satisfied and the mission state is acceptable
 - PASS requires PASS_PROOF=direct or PASS_PROOF=trusted_external; worker-owned scripts/tests, workspace-local notes, and prose claims are useful evidence but never sufficient positive proof by themselves
+- for a task whose complete contract is only to read, explain, classify, summarize, calculate, draft without sending, or answer, and whose result claims no mutation or delivery, the answer itself is the reviewed artifact; independently compare it with the task and supplied source material and record `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...`; this reviewer-owned comparison is direct evidence, not worker `prose_only`
+- this answer-only rule never proves side effects; independently verify every claimed file change, command, persisted record, send, deployment, or live condition
 - for workspace-backed work, PASS_PROOF=direct requires current-workspace inspection: list or stat the relevant paths, read the required outputs or changed files, and run a bounded verification command when it is available and safe; if a required file is absent from the current workspace, FAIL or PARTIAL, never PASS
 - when the workspace contains tests, acceptance scripts, task manifests, or checker code, inspect those acceptance artifacts before PASS; if they define assertions, verify each decisive assertion directly, run them in the correct environment when safe, or return PARTIAL with the exact unchecked assertions
 - do not treat an existing output artifact as proof when the acceptance path re-runs a command, writes to a fresh output path, checks idempotence, checks permissions, or validates executable behavior; verify the behavior the acceptance path will exercise
@@ -109,9 +111,9 @@ CATEGORIZED_FINDINGS contract:
 - if there is no concrete finding, write a single "- none" line under the section
 
 PASS_PROOF contract:
-- direct means you directly inspected the required artifact, durable state, live surface, or communication record against the assignment
+- direct means you directly inspected the required artifact, durable state, live surface, or communication record against the assignment; for answer-only work the required artifact is the answer and direct means an independent task/source/answer comparison
 - for workspace artifacts, direct means the inspection was performed in the current Workspace root from this assignment; artifacts from other runs or workspaces are stale evidence
-- direct evidence must identify the reviewer as source and the method used; prefer `source=reviewer | method=read_file|stat_file|run_command|db_query|live_check|communication_check | target=... | result=...`
+- direct evidence must identify the reviewer as source and the method used; prefer `source=reviewer | method=read_file|stat_file|run_command|db_query|live_check|communication_check|inspect_artifact | target=... | result=...`
 - trusted_external means an immutable validator, accepted send proof, or external system of record proves the result
 - trusted external evidence must identify the external validator or system of record; prefer `source=external | method=validator | target=... | result=...`
 - workspace_local means the positive proof is only a worker-owned workspace script/test/log such as run-tests.sh, pytest, or notes written in the task workspace
@@ -978,6 +980,7 @@ Open the review skill first and follow it.\n\
 \n\
 Start from the deterministic review evidence above, then inspect the underlying runtime/continuity/artifact context yourself with read-only tools. Do not assume a claim is true unless the deterministic evidence or your own read-only inspection supports it.\n\
 Treat the worker's artifact text and completion summary as claims to audit, not as proof. For every decisive claim needed for PASS, write the check you performed in EVIDENCE; if you did not verify it yourself or from a trusted external system of record, do not PASS.\n\
+For answer-only work, do not demand an unrelated file, database mutation, validator, or external effect. Confirm the task only asks to read, explain, classify, summarize, calculate, draft without sending, or answer and that the result claims no mutation or delivery. Independently compare the task, source material, and answer; record `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...` and use PASS_PROOF: direct when correct. Inspect any named source directly. This does not validate a claimed file change, command, persisted state, send, deployment, or live condition.\n\
 \n\
 Required review work:\n\
 1. load active strategic directives, mission state, and continuity for this conversation/thread\n\
@@ -1014,7 +1017,7 @@ OPEN_ITEMS:\n\
 - <concrete rework item>\n\
 PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/internal-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
-- source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
+- source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|inspect_artifact|claim|log|validator | target=<path, command, record, surface, task contract, or system> | result=<observed result>\n\
 HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n\
 DISPOSITION: SEND|NO_SEND\n\
@@ -1023,8 +1026,8 @@ WAIT_REF: none|<entity-type>:<entity-id>\n\
 \n\
 The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
 \n\
-PASS_PROOF is a structural trust boundary. Emit `direct` only when you inspected the required artifact, durable state, live surface, or communication record yourself against the assignment. Emit `trusted_external` only when an immutable validator, accepted send proof, or external system of record proves the result. Emit `workspace_local` when the only positive proof is a worker-owned workspace script/test/log such as run-tests.sh or pytest. Emit `prose_only` for worker claims. Emit `none` when no positive proof exists. A PASS without `direct` or `trusted_external` is invalid.\n\
-EVIDENCE is also structural. Prefer pipe-delimited fields: `source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=... | result=...`. Reviewer-owned `run_command` evidence is direct only when the reviewer executed the command in the reviewed workspace or target runtime and reports the command target plus observed result. Worker-owned command logs remain workspace_local, not direct.\n\
+PASS_PROOF is a structural trust boundary. For answer-only work, `direct` requires the reviewer's independent semantic comparison against the task and source material; merely trusting the worker remains `prose_only`. For side effects, `direct` still requires inspection of the authoritative artifact, state, surface, or communication record. Emit `trusted_external` only for immutable validator/system-of-record proof. A PASS without `direct` or `trusted_external` is invalid.\n\
+EVIDENCE is also structural. `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...` is direct only for answer-only work and only when it records the actual comparison. Worker logs and claims remain non-direct.\n\
 \n\
 DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the current task is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the task was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
@@ -2352,6 +2355,21 @@ mod tests {
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
         assert!(!outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_answer_only_pass_with_reviewer_inspection_stays_pass() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: answer matches.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=inspect_artifact | target=task contract and answer | result=Berlin matches the supplied fact and no effect is claimed\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(3, vec!["durable_queue_or_ticket_work".into()], report);
+        assert_eq!(outcome.verdict, ReviewVerdict::Pass);
+        assert!(outcome.has_acceptable_pass_proof());
+    }
+
+    #[test]
+    fn answer_only_worker_prose_without_reviewer_inspection_is_rejected() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: looks right.\nPASS_PROOF: prose_only\nEVIDENCE:\n- worker claims Berlin\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(3, vec!["durable_queue_or_ticket_work".into()], report);
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
     }
 
     #[test]

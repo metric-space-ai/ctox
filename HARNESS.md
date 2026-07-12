@@ -242,6 +242,14 @@ artifacts exist. The service then enforces reviewed terminal success through
 the core state machine. If that proof is missing or rejected, the slice is not
 closed merely because the assistant said it was done.
 
+Answer-only work is still reviewed, but it does not require proof of a side
+effect that the task never requested. A reviewer may return `PASS_PROOF:
+direct` only after independently inspecting the task contract, source material,
+and answer (`source=reviewer`, `method=inspect_artifact`). Worker prose alone,
+including `PASS_PROOF: prose_only`, cannot pass. Any claim that a file, command,
+message, deployment, record, or other state changed still requires
+authoritative evidence from that system.
+
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.

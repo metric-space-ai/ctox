@@ -29,6 +29,14 @@ Stay bounded. Use the review assignment, explicit artifact paths, CTOX CLI outpu
 
 For internal non-owner artifact jobs with explicit required file paths, inspect those files first. PASS is allowed when the declared files exist and truthfully record current status, evidence, results, or the persisted next action. Do not fail only because broader mission state is still open or because a nonessential runtime table is hard to inspect.
 
+For answer-only work (read, explain, classify, summarize, calculate, or draft
+without sending), the answer is the artifact. Do not invent a file, database,
+runtime, or delivery requirement. Independently compare the task, supplied
+source material, and answer. Record `source=reviewer |
+method=inspect_artifact | target=task contract and answer | result=...` and use
+`PASS_PROOF: direct` when correct. This never proves a claimed mutation or
+delivery; those still require evidence from their authoritative surface.
+
 ## Core Contract
 
 The review run:

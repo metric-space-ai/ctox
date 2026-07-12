@@ -125,6 +125,16 @@ The important property is that the reviewer does not own a new durable cascade.
 It may cause a bounded revision, but it cannot recursively create review-owned
 internal work that then creates further review-owned internal work.
 
+### Answer-only review
+
+Read, explain, classify, summarize, calculate, and draft-without-send tasks have
+no external effect to prove. Their reviewer compares the task contract, source,
+and answer directly and records `PASS_PROOF: direct` with
+`source=reviewer` and `method=inspect_artifact`. This is independent review,
+not acceptance of worker prose. `PASS_PROOF: prose_only` remains invalid, and
+the direct method is never sufficient for claimed file, command, message,
+deployment, record, or other state changes.
+
 ## Witness Of Progress
 
 Every rejected review must have a witness before the same artifact can pass

@@ -329,6 +329,14 @@ ctox business-os app create --instruction "<request>" [--module-id <id>]
 ctox business-os app modify <module-id> --instruction "<request>"
 ctox business-os app validate <module-id> --installed
 
+# Inspect and run the 100-case end-to-end harness acceptance bench.
+# --confirm-live intentionally creates real queue work; start with --dry-run.
+ctox business-os harness-bench catalog
+ctox business-os harness-bench run --dry-run
+ctox business-os harness-bench run --confirm-live --run-id <id> \
+  --actor <user-id> --reviewer <reviewer-id>
+ctox business-os harness-bench status --run-id <id> --fail-on-inflight
+
 # Synchronous starter completion is valid
 # status=completed means CTOX already wrote, validated, and projected the app
 # status=accepted means the durable queue worker owns the remaining app work

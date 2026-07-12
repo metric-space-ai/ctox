@@ -319,6 +319,15 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("repair") => handle_business_os_repair(root, &args[1..]),
         Some("backup") => handle_business_os_backup(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
+        Some("harness-bench") => {
+            let result = super::business_os_harness_bench::handle(root, &args[1..])?;
+            print_json(&result)?;
+            anyhow::ensure!(
+                result.get("ok").and_then(serde_json::Value::as_bool) != Some(false),
+                "Business OS harness bench reported failures"
+            );
+            Ok(())
+        }
         Some("auth") => handle_business_os_auth(root, &args[1..]),
         Some("desktop") => handle_business_os_desktop(root, &args[1..]),
         Some("web-stack") => handle_business_os_web_stack(root, &args[1..]),
@@ -3855,7 +3864,7 @@ fn business_os_usage() -> String {
         )
         .replace(
             "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)",
-            "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os commands diagnostics --json\n  ctox business-os commands inspect <command-id>\n  ctox business-os commands gc (--dry-run | --apply)\n  ctox business-os commands reconcile (--dry-run | --apply)",
+            "  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os commands diagnostics --json\n  ctox business-os commands inspect <command-id>\n  ctox business-os commands gc (--dry-run | --apply)\n  ctox business-os commands reconcile (--dry-run | --apply)\n  ctox business-os harness-bench catalog\n  ctox business-os harness-bench run (--dry-run | --confirm-live) [--run-id <id>] [--actor <user-id>] [--reviewer <user-id>] [--family <id>] [--case <H001>] [--limit <n>]\n  ctox business-os harness-bench status --run-id <id> [--fail-on-inflight]",
         )
         .replace(
             "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
