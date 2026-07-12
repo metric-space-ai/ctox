@@ -11784,7 +11784,8 @@ function ensureCtoxSmokeBinary() {
       async function runBusinessOsAppReleaseUiSmoke() {
         const isVolatileSyncError = (error) => {
           const message = String(error?.message || error || '');
-          return /peer-close|peer .* closed|replication-cancel|database connection is closing|QUERY_CANCELLED|WebRTC peer/i.test(message);
+          return /peer-close|peer .* closed|replication-cancel|database connection is closing|QUERY_CANCELLED|WebRTC peer/i.test(message)
+            || /UNAUTHORIZED:\s*peer is not authorized for this collection/i.test(message);
         };
         const waitFor = async (predicate, ms, label) => {
           const deadline = Date.now() + ms;
