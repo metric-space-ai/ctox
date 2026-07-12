@@ -170,10 +170,11 @@ row. In particular, a crash after typed result persistence reopens the command
 as `retry_wait`, retains the prior attempt result as evidence, and clears the
 queue lease owner, timestamps, and expiry before redispatch.
 
-While idle, the full router remains source-stamp gated, but an uncached pending
-queue count runs at most every 30 seconds. It is the durable wakeup backstop for
-WAL updates whose filesystem stamp is not observed in time; finding work clears
-the idle gate immediately.
+While idle, both the lightweight router preflight and the full router remain
+source-stamp gated, but an uncached pending queue count runs in front of each
+gate at most every 30 seconds. It is the durable wakeup backstop for WAL updates
+whose filesystem stamp is not observed in time; finding work clears the stale
+gate immediately.
 
 ## Witness Of Progress
 

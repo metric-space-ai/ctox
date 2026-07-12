@@ -245,6 +245,7 @@ struct ChannelRouterPreflightIdleGateState {
     source_stamp: ChannelRouterSourceStamp,
     env_overlay: BTreeMap<String, String>,
     last_idle_pass: Instant,
+    last_durable_queue_poll: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -14131,18 +14132,44 @@ fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
     let env_overlay = live_service_env_overlay();
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(previous) = guard.as_ref() else {
-        return false;
+    let durable_queue_poll_due = {
+        let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(previous) = guard.as_ref() else {
+            return false;
+        };
+        if channel_router_source_has_due_time(&source_stamp)
+            || previous.root != root_path
+            || previous.source_stamp != source_stamp
+            || previous.env_overlay != env_overlay
+            || now.duration_since(previous.last_idle_pass)
+                >= Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
+        {
+            return false;
+        }
+        now.duration_since(previous.last_durable_queue_poll)
+            >= Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS)
     };
-    if channel_router_source_has_due_time(&source_stamp) {
+    if !durable_queue_poll_due {
+        return true;
+    }
+    if channels::pending_queue_task_count_uncached(root)
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard
+            .as_ref()
+            .is_some_and(|previous| previous.root == root_path)
+        {
+            *guard = None;
+        }
         return false;
     }
-    previous.root == root_path
-        && previous.source_stamp == source_stamp
-        && previous.env_overlay == env_overlay
-        && now.duration_since(previous.last_idle_pass)
-            < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(previous) = guard.as_mut().filter(|previous| previous.root == root_path) {
+        previous.last_durable_queue_poll = now;
+    }
+    true
 }
 
 fn mark_channel_router_preflight_idle(root: &Path) {
@@ -14156,6 +14183,7 @@ fn mark_channel_router_preflight_idle(root: &Path) {
         source_stamp,
         env_overlay,
         last_idle_pass: Instant::now(),
+        last_durable_queue_poll: Instant::now(),
     });
 }
 
@@ -23769,6 +23797,56 @@ mod tests {
         assert!(
             !should_skip_idle_channel_router_preflight(&root),
             "queue work must reopen the channel-router preflight gate"
+        );
+
+        clear_channel_router_preflight_idle_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_preflight_safety_poll_detects_pending_queue_with_unchanged_stamp() {
+        clear_channel_router_preflight_idle_gate_for_tests();
+        let root = temp_root("channel-router-preflight-pending-safety-poll");
+        std::fs::create_dir_all(root.join("runtime")).expect("create runtime directory");
+        let db_path = crate::paths::core_db(&root);
+        channels::open_channel_db(&db_path).expect("create core database");
+        mark_channel_router_preflight_idle(&root);
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Preflight pending safety poll".to_string(),
+                prompt: "Detect durable work even when the cached source stamp is unchanged."
+                    .to_string(),
+                thread_key: "router/preflight-pending-safety-poll".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create pending queue task");
+        {
+            let current_stamp = channel_router_source_stamp(&root);
+            let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = guard.as_mut().expect("preflight idle gate");
+            previous.source_stamp = current_stamp;
+            previous.last_durable_queue_poll = Instant::now()
+                - Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS + 1);
+        }
+
+        assert!(
+            !should_skip_idle_channel_router_preflight(&root),
+            "the bounded safety poll must reopen preflight for pending durable work"
+        );
+        let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+        assert!(
+            gate.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "pending durable work must clear the stale preflight gate"
         );
 
         clear_channel_router_preflight_idle_gate_for_tests();

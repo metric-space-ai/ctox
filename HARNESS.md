@@ -113,6 +113,12 @@ lease, owner, timestamps, and expiry are cleared together. A restart can then
 open a new finite attempt without reviving a terminal command or losing the
 prior result evidence.
 
+Idle routing uses source stamps for economy, but source stamps are never the
+only wake signal. The lightweight preflight gate and the full router gate each
+perform an uncached durable `pending` count at most every 30 seconds. This
+bounds dispatch latency when a WAL write does not change the cached filesystem
+stamp, without returning to continuous full-router scans.
+
 ## Worker Slice Flow
 
 `start_prompt_worker(...)` is the outer harness entry point for a leased slice.
