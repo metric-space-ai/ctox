@@ -41,6 +41,7 @@ use crate::iot::{now_ms, Context, Result};
 use anyhow::{anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -70,7 +71,7 @@ type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 /// subscribe frames) lives here.
 #[derive(Default, serde::Deserialize)]
 struct WsConfig {
-    /// `ws://` / `wss://` device endpoint. Required.
+    /// `wss://` remote endpoint or `ws://` loopback endpoint. Required.
     #[serde(default)]
     url: String,
     /// runtime_env / secret-store key for an `Authorization` header value
@@ -194,9 +195,7 @@ impl WsAgent {
         if cfg.url.trim().is_empty() {
             bail!("ws agent: config.url is required");
         }
-        if !(cfg.url.starts_with("ws://") || cfg.url.starts_with("wss://")) {
-            bail!("ws agent: config.url must be ws:// or wss://");
-        }
+        validate_device_websocket_url(&cfg.url)?;
 
         // Resolve the optional auth header value from the CTOX secret store /
         // typed config — NEVER std::env. ref: HARD RULE (config/secrets).
@@ -350,6 +349,28 @@ impl WsAgent {
         }
         out
     }
+}
+
+fn validate_device_websocket_url(value: &str) -> Result<()> {
+    let parsed = url::Url::parse(value).context("ws agent: config.url must be an absolute URL")?;
+    let host = parsed
+        .host_str()
+        .context("ws agent: config.url must include a host")?;
+    match parsed.scheme() {
+        "wss" => Ok(()),
+        "ws" if is_loopback_host(host) => Ok(()),
+        "ws" => bail!(
+            "ws agent: cleartext ws:// is restricted to loopback; use wss:// for remote devices"
+        ),
+        _ => bail!("ws agent: config.url must be ws:// or wss://"),
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 // ---------------------------------------------------------------------------
@@ -837,7 +858,7 @@ mod tests {
             root,
             agent_id: "ws-test-agent".into(),
             realm: "default".into(),
-            config: json!({ "url": "ws://unused" }),
+            config: json!({ "url": "wss://unused.invalid" }),
         }
     }
 
@@ -887,6 +908,33 @@ mod tests {
             config: json!({ "url": "http://example.com" }),
         };
         assert!(WsAgent::new(ctx).is_err());
+    }
+
+    #[test]
+    fn new_rejects_cleartext_remote_websocket_url() {
+        let root = std::env::temp_dir();
+        let ctx = AgentContext {
+            root: &root,
+            agent_id: "a".into(),
+            realm: "default".into(),
+            config: json!({ "url": "ws://192.0.2.10:8080/socket" }),
+        };
+        let err = WsAgent::new(ctx)
+            .err()
+            .expect("remote cleartext websocket must be rejected");
+        assert!(err.to_string().contains("use wss:// for remote devices"));
+    }
+
+    #[test]
+    fn new_accepts_secure_remote_websocket_url() {
+        let root = std::env::temp_dir();
+        let ctx = AgentContext {
+            root: &root,
+            agent_id: "a".into(),
+            realm: "default".into(),
+            config: json!({ "url": "wss://device.example.test/socket" }),
+        };
+        WsAgent::new(ctx).expect("secure remote websocket URL should be accepted");
     }
 
     /// Whole-frame value routing: a pushed device frame becomes an inbound

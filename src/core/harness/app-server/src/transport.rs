@@ -60,14 +60,15 @@ fn colorize(text: &str, style: Style) -> String {
 fn print_websocket_startup_banner(addr: SocketAddr) {
     let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
     let listening_label = colorize("listening on:", Style::new().dimmed());
-    let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    // The parser rejects non-loopback binds before this display-only URL is built.
+    let loopback_listen_url = colorize(&format!("ws://{addr}"), Style::new().green()); // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
     let ready_label = colorize("readyz:", Style::new().dimmed());
     let ready_url = colorize(&format!("http://{addr}/readyz"), Style::new().green());
     let health_label = colorize("healthz:", Style::new().dimmed());
     let health_url = colorize(&format!("http://{addr}/healthz"), Style::new().green());
     let note_label = colorize("note:", Style::new().dimmed());
     eprintln!("{title}");
-    eprintln!("  {listening_label} {listen_url}");
+    eprintln!("  {listening_label} {loopback_listen_url}");
     eprintln!("  {ready_label} {ready_url}");
     eprintln!("  {health_label} {health_url}");
     if addr.ip().is_loopback() {
@@ -120,11 +121,11 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://` or `ws://IP:PORT`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://` or `ws://LOOPBACK_IP:PORT`"
             ),
             AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
-                "invalid websocket --listen URL `{listen_url}`; expected `ws://IP:PORT`"
+                "invalid websocket --listen URL `{listen_url}`; expected `ws://LOOPBACK_IP:PORT`"
             ),
         }
     }
@@ -144,6 +145,11 @@ impl AppServerTransport {
             let bind_address = socket_addr.parse::<SocketAddr>().map_err(|_| {
                 AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url.to_string())
             })?;
+            if !bind_address.ip().is_loopback() {
+                return Err(AppServerTransportParseError::InvalidWebSocketListenUrl(
+                    listen_url.to_string(),
+                ));
+            }
             return Ok(Self::WebSocket { bind_address });
         }
 
@@ -732,7 +738,17 @@ mod tests {
             .expect_err("hostname bind address should be rejected");
         assert_eq!(
             err.to_string(),
-            "invalid websocket --listen URL `ws://localhost:1234`; expected `ws://IP:PORT`"
+            "invalid websocket --listen URL `ws://localhost:1234`; expected `ws://LOOPBACK_IP:PORT`"
+        );
+    }
+
+    #[test]
+    fn app_server_transport_rejects_cleartext_non_loopback_bind() {
+        let err = AppServerTransport::from_listen_url("ws://0.0.0.0:1234")
+            .expect_err("cleartext websocket listener must remain loopback-only");
+        assert_eq!(
+            err.to_string(),
+            "invalid websocket --listen URL `ws://0.0.0.0:1234`; expected `ws://LOOPBACK_IP:PORT`"
         );
     }
 
@@ -742,7 +758,7 @@ mod tests {
             .expect_err("unsupported scheme should fail");
         assert_eq!(
             err.to_string(),
-            "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
+            "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://LOOPBACK_IP:PORT`"
         );
     }
 

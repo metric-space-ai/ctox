@@ -24,9 +24,11 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
-- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
+- websocket (`--listen ws://LOOPBACK_IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 
-When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+Cleartext websocket listeners are restricted to loopback addresses. When running
+with `--listen ws://LOOPBACK_IP:PORT`, the same listener also serves basic HTTP
+health probes:
 
 - `GET /readyz` returns `200 OK` once the listener is accepting new connections.
 - `GET /healthz` currently always returns `200 OK`.
