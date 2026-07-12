@@ -251,7 +251,7 @@ function auditSecuritySignoffArtifact(signoff) {
   const blockers = auditTemplateMarker(signoff);
   if (signoff.schema !== 'ctox.business_os.security_privacy_signoff.v1') blockers.push('schema');
   if (signoff.status !== 'signed-off') blockers.push(`status_${signoff.status || 'missing'}`);
-  blockers.push(...auditGitRevision('security_signoff_evidence_revision', signoff.evidence_revision));
+  blockers.push(...auditAncestorGitRevision('security_signoff_evidence_revision', signoff.evidence_revision));
   if (signoff.reviewer === 'TBD' || typeof signoff.reviewer !== 'string' || signoff.reviewer.length === 0) {
     blockers.push('reviewer_not_set');
   }
@@ -595,6 +595,34 @@ function auditGitRevision(label, revision) {
     return [`${label}_mismatch`];
   }
   return [];
+}
+
+function auditAncestorGitRevision(label, revision) {
+  if (typeof revision !== 'string' || !/^[0-9a-f]{7,40}$/i.test(revision)) {
+    return [`${label}_missing_or_invalid`];
+  }
+  if (!candidateCommit) {
+    return ['candidate_commit_unavailable'];
+  }
+  if (revision === candidateCommit || candidateCommit.startsWith(revision)) {
+    return [];
+  }
+  if (isGitAncestor(revision, candidateCommit)) {
+    return [];
+  }
+  return [`${label}_mismatch`];
+}
+
+function isGitAncestor(ancestor, descendant) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readCurrentGitCommit() {

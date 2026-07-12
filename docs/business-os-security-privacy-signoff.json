@@ -3,7 +3,7 @@
   "status": "pending-signoff",
   "reviewer": "TBD",
   "reviewed_at": "TBD",
-  "evidence_revision": "4d1cc9e321030e1afa0260d137cab102b0366ece",
+  "evidence_revision": "8c9e09c9e0441872bb7d9616ed84b22d89271077",
   "controls": {
     "dynamic_app_runtime_boundary": {
       "status": "pending",
@@ -102,7 +102,7 @@
     "docs/ctox-sync-production-readiness-runbooks.md": "ee9c8ab96b93f50582c61cdc3dc8efb66802ae6f3d07970307da4943eb6c30b2",
     "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "30d761ec41f4ae8f44b867fc9eb77f79c578e71ec96995a50a6d6cb445776bee",
     "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "f9a38ae322476a2cd5f372c199d9dd98247b6a2b1174056f112be9b5154a5b9e",
-    "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "6680689434597cfe5b812cb66b151f741553b18ee2041c5c28a82197c9619696",
+    "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "cc5c73dd20d3a3794511866de58c87b086c6b25a95cedc1c51ddb5a92881ee4e",
     "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "fc9c3ed8efce75d9a1fb46f490bd2e8ae6cec12dbc71b6f65d3fcd75f947f868",
     "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "3df0f35fe6d0127d2f5a972991bc1bcbd650f5a77a62e7046522c607a913b28f",
     "src/core/rxdb/tools/business_os_production_smoke_registry.js": "ae944b995a6c0505d6f55ac8b7b269394bf60f719c9bbb5878ece9199d83978d",
