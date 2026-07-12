@@ -96,6 +96,8 @@ export async function openReactSettings({
 
   let channelsAccountsSub = null;
   let usersSub = null;
+  let activityRetryTimer = null;
+  let activityRetryAttempts = 0;
   const ensureChannelCollections = async () => {
     await Promise.allSettled([
       sync?.startCollection?.('communication_accounts'),
@@ -220,6 +222,10 @@ export async function openReactSettings({
 
   const refreshActivity = async () => {
     if (!isAdmin) return;
+    if (activityRetryTimer) {
+      clearTimeout(activityRetryTimer);
+      activityRetryTimer = null;
+    }
     settingsState.activity = {
       ...settingsState.activity,
       loading: true,
@@ -234,13 +240,23 @@ export async function openReactSettings({
         loaded: true,
         error: '',
       };
+      activityRetryAttempts = 0;
     } catch (error) {
+      const transient = isTransientActivityLoadError(error);
       settingsState.activity = {
         ...settingsState.activity,
         loading: false,
-        loaded: true,
+        loaded: !transient,
         error: String(error?.message || error),
       };
+      if (transient && settingsState.tab === 'activity' && activityRetryAttempts < 5) {
+        activityRetryAttempts += 1;
+        const delayMs = Math.min(1000 * activityRetryAttempts, 5000);
+        activityRetryTimer = setTimeout(() => {
+          activityRetryTimer = null;
+          if (settingsState.tab === 'activity') refreshActivity();
+        }, delayMs);
+      }
     }
     render();
   };
@@ -361,6 +377,10 @@ export async function openReactSettings({
       if (settingsState.channels?.qrPoll) {
         clearInterval(settingsState.channels.qrPoll);
         settingsState.channels.qrPoll = null;
+      }
+      if (activityRetryTimer) {
+        clearTimeout(activityRetryTimer);
+        activityRetryTimer = null;
       }
       revokeModuleSupportDownloadUrls();
       onClose?.();
@@ -2291,24 +2311,123 @@ async function saveUser(payload, { commandBus, db, session } = {}) {
 }
 
 async function loadBusinessActivity({ commandBus, db, session, sync } = {}) {
-  const command = await dispatchModuleCommand({
-    commandBus,
-    db,
-    session,
-    sync,
-    commandType: 'ctox.business_os.audit.list',
-    moduleId: 'ctox',
-    recordId: 'business-activity',
-    payload: { limit: 50 },
-    source: 'business-os-settings',
-    timeoutMs: 15000,
-    requireResult: true,
-  });
-  const payload = command.result || command;
-  if (command.status === 'failed' || payload?.ok === false) {
-    throw new Error(payload?.error || 'Aktivität konnte nicht geladen werden.');
+  const startedAtMs = Date.now();
+  const maxWaitMs = 28000;
+  let lastError = null;
+  for (let attempt = 0; attempt < 5 && Date.now() - startedAtMs < maxWaitMs; attempt += 1) {
+    try {
+      const command = await dispatchModuleCommand({
+        commandBus,
+        db,
+        session,
+        sync,
+        commandType: 'ctox.business_os.audit.list',
+        moduleId: 'ctox',
+        recordId: 'business-activity',
+        payload: { limit: 50 },
+        source: 'business-os-settings',
+        timeoutMs: attempt === 0 ? 8000 : 6000,
+        requireResult: true,
+      });
+      const payload = command.result || command;
+      if (command.status === 'failed' || payload?.ok === false) {
+        throw new Error(payload?.error || 'Aktivität konnte nicht geladen werden.');
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientActivityLoadError(error)) break;
+      const fallback = await loadLocalBusinessActivityFallback({ db });
+      if (fallback?.events?.length) return fallback;
+      const elapsedMs = Date.now() - startedAtMs;
+      if (elapsedMs >= maxWaitMs) break;
+      await delay(Math.min(500 + (attempt * 500), 2000));
+      await sync?.startCollection?.('business_commands')?.catch?.(() => {});
+    }
   }
-  return payload;
+  throw lastError || new Error('Aktivität konnte nicht geladen werden.');
+}
+
+function isTransientActivityLoadError(error) {
+  const text = String(error?.code || error?.message || error || '');
+  return /projection_delayed|projection_pending|sync_unavailable|native_unavailable|WebRTC peer .* closed|peer-close|replication-cancel|QUERY_CANCELLED|IDBDatabase.*closing|database connection is closing/i.test(text);
+}
+
+async function loadLocalBusinessActivityFallback({ db } = {}) {
+  const coll = db?.collection?.('business_commands');
+  if (!coll?.find) return null;
+  let docs = [];
+  try {
+    docs = await coll.find().exec();
+  } catch {
+    return null;
+  }
+  const events = docs
+    .map((doc) => doc?.toJSON?.() || doc)
+    .filter(Boolean)
+    .sort((a, b) => Number(b.updated_at_ms || b.observed_at_ms || 0) - Number(a.updated_at_ms || a.observed_at_ms || 0))
+    .map(localBusinessCommandActivityEvent)
+    .filter(Boolean)
+    .slice(0, 50);
+  return events.length ? { ok: true, events } : null;
+}
+
+function localBusinessCommandActivityEvent(command) {
+  const commandType = String(command?.command_type || command?.type || '');
+  const status = String(command?.status || command?.terminal_status || '');
+  const eventType = localBusinessCommandActivityType(commandType, status);
+  if (!eventType) return null;
+  const commandId = String(command?.command_id || command?.id || command?.record_id || newId());
+  const payload = command?.payload || {};
+  const result = command?.result || {};
+  const observedAtMs = Number(command?.updated_at_ms || command?.observed_at_ms || Date.now());
+  return {
+    id: `local_activity_${eventType}_${commandId}`,
+    collection: 'business_commands',
+    record_id: commandId,
+    type: eventType,
+    command_type: eventType,
+    observed_at_ms: observedAtMs,
+    payload: {
+      event_type: eventType,
+      command_id: commandId,
+      module: String(command?.module || 'ctox'),
+      command_type: commandType,
+      record_id: command?.record_id || '',
+      actor: command?.client_context?.actor || {},
+      status,
+      summary: localBusinessCommandActivitySummary(commandType, command),
+      observed_at_ms: observedAtMs,
+      reconstructed_from: 'business_commands',
+    },
+  };
+}
+
+function localBusinessCommandActivityType(commandType, status) {
+  if (commandType === 'ctox.module.release' && status === 'completed') return 'business_os.module.release.succeeded';
+  if (commandType === 'ctox.module.release' && status === 'failed') return 'business_os.module.release.failed';
+  if (commandType === 'ctox.module.rollback_version' && status === 'completed') return 'business_os.module.rollback.succeeded';
+  if (commandType === 'ctox.module.rollback_version' && status === 'failed') return 'business_os.module.rollback.failed';
+  return '';
+}
+
+function localBusinessCommandActivitySummary(commandType, command) {
+  const payload = command?.payload || {};
+  const result = command?.result || {};
+  const recordId = String(command?.record_id || '');
+  const moduleId = String(result.module_id || payload.module_id || recordId || 'App');
+  return {
+    ok: result.ok !== false,
+    module_id: moduleId,
+    version_id: String(result.version_id || payload.version_id || ''),
+    target_version: String(result.target_version || payload.target_version || ''),
+    release_channel: commandType === 'ctox.module.release'
+      ? String(result.release_channel || payload.release_channel || 'team')
+      : '',
+    source_version_id: String(result.source_version_id || payload.source_version_id || ''),
+    rollback_version_id: String(result.rollback_version_id || payload.rollback_version_id || payload.version_id || ''),
+    rolled_back_at_ms: Number(result.rolled_back_at_ms || 0) || null,
+  };
 }
 
 async function loadModuleWhyDiagnostics(moduleId, { commandBus, db, session, sync } = {}) {
