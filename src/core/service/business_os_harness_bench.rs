@@ -330,8 +330,11 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     let mut counts = BTreeMap::<String, usize>::new();
     let mut results = Vec::new();
     for case in &manifest.cases {
-        let command =
-            crate::business_os::store::pull_business_command_status_record(root, &case.command_id)?;
+        let command_context =
+            crate::mission::channels::inspect_business_command(root, &case.command_id)?;
+        let command = command_context
+            .as_ref()
+            .and_then(|context| context.get("command"));
         let thread = crate::business_os::store::pull_collection_record(
             root,
             "user_threads",
@@ -353,14 +356,15 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             .count();
         let (state, reason) = evaluate(
             case,
-            command.as_ref(),
+            command,
+            command_context.as_ref(),
             thread.as_ref(),
             chat.as_ref(),
             &case_approvals,
             note_count,
         );
         *counts.entry(state.label().into()).or_default() += 1;
-        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":case.thread_id,"command_status":command.as_ref().map(command_status).unwrap_or_else(||"missing".into()),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"chat_status":chat.as_ref().map(|value|field(value,"tracking_status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
+        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":case.thread_id,"command_status":command.map(command_status).unwrap_or_else(||"missing".into()),"review_transition_passed":command_context.as_ref().is_some_and(review_passed),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"chat_status":chat.as_ref().map(|value|field(value,"tracking_status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
     }
     let bad = counts.get("failed").copied().unwrap_or(0)
         + counts.get("lost_between_chairs").copied().unwrap_or(0);
@@ -374,6 +378,7 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
 fn evaluate(
     case: &SubmittedCase,
     command: Option<&Value>,
+    command_context: Option<&Value>,
     thread: Option<&Value>,
     chat: Option<&Value>,
     approvals: &[Value],
@@ -455,7 +460,7 @@ fn evaluate(
                     format!("answer missing markers: {}", missing.join(", ")),
                 );
             }
-            if !review_passed(command) {
+            if !command_context.is_some_and(review_passed) {
                 return (
                     State::Failed,
                     "completion lacks passed review and validation".into(),
@@ -491,14 +496,25 @@ fn completed_business_chat_reply(chat: Option<&Value>, case: &SubmittedCase) -> 
         })
 }
 
-fn review_passed(value: &Value) -> bool {
-    matches!(
-        pointer(value, &["/result/review_status", "/result/review_verdict"]).as_deref(),
-        Some("passed" | "pass")
-    ) && matches!(
-        pointer(value, &["/result/validation_status"]).as_deref(),
-        Some("passed" | "pass")
-    )
+fn review_passed(context: &Value) -> bool {
+    let Some(transitions) = context.get("transitions").and_then(Value::as_array) else {
+        return false;
+    };
+    let reviewed_version = transitions.iter().find_map(|transition| {
+        (field(transition, "from_phase") == "awaiting_review"
+            && field(transition, "to_phase") == "validating"
+            && field(transition, "reason") == "completion review and validation recorded")
+            .then(|| transition.get("projection_version").and_then(Value::as_i64))
+            .flatten()
+    });
+    let completed_version = transitions.iter().find_map(|transition| {
+        (field(transition, "from_phase") == "validating"
+            && field(transition, "to_phase") == "terminal"
+            && field(transition, "terminal_status") == "completed")
+            .then(|| transition.get("projection_version").and_then(Value::as_i64))
+            .flatten()
+    });
+    matches!((reviewed_version, completed_version), (Some(reviewed), Some(completed)) if completed > reviewed)
 }
 fn command_status(value: &Value) -> String {
     pointer(value, &["/status", "/task_status", "/route_status"])
@@ -592,6 +608,27 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
+    fn passed_review_context() -> Value {
+        json!({
+            "transitions": [
+                {
+                    "projection_version": 5,
+                    "from_phase": "awaiting_review",
+                    "to_phase": "validating",
+                    "terminal_status": "none",
+                    "reason": "completion review and validation recorded"
+                },
+                {
+                    "projection_version": 6,
+                    "from_phase": "validating",
+                    "to_phase": "terminal",
+                    "terminal_status": "completed",
+                    "reason": "command-specific writeback completed after review and validation"
+                }
+            ]
+        })
+    }
+
     #[test]
     fn catalog_has_exactly_100_cases() {
         let items = cases();
@@ -645,19 +682,38 @@ mod tests {
             task_id: "t".into(),
             thread_id: "h".into(),
         };
-        let command = json!({"status":"completed","result":{"answer":"BENCH-001 aktiv","review_status":"passed","validation_status":"passed"}});
+        let command = json!({"status":"completed","result":{"answer":"BENCH-001 aktiv"}});
+        let review = passed_review_context();
         let chat = json!({"messages":[{"role":"ctox","status":"completed","commandId":"c","taskId":"t","text":"BENCH-001 aktiv"}]});
         assert_eq!(
-            evaluate(&case, Some(&command), None, Some(&chat), &[], 0).0,
+            evaluate(
+                &case,
+                Some(&command),
+                Some(&review),
+                None,
+                Some(&chat),
+                &[],
+                0,
+            )
+            .0,
             State::Passed
         );
-        let unreviewed = json!({"status":"completed","result":{"answer":"BENCH-001 aktiv","review_status":"held","validation_status":"pending"}});
+        let unreviewed = json!({"transitions":[]});
         assert_eq!(
-            evaluate(&case, Some(&unreviewed), None, Some(&chat), &[], 0).0,
+            evaluate(
+                &case,
+                Some(&command),
+                Some(&unreviewed),
+                None,
+                Some(&chat),
+                &[],
+                0,
+            )
+            .0,
             State::Failed
         );
         assert_eq!(
-            evaluate(&case, Some(&command), None, None, &[], 0).0,
+            evaluate(&case, Some(&command), Some(&review), None, None, &[], 0,).0,
             State::Lost
         );
     }
@@ -677,7 +733,7 @@ mod tests {
         let command = json!({"status":"completed","result":{"answer":"BENCH-071 plus stale BENCH-070","review_status":"passed","validation_status":"passed"}});
         let chat = json!({"messages":[{"role":"ctox","status":"completed","commandId":"c","taskId":"t","text":"BENCH-071 plus stale BENCH-070"}]});
         assert_eq!(
-            evaluate(&case, Some(&command), None, Some(&chat), &[], 0).0,
+            evaluate(&case, Some(&command), None, None, Some(&chat), &[], 0).0,
             State::Failed
         )
     }
@@ -698,6 +754,7 @@ mod tests {
             evaluate(
                 &case,
                 Some(&json!({"status":"blocked"})),
+                None,
                 None,
                 None,
                 &[],
@@ -726,6 +783,7 @@ mod tests {
             evaluate(
                 &case,
                 Some(&json!({"status":"blocked"})),
+                None,
                 Some(&thread),
                 None,
                 &[approval],
