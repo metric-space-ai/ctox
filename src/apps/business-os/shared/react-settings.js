@@ -2302,6 +2302,7 @@ async function loadBusinessActivity({ commandBus, db, session, sync } = {}) {
     payload: { limit: 50 },
     source: 'business-os-settings',
     timeoutMs: 15000,
+    requireResult: true,
   });
   const payload = command.result || command;
   if (command.status === 'failed' || payload?.ok === false) {
