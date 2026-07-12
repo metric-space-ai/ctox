@@ -14706,9 +14706,47 @@ function ensureCtoxSmokeBinary() {
       if (smokeMode === 'restart-browser-to-rust'
         || smokeMode === 'restart-signaling-browser-to-rust'
         || smokeMode === 'rollover-native-peer-browser-to-rust') {
-        const peerSessionsBeforeRestart = useAppDb
-          ? (await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({ includeCounts: false }))?.sync?.peerSessions || []
-          : [];
+        const requiredRestartCollections = [
+          'business_module_catalog',
+          'ctox_runtime_settings',
+          'business_commands',
+          'ctox_queue_tasks',
+          'desktop_files',
+          'desktop_file_chunks',
+        ];
+        let peerSessionsBeforeRestart = [];
+        if (useAppDb) {
+          const baselineDeadline = Date.now() + 60000;
+          let baselineProblems = [];
+          while (Date.now() < baselineDeadline) {
+            const baselineStatus = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({ includeCounts: false });
+            peerSessionsBeforeRestart = baselineStatus?.sync?.peerSessions || [];
+            const baselineByCollection = new Map(
+              peerSessionsBeforeRestart.map((session) => [session.collection, session]),
+            );
+            baselineProblems = requiredRestartCollections.flatMap((collection) => {
+              const session = baselineByCollection.get(collection);
+              if (!session?.peerSession) return [`${collection}:missing_session`];
+              if (!session.checkpoint
+                || session.checkpoint.state !== 'advertised'
+                || !session.checkpoint.epoch
+                || session.checkpoint.collection !== collection) {
+                return [`${collection}:checkpoint_not_advertised`];
+              }
+              return [];
+            });
+            if (baselineProblems.length === 0) break;
+            await delay(500);
+          }
+          if (baselineProblems.length) {
+            throw new Error(`Critical peer session baseline was incomplete before native peer restart: ${JSON.stringify({
+              problems: baselineProblems,
+              requiredRestartCollections,
+              observedCollections: peerSessionsBeforeRestart.map((session) => session.collection),
+              mode: smokeMode,
+            }, null, 2)}`);
+          }
+        }
         if (smokeMode === 'rollover-native-peer-browser-to-rust') {
           await globalThis.__ctoxRolloverNativePeerInProcess?.();
         } else if (smokeMode === 'restart-signaling-browser-to-rust') {
@@ -14745,14 +14783,6 @@ function ensureCtoxSmokeBinary() {
             waitForNativePeerOpen(appFileReplicationState, 'desktop_files after native peer restart'),
             waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after native peer restart'),
           ]);
-          const requiredRestartCollections = [
-            'business_module_catalog',
-            'ctox_runtime_settings',
-            'business_commands',
-            'ctox_queue_tasks',
-            'desktop_files',
-            'desktop_file_chunks',
-          ];
           let advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
             timeoutMs: 60000,
             requiredCollections: requiredRestartCollections,
@@ -14792,12 +14822,32 @@ function ensureCtoxSmokeBinary() {
             advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({ includeCounts: false });
           }
           if (restartEvidenceProblems.length) {
+            const summarizeCriticalPeerSessions = (sessions) => requiredRestartCollections.map((collection) => {
+              const session = (Array.isArray(sessions) ? sessions : [])
+                .find((item) => item?.collection === collection);
+              return {
+                collection,
+                peerSession: session?.peerSession || null,
+                generation: Number(session?.generation || 0),
+                previousPeerSession: session?.previousPeerSession || null,
+                checkpoint: session?.checkpoint || null,
+                seenAt: session?.seenAt || null,
+              };
+            });
             throw new Error(`Critical peer sessions did not converge after native peer restart: ${JSON.stringify({
               problems: restartEvidenceProblems,
               requiredRestartCollections,
-              before: peerSessionsBeforeRestart,
-              after: advancedStatusAfterRepair?.sync?.peerSessions || [],
-              advancedStatusAfterRepair,
+              before: summarizeCriticalPeerSessions(peerSessionsBeforeRestart),
+              after: summarizeCriticalPeerSessions(advancedStatusAfterRepair?.sync?.peerSessions || []),
+              status: {
+                version: advancedStatusAfterRepair?.version || null,
+                phase: advancedStatusAfterRepair?.sync?.phase || null,
+                replicationUp: advancedStatusAfterRepair?.sync?.replicationUp === true,
+                reconnectingCollections: advancedStatusAfterRepair?.sync?.reconnectingCollections || [],
+                missingRequiredCollections: advancedStatusAfterRepair?.sync?.missingRequiredCollections || [],
+                lastError: advancedStatusAfterRepair?.sync?.lastError || null,
+                lastLifecycleEvent: advancedStatusAfterRepair?.sync?.lastLifecycleEvent || null,
+              },
               mode: smokeMode,
             }, null, 2)}`);
           }
