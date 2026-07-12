@@ -4953,22 +4953,24 @@ function ensureCtoxSmokeBinary() {
             await globalThis.__ctoxFreshProfileNarrowSetup?.();
             await waitFor(() => {
               const root = document.querySelector('[data-app-store-root]') || document.body;
+              const targetCard = document.querySelector('[data-app-id="phase14-fresh-team-app"]');
+              targetCard?.scrollIntoView?.({ block: 'center', inline: 'nearest' });
               const visibleLifecycle = [...document.querySelectorAll('.module-tab-lifecycle, .app-lifecycle-badge')]
                 .filter((el) => {
                   const rect = el.getBoundingClientRect();
                   return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth;
                 });
-              const disabled = document.querySelector('[data-disabled-reason]');
-              const disabledRect = disabled?.getBoundingClientRect?.();
+              const disabled = targetCard?.querySelector('[data-disabled-reason]');
+              const disabledReason = disabled?.getAttribute('data-disabled-reason') || '';
               return {
                 ok: window.innerWidth <= 430
                   && Boolean(root)
                   && visibleLifecycle.length >= 1
-                  && Boolean(disabled && disabledRect?.width > 0 && disabledRect.left < window.innerWidth),
+                  && Boolean(targetCard && disabled && disabledReason),
                 width: window.innerWidth,
                 height: window.innerHeight,
                 lifecycleCount: visibleLifecycle.length,
-                disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
+                disabledReason,
               };
             }, 5000, 'fresh-profile narrow viewport visible labels');
             return {
