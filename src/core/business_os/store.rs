@@ -27426,6 +27426,51 @@ pub fn issue_business_os_capability_token(
     Ok((token, expires_at_ms))
 }
 
+/// Issue a capability token for the already authenticated HTTP session.
+///
+/// The Business OS shell can run from a local implicit desktop session without
+/// an explicit login cookie. That session is still server-authenticated (the
+/// server derived it from a loopback request and local runtime config), but the
+/// normal "remember session user" path intentionally does not add implicit
+/// local-dev to the team roster. A WebRTC capability token, however, needs a
+/// durable active actor and capability epoch. Materialize exactly this
+/// server-derived session actor here before delegating to the normal issuer.
+pub fn issue_business_os_capability_token_for_session(
+    root: &Path,
+    session: &BusinessOsSession,
+    now_ms: i64,
+) -> anyhow::Result<(String, i64)> {
+    anyhow::ensure!(session.authenticated, "authenticated session is required");
+    let user = session
+        .user
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("authenticated session has no user"))?;
+    let user_id = user.id.trim();
+    anyhow::ensure!(!user_id.is_empty(), "session user id is required");
+    let display_name = user.display_name.trim();
+    let display_name = if display_name.is_empty() {
+        user_id
+    } else {
+        display_name
+    };
+    let role = normalize_business_role(&user.role);
+    let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
+    conn.execute(
+        "INSERT INTO business_users
+            (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, 1, ?4, ?4)
+         ON CONFLICT(user_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            role = excluded.role,
+            active = 1,
+            updated_at_ms = excluded.updated_at_ms",
+        params![user_id, display_name, role.as_str(), now_ms],
+    )?;
+    drop(conn);
+    issue_business_os_capability_token(root, user_id, now_ms)
+}
+
 /// Issue a capability token for a trusted managed-control-plane session.
 ///
 /// ctox.dev authenticates the tenant user on the managed subdomain, then calls
@@ -38555,6 +38600,44 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn local_dev_session_can_issue_data_plane_capability() -> anyhow::Result<()> {
+        let _env = EnvRestore::set(&[
+            ("CTOX_AUTH_USERS", ""),
+            ("CTOX_BUSINESS_PASSWORD", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_DISPLAY_NAME", "Local CTOX"),
+            ("CTOX_BUSINESS_OS_DESKTOP_USER", "local-dev"),
+            ("CTOX_BUSINESS_OS_DESKTOP_ROLE", "admin"),
+            ("CTOX_BUSINESS_OS_LOGIN_URL", ""),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "0"),
+            ("CTOX_BUSINESS_OS_SESSION_TOKEN", ""),
+        ]);
+        let temp = tempdir()?;
+        let session = session_for_request(None, None, true);
+        assert!(session.authenticated);
+
+        let now = now_ms() as i64;
+        let (token, expires_at_ms) =
+            issue_business_os_capability_token_for_session(temp.path(), &session, now)?;
+
+        assert!(expires_at_ms > now);
+        assert_eq!(
+            verify_capability_actor(temp.path(), &token),
+            Some(("local-dev".to_owned(), "admin".to_owned()))
+        );
+
+        let conn = open_store(temp.path())?;
+        let (display_name, role, active): (String, String, i64) = conn.query_row(
+            "SELECT display_name, role, active FROM business_users WHERE user_id = 'local-dev'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(display_name, "Local CTOX");
+        assert_eq!(role, "admin");
+        assert_eq!(active, 1);
         Ok(())
     }
 

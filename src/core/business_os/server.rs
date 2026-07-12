@@ -252,16 +252,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
-                let user_id = session
-                    .user
-                    .as_ref()
-                    .map(|user| user.id.clone())
-                    .unwrap_or_default();
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                match store::issue_business_os_capability_token(root, &user_id, now) {
+                match store::issue_business_os_capability_token_for_session(root, &session, now) {
                     Ok((token, expires_at_ms)) => respond_json_value(
                         request,
                         serde_json::json!({
