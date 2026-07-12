@@ -139,6 +139,9 @@ test('standardizes dataframe headers with units and hover help', () => {
   assert.match(columnHeaderHelp(thrust), /Newton/i);
   assert.equal(columnHeaderLabel(loadCase), 'Load Case');
   assert.doesNotMatch(columnHeaderHelp(loadCase), /Source unit: N/);
+
+  const [torque] = normalizeColumns([{ name: 'torque_Nm', label: 'Torque N m', unit: 'N m' }]);
+  assert.equal(columnHeaderLabel(torque), 'Moment/Torque (N m)');
 });
 
 test('formats factual numeric values without locale separators', () => {

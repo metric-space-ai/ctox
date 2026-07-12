@@ -10648,8 +10648,104 @@ function isInOperatorMatch(actual, candidates) {
 }
 function matchesRegex(actual, pattern) {
   if (actual === void 0 || actual === null) return false;
-  const source = pattern instanceof RegExp ? pattern : new RegExp(String(pattern));
-  return source.test(String(actual));
+  const compiled = compileLinearRegexPattern(pattern);
+  if (!compiled) return false;
+  return testLinearRegexPattern(String(actual), compiled);
+}
+var MAX_LINEAR_REGEX_PATTERN_LENGTH = 128;
+var MAX_LINEAR_REGEX_INPUT_LENGTH = 8192;
+function compileLinearRegexPattern(pattern) {
+  const source = pattern instanceof RegExp ? pattern.source : String(pattern ?? "");
+  const ignoreCase = pattern instanceof RegExp ? pattern.ignoreCase : false;
+  if (!source || source.length > MAX_LINEAR_REGEX_PATTERN_LENGTH) return null;
+  let cursor = 0;
+  let end = source.length;
+  const anchoredStart = source[cursor] === "^";
+  if (anchoredStart) cursor += 1;
+  const anchoredEnd = end > cursor && source[end - 1] === "$" && !isEscaped(source, end - 1);
+  if (anchoredEnd) end -= 1;
+  const tokens = [];
+  while (cursor < end) {
+    const parsed = parseLinearRegexAtom(source, cursor, end);
+    if (!parsed) return null;
+    cursor = parsed.next;
+    let min = 1;
+    let max = 1;
+    if (cursor < end && ["*", "+", "?"].includes(source[cursor])) {
+      const quantifier = source[cursor];
+      min = quantifier === "+" ? 1 : 0;
+      max = quantifier === "?" ? 1 : Infinity;
+      cursor += 1;
+    }
+    tokens.push({ ...parsed.atom, min, max });
+  }
+  return { tokens, anchoredStart, anchoredEnd, ignoreCase };
+}
+function parseLinearRegexAtom(source, cursor, end) {
+  const char = source[cursor];
+  if (!char) return null;
+  if (char === ".") {
+    return { atom: { kind: "any" }, next: cursor + 1 };
+  }
+  if (char === "\\") {
+    const escaped = source[cursor + 1];
+    if (!escaped || cursor + 1 >= end) return null;
+    if (escaped === "s") return { atom: { kind: "space" }, next: cursor + 2 };
+    if (escaped === "d") return { atom: { kind: "digit" }, next: cursor + 2 };
+    if (escaped === "w") return { atom: { kind: "word" }, next: cursor + 2 };
+    return { atom: { kind: "literal", value: escaped }, next: cursor + 2 };
+  }
+  if ("()[]{}|".includes(char)) return null;
+  if ("*+?".includes(char)) return null;
+  return { atom: { kind: "literal", value: char }, next: cursor + 1 };
+}
+function testLinearRegexPattern(value, compiled) {
+  const input = String(value || "").slice(0, MAX_LINEAR_REGEX_INPUT_LENGTH);
+  const text = compiled.ignoreCase ? input.toLocaleLowerCase() : input;
+  const tokens = compiled.ignoreCase ? compiled.tokens.map((token) => token.kind === "literal" ? { ...token, value: token.value.toLocaleLowerCase() } : token) : compiled.tokens;
+  if (!tokens.length) return true;
+  const starts = compiled.anchoredStart ? [0] : Array.from({ length: text.length + 1 }, (_, index) => index);
+  return starts.some((start) => {
+    const endings = consumeLinearRegexTokens(text, tokens, start, 0);
+    return endings.some((end) => compiled.anchoredEnd ? end === text.length : true);
+  });
+}
+function consumeLinearRegexTokens(text, tokens, position, tokenIndex) {
+  if (tokenIndex >= tokens.length) return [position];
+  const token = tokens[tokenIndex];
+  const endings = [];
+  let next = position;
+  let count = 0;
+  while (count < token.min) {
+    if (!linearRegexAtomMatches(text[next], token)) return endings;
+    next += 1;
+    count += 1;
+  }
+  const positions = [next];
+  while (count < token.max && next < text.length && linearRegexAtomMatches(text[next], token)) {
+    next += 1;
+    count += 1;
+    positions.push(next);
+  }
+  for (let index = positions.length - 1; index >= 0; index -= 1) {
+    endings.push(...consumeLinearRegexTokens(text, tokens, positions[index], tokenIndex + 1));
+  }
+  return endings;
+}
+function linearRegexAtomMatches(char, token) {
+  if (char === void 0) return false;
+  if (token.kind === "any") return true;
+  if (token.kind === "space") return /\s/.test(char);
+  if (token.kind === "digit") return char >= "0" && char <= "9";
+  if (token.kind === "word") return /[A-Za-z0-9_]/.test(char);
+  return char === token.value;
+}
+function isEscaped(source, index) {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
 }
 function arrayContains(actual, expected) {
   return Array.isArray(actual) && actual.includes(expected);

@@ -3324,11 +3324,6 @@ function fallbackCvSectionLines(rawText, kind) {
   return [];
 }
 
-
-function escapeRegExp(str){
-  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function escapeHtmlText(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -3423,20 +3418,37 @@ function buildHighlightCandidates(snippet) {
 function collectHighlightIntervals(text, candidate, { color, reqId, intervals }) {
   const term = String(candidate || '').trim();
   if (term.length < 3) return;
-  const pattern = escapeRegExp(term).replace(/\s+/g, '\\s+');
-  let re;
-  try {
-    re = new RegExp(pattern, 'gi');
-  } catch {
-    return;
-  }
-  let match;
-  while ((match = re.exec(text))) {
-    const start = match.index;
-    const end = start + match[0].length;
+  for (const { start, end } of findWhitespaceFlexibleMatches(text, term)) {
     if (end > start) intervals.push({ start, end, color, reqId });
-    if (re.lastIndex === match.index) re.lastIndex += 1;
   }
+}
+
+function findWhitespaceFlexibleMatches(text, term) {
+  const source = String(text || '');
+  const tokens = String(term || '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!source || !tokens.length) return [];
+  const lower = source.toLocaleLowerCase();
+  const matches = [];
+  let cursor = 0;
+
+  while (cursor < lower.length) {
+    const start = lower.indexOf(tokens[0], cursor);
+    if (start === -1) break;
+    let end = start + tokens[0].length;
+    let ok = true;
+    for (let tokenIndex = 1; tokenIndex < tokens.length; tokenIndex += 1) {
+      let probe = end;
+      while (probe < lower.length && /\s/.test(lower[probe])) probe += 1;
+      if (probe === end || lower.slice(probe, probe + tokens[tokenIndex].length) !== tokens[tokenIndex]) {
+        ok = false;
+        break;
+      }
+      end = probe + tokens[tokenIndex].length;
+    }
+    if (ok) matches.push({ start, end });
+    cursor = Math.max(start + 1, end);
+  }
+  return matches;
 }
 
 function mergeHighlightIntervals(intervals, maxLength) {

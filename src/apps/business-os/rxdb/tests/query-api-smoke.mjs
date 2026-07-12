@@ -17,6 +17,8 @@ const docs = [
 assert(matchesSelector(docs[0], { status: 'open', score: { $gte: 2, $lte: 2 } }), 'basic selector failed');
 assert(matchesSelector(docs[1], { status: { $in: ['done'] }, tags: { $contains: 'two' } }), 'array selector failed');
 assert(matchesSelector(docs[0], { $and: [{ status: 'open' }, { title: { $regex: '^Al' } }] }), '$and/$regex selector failed');
+assert(matchesSelector({ title: 'Alpha 42' }, { title: { $regex: '^Al\\w+\\s\\d+$' } }), 'linear $regex subset selector failed');
+assert(!matchesSelector({ title: 'aaaaaaaaaaaaaaaa!' }, { title: { $regex: '(a+)+$' } }), 'unsupported nested $regex selector must fail closed');
 assert(matchesSelector(docs[0], { $or: [{ status: 'missing' }, { 'nested.value': { $gt: 2 } }] }), '$or/nested selector failed');
 assert(matchesSelector(docs[1], { rows: { $elemMatch: { kind: 'y', qty: { $gte: 7 } } } }), '$elemMatch selector failed');
 assert(!matchesSelector(docs[2], { $not: { status: 'open' } }), '$not selector failed');

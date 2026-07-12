@@ -2445,7 +2445,8 @@ function localizedColumnBaseLabel(label, column = {}) {
 }
 
 function labelEndsWithUnitInParens(label, unit) {
-  return new RegExp(`\\(${escapeRegExp(unit)}\\)\\s*$`, 'i').test(String(label || ''));
+  const suffix = `(${String(unit || '').trim()})`.toLocaleLowerCase();
+  return Boolean(suffix.length > 2 && String(label || '').trim().toLocaleLowerCase().endsWith(suffix));
 }
 
 function stripUnitSuffix(label, unit = '') {
@@ -2456,9 +2457,20 @@ function stripUnitSuffix(label, unit = '') {
   if (unit === 'N m') aliases.add('Nm');
   for (const alias of aliases) {
     if (!alias) continue;
-    value = value.replace(new RegExp(`[\\s_-]+${escapeRegExp(alias)}\\s*$`, 'i'), '').trim();
+    value = stripTrailingUnitAlias(value, alias);
   }
   return value || String(label || '').trim();
+}
+
+function stripTrailingUnitAlias(value, alias) {
+  const text = String(value || '');
+  const normalizedAlias = String(alias || '').trim().toLocaleLowerCase();
+  if (!text || !normalizedAlias) return text.trim();
+  const lower = text.toLocaleLowerCase();
+  if (!lower.endsWith(normalizedAlias)) return text.trim();
+  const prefix = text.slice(0, text.length - normalizedAlias.length);
+  if (!prefix || !/[\s_-]$/.test(prefix)) return text.trim();
+  return prefix.replace(/[\s_-]+$/g, '').trim();
 }
 
 function metricUnitForColumn(column) {
@@ -2715,10 +2727,6 @@ function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') 
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function escapeHtml(value) {
