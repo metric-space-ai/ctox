@@ -5230,24 +5230,16 @@ function guardAllowsCollectionPermission(guard, collectionName, permission) {
   if (!guard || !name) return true;
   // Runtime-installed app code never inherits the signed-in operator's
   // ambient collection authority. Its shell-delivered facade is confined to
-  // the collections declared by that app; native policy/grants then decide
-  // whether those declared collections are readable or writable.
+  // the collections declared by that app, and data handles require a concrete
+  // collection grant. Module-scope permissions decide lifecycle/open/modify
+  // authority; they must not unlock arbitrary declared data collections.
   if (!guard.collections.has(name)) return false;
-  if (canUseBusinessPermission({
+  return canUseBusinessPermission({
     session: state.session,
     governance: state.governance,
     permission,
     scopeType: 'collection',
     scopeId: name,
-  })) {
-    return true;
-  }
-  return canUseBusinessPermission({
-    session: state.session,
-    governance: state.governance,
-    permission,
-    scopeType: 'module',
-    scopeId: guard.moduleId,
   });
 }
 
@@ -6125,24 +6117,14 @@ function canUseModulePermission(mod, permission) {
 }
 
 function canUseModuleDataPermission(mod, collectionName, permission) {
-  const moduleId = String(mod?.id || mod?.module_id || '').trim();
   const collection = String(collectionName || '').trim();
-  if (!moduleId || !collection || !permission) return false;
-  if (canUseBusinessPermission({
+  if (!collection || !permission) return false;
+  return canUseBusinessPermission({
     session: state.session,
     governance: state.governance,
     permission,
     scopeType: 'collection',
     scopeId: collection,
-  })) {
-    return true;
-  }
-  return canUseBusinessPermission({
-    session: state.session,
-    governance: state.governance,
-    permission,
-    scopeType: 'module',
-    scopeId: moduleId,
   });
 }
 
