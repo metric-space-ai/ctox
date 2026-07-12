@@ -10261,7 +10261,7 @@ function ensureCtoxSmokeBinary() {
                 && ['actor', 'visibility', 'open', 'modify', 'source', 'release', 'rollback', 'data']
                   .every((key) => why.rowKeys.includes(key))
                 && why.dataCollections.includes('business_commands')
-                && why.dataRows.some((row) => /Lesen: Erlaubt/.test(row.text) && /Schreiben: Erlaubt/.test(row.text))
+                && why.dataRows.some((row) => /Lesen: Nicht erlaubt/.test(row.text) && /Schreiben: Nicht erlaubt/.test(row.text))
               ),
               state: element?.dataset?.lifecyclePermissionState || '',
               text,
