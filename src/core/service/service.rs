@@ -7147,24 +7147,24 @@ fn start_prompt_worker(
                                 timeout_worker_message,
                                 retry_worker_message,
                             );
-                            if let Some(not_before) = retry_not_before.as_deref() {
-                                let _ = channels::defer_messages_until(
-                                    &root,
-                                    &job.leased_message_keys,
-                                    not_before,
-                                    if timeout_worker_message {
-                                        "turn timeout retry backoff"
-                                    } else {
-                                        "retryable runtime/API failure"
-                                    },
-                                );
-                            }
+                            let retry_reason = if timeout_worker_message {
+                                "turn timeout retry backoff"
+                            } else {
+                                "retryable runtime/API failure"
+                            };
                             let ack_result = if route_status == "failed" {
                                 channels::ack_leased_messages_with_failure_reason(
                                     &root,
                                     &job.leased_message_keys,
                                     route_status,
                                     &compact_error,
+                                )
+                            } else if route_status == "pending" {
+                                release_retryable_worker_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    retry_not_before.as_deref(),
+                                    retry_reason,
                                 )
                             } else {
                                 channels::ack_leased_messages(
@@ -22050,6 +22050,29 @@ fn runtime_retry_not_before_iso(error_text: &str) -> String {
     chrono_like_iso(current_epoch_secs().saturating_add(cooldown_secs))
 }
 
+fn release_retryable_worker_messages(
+    root: &Path,
+    message_keys: &[String],
+    retry_not_before: Option<&str>,
+    reason: &str,
+) -> Result<usize> {
+    if let Some(not_before) = retry_not_before {
+        channels::defer_messages_until(root, message_keys, not_before, reason)?;
+    }
+    for message_key in message_keys {
+        channels::transition_business_command_for_task(
+            root,
+            message_key,
+            "pending",
+            None,
+            None,
+            Some(reason),
+            reason,
+        )?;
+    }
+    channels::ack_leased_messages(root, message_keys, "pending")
+}
+
 fn timeout_retry_not_before_iso(agent_failure_count: i64) -> String {
     let exponent = agent_failure_count.saturating_sub(1).clamp(0, 4) as u32;
     let cooldown_secs = 300_u64.saturating_mul(2_u64.saturating_pow(exponent));
@@ -34058,6 +34081,135 @@ Use shell tools to create or update these files."
             "idle dispatch must wait until the queue task not_before expires"
         );
         assert_eq!(route_status_for(&root, &task.message_key), "pending");
+    }
+
+    #[test]
+    fn runtime_retry_moves_business_command_to_retry_wait_before_releasing_queue() {
+        let root = temp_root("business-command-runtime-retry-wait");
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some("cmd_runtime_retry_wait".to_string()),
+                module: "ctox".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("ctox".to_string()),
+                payload: serde_json::json!({
+                    "title": "Retry the answer",
+                    "instruction": "Answer OK",
+                    "prompt": "Answer OK"
+                }),
+                client_context: serde_json::json!({
+                    "action": "context-chat",
+                    "module": "ctox"
+                }),
+            },
+        )
+        .expect("record command");
+        let task_id = accepted.task_id.expect("queue task id");
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease first attempt");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "first attempt leased",
+        )
+        .expect("project first lease");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "first attempt started",
+        )
+        .expect("project first start");
+
+        let not_before = "2099-01-01T00:00:00Z";
+        release_retryable_worker_messages(
+            &root,
+            std::slice::from_ref(&task_id),
+            Some(not_before),
+            "retryable runtime/API failure",
+        )
+        .expect("release retryable command");
+
+        assert_eq!(route_status_for(&root, &task_id), "pending");
+        assert_eq!(
+            channels::queue_task_deferred_until(&root, &task_id)
+                .expect("read durable retry")
+                .as_deref(),
+            Some(not_before)
+        );
+        let retry_context = channels::inspect_business_command_for_task(&root, &task_id)
+            .expect("inspect retry command")
+            .expect("linked command");
+        assert_eq!(retry_context["command"]["execution_phase"], "retry_wait");
+        assert_eq!(retry_context["command"]["attempt"], 1);
+        assert_eq!(retry_context["command"]["retryable"], true);
+
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open retry database");
+        conn.execute(
+            "UPDATE communication_messages
+             SET metadata_json=json_set(metadata_json, '$.not_before', '2000-01-01T00:00:00Z')
+             WHERE message_key=?1",
+            params![task_id],
+        )
+        .expect("expire message retry");
+        conn.execute(
+            "UPDATE communication_routing_state
+             SET retry_not_before='2000-01-01T00:00:00Z'
+             WHERE message_key=?1",
+            params![task_id],
+        )
+        .expect("expire routing retry");
+        drop(conn);
+
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease retry attempt");
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open leased retry database");
+        let cleared_retry: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT retry_not_before, hold_reason
+                 FROM communication_routing_state WHERE message_key=?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read cleared retry state");
+        assert_eq!(cleared_retry, (None, None));
+        drop(conn);
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "retry attempt leased",
+        )
+        .expect("project retry lease");
+        channels::transition_business_command_for_task(
+            &root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "retry attempt started",
+        )
+        .expect("project retry start");
+        let running_context = channels::inspect_business_command_for_task(&root, &task_id)
+            .expect("inspect running retry")
+            .expect("linked command");
+        assert_eq!(running_context["command"]["execution_phase"], "running");
+        assert_eq!(running_context["command"]["attempt"], 2);
     }
 
     #[test]

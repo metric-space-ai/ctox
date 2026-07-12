@@ -4333,6 +4333,14 @@ pub(crate) fn transition_business_command_for_task(
         "leased" => ("leased", "none"),
         "running" => ("running", "none"),
         "blocked" => ("blocked", "none"),
+        "pending"
+            if matches!(
+                from_phase.as_str(),
+                "leased" | "running" | "awaiting_review" | "validating" | "retry_wait"
+            ) =>
+        {
+            ("retry_wait", "none")
+        }
         _ => ("queued", "none"),
     };
     if from_phase == "terminal" {
@@ -4383,7 +4391,7 @@ pub(crate) fn transition_business_command_for_task(
         "UPDATE business_command_aggregates
          SET execution_phase = ?2, terminal_status = ?3, projection_version = ?4,
              result_json = COALESCE(?5, result_json), error_code = ?6, error_message = ?7,
-             retryable = CASE WHEN ?2 = 'blocked' THEN 1 ELSE 0 END,
+             retryable = CASE WHEN ?2 IN ('blocked', 'retry_wait') THEN 1 ELSE 0 END,
              attempt = attempt + CASE WHEN ?2 = 'running' AND execution_phase != 'running' THEN 1 ELSE 0 END,
              updated_at_ms = ?8
          WHERE command_id = ?1",
@@ -4661,7 +4669,9 @@ pub(crate) fn record_business_command_review(
     let now_ms = epoch_millis();
     tx.execute(
         "UPDATE business_command_aggregates
-         SET execution_phase = ?2, projection_version = ?3, updated_at_ms = ?4
+         SET execution_phase = ?2, projection_version = ?3,
+             retryable = CASE WHEN ?2 IN ('retry_wait', 'blocked') THEN 1 ELSE 0 END,
+             updated_at_ms = ?4
          WHERE command_id = ?1",
         params![command_id, to_phase, next_version, now_ms],
     )?;
@@ -5959,7 +5969,7 @@ pub fn lease_queue_task(
         let updated = tx.execute(
             r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
                VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
-               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, acked_at=NULL, updated_at=excluded.updated_at
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
                WHERE communication_routing_state.route_status = 'pending'"#,
             params![message_key, normalized_owner, now, lease_expires_at],
         )?;
@@ -11609,7 +11619,7 @@ fn take_messages(
         let updated = tx.execute(
             r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, acked_at, last_error, updated_at)
                VALUES (?1, 'leased', ?2, ?3, ?3, ?4, NULL, NULL, ?3)
-               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, acked_at=NULL, updated_at=excluded.updated_at
+               ON CONFLICT(message_key) DO UPDATE SET route_status='leased', lease_owner=excluded.lease_owner, leased_at=excluded.leased_at, first_pending_at=COALESCE(communication_routing_state.first_pending_at, excluded.first_pending_at), lease_expires_at=excluded.lease_expires_at, retry_not_before=NULL, hold_reason=NULL, acked_at=NULL, updated_at=excluded.updated_at
                WHERE communication_routing_state.route_status = 'pending'"#,
             params![item.message_key, lease_owner, leased_at, lease_expires_at],
         )?;
@@ -11649,7 +11659,7 @@ pub fn defer_messages_until(
     let conn = open_channel_db(&db_path)?;
     let mut updated = 0usize;
     for message_key in message_keys {
-        updated += conn.execute(
+        let message_updated = conn.execute(
             r#"
             UPDATE communication_messages
             SET metadata_json = json_set(
@@ -11661,6 +11671,19 @@ pub fn defer_messages_until(
             "#,
             params![message_key, not_before, reason],
         )?;
+        if message_updated != 0 {
+            conn.execute(
+                r#"
+                UPDATE communication_routing_state
+                SET retry_not_before = ?2,
+                    hold_reason = ?3,
+                    updated_at = ?4
+                WHERE message_key = ?1
+                "#,
+                params![message_key, not_before, reason, now_iso_string()],
+            )?;
+        }
+        updated += message_updated;
     }
     Ok(updated)
 }
