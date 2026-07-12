@@ -36094,6 +36094,15 @@ fn handle_appsec_business_command(
             }
             if command
                 .payload
+                .get("require_login_proof")
+                .or_else(|| command.payload.get("require-login-proof"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--require-login-proof".to_string());
+            }
+            if command
+                .payload
                 .get("require_evidence")
                 .or_else(|| command.payload.get("require-evidence"))
                 .and_then(Value::as_bool)

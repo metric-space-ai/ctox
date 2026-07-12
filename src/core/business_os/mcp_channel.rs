@@ -1215,6 +1215,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("evidence_dir"),
                 optional_string("credential_proof"),
                 optional_boolean("require_credentials"),
+                optional_boolean("require_login_proof"),
                 optional_boolean("require_evidence"),
             ]),
         ),
@@ -2888,6 +2889,9 @@ fn appsec_authz_preflight(
     }
     if optional_bool_arg(arguments, "require_credentials") {
         args.push("--require-credentials".to_string());
+    }
+    if optional_bool_arg(arguments, "require_login_proof") {
+        args.push("--require-login-proof".to_string());
     }
     if optional_bool_arg(arguments, "require_evidence") {
         args.push("--require-evidence".to_string());
