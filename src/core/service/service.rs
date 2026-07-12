@@ -7969,9 +7969,11 @@ fn run_completion_review(
     } else {
         founder_commitment_backing_summaries(root)
     };
+    let (review_scope, review_task_goal, review_task_prompt) =
+        completion_review_contract_for_job(root, job);
     let review_request = review::CompletionReviewRequest {
-        task_goal: job.goal.clone(),
-        task_prompt: job.prompt.clone(),
+        task_goal: review_task_goal,
+        task_prompt: review_task_prompt,
         preview: job.preview.clone(),
         source_label: job.source_label.clone(),
         owner_visible,
@@ -8056,7 +8058,7 @@ fn run_completion_review(
         artifact_commitments: founder_commitments.clone(),
         commitment_backing: founder_commitment_backing.clone(),
         deterministic_evidence,
-        review_scope: completion_review_scope_for_job(root, job),
+        review_scope,
     };
     let mut outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if let Some(guard_outcome) = spreadsheet_attachment_guard_outcome(root, job, &review_request) {
@@ -10591,17 +10593,46 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
     })
 }
 
-fn completion_review_scope_for_job(root: &Path, job: &QueuedPrompt) -> review::ReviewScope {
+fn completion_review_contract_for_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> (review::ReviewScope, String, String) {
     for message_key in &job.leased_message_keys {
         let Ok(Some(context)) = channels::inspect_business_command_for_task(root, message_key)
         else {
             continue;
         };
         if let Some(scope) = completion_review_scope_from_command_context(&context) {
-            return scope;
+            if let Some((goal, prompt)) = semantic_answer_contract_from_command_context(&context) {
+                return (scope, goal, prompt);
+            }
         }
     }
-    review::ReviewScope::FullEvidence
+    (
+        review::ReviewScope::FullEvidence,
+        job.goal.clone(),
+        job.prompt.clone(),
+    )
+}
+
+fn semantic_answer_contract_from_command_context(context: &Value) -> Option<(String, String)> {
+    let payload = context.pointer("/command/payload")?;
+    let prompt = ["instruction", "prompt", "user_message", "body"]
+        .into_iter()
+        .find_map(|field| {
+            payload
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })?;
+    let goal = payload
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Answer the durable Business OS data task");
+    Some((goal.to_string(), prompt.to_string()))
 }
 
 fn completion_review_scope_from_command_context(context: &Value) -> Option<review::ReviewScope> {
@@ -24448,6 +24479,71 @@ mod tests {
         ] {
             assert_eq!(completion_review_scope_from_command_context(&context), None);
         }
+    }
+
+    #[test]
+    fn semantic_review_uses_durable_command_contract_not_worker_runtime_wrapper() {
+        let root = temp_root("semantic-review-canonical-contract");
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some("cmd_semantic_contract".to_string()),
+                module: "customers".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("customer-1".to_string()),
+                payload: serde_json::json!({
+                    "title": "Feldwert lesen",
+                    "instruction": "Kundenakte: Referenz BENCH-001, Status aktiv. Nenne Referenz und Status.",
+                    "prompt": "duplicate prompt must not be appended",
+                    "mode": "data",
+                    "dependencies": [],
+                    "attachments": []
+                }),
+                client_context: serde_json::json!({"source":"test"}),
+            },
+        )
+        .expect("record command");
+        let task_id = accepted.task_id.expect("queue task id");
+        let job = QueuedPrompt {
+            prompt: "Work only inside this workspace:\n/tmp/task\n\nExecution contract: If this request asks for files, commands, runtime state, tickets, benchmarks, or verification, do the work with tools.\n\ncontaminated retry prompt".to_string(),
+            goal: "runtime-enriched goal".to_string(),
+            preview: "bench".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task_id],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp/task".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let (scope, goal, prompt) = completion_review_contract_for_job(&root, &job);
+        assert!(matches!(
+            scope,
+            review::ReviewScope::SemanticAnswerOnly { .. }
+        ));
+        assert_eq!(goal, "Feldwert lesen");
+        assert_eq!(
+            prompt,
+            "Kundenakte: Referenz BENCH-001, Status aktiv. Nenne Referenz und Status."
+        );
+        assert!(!prompt.contains("Execution contract"));
+        assert!(!prompt.contains("duplicate prompt"));
+        assert!(!prompt.contains("retry"));
+    }
+
+    #[test]
+    fn semantic_review_without_durable_text_contract_falls_back_to_full_evidence() {
+        let context = serde_json::json!({
+            "command": {
+                "command_type": "business_os.chat.task",
+                "payload": {"mode": "data", "dependencies": [], "attachments": []}
+            }
+        });
+        assert!(semantic_answer_contract_from_command_context(&context).is_none());
     }
 
     #[test]

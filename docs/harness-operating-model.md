@@ -137,9 +137,12 @@ deployment, record, or other state changes.
 
 For a typed Business OS data-chat command with no dependencies or attachments,
 that comparison runs in a tool-free semantic review session. Its prompt carries
-only the exact task contract and answer; it does not load workspace, runtime,
-continuity, mission, or the general review skill. Action-mode commands and data
-commands with dependencies or attachments stay on the full evidence reviewer.
+only the original durable command title/text contract and the answer; it does
+not reuse the worker prompt after workspace instructions, execution contracts,
+or retry feedback were added, and it does not load workspace, runtime,
+continuity, mission, or the general review skill. A missing durable text
+contract, action-mode command, or data command with dependencies or attachments
+stays on the full evidence reviewer.
 
 ## Witness Of Progress
 

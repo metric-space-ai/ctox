@@ -256,9 +256,14 @@ authoritative evidence from that system.
 Typed Business OS `business_os.chat.task` commands in `mode=data`, without
 dependencies or attachments, use a bounded semantic review scope: no tools,
 no workspace/runtime/mission loading, and one 120-second review turn. This
-narrows evidence gathering but does not skip review. If the task or answer
-claims a side effect, the semantic reviewer must fail it; action-mode commands
-remain on the full evidence path.
+narrows evidence gathering but does not skip review. The task goal and contract
+come from the original durable command payload (`title` plus the first present
+text contract in `instruction`, `prompt`, `user_message`, or `body`), never
+from the worker prompt after workspace instructions, execution contracts, or
+retry feedback have been added. If no durable text contract exists, the task
+falls back to full evidence review. If the task or answer claims a side effect,
+the semantic reviewer must fail it; action-mode commands remain on the full
+evidence path.
 
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
