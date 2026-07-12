@@ -6038,11 +6038,16 @@ pub fn lease_queue_task(
     ensure_queue_account(&mut conn)?;
     let current =
         load_queue_message_from_conn(&conn, message_key)?.context("queue task not found")?;
+    // Thread refresh is ancillary routing maintenance. Run it before the lease
+    // transaction so a transient write-lock error cannot be reported after the
+    // lease has already committed and strand work between `pending` and worker
+    // activation.
+    refresh_thread(&mut conn, &current.thread_key)?;
     let now = now_iso_string();
     let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     // Hold a write lock across the read-modify-write so a concurrent leaser on
     // a separate connection cannot overwrite our lease_owner (lost-update).
-    {
+    let leased = {
         let tx =
             rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
         if let Some(not_before) = queue_task_deferred_until_from_conn(&tx, message_key)? {
@@ -6076,10 +6081,12 @@ pub fn lease_queue_task(
                 message_key
             );
         }
+        let leased = load_queue_task_from_conn(&tx, message_key)?
+            .context("failed to load leased queue task")?;
         tx.commit()?;
-    }
-    refresh_thread(&mut conn, &current.thread_key)?;
-    load_queue_task_from_conn(&conn, message_key)?.context("failed to load leased queue task")
+        leased
+    };
+    Ok(leased)
 }
 
 /// router-3: the age past which a still-leased, unacked queue task is "stuck".
@@ -14739,6 +14746,60 @@ mod tests {
         );
 
         let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn queue_thread_refresh_failure_does_not_leave_a_committed_lease() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-refresh-failure-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "refresh failure before lease".to_string(),
+                prompt: "Keep this task pending when thread refresh fails.".to_string(),
+                thread_key: "queue/lease-refresh-failure".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER fail_queue_thread_refresh_before_lease
+            BEFORE UPDATE ON communication_threads
+            WHEN NEW.thread_key = 'queue/lease-refresh-failure'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected thread refresh failure');
+            END;
+            "#,
+        )
+        .expect("install refresh failure trigger");
+        drop(conn);
+
+        let error = lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect_err("thread refresh failure must abort before queue lease commit");
+        assert!(error
+            .to_string()
+            .contains("injected thread refresh failure"));
+        let reloaded = load_queue_task(&root, &created.message_key)
+            .expect("failed to load queue task")
+            .expect("missing queue task");
+        assert_eq!(reloaded.route_status, "pending");
+        assert!(reloaded.lease_owner.is_none());
+        assert!(reloaded.leased_at.is_none());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

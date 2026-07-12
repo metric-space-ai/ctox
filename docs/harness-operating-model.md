@@ -157,6 +157,11 @@ waits use the same boundary with `command=blocked`, `queue=blocked`, and the
 durable `WaitRef`; exhausted technical holds terminalize command and queue
 together as failed.
 
+Lease acquisition has no fallible maintenance step after commit. Thread
+projection refresh happens before the lease transaction, and the returned task
+view is materialized before commit. Thus an acquisition error leaves the queue
+row pending; a committed lease is always returned to the dispatcher.
+
 ## Witness Of Progress
 
 Every rejected review must have a witness before the same artifact can pass

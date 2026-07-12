@@ -255,6 +255,12 @@ typed result or review evidence cannot be persisted must not leave a
 `running` command behind a `pending` queue row. Either the complete hold is
 durable or none of it is.
 
+Queue acquisition follows the same commit-boundary rule: ancillary thread
+refresh runs before the lease transaction, and the leased task view is loaded
+inside that transaction. A caller therefore cannot receive an error after the
+lease has already committed and accidentally leave a durable task without an
+active or buffered worker.
+
 Only approved work can move into terminal handling. For communication and other
 artifact-producing work, the outcome witness checks that required durable
 artifacts exist. The service then enforces reviewed terminal success through
