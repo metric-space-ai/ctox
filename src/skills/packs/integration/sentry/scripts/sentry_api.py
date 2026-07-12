@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
 import time
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import urlencode, urlparse
 
 DEFAULT_BASE_URL = "https://sentry.io"
 DEFAULT_ORG = "your-org"
@@ -52,38 +51,68 @@ def next_cursor(link_header):
 
 
 def request_json(url, token, retries=1):
-    req = Request(url)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/json")
-
     attempt = 0
     while True:
         try:
-            with urlopen(req) as resp:
-                body = resp.read().decode("utf-8")
+            status, headers, body = http_request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
+            if 200 <= status < 300:
                 data = json.loads(body) if body else None
-                return data, resp.headers
-        except HTTPError as err:
-            body = err.read().decode("utf-8", "ignore")
-            if attempt < retries and (err.code >= 500 or err.code == 429):
+                return data, headers
+            if attempt < retries and (status >= 500 or status == 429):
                 attempt += 1
                 time.sleep(1)
                 continue
-            raise RuntimeError(f"HTTP {err.code} for {url}: {body or 'request failed'}") from err
-        except URLError as err:
+            raise RuntimeError(f"HTTP {status} for {url}: {body or 'request failed'}")
+        except OSError as err:
             if attempt < retries:
                 attempt += 1
                 time.sleep(1)
                 continue
-            raise RuntimeError(f"Network error for {url}: {err.reason}") from err
+            raise RuntimeError(f"Network error for {url}: {err}") from err
 
 
 def build_url(base_url, path, params=None):
+    require_http_base_url(base_url)
     base = base_url.rstrip("/")
     url = f"{base}{path}"
     if params:
         url = f"{url}?{urlencode(params, doseq=True)}"
     return url
+
+
+def require_http_url(url):
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"Refusing non-HTTP(S) Sentry URL: {url!r}")
+
+
+def require_http_base_url(base_url):
+    parsed = urlparse(str(base_url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"Refusing non-HTTP(S) Sentry base URL: {base_url!r}")
+
+
+def http_request(url, *, method="GET", body=None, headers=None, timeout=30):
+    require_http_url(url)
+    parsed = urlparse(str(url))
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = connection_cls(parsed.hostname, parsed.port, timeout=timeout)
+    try:
+        conn.request(method, path, body=body, headers=headers or {})
+        response = conn.getresponse()
+        response_body = response.read().decode("utf-8", "ignore")
+        return response.status, response.headers, response_body
+    finally:
+        conn.close()
 
 
 def paged_get(base_url, path, params, token, limit):

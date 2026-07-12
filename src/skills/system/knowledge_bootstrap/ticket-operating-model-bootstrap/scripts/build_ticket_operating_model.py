@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
-import urllib.error
-import urllib.request
+import urllib.parse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -736,19 +736,21 @@ def refine_decision_support_openai(
         ],
         "text": {"format": {"type": "json_object"}},
     }
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/v1/responses",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
+    try:
+        status, response_body = http_json_request(
+            openai_responses_url(base_url),
+            method="POST",
+            body=json.dumps(body).encode("utf-8"),
+            headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            },
+            timeout=60,
+        )
+        if not (200 <= status < 300):
+            return None
+        payload = json.loads(response_body)
+    except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
         return None
     text = openai_output_text(payload)
     if not text:
@@ -760,6 +762,38 @@ def refine_decision_support_openai(
     if not isinstance(refined, dict):
         return None
     return refined
+
+
+def openai_responses_url(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(str(base_url or "").rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Refusing non-HTTP(S) OpenAI base URL: {base_url!r}")
+    path = parsed.path.rstrip("/") + "/v1/responses"
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def http_json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 60,
+) -> tuple[int, str]:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Refusing non-HTTP(S) URL: {url!r}")
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = connection_cls(parsed.hostname, parsed.port, timeout=timeout)
+    try:
+        conn.request(method, path, body=body, headers=headers or {})
+        response = conn.getresponse()
+        return response.status, response.read().decode("utf-8", "ignore")
+    finally:
+        conn.close()
 
 
 def build_operating_model(

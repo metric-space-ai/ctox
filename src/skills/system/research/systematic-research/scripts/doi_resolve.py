@@ -21,12 +21,11 @@ Stdlib-only. No requests dependency. Per-request timeout 10 seconds.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional
 
 USER_AGENT = "ctox-deep-research/dev (mailto:contact@metric-space-ai.github.io)"
@@ -56,18 +55,11 @@ def _normalize_doi(raw: str) -> str:
 
 def _http_get_json(url: str) -> Optional[Dict[str, Any]]:
     """GET the URL with our User-Agent, parse JSON. None on any failure."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-            status = getattr(resp, "status", 200)
-            if status != 200:
-                return None
-            data = resp.read()
-    except urllib.error.HTTPError:
-        return None
-    except urllib.error.URLError:
-        return None
-    except (TimeoutError, ConnectionError):
+        status, data = _http_get(url)
+        if status != 200:
+            return None
+    except (OSError, TimeoutError, ConnectionError, ValueError):
         return None
     except Exception:  # pragma: no cover — be defensive in CLI tools
         return None
@@ -82,18 +74,33 @@ def _http_status_get(url: str) -> int:
     error). Used so callers can distinguish 404 (fall back) from
     transport failure (mark error).
     """
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-            return getattr(resp, "status", 200)
-    except urllib.error.HTTPError as exc:
-        return exc.code
-    except urllib.error.URLError:
+        status, _ = _http_get(url)
+        return status
+    except (OSError, TimeoutError, ConnectionError, ValueError):
         return 0
-    except (TimeoutError, ConnectionError):
-        return 0
-    except Exception:  # pragma: no cover
-        return 0
+
+
+def _is_http_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _http_get(url: str) -> tuple[int, bytes]:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Refusing non-HTTP(S) DOI URL: {url!r}")
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = connection_cls(parsed.hostname, parsed.port, timeout=TIMEOUT_SECONDS)
+    try:
+        conn.request("GET", path, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
 
 
 def _crossref_resolve(doi: str) -> Optional[Dict[str, Any]]:

@@ -12,6 +12,7 @@ process environment variables.
 """
 
 import argparse
+import http.client
 import json
 import pathlib
 import shutil
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
+import urllib.parse
 
 
 DEFAULT_GOOGLE_SEARCH_URL = (
@@ -71,18 +72,41 @@ def find_reference_dir(override: str | None) -> pathlib.Path:
 
 
 def wait_for_devtools_url(port: int, timeout_s: float) -> dict:
+    if port <= 0 or port > 65535:
+        raise ValueError(f"invalid DevTools port: {port}")
     deadline = time.time() + timeout_s
     last_error: Exception | None = None
     while time.time() < deadline:
+        url = f"http://127.0.0.1:{port}/json/version"
         try:
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/json/version", timeout=1
-            ) as response:
-                return json.load(response)
+            return json.loads(loopback_http_get(url, timeout=1).decode("utf-8"))
         except Exception as exc:  # pragma: no cover - dev utility
             last_error = exc
             time.sleep(0.5)
     raise RuntimeError(f"DevTools not reachable on {port}: {last_error}")
+
+
+def require_loopback_http_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise ValueError(f"Refusing non-loopback DevTools URL: {url!r}")
+
+
+def loopback_http_get(url: str, timeout: float) -> bytes:
+    require_loopback_http_url(url)
+    parsed = urllib.parse.urlparse(str(url))
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
+    try:
+        conn.request("GET", path)
+        response = conn.getresponse()
+        if not (200 <= response.status < 300):
+            raise RuntimeError(f"DevTools returned HTTP {response.status}")
+        return response.read()
+    finally:
+        conn.close()
 
 
 def wait_for_chrome_shutdown(chrome_bin: pathlib.Path, timeout_s: float) -> None:

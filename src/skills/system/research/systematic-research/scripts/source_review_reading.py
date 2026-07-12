@@ -12,13 +12,12 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import http.client
 import json
 import re
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -128,9 +127,40 @@ def normalize_openalex_id(raw: Any) -> str:
 
 
 def http_json(url: str, timeout_sec: int) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-        return json.loads(response.read().decode("utf-8"))
+    status, data, _ = http_get(url, timeout_sec, headers={"User-Agent": USER_AGENT})
+    if not (200 <= status < 300):
+        raise RuntimeError(f"HTTP {status} for {url}")
+    return json.loads(data.decode("utf-8"))
+
+
+def require_http_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Refusing non-HTTP(S) source-reading URL: {url!r}")
+
+
+def http_get(
+    url: str,
+    timeout_sec: int,
+    *,
+    headers: dict[str, str] | None = None,
+    max_bytes: int | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    require_http_url(url)
+    parsed = urllib.parse.urlparse(str(url))
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = connection_cls(parsed.hostname, parsed.port, timeout=timeout_sec)
+    try:
+        conn.request("GET", path, headers=headers or {})
+        response = conn.getresponse()
+        data = response.read(max_bytes) if max_bytes is not None else response.read()
+        response_headers = {key.lower(): value for key, value in response.headers.items()}
+        return response.status, data, response_headers
+    finally:
+        conn.close()
 
 
 def compact_abstract(value: Any) -> str:
@@ -243,19 +273,19 @@ def strip_html(value: str) -> str:
 
 
 def direct_fetch_text(url: str, timeout_sec: int) -> tuple[bool, str, str]:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/pdf,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-            data = response.read(12_000_000)
-            content_type = response.headers.get("content-type", "").lower()
-    except urllib.error.HTTPError as exc:
-        return False, "", f"http {exc.code}"
+        status, data, response_headers = http_get(
+            url,
+            timeout_sec,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/pdf,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            max_bytes=12_000_000,
+        )
+        if not (200 <= status < 300):
+            return False, "", f"http {status}"
+        content_type = response_headers.get("content-type", "").lower()
     except Exception as exc:
         return False, "", f"fetch failed: {exc}"
 

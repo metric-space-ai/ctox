@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import http.client
 import json
 import os
 import re
@@ -20,7 +21,6 @@ import sys
 import time
 import tempfile
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -224,14 +224,20 @@ def save_query_plan(path: Path, plan: list[QuerySpec]) -> None:
 
 
 def http_json(url: str, timeout_sec: int) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "ctox-source-review/1.0"})
-    with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-        return json.loads(response.read().decode("utf-8"))
+    status, body = http_get(
+        url,
+        timeout_sec,
+        headers={"User-Agent": "ctox-source-review/1.0"},
+    )
+    if not (200 <= status < 300):
+        raise RuntimeError(f"HTTP {status} for {url}")
+    return json.loads(body.decode("utf-8"))
 
 
 def http_text(url: str, timeout_sec: int) -> str:
-    request = urllib.request.Request(
+    status, body = http_get(
         url,
+        timeout_sec,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -239,8 +245,31 @@ def http_text(url: str, timeout_sec: int) -> str:
             )
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-        return response.read().decode("utf-8", errors="ignore")
+    if not (200 <= status < 300):
+        raise RuntimeError(f"HTTP {status} for {url}")
+    return body.decode("utf-8", errors="ignore")
+
+
+def require_http_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Refusing non-HTTP(S) source-review URL: {url!r}")
+
+
+def http_get(url: str, timeout_sec: int, *, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+    require_http_url(url)
+    parsed = urllib.parse.urlparse(str(url))
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = connection_cls(parsed.hostname, parsed.port, timeout=timeout_sec)
+    try:
+        conn.request("GET", path, headers=headers or {})
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
 
 
 def strip_html(value: str) -> str:
