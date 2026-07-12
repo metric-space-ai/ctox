@@ -341,6 +341,7 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     let mut counts = BTreeMap::<String, usize>::new();
     let mut results = Vec::new();
     for case in &manifest.cases {
+        let thread_record_id = thread_record_id(case);
         let command_context =
             crate::mission::channels::inspect_business_command(root, &case.command_id)?;
         let command = command_context
@@ -349,7 +350,7 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         let thread = crate::business_os::store::pull_collection_record(
             root,
             "user_threads",
-            &case.thread_id,
+            &thread_record_id,
         )?;
         let chat = crate::business_os::store::pull_collection_record(
             root,
@@ -358,12 +359,12 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         )?;
         let case_approvals = approvals
             .iter()
-            .filter(|value| field(value, "thread_id") == case.thread_id)
+            .filter(|value| field(value, "thread_id") == thread_record_id)
             .cloned()
             .collect::<Vec<_>>();
         let note_count = notifications
             .iter()
-            .filter(|value| field(value, "thread_id") == case.thread_id)
+            .filter(|value| field(value, "thread_id") == thread_record_id)
             .count();
         let (state, reason) = evaluate(
             case,
@@ -375,7 +376,7 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
             note_count,
         );
         *counts.entry(state.label().into()).or_default() += 1;
-        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":case.thread_id,"command_status":command.map(command_status).unwrap_or_else(||"missing".into()),"review_transition_passed":command_context.as_ref().is_some_and(review_passed),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"chat_status":chat.as_ref().map(|value|field(value,"tracking_status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
+        results.push(json!({"case_id":case.id,"family":case.family,"module":case.module,"state":state.label(),"reason":reason,"command_id":case.command_id,"task_id":case.task_id,"thread_id":thread_record_id,"command_status":command.map(command_status).unwrap_or_else(||"missing".into()),"review_transition_passed":command_context.as_ref().is_some_and(review_passed),"thread_status":thread.as_ref().map(|value|field(value,"status")).unwrap_or_else(||"missing".into()),"chat_status":chat.as_ref().map(|value|field(value,"tracking_status")).unwrap_or_else(||"missing".into()),"approval_statuses":case_approvals.iter().map(|value|field(value,"status")).collect::<Vec<_>>(),"notification_count":note_count}));
     }
     let bad = counts.get("failed").copied().unwrap_or(0)
         + counts.get("lost_between_chairs").copied().unwrap_or(0);
@@ -384,6 +385,14 @@ fn status(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     Ok(
         json!({"ok":bad==0 && (!fail_inflight || inflight==0),"settled":inflight==0,"schema":"ctox.business_os.harness_bench_status.v1","run_id":run_id,"case_count":manifest.cases.len(),"counts":counts,"invariant":"every autonomous case completes in Business OS chat; every human case has durable Threads routing; blocked/failed work without its required route is lost_between_chairs","cases":results}),
     )
+}
+
+fn thread_record_id(case: &SubmittedCase) -> String {
+    if case.thread_id.starts_with("business-os/threads/") {
+        case.thread_id.clone()
+    } else {
+        format!("business-os/threads/{}", case.thread_id)
+    }
 }
 
 fn evaluate(
@@ -743,6 +752,31 @@ mod tests {
             "terminal_status": "completed"
         });
         assert_eq!(command_status(&completed), "completed");
+    }
+
+    #[test]
+    fn human_route_status_uses_canonical_threads_record_id() {
+        let case = SubmittedCase {
+            id: "H081".into(),
+            family: "human_approval".into(),
+            module: "customers".into(),
+            route: "approval".into(),
+            terms: vec![],
+            command_id: "bench_run_h081".into(),
+            task_id: "queue:system::h081".into(),
+            thread_id: "bench_run_h081".into(),
+        };
+        assert_eq!(
+            thread_record_id(&case),
+            "business-os/threads/bench_run_h081"
+        );
+
+        let mut canonical = case;
+        canonical.thread_id = "business-os/threads/bench_run_h081".into();
+        assert_eq!(
+            thread_record_id(&canonical),
+            "business-os/threads/bench_run_h081"
+        );
     }
 
     #[test]
