@@ -1296,7 +1296,14 @@ impl PersistentSession {
             output_schema: None,
             collaboration_mode: None,
         };
-        let turn_start_result: Result<TurnStartResponse> = match tokio::time::timeout(
+        // A turn/start TIMEOUT is ambiguous: the facade detaches the request
+        // onto its own task, so timing out the caller-side future does NOT
+        // cancel the server-side turn — it may still be starting. Rotating
+        // the thread and re-submitting the same prompt on a timeout would
+        // duplicate model/tool side effects (ctox#21 P1 review). So we only
+        // rotate on a DEFINITIVE error response (the turn provably did not
+        // start); a timeout poisons the session and bails without retry.
+        let turn_resp: TurnStartResponse = match tokio::time::timeout(
             Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
             client.request_typed(ClientRequest::TurnStart {
                 request_id: seq.next(),
@@ -1305,16 +1312,15 @@ impl PersistentSession {
         )
         .await
         {
-            Ok(result) => result.map_err(|err| anyhow::anyhow!("{err}")),
-            Err(_) => Err(anyhow::anyhow!(
-                "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
-            )),
-        };
-        let turn_resp: TurnStartResponse = match turn_start_result {
-            Ok(resp) => resp,
-            Err(err) => {
+            Ok(Ok(resp)) => resp,
+            Err(_) => {
+                anyhow::bail!(
+                    "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; the turn may have started server-side, so the session is poisoned instead of retried to avoid a duplicate turn"
+                );
+            }
+            Ok(Err(err)) => {
                 eprintln!(
-                    "[ctox direct-session] turn/start on session thread {thread_id} failed ({err}); rotating thread"
+                    "[ctox direct-session] turn/start on session thread {thread_id} returned an error ({err}); rotating thread"
                 );
                 let rotated_thread_id = start_session_thread(
                     client,
@@ -1334,6 +1340,8 @@ impl PersistentSession {
                 .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
                 eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
                 *session_thread_id = rotated_thread_id.clone();
+                // The rotation retry is likewise timeout-poisoned: a fresh
+                // thread's turn/start that times out must not fan out again.
                 match tokio::time::timeout(
                     Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
                     client.request_typed(ClientRequest::TurnStart {
@@ -1345,7 +1353,7 @@ impl PersistentSession {
                 {
                     Ok(result) => result.map_err(|err| anyhow::anyhow!("turn/start: {err}"))?,
                     Err(_) => anyhow::bail!(
-                        "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
+                        "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; session poisoned instead of retried"
                     ),
                 }
             }
@@ -1355,6 +1363,13 @@ impl PersistentSession {
 
         // Event loop
         let mut final_message: Option<String> = None;
+        // `AgentMessage` events carry no turn id, so an orphaned message from
+        // a prior/interrupted turn still queued on this reused thread could
+        // set `final_message` and become this turn's reply (ctox#21 P1
+        // review). Only trust `AgentMessage` once we have observed the
+        // `TurnStarted` for OUR turn_id; everything before that belongs to an
+        // earlier turn and is ignored for reply attribution.
+        let mut saw_our_turn_started = false;
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -1592,20 +1607,33 @@ impl PersistentSession {
                             }
                         }
                         match msg {
+                            EventMsg::TurnStarted(ref ts) if ts.turn_id == turn_id => {
+                                saw_our_turn_started = true;
+                            }
                             EventMsg::AgentMessage(am) => {
-                                final_message = Some(am.message.clone());
+                                // Ignore replies that arrive before our turn
+                                // has started — they belong to an earlier turn
+                                // draining off the reused thread.
+                                if saw_our_turn_started {
+                                    final_message = Some(am.message.clone());
+                                }
                             }
                             EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => {
                                 // The completion event's own last message is
-                                // authoritative: `AgentMessage` events carry
-                                // no turn id, so `final_message` could hold a
-                                // reply from a different turn on this thread.
-                                if let Some(last) = tc
+                                // authoritative when present. When it is
+                                // absent, fall back to a same-turn
+                                // `AgentMessage` (guarded by
+                                // `saw_our_turn_started`); if neither exists,
+                                // clear any stale value so we never return a
+                                // foreign turn's reply.
+                                match tc
                                     .last_agent_message
                                     .as_ref()
                                     .filter(|last| !last.trim().is_empty())
                                 {
-                                    final_message = Some(last.clone());
+                                    Some(last) => final_message = Some(last.clone()),
+                                    None if !saw_our_turn_started => final_message = None,
+                                    None => {}
                                 }
                                 break;
                             }
@@ -2037,6 +2065,22 @@ impl PersistentSession {
             if let Some(client) = self.client.take() {
                 let tid = self.thread_id.clone();
                 eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
+                // `block_on` (and blocking runtime shutdown below) panics
+                // when invoked from inside an async runtime. All in-tree
+                // owners drop the session from synchronous worker threads,
+                // but a future async owner must not turn teardown into a
+                // panic — degrade to the abrupt path instead.
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    eprintln!(
+                        "[ctox direct-session] {action} from async context; skipping graceful shutdown thread_id={tid}"
+                    );
+                    client.abort_now();
+                    runtime.shutdown_background();
+                    if let Some(scratch) = self.reviewer_scratch_workspace.take() {
+                        let _ = std::fs::remove_dir_all(&scratch);
+                    }
+                    return;
+                }
                 // Try a bounded graceful shutdown first. `abort_now` skips
                 // the processor teardown (`clear_all_thread_listeners`,
                 // `shutdown_threads`), which leaves the durable thread's
@@ -2101,37 +2145,60 @@ async fn start_session_thread(
     persistent_worker: bool,
     persistent_thread_name: Option<&str>,
 ) -> Result<String> {
-    let response: ThreadStartResponse = client
-        .request_typed(ClientRequest::ThreadStart {
-            request_id: seq.next(),
-            params: ThreadStartParams {
-                model: Some(model.to_string()),
-                model_provider: model_provider.map(str::to_string),
-                cwd: Some(cwd.to_string_lossy().to_string()),
-                approval_policy: Some(AskForApproval::Never.into()),
-                sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-                base_instructions: Some(base_instructions.to_string()),
-                dynamic_tools: disable_active_tools.then(Vec::new),
-                disable_mcp_servers: Some(disable_mcp_servers),
-                ephemeral: Some(!persistent_worker),
-                persist_extended_history: persistent_worker,
-                ..ThreadStartParams::default()
-            },
-        })
-        .await
-        .map_err(|err| anyhow::anyhow!("thread/start: {err}"))?;
+    // Bound these control requests: a wedged response path must not hang the
+    // worker indefinitely (ctox#21 P1 review). They register/name a thread
+    // with no model side effects, so a timeout simply surfaces as an error
+    // and the session is rebuilt.
+    let thread_start_fut = client.request_typed(ClientRequest::ThreadStart {
+        request_id: seq.next(),
+        params: ThreadStartParams {
+            model: Some(model.to_string()),
+            model_provider: model_provider.map(str::to_string),
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            approval_policy: Some(AskForApproval::Never.into()),
+            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
+            base_instructions: Some(base_instructions.to_string()),
+            dynamic_tools: disable_active_tools.then(Vec::new),
+            disable_mcp_servers: Some(disable_mcp_servers),
+            ephemeral: Some(!persistent_worker),
+            persist_extended_history: persistent_worker,
+            ..ThreadStartParams::default()
+        },
+    });
+    let response: ThreadStartResponse = match tokio::time::timeout(
+        Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+        thread_start_fut,
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|err| anyhow::anyhow!("thread/start: {err}"))?,
+        Err(_) => {
+            anyhow::bail!("thread/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s")
+        }
+    };
     let thread_id = response.thread.id;
     if let Some(persistent_thread_name) = persistent_thread_name {
-        client
-            .request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
+        let set_name_fut =
+            client.request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
                 request_id: seq.next(),
                 params: ThreadSetNameParams {
                     thread_id: thread_id.clone(),
                     name: persistent_thread_name.to_string(),
                 },
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("thread/name/set: {err}"))?;
+            });
+        match tokio::time::timeout(
+            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+            set_name_fut,
+        )
+        .await
+        {
+            Ok(result) => {
+                result.map_err(|err| anyhow::anyhow!("thread/name/set: {err}"))?;
+            }
+            Err(_) => anyhow::bail!(
+                "thread/name/set timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
+            ),
+        }
     }
     eprintln!("[ctox direct-session] thread started: {thread_id}");
     Ok(thread_id)

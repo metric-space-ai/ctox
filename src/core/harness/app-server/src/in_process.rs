@@ -96,7 +96,14 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    matches!(notification, ServerNotification::TurnCompleted(_))
+    // Must match the facade classifier in `ctox-app-server-client`
+    // (`event_requires_delivery`): if this layer treats a notification as
+    // droppable while the facade treats it as required, the event is dropped
+    // here before the facade's buffer can protect it (ctox#21 P1 review).
+    matches!(
+        notification,
+        ServerNotification::TurnCompleted(_) | ServerNotification::ContextCompacted(_)
+    )
 }
 
 fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> bool {
@@ -114,35 +121,53 @@ fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> 
 /// queue are buffered in `pending` and flushed by the loop's `reserve()`
 /// arm; droppable events behind a non-empty buffer are discarded so buffered
 /// completion events are never overtaken. Returns `true` when the loop
-/// should exit because the event consumer is gone.
+/// should exit because the event consumer is gone OR the delivery buffer has
+/// grown past `max_pending` (a wedged consumer — failing the session is
+/// correct, silently growing without bound is not).
 fn enqueue_in_process_event(
     event_tx: &mpsc::Sender<InProcessServerEvent>,
     pending: &mut VecDeque<InProcessServerEvent>,
     consumer_gone: &mut bool,
     event: InProcessServerEvent,
     requires_delivery: bool,
+    max_pending: usize,
     kind: &'static str,
 ) -> bool {
     if *consumer_gone {
         return true;
     }
+    let buffer_and_check = |pending: &mut VecDeque<InProcessServerEvent>,
+                            consumer_gone: &mut bool,
+                            event: InProcessServerEvent|
+     -> bool {
+        pending.push_back(event);
+        if pending.len() > max_pending {
+            warn!(
+                "in-process delivery-required buffer exceeded {max_pending}; treating consumer as wedged"
+            );
+            *consumer_gone = true;
+            pending.clear();
+            true
+        } else {
+            false
+        }
+    };
     if !pending.is_empty() {
         if requires_delivery {
-            pending.push_back(event);
-        } else {
-            warn!("dropping in-process {kind} behind buffered delivery-required events");
+            return buffer_and_check(pending, consumer_gone, event);
         }
+        warn!("dropping in-process {kind} behind buffered delivery-required events");
         return false;
     }
     match event_tx.try_send(event) {
         Ok(()) => false,
         Err(mpsc::error::TrySendError::Full(event)) => {
             if requires_delivery {
-                pending.push_back(event);
+                buffer_and_check(pending, consumer_gone, event)
             } else {
                 warn!("dropping in-process {kind} (queue full)");
+                false
             }
-            false
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             *consumer_gone = true;
@@ -554,11 +579,19 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         // `send().await` inside this loop: a paused or slow event consumer
         // must never stall the request path, otherwise `turn/interrupt` can
         // never land once the event queue is full and the whole session
-        // wedges (ctox#21). `writer_rx` is gated on the buffer bound so
-        // upstream backpressure still applies without unbounded memory.
+        // wedges (ctox#21).
+        //
+        // `writer_rx` is NEVER gated on this buffer: it also carries JSON-RPC
+        // responses, and gating it would deadlock a request whose response is
+        // stuck behind a full event buffer. The buffer holds only
+        // delivery-required NOTIFICATIONS, whose count is naturally bounded by
+        // the number of concurrent turns (a couple of events per turn). The
+        // large cap below is a runaway backstop, not normal backpressure:
+        // exceeding it means the consumer is wedged, so we fail the session
+        // (all pending requests + terminate) rather than grow without bound.
         let mut pending_delivery_events: VecDeque<InProcessServerEvent> = VecDeque::new();
         let mut event_consumer_gone = false;
-        let max_pending_delivery_events = channel_capacity.max(1024);
+        let max_pending_delivery_events = channel_capacity.saturating_mul(64).max(65_536);
 
         loop {
             tokio::select! {
@@ -654,7 +687,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         }
                     }
                 }
-                outgoing_message = writer_rx.recv(), if pending_delivery_events.len() < max_pending_delivery_events => {
+                outgoing_message = writer_rx.recv() => {
                     let Some(outgoing_message) = outgoing_message else {
                         break;
                     };
@@ -723,6 +756,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 &mut event_consumer_gone,
                                 event,
                                 requires_delivery,
+                                max_pending_delivery_events,
                                 "server notification",
                             ) {
                                 break;
@@ -742,6 +776,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 &mut event_consumer_gone,
                                 event,
                                 requires_delivery,
+                                max_pending_delivery_events,
                                 "legacy notification",
                             ) {
                                 break;
@@ -988,6 +1023,7 @@ mod tests {
             &mut consumer_gone,
             delivery_event(),
             true,
+            1024,
             "test",
         ));
         assert!(pending.is_empty());
@@ -1000,6 +1036,7 @@ mod tests {
             &mut consumer_gone,
             delivery_event(),
             true,
+            1024,
             "test",
         ));
         assert_eq!(pending.len(), 1);
@@ -1009,6 +1046,7 @@ mod tests {
             &mut consumer_gone,
             droppable_event(),
             false,
+            1024,
             "test",
         ));
         assert_eq!(pending.len(), 1);
@@ -1022,6 +1060,7 @@ mod tests {
             &mut consumer_gone,
             delivery_event(),
             true,
+            1024,
             "test",
         ));
         assert_eq!(pending.len(), 2);
@@ -1035,9 +1074,58 @@ mod tests {
             &mut consumer_gone,
             delivery_event(),
             true,
+            1024,
             "test",
         ));
         assert!(consumer_gone);
+    }
+
+    #[test]
+    fn enqueue_event_runaway_buffer_fails_session_instead_of_growing() {
+        // A wedged consumer that never drains: the delivery-required buffer
+        // must not grow without bound. Once it passes the cap the helper
+        // signals the loop to terminate the session (ctox#21 P1 review).
+        let (event_tx, _event_rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let mut consumer_gone = false;
+        let cap = 4;
+        let delivery_event = || {
+            InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: "codex/event/task_complete".to_string(),
+                params: None,
+            })
+        };
+        // Saturate the single queue slot first.
+        let terminate = enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            delivery_event(),
+            true,
+            cap,
+            "test",
+        );
+        assert!(!terminate);
+        // Keep buffering delivery-required events; the helper terminates once
+        // the buffer passes `cap`.
+        let mut terminated = false;
+        for _ in 0..(cap + 2) {
+            if enqueue_in_process_event(
+                &event_tx,
+                &mut pending,
+                &mut consumer_gone,
+                delivery_event(),
+                true,
+                cap,
+                "test",
+            ) {
+                terminated = true;
+                break;
+            }
+        }
+        assert!(terminated, "runaway buffer must terminate the session");
+        assert!(consumer_gone);
+        assert!(pending.is_empty(), "buffer is cleared on terminate");
     }
 
     /// Regression test for ctox#21: a paused event consumer must never stall

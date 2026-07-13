@@ -3675,7 +3675,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
     // unrelated job finished while this turn was still running or wedged
     // (ctox#21).
     let assistant_seq_before_submit = if wait {
-        chat_wait_latest_assistant_seq(&chat_db_path, conversation_id)
+        chat_wait_latest_assistant_seq(&chat_db_path, conversation_id)?
     } else {
         None
     };
@@ -3743,6 +3743,38 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     action.subject,
                     action.to
                 );
+            }
+        }
+        // Finalization barrier: the assistant row is persisted BEFORE
+        // continuity refresh and terminal service handling, and a late
+        // failure can persist a newer failure row for this conversation
+        // (ctox#21 P1 review). Wait — bounded — until the service reports
+        // the worker finished, then RE-READ the newest row so a late
+        // failure outcome is judged instead of the optimistic first row.
+        // Full request↔row correlation needs a durable submission id
+        // through the queue and is tracked as follow-up work.
+        if completed_assistant.is_some() {
+            let barrier_deadline = std::cmp::min(
+                deadline,
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+            );
+            loop {
+                let status = service::service_status_snapshot_with(root, &wait_probe)?;
+                if !status.running || !status.busy {
+                    final_status = Some(status);
+                    break;
+                }
+                if std::time::Instant::now() >= barrier_deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            if let Some(record) = chat_wait_new_assistant_message(
+                &chat_db_path,
+                conversation_id,
+                assistant_seq_before_submit,
+            ) {
+                completed_assistant = Some(record);
             }
         }
         // Enforce the typed terminal outcome: exit code 0 requires a real
@@ -4175,16 +4207,23 @@ fn collect_flag_values(args: &[String], flag: &str) -> Vec<String> {
 }
 
 /// Newest assistant `seq` already persisted for the conversation, read
-/// before submit so the wait loop only accepts strictly newer rows. Errors
-/// (missing database on a fresh root, transient SQLITE_BUSY) degrade to
-/// `None`: with no baseline, any assistant row counts as completion.
-fn chat_wait_latest_assistant_seq(db_path: &Path, conversation_id: i64) -> Option<i64> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default()).ok()?;
-    engine
+/// before submit so the wait loop only accepts strictly newer rows.
+///
+/// `Ok(None)` means the conversation has no assistant row yet (a fresh
+/// conversation) — the first row then completes the wait. A read error is
+/// propagated, NOT degraded to `None`: degrading would establish a zero
+/// baseline and accept any pre-existing row as this turn's completion, a
+/// fail-open that reports a stale reply as success (ctox#21 P1 review).
+fn chat_wait_latest_assistant_seq(
+    db_path: &Path,
+    conversation_id: i64,
+) -> anyhow::Result<Option<i64>> {
+    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())
+        .context("failed to open chat database for wait baseline")?;
+    Ok(engine
         .latest_assistant_message(conversation_id)
-        .ok()
-        .flatten()
-        .map(|record| record.seq)
+        .context("failed to read chat wait baseline")?
+        .map(|record| record.seq))
 }
 
 /// One wait-loop poll: the newest assistant row for the conversation, if it

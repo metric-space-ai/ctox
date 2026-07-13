@@ -109,16 +109,37 @@ enum ForwardOutcome {
 /// must never stall command processing, otherwise `turn/interrupt` and other
 /// control requests can never land once the event queue fills (ctox#21).
 /// Droppable events never overtake buffered delivery-required events.
+///
+/// Unlike the low-level `writer_rx`, this facade only forwards EVENTS here —
+/// request responses travel back through detached request tasks and their own
+/// oneshot channels, never through `event_tx` — so buffering events cannot
+/// deadlock a response. `max_pending` is a runaway backstop: exceeding it
+/// means the consumer is wedged, so the session is failed rather than grown
+/// without bound (ctox#21 P1 review).
 fn forward_event(
     event_tx: &mpsc::Sender<InProcessServerEvent>,
     pending: &mut VecDeque<InProcessServerEvent>,
     event: InProcessServerEvent,
     requires_delivery: bool,
+    max_pending: usize,
 ) -> ForwardOutcome {
+    let buffer = |pending: &mut VecDeque<InProcessServerEvent>,
+                  event: InProcessServerEvent|
+     -> ForwardOutcome {
+        pending.push_back(event);
+        if pending.len() > max_pending {
+            warn!(
+                "facade delivery-required buffer exceeded {max_pending}; treating consumer as wedged"
+            );
+            pending.clear();
+            ForwardOutcome::ConsumerGone
+        } else {
+            ForwardOutcome::Forwarded
+        }
+    };
     if !pending.is_empty() {
         if requires_delivery {
-            pending.push_back(event);
-            return ForwardOutcome::Forwarded;
+            return buffer(pending, event);
         }
         return ForwardOutcome::Dropped(event);
     }
@@ -126,8 +147,7 @@ fn forward_event(
         Ok(()) => ForwardOutcome::Forwarded,
         Err(mpsc::error::TrySendError::Full(event)) => {
             if requires_delivery {
-                pending.push_back(event);
-                ForwardOutcome::Forwarded
+                buffer(pending, event)
             } else {
                 ForwardOutcome::Dropped(event)
             }
@@ -403,9 +423,11 @@ impl InProcessAppServerClient {
             // Delivery-required events that did not fit into the consumer
             // queue. Flushed via the `reserve()` arm; `handle.next_event()`
             // is gated on the buffer bound so upstream backpressure applies
-            // while command processing keeps running (ctox#21).
+            // while command processing keeps running (ctox#21). Gating
+            // `next_event()` is safe (unlike gating the low-level
+            // `writer_rx`): it carries only events here, never responses.
             let mut pending_delivery_events: VecDeque<InProcessServerEvent> = VecDeque::new();
-            const MAX_PENDING_DELIVERY_EVENTS: usize = 1024;
+            const MAX_PENDING_DELIVERY_EVENTS: usize = 65_536;
             loop {
                 tokio::select! {
                     permit = event_tx.reserve(), if !pending_delivery_events.is_empty() && event_stream_enabled => {
@@ -488,6 +510,7 @@ impl InProcessAppServerClient {
                                 &mut pending_delivery_events,
                                 lag_event,
                                 requires_delivery,
+                                MAX_PENDING_DELIVERY_EVENTS,
                             ) {
                                 ForwardOutcome::Forwarded => {
                                     skipped_events = 0;
@@ -521,6 +544,7 @@ impl InProcessAppServerClient {
                             &mut pending_delivery_events,
                             event,
                             requires_delivery,
+                            MAX_PENDING_DELIVERY_EVENTS,
                         ) {
                             ForwardOutcome::Forwarded => {}
                             ForwardOutcome::Dropped(event) => {
@@ -1628,6 +1652,45 @@ mod tests {
         assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
             skipped: 1
         }));
+    }
+
+    #[tokio::test]
+    async fn forward_event_runaway_buffer_reports_consumer_gone() {
+        // A consumer that never drains: the delivery-required buffer must not
+        // grow without bound. Past the cap the helper reports the consumer as
+        // wedged so the worker fails the stream (ctox#21 P1 review).
+        let (event_tx, _event_rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let cap = 4usize;
+        let delivery_event = || {
+            InProcessServerEvent::LegacyNotification(
+                ctox_app_server_protocol::JSONRPCNotification {
+                    method: "codex/event/task_complete".to_string(),
+                    params: None,
+                },
+            )
+        };
+        // First event fills the single queue slot.
+        assert!(matches!(
+            forward_event(&event_tx, &mut pending, delivery_event(), true, cap),
+            ForwardOutcome::Forwarded
+        ));
+        // Buffer up to the cap, then the next event trips the backstop.
+        let mut wedged = false;
+        for _ in 0..(cap + 2) {
+            match forward_event(&event_tx, &mut pending, delivery_event(), true, cap) {
+                ForwardOutcome::Forwarded => {}
+                ForwardOutcome::ConsumerGone => {
+                    wedged = true;
+                    break;
+                }
+                ForwardOutcome::Dropped(_) => {
+                    panic!("delivery-required events must never be dropped")
+                }
+            }
+        }
+        assert!(wedged, "runaway buffer must report ConsumerGone");
+        assert!(pending.is_empty(), "buffer is cleared when wedged");
     }
 
     #[tokio::test]
