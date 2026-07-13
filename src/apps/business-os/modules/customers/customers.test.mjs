@@ -10,6 +10,11 @@ const schemaSource = await readFile(schemaUrl, 'utf8');
 const schemaModule = await import(`data:text/javascript;base64,${Buffer.from(schemaSource).toString('base64')}`);
 const { collections, migrationStrategies } = schemaModule;
 
+// Collection entries may be either a bare schema or a `{ schema,
+// conflictStrategy }` wrapper — the shell, hash generator, and native peer
+// all read `definition.schema || definition` (see schema.js).
+const schemaOf = (definition) => definition.schema || definition;
+
 const expectedCollections = [
   'business_commands',
   'customer_accounts',
@@ -28,7 +33,8 @@ const expectedCollections = [
 
 assert.deepEqual(Object.keys(collections).sort(), expectedCollections.sort());
 
-for (const [name, schema] of Object.entries(collections)) {
+for (const [name, definition] of Object.entries(collections)) {
+  const schema = schemaOf(definition);
   assert.equal(schema.primaryKey, 'id', `${name} primary key`);
   assert.equal(schema.type, 'object', `${name} schema type`);
   assert.equal(schema.additionalProperties, true, `${name} allows forward-compatible properties`);
@@ -40,19 +46,20 @@ for (const [name, schema] of Object.entries(collections)) {
 }
 
 for (const name of expectedCollections.filter((collection) => collection.startsWith('customer_'))) {
-  assert.ok(collections[name].properties.is_deleted, `${name} is soft-delete capable`);
-  assert.ok(collections[name].required.includes('is_deleted'), `${name} requires is_deleted`);
+  const schema = schemaOf(collections[name]);
+  assert.ok(schema.properties.is_deleted, `${name} is soft-delete capable`);
+  assert.ok(schema.required.includes('is_deleted'), `${name} requires is_deleted`);
   assert.ok(
-    collections[name].indexes.some((index) => Array.isArray(index) && index.join('|') === 'is_deleted|updated_at_ms'),
+    schema.indexes.some((index) => Array.isArray(index) && index.join('|') === 'is_deleted|updated_at_ms'),
     `${name} has soft-delete freshness index`,
   );
 }
 
-assert.ok(collections.customer_accounts.indexes.includes('domain'));
-assert.ok(collections.customer_contacts.indexes.includes('email'));
-assert.ok(collections.customer_opportunities.indexes.some((index) => Array.isArray(index) && index.join('|') === 'stage|position'));
-assert.ok(collections.customer_activities.indexes.some((index) => Array.isArray(index) && index.join('|') === 'account_id|happens_at_ms'));
-assert.ok(collections.customer_dedupe_candidates.indexes.some((index) => Array.isArray(index) && index.join('|') === 'object_type|match_key'));
+assert.ok(schemaOf(collections.customer_accounts).indexes.includes('domain'));
+assert.ok(schemaOf(collections.customer_contacts).indexes.includes('email'));
+assert.ok(schemaOf(collections.customer_opportunities).indexes.some((index) => Array.isArray(index) && index.join('|') === 'stage|position'));
+assert.ok(schemaOf(collections.customer_activities).indexes.some((index) => Array.isArray(index) && index.join('|') === 'account_id|happens_at_ms'));
+assert.ok(schemaOf(collections.customer_dedupe_candidates).indexes.some((index) => Array.isArray(index) && index.join('|') === 'object_type|match_key'));
 assert.equal(typeof migrationStrategies.business_commands[1], 'function');
 
 const moduleJson = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
