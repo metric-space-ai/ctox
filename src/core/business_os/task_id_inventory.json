@@ -53,7 +53,7 @@
     },
     {
       "file": "src/core/business_os/store.rs",
-      "function": "process_business_chat_reply",
+      "function": "persist_terminal_business_chat_command_projection",
       "occurrence": 1,
       "semantics": "execution_link",
       "target_field": "execution_task_id"

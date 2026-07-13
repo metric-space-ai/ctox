@@ -12,6 +12,7 @@ const classifications = new Map(Object.entries({
   delete_ctox_task: ['target_task', 'target_task_id'],
   fail_business_command_from_queue_error: ['execution_link', 'execution_task_id'],
   outbound_queue_research_scraper_generation: ['domain_queue_reference', 'target_task_id or a domain-specific queue reference'],
+  persist_terminal_business_chat_command_projection: ['execution_link', 'execution_task_id'],
   process_business_chat_reply: ['execution_link', 'execution_task_id'],
   process_cv_print_parse_command: ['execution_link', 'execution_task_id'],
   process_documents_report_command: ['execution_link', 'execution_task_id'],

@@ -178,6 +178,10 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --check
 
+      - name: Install Business OS browser test runtime
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+
       - name: Installer script checks
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -341,7 +345,6 @@ jobs:
       - name: Business OS production browser gate
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
           npm --prefix src/apps/business-os run qa:design-gates
           # deferred until shell-chat composition files land on main:
           # node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
