@@ -1480,6 +1480,19 @@ fn refresh_continuity_documents(
                     kind_label,
                     &format!("model refresh failed: {err}"),
                 );
+                // A poisoned session must not be swallowed as an optional
+                // helper failure: its detached turn may still be running, and
+                // reusing the session is refused anyway. Propagate so the
+                // slice fails and the service discards the session instead of
+                // carrying it into the next job (ctox#21 review round 3).
+                if err
+                    .downcast_ref::<super::direct_session::SessionPoisoned>()
+                    .is_some()
+                {
+                    return Err(err.context(format!(
+                        "continuity refresh {kind_label} poisoned the worker session"
+                    )));
+                }
                 eprintln!("ctox continuity refresh skipped {kind_label} invocation: {err}");
                 continue;
             }

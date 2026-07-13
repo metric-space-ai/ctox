@@ -2886,6 +2886,12 @@ pub fn service_status_snapshot_with(
     // alive and busy, not down. The fallback's empty busy/queue fields are
     // not fresh truth — UI-cadence callers must keep their previously
     // observed state for those.
+    //
+    // The same distrust applies to every fallback below that infers
+    // `running = true` from a manager or PID without a successful IPC
+    // response (missing socket, EOF, malformed reply, restart race): the
+    // default `busy = false` is a placeholder, not an observation, so those
+    // statuses are marked degraded too (ctox#21 review round 3).
     let degraded = matches!(live, LiveStatusProbe::Slow);
     if let Some(systemd) = systemd {
         let mut status = ServiceStatus::stopped_with_business_os(root, probe.include_business_os);
@@ -2896,7 +2902,7 @@ pub fn service_status_snapshot_with(
         }
         status.autostart_enabled = systemd.enabled;
         status.manager = "systemd-user".to_string();
-        status.degraded_probe = degraded;
+        status.degraded_probe = degraded || status.running;
         status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
         return Ok(status);
     }
@@ -2909,7 +2915,7 @@ pub fn service_status_snapshot_with(
         }
         status.autostart_enabled = launchd.enabled;
         status.manager = "launchd-user".to_string();
-        status.degraded_probe = degraded;
+        status.degraded_probe = degraded || status.running;
         status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
         return Ok(status);
     }
@@ -2920,7 +2926,7 @@ pub fn service_status_snapshot_with(
             status.running = true;
             status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
         }
-        status.degraded_probe = degraded;
+        status.degraded_probe = degraded || status.running;
         return Ok(status);
     }
     #[cfg(not(unix))]
