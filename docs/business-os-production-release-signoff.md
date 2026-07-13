@@ -4,7 +4,7 @@ Schema: ctox.business_os.production_signoff.v1
 Status: pending-signoff
 Signoff owner: TBD
 Signoff date: TBD
-Evidence revision: f2cdd6a8d276d3d70f0930ed8d73c4f641ecc9c6
+Evidence revision: cab3b57859058fb9721cdb4fb5385b6b7e4f0463
 
 This file is the human-readable release checklist for Business OS roles,
 permissions, dynamic apps and agent scopes. The machine-readable blocking
@@ -69,3 +69,6 @@ security/privacy review.
 - 2026-06-18: Automated evidence hashes are populated in
   `docs/business-os-security-privacy-signoff.json`; checklist remains pending
   until explicit reviewer signoff.
+- 2026-07-13: Automated source hashes were refreshed against the current
+  release candidate after the Readiness/Soak workflow hardening. Human review
+  and signoff remain pending.

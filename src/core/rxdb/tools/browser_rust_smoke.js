@@ -6512,7 +6512,13 @@ function ensureCtoxSmokeBinary() {
       const needsFileCollections = (
         (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode)
         || materializeSmokeMode
-      ) && !deferInitialFileCollections;
+      )
+        && !deferInitialFileCollections
+        // Audience policy is evaluated from the module catalog, runtime
+        // status and shell state. Requiring late file-collection negotiation
+        // after its intentional page reload couples this policy gate to an
+        // unrelated data plane and made the zero-retry release matrix flaky.
+        && smokeMode !== 'business-os-app-audience-ui';
       const setupPhaseTimings = {};
 
       let appState = null;

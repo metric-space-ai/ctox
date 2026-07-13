@@ -955,6 +955,9 @@ function runSmokeMatrixSelfTest() {
   if (!runnerUsesSharedModeList || !runnerBlocksUnimplementedModes) {
     throw new Error('Business OS production smoke modes are not wired into browser_rust_smoke.js');
   }
+  if (!runnerSource.includes("&& smokeMode !== 'business-os-app-audience-ui'")) {
+    throw new Error('App audience policy smoke must remain independent of deferred file replication');
+  }
   const matrixSource = fs.readFileSync(__filename, 'utf8');
   const ensureBinaryIndex = matrixSource.indexOf('\nensureCtoxSmokeBinary();\n');
   const refreshSourceIndex = matrixSource.indexOf('\nsummary.source = sourceEvidence();\n', ensureBinaryIndex);
