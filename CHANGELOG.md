@@ -39,6 +39,16 @@ planned hardening is distinguishable from feature work.
 
 ### Added
 
+- Event-stream health counters in `ctox status`
+  (`performance.event_stream`): dropped events, delivery-buffer activity,
+  lost/wedged consumers, runaway terminations and lag markers, plus
+  [docs/pilot-monitoring.md](docs/pilot-monitoring.md) describing how to
+  monitor a pilot with exactly these product-exposed signals.
+- An automated reproduction of the
+  [#21](https://github.com/metric-space-ai/ctox/issues/21) failure mode as
+  an integration test: the real service, a mid-turn SIGKILL of a waiting
+  chat client, and fresh clients that must complete without a daemon
+  restart — plus a 100-iteration evidence variant.
 - `SECURITY.md`: private vulnerability reporting channel, response targets,
   supported versions, and a summary of the security model.
 - This changelog.
