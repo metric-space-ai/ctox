@@ -66,6 +66,9 @@ jobs:
           npm --prefix src/apps/business-os test
           npm --prefix src/apps/business-os run test:module-bundles
 
+      - name: Install Business OS browser test runtime
+        run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+
       - name: Business OS production contract checks
         run: |
           node --check src/apps/business-os/scripts/assert-rxdb-only.mjs
@@ -112,7 +115,6 @@ jobs:
       - name: Business OS production browser gate
         run: |
           npm --prefix src/apps/business-os ci
-          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
           npm --prefix src/apps/business-os run qa:design-gates
           # deferred until shell-chat composition files land on main:
           # node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
