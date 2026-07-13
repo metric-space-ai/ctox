@@ -35,7 +35,7 @@ checked and the linked evidence matches the release commit.
 - [ ] `external_effect_boundary` - MCP external-effect boundary and generated-app
   command-bus limits reviewed; no external-effect path is enabled without a
   separate approval model.
-- [ ] `release_artifact_integrity` - production Browser/Rust smoke artifact, release
+- [ ] `release_artifact_integrity` (`artifact-integrity`) - production Browser/Rust smoke artifact, release
   workflow gate, dependency bootstrap, uploaded evidence and release artifact
   dependency chain reviewed.
 - [ ] `sync_recovery_crypto_boundary` - recovery journals, encrypted off-host
