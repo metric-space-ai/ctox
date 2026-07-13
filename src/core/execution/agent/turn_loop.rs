@@ -1782,6 +1782,9 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("context_preflight_heuristic_overflow")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
+        || lower.contains("stream disconnected before completion")
+        || lower.contains("error sending request for url")
+        || lower.contains("connection reset by peer")
         || lower.contains("max_output_tokens")
         || lower.contains("incomplete response returned")
     {

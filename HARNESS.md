@@ -333,7 +333,10 @@ lease returns to `pending`; the same cooldown is persisted in queue metadata and
 `communication_routing_state.retry_not_before`. After the cooldown, the same
 task and command may enter a new attempt through `retry_wait -> leased -> running`.
 The command is never reset to `queued`, duplicated, or terminalized merely
-because the provider returned a retryable error such as HTTP 429.
+because the provider returned a retryable error such as HTTP 429 or disconnected
+before `response.completed`. These failures use the same five-attempt technical
+hold budget and exponential backoff, so a broken provider cannot create an
+unbounded retry loop.
 
 ## Core State Machine
 

@@ -5870,13 +5870,11 @@ fn start_prompt_worker(
             // agent-failure counter. Successful turns reset the counter;
             // non-success outcomes increment it for status and explicit
             // mission-governance decisions.
-            let mut agent_failure_count_after_turn = 0_i64;
             let mut agent_failure_threshold_hit = false;
             if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
                 if agent_outcome.is_agent_failure() && !retryable_runtime_failure {
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
-                            agent_failure_count_after_turn = record.agent_failure_count;
                             let threshold = mission_agent_failure_threshold(&root);
                             if record.agent_failure_count >= threshold {
                                 agent_failure_threshold_hit = true;
@@ -7038,13 +7036,6 @@ fn start_prompt_worker(
                             || job.ticket_self_work_id.is_some()
                             || timeout_follow_up_outcome.is_some()
                             || runtime_retry_outcome.is_some();
-                        let retry_not_before = if retry_runtime_message {
-                            Some(runtime_retry_not_before_iso(&err_text))
-                        } else if timeout_retry_message && !agent_failure_threshold_hit {
-                            Some(timeout_retry_not_before_iso(agent_failure_count_after_turn))
-                        } else {
-                            None
-                        };
                         let mut cv_print_parser_recovered_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
                             && is_cv_print_parser_queue_job(&job)
@@ -7227,8 +7218,8 @@ fn start_prompt_worker(
                                 release_retryable_worker_messages(
                                     &root,
                                     &job.leased_message_keys,
-                                    retry_not_before.as_deref(),
                                     retry_reason,
+                                    &compact_error,
                                 )
                             } else {
                                 channels::ack_leased_messages(
@@ -18389,6 +18380,9 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("no context evidence rendered")
         || normalized.contains("mid-task compaction failed")
         || normalized.contains("failed to parse structured compaction response")
+        || normalized.contains("stream disconnected before completion")
+        || normalized.contains("error sending request for url")
+        || normalized.contains("connection reset by peer")
         || normalized.contains("max_output_tokens")
         || normalized.contains("incomplete response returned")
         || normalized.contains("too many requests")
@@ -22219,30 +22213,22 @@ fn runtime_retry_not_before_iso(error_text: &str) -> String {
 fn release_retryable_worker_messages(
     root: &Path,
     message_keys: &[String],
-    retry_not_before: Option<&str>,
     reason: &str,
+    summary: &str,
 ) -> Result<usize> {
-    if let Some(not_before) = retry_not_before {
-        channels::defer_messages_until(root, message_keys, not_before, reason)?;
-    }
-    for message_key in message_keys {
-        channels::transition_business_command_for_task(
-            root,
-            message_key,
-            "pending",
-            None,
-            None,
-            Some(reason),
-            reason,
-        )?;
-    }
-    channels::ack_leased_messages(root, message_keys, "pending")
-}
-
-fn timeout_retry_not_before_iso(agent_failure_count: i64) -> String {
-    let exponent = agent_failure_count.saturating_sub(1).clamp(0, 4) as u32;
-    let cooldown_secs = 300_u64.saturating_mul(2_u64.saturating_pow(exponent));
-    chrono_like_iso(current_epoch_secs().saturating_add(cooldown_secs.min(3_600)))
+    let policy_id = if reason.contains("timeout") {
+        "worker-turn-timeout"
+    } else {
+        "worker-runtime-api-failure"
+    };
+    channels::hold_leased_messages(
+        root,
+        message_keys,
+        &review::HoldReason::Technical {
+            policy_id: policy_id.to_string(),
+        },
+        summary,
+    )
 }
 
 fn is_turn_timeout_blocker(value: &str) -> bool {
@@ -34347,6 +34333,7 @@ Use shell tools to create or update these files."
             "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered",
             "mid-task compaction failed: failed to parse structured compaction response",
             "direct session error: stream disconnected before completion: Incomplete response returned, reason: max_output_tokens",
+            "direct session error: ErrorEvent { message: \"stream disconnected before completion: error sending request for url (https://api.minimax.io/v1/responses)\" }",
             "HTTP status 429 Too Many Requests",
             "HTTP status 503 Service Unavailable",
         ];
@@ -34387,6 +34374,17 @@ Use shell tools to create or update these files."
             classify_agent_failure(error),
             crate::lcm::AgentOutcome::Aborted
         );
+    }
+
+    #[test]
+    fn provider_stream_disconnect_is_retryable_runtime_failure() {
+        let error = "direct session error: ErrorEvent { message: \"stream disconnected before completion: error sending request for url (https://api.minimax.io/v1/responses)\" }";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
     }
 
     #[test]
@@ -34564,22 +34562,18 @@ Use shell tools to create or update these files."
         );
         assert!(first_lease.leased_at.is_some());
 
-        let not_before = "2099-01-01T00:00:00Z";
         release_retryable_worker_messages(
             &root,
             std::slice::from_ref(&task_id),
-            Some(not_before),
             "retryable runtime/API failure",
+            "provider stream disconnected before completion",
         )
         .expect("release retryable command");
 
         assert_eq!(route_status_for(&root, &task_id), "pending");
-        assert_eq!(
-            channels::queue_task_deferred_until(&root, &task_id)
-                .expect("read durable retry")
-                .as_deref(),
-            Some(not_before)
-        );
+        assert!(channels::queue_task_deferred_until(&root, &task_id)
+            .expect("read durable retry")
+            .is_some());
         let retry_context = channels::inspect_business_command_for_task(&root, &task_id)
             .expect("inspect retry command")
             .expect("linked command");
@@ -34589,6 +34583,19 @@ Use shell tools to create or update these files."
 
         let conn =
             channels::open_channel_db(&crate::paths::core_db(&root)).expect("open retry database");
+        let (failure_attempts, hold_reason): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT failure_attempt_count, hold_reason FROM communication_routing_state WHERE message_key=?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read bounded runtime retry state");
+        assert_eq!(failure_attempts, 1);
+        assert_eq!(
+            hold_reason.as_deref(),
+            Some("technical:worker-runtime-api-failure")
+        );
+
         conn.execute(
             "UPDATE communication_messages
              SET metadata_json=json_set(metadata_json, '$.not_before', '2000-01-01T00:00:00Z')
