@@ -29,6 +29,13 @@ planned hardening is distinguishable from feature work.
   gracefully, and `ctox chat --wait` judges completion per conversation
   against the durable assistant outcome — empty replies and failure outcomes
   exit non-zero instead of reporting false success.
+- Hardening pass on the #21 fix after adversarial review: request responses
+  can no longer deadlock behind a saturated event buffer (runaway buffers
+  fail the session explicitly), a timed-out `turn/start` is never retried
+  (prevents duplicate turn execution), stale events from an interrupted turn
+  can no longer surface as the next turn's reply, and `chat --wait` re-reads
+  the durable outcome after the worker finishes so late failures decide the
+  exit code.
 
 ### Added
 
