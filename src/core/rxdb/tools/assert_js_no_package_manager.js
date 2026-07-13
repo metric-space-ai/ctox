@@ -45,6 +45,12 @@ if (!fs.existsSync(root)) {
       const content = fs.readFileSync(file, 'utf8');
       assertNoBareImports(rel, content);
       for (const token of forbiddenCodeTokens) {
+        // Browser tests may locate their repository-provided Playwright runtime.
+        // Keep rejecting dependency trees above and dependency references in the
+        // package-manager-free browser runtime itself.
+        if (token === 'node_modules' && (rel.includes('/tests/') || rel.includes('/tools/'))) {
+          continue;
+        }
         if (content.includes(token)) {
           offenders.push(`${rel}: forbidden dependency token ${token}`);
         }
