@@ -281,6 +281,12 @@ pub(crate) async fn run_compaction_controller(
                     blocks.remove(0);
                     trimmed_blocks += 1;
                 }
+                Err(err) if is_structured_output_format_error(&err) => {
+                    eprintln!(
+                        "[ctox compact-controller] progress stage used deterministic fallback: {err}"
+                    );
+                    break fallback_progress_review(&task_hint);
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -315,6 +321,12 @@ pub(crate) async fn run_compaction_controller(
                     blocks.remove(0);
                     trimmed_blocks += 1;
                 }
+                Err(err) if is_structured_output_format_error(&err) => {
+                    eprintln!(
+                        "[ctox compact-controller] screen stage used conservative fallback: {err}"
+                    );
+                    break;
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -337,13 +349,23 @@ pub(crate) async fn run_compaction_controller(
                 previous_chars,
                 &retained_before,
             )?;
-            let iteration_result = run_structured_prompt::<DecisionStageResponse>(
+            let iteration_result = match run_structured_prompt::<DecisionStageResponse>(
                 sess,
                 turn_context,
                 prompt,
                 iteration_schema(),
             )
-            .await?;
+            .await
+            {
+                Ok(result) => result,
+                Err(err) if is_structured_output_format_error(&err) => {
+                    eprintln!(
+                        "[ctox compact-controller] iteration stage stopped at deterministic fallback: {err}"
+                    );
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             let decisions = apply_decisions(
                 &mut blocks,
                 &iteration_result.decisions,
@@ -383,19 +405,44 @@ pub(crate) async fn run_compaction_controller(
             &anchor_blocks,
             &focus_blocks,
         )?;
-        run_structured_prompt::<OutputStageResponse>(sess, turn_context, prompt, output_schema())
-            .await?
+        match run_structured_prompt::<OutputStageResponse>(
+            sess,
+            turn_context,
+            prompt,
+            output_schema(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) if is_structured_output_format_error(&err) => {
+                eprintln!(
+                    "[ctox compact-controller] output stage used deterministic fallback: {err}"
+                );
+                fallback_output_stage(&task_hint, &blocks)
+            }
+            Err(err) => return Err(err),
+        }
     };
 
     let reprioritization_prompt =
         build_reprioritization_prompt(&task_hint, trigger, &output_result, &recent_user_messages)?;
-    let reprioritization = run_structured_prompt::<ReprioritizationStageResponse>(
+    let reprioritization = match run_structured_prompt::<ReprioritizationStageResponse>(
         sess,
         turn_context,
         reprioritization_prompt,
         reprioritization_schema(),
     )
-    .await?;
+    .await
+    {
+        Ok(result) => result,
+        Err(err) if is_structured_output_format_error(&err) => {
+            eprintln!(
+                "[ctox compact-controller] reprioritization stage used deterministic fallback: {err}"
+            );
+            fallback_reprioritization(&task_hint, trigger)
+        }
+        Err(err) => return Err(err),
+    };
 
     let mode = if reprioritization.should_reprioritize
         || matches!(
@@ -476,6 +523,59 @@ fn sanitize_progress_review(result: ProgressStageResponse) -> ProgressStageRespo
         progress_score,
         rationale: normalize_text(&result.rationale),
     }
+}
+
+fn fallback_progress_review(task_hint: &str) -> ProgressStageResponse {
+    ProgressStageResponse {
+        summary: clip_chars(task_hint, 800),
+        progress_score: 3,
+        rationale: "The model did not return the requested structured compaction payload; the controller retained context conservatively."
+            .to_string(),
+    }
+}
+
+fn fallback_output_stage(task_hint: &str, blocks: &[CompactionBlock]) -> OutputStageResponse {
+    let retained = retained_blocks(blocks);
+    let joined = retained
+        .iter()
+        .map(|block| format!("{}\n{}", block.title, block.current_text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    OutputStageResponse {
+        _story_title: "Continuity Narrative".to_string(),
+        story_draft: clip_tail_chars(&joined, DEFAULT_FINAL_TARGET_CHARS.saturating_sub(2400)),
+        _anchor_title: "Continuity Anchors".to_string(),
+        anchor_draft: String::new(),
+        _focus_title: "Active Focus".to_string(),
+        focus_draft: clip_chars(task_hint, 2200),
+    }
+}
+
+fn fallback_reprioritization(
+    task_hint: &str,
+    trigger: CompactionTrigger,
+) -> ReprioritizationStageResponse {
+    ReprioritizationStageResponse {
+        summary: "Structured reprioritization was unavailable; continue the current durable task."
+            .to_string(),
+        should_reprioritize: false,
+        interrupts_reviewed: trigger != CompactionTrigger::Interrupt,
+        active_task: clip_chars(task_hint, 1200),
+        task_packet: Vec::new(),
+        priority_reason: "Conservative deterministic fallback preserves the current task."
+            .to_string(),
+        next_action: "continue_current_task".to_string(),
+        completed_tasks: Vec::new(),
+        follow_up_tasks: Vec::new(),
+        mutated_tasks: Vec::new(),
+        priority_order: Vec::new(),
+    }
+}
+
+fn is_structured_output_format_error(err: &CodexErr) -> bool {
+    let normalized = err.to_string().to_ascii_lowercase();
+    normalized.contains("failed to parse structured compaction response")
+        || normalized.contains("structured compaction stream completed without output")
 }
 
 fn derive_task_hint(input: &[UserInput], history_items: &[ResponseItem]) -> String {
@@ -745,6 +845,18 @@ fn normalize_text(value: &str) -> String {
 
 fn count_chars(value: &str) -> usize {
     normalize_text(value).chars().count()
+}
+
+fn clip_chars(value: &str, max_chars: usize) -> String {
+    normalize_text(value).chars().take(max_chars).collect()
+}
+
+fn clip_tail_chars(value: &str, max_chars: usize) -> String {
+    let normalized = normalize_text(value);
+    let chars = normalized.chars().collect::<Vec<_>>();
+    chars[chars.len().saturating_sub(max_chars)..]
+        .iter()
+        .collect()
 }
 
 fn normalize_string_list(values: &[String]) -> Vec<String> {
@@ -1642,6 +1754,7 @@ async fn run_structured_prompt<T: DeserializeOwned>(
             Ok(value) => return Ok(value),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::ContextWindowExceeded) => return Err(CodexErr::ContextWindowExceeded),
+            Err(err) if is_structured_output_format_error(&err) => return Err(err),
             Err(err) => {
                 if retries < max_retries as usize {
                     retries += 1;
@@ -1760,6 +1873,35 @@ mod tests {
             .map(|block| block.title.as_str())
             .collect::<Vec<_>>();
         assert_eq!(titles, vec!["One", "One / Part 2", "Two"]);
+    }
+
+    #[test]
+    fn deterministic_fallback_keeps_current_task_and_bounded_recent_context() {
+        let blocks = segment_context(
+            &format!("## Old\n{}\n\n## Recent\nkeep-me", "x".repeat(20_000)),
+            25_000,
+        );
+        let output = fallback_output_stage("Finish BENCH-027", &blocks);
+        let reprioritization =
+            fallback_reprioritization("Finish BENCH-027", CompactionTrigger::Auto);
+
+        assert!(output.story_draft.contains("keep-me"));
+        assert!(count_chars(&output.story_draft) <= DEFAULT_FINAL_TARGET_CHARS - 2400);
+        assert_eq!(output.focus_draft, "Finish BENCH-027");
+        assert!(!reprioritization.should_reprioritize);
+        assert_eq!(reprioritization.next_action, "continue_current_task");
+        assert_eq!(reprioritization.active_task, "Finish BENCH-027");
+    }
+
+    #[test]
+    fn structured_format_failures_are_not_retried_as_transport_errors() {
+        let parse_error = CodexErr::InvalidRequest(
+            "failed to parse structured compaction response: expected value".to_string(),
+        );
+        let transport_error = CodexErr::Stream("connection reset".to_string(), None);
+
+        assert!(is_structured_output_format_error(&parse_error));
+        assert!(!is_structured_output_format_error(&transport_error));
     }
 
     #[test]

@@ -188,7 +188,11 @@ There are three context-protection mechanisms in the current code:
   model token events during the live turn. Emergency compaction fires when
   per-call input reaches 75 percent of the context window. Adaptive compaction
   defaults to a 15 percent visible-output/read-input drift threshold, with a
-  minimum of 4096 visible output tokens.
+  minimum of 4096 visible output tokens. The semantic controller requests
+  structured model output; provider-only schema/format failures fall back to a
+  bounded recent narrative plus the unchanged active task. They do not fail or
+  replay the Business task. Transport and context-window failures keep their
+  normal retry/terminal behavior.
 
 Before every model request, history normalization keeps only the newest marked
 `<ctox_runtime_context ...>` developer section. It does not delete real user

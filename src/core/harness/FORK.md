@@ -33,6 +33,14 @@ CTOX-specific response-item type. Resume and compaction continue to use the
 fork's existing thread, rollout, `TurnContextItem`, and `ContextManager`
 contracts.
 
+The structured compaction controller treats provider formatting failures as a
+recoverable model-surface limitation. If a provider returns prose or an empty
+payload instead of the requested JSON schema, the fork does not fail or replay
+the Business task. It uses a deterministic conservative fallback: retain a
+bounded recent narrative, keep the durable task as active focus, and decline
+reprioritization. Transport, context-window, and interruption errors remain
+fatal/retryable under their existing policies.
+
 ## Backport Notes
 
 ### 2026-04 Subagents Backport
