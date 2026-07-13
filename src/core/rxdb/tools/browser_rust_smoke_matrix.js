@@ -768,6 +768,12 @@ if (signalingPortBase + maxPortOffset > 65535) {
 }
 
 ensureCtoxSmokeBinary();
+// The summary object is created before configuration/build validation so that
+// configuration failures can still emit a diagnostic artifact. On a clean CI
+// runner the smoke binary does not exist at that point and its initial hash is
+// therefore null. Refresh source evidence after the build before validating or
+// executing the matrix.
+summary.source = sourceEvidence();
 
 for (const [index, mode] of modes.entries()) {
   const effectiveBrowserWarningBudget = mode === 'network-flap-browser-to-rust' && networkFlapBrowserWarningBudget !== null
@@ -948,6 +954,12 @@ function runSmokeMatrixSelfTest() {
   const runnerBlocksUnimplementedModes = runnerSource.includes('businessOsProductionSmokeModeSet.has(smokeMode)');
   if (!runnerUsesSharedModeList || !runnerBlocksUnimplementedModes) {
     throw new Error('Business OS production smoke modes are not wired into browser_rust_smoke.js');
+  }
+  const matrixSource = fs.readFileSync(__filename, 'utf8');
+  const ensureBinaryIndex = matrixSource.indexOf('\nensureCtoxSmokeBinary();\n');
+  const refreshSourceIndex = matrixSource.indexOf('\nsummary.source = sourceEvidence();\n', ensureBinaryIndex);
+  if (ensureBinaryIndex < 0 || refreshSourceIndex < ensureBinaryIndex) {
+    throw new Error('Smoke matrix source evidence is not refreshed after building the smoke binary');
   }
   assertBusinessOsProductionSmokeRegistry({
     runnerModes: businessOsProductionSmokeModes,
