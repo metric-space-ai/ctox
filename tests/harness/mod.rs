@@ -14,8 +14,34 @@ pub struct TestRoot {
 #[allow(dead_code)]
 impl TestRoot {
     pub fn new(label: &str) -> Self {
-        let root = unique_test_root(label);
+        Self::new_at(&unique_test_root(label))
+    }
+
+    /// Create a test root at an explicit path. Use for tests that need SHORT
+    /// root paths (e.g. unix-socket paths under `<root>/runtime/sockets/`
+    /// cap at ~100 bytes).
+    pub fn new_at(root: &std::path::Path) -> Self {
+        let root = root.to_path_buf();
+        let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        // `CTOX_ROOT` is only honored when the target passes
+        // `looks_like_ctox_root` (main.rs: Cargo.toml + entrypoint +
+        // creation ledger). Without these markers the binary silently falls
+        // back to CWD-ancestor resolution — which is the REAL repository
+        // root when tests run from the package directory. Any test that
+        // relies on root-level isolation (service, runtime env, secrets)
+        // would then read and write the developer's actual runtime state.
+        fs::create_dir_all(root.join("src/core")).expect("failed to create src marker");
+        fs::create_dir_all(root.join("contracts/history")).expect("failed to create ledger dir");
+        fs::write(root.join("Cargo.toml"), "# ctox test root marker\n")
+            .expect("failed to write Cargo.toml marker");
+        fs::write(root.join("src/core/main.rs"), "// ctox test root marker\n")
+            .expect("failed to write entrypoint marker");
+        fs::write(
+            root.join("contracts/history/creation-ledger.md"),
+            "# ctox test root marker\n",
+        )
+        .expect("failed to write ledger marker");
         Self { root }
     }
 
@@ -30,6 +56,18 @@ impl TestRoot {
 
     pub fn path(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
+    }
+
+    /// Spawn a long-running ctox child (e.g. `service --foreground`) against
+    /// this root. The caller owns the child and must kill/wait it.
+    pub fn spawn(&self, args: &[&str]) -> std::process::Child {
+        Command::new(env!("CARGO_BIN_EXE_ctox"))
+            .args(args)
+            .env("CTOX_ROOT", &self.root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn ctox binary")
     }
 }
 
