@@ -20,6 +20,16 @@ planned hardening is distinguishable from feature work.
 
 ## [Unreleased]
 
+### Fixed
+
+- Service event stream no longer wedges permanently after a chat client
+  disconnects mid-turn ([#21](https://github.com/metric-space-ai/ctox/issues/21)):
+  turn-completion events are buffered instead of blocking the request path,
+  `turn/interrupt` now reliably reaches a running turn, sessions tear down
+  gracefully, and `ctox chat --wait` judges completion per conversation
+  against the durable assistant outcome — empty replies and failure outcomes
+  exit non-zero instead of reporting false success.
+
 ### Added
 
 - `SECURITY.md`: private vulnerability reporting channel, response targets,
