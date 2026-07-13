@@ -1,0 +1,30 @@
+{
+  "schema_version": "ctox-office-completion-audit-v1",
+  "audited_at": "2026-07-13",
+  "overall_status": "release_observation_pending",
+  "verified_workstreams": 9,
+  "total_workstreams": 10,
+  "products": ["ctox-documents", "ctox-spreadsheets"],
+  "requirements": [
+    { "id": "A1", "status": "verified", "evidence": ["upstream/euro-office-v9.3.1.json", "../vendor/ctox-office/provenance.json"] },
+    { "id": "A2", "status": "verified", "evidence": ["src/forks/ctox-documents/manifest.json", "src/forks/ctox-spreadsheets/manifest.json", "src/runtime/ctox-documents.mjs", "src/runtime/ctox-spreadsheets.mjs", "../vendor/ctox-office/provenance.json"] },
+    { "id": "A3", "status": "verified", "evidence": ["src/capsule.mjs", "src/frame-runtime.mjs", "src/runtime/ctox-fork-core.mjs", "office-engine.test.mjs"] },
+    { "id": "A3b", "status": "verified", "evidence": ["src/forks/shared/business-os.css", "oracle/evidence/office.fork-business-os-ui.json", "oracle/flows/office.fork-business-os-ui.playwright.js"] },
+    { "id": "A4", "status": "verified", "evidence": ["src/business-os-bridge.mjs", "../modules/documents/index.js", "../modules/spreadsheets/index.js"] },
+    { "id": "A5", "status": "verified", "evidence": ["../../../core/business_os/office_engine.rs", "../../../core/office-engine/src/main.rs"] },
+    { "id": "A6", "status": "verified", "evidence": ["../../../core/business_os/store.rs", "oracle/evidence/office.offline-reconnect.json", "oracle/evidence/office.native-peer-restart.json"] },
+    { "id": "A7", "status": "verified", "evidence": ["oracle/side-by-side.html", "features.json"] },
+    { "id": "A8", "status": "verified", "evidence": ["oracle/evidence/document.docx-roundtrip-corpus.json", "oracle/validate-document-corpus.mjs"] },
+    { "id": "A9", "status": "verified", "evidence": ["oracle/evidence/spreadsheet.xlsx-roundtrip-corpus.json", "oracle/validate-spreadsheet-corpus.mjs"] },
+    { "id": "A10", "status": "release_observation_pending", "evidence": ["rollout.json", "validate-rollout.mjs", "capture-release-evidence.mjs"] }
+  ],
+  "external_release_observation": {
+    "repository": "metric-space-ai/ctox",
+    "checked_at": "2026-07-13",
+    "latest_published_release": "0.3.27",
+    "minimum_switch_release": "0.3.32",
+    "switch_release_observed": false,
+    "stable_followup_releases_observed": 0,
+    "legacy_removal_authorized": false
+  }
+}

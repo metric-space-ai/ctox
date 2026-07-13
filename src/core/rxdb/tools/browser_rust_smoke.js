@@ -37,6 +37,8 @@
  *   SMOKE_MODE=command-reload-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-restart-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-midflight-restart-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=office-document-midflight-restart-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=office-spreadsheet-midflight-restart-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=rollover-native-peer-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=tab-freeze-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=network-flap-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
@@ -323,6 +325,8 @@ const supportedSmokeModes = [
   'command-reload-browser-to-rust',
   'command-restart-browser-to-rust',
   'command-midflight-restart-browser-to-rust',
+  'office-document-midflight-restart-browser-to-rust',
+  'office-spreadsheet-midflight-restart-browser-to-rust',
   'rollover-native-peer-browser-to-rust',
   'tab-freeze-browser-to-rust',
   'network-flap-browser-to-rust',
@@ -6346,11 +6350,23 @@ function ensureCtoxSmokeBinary() {
       };
     }
     const pageEvaluateStartedAt = Date.now();
+    const officeRestartKind = smokeMode === 'office-document-midflight-restart-browser-to-rust'
+      ? 'document'
+      : smokeMode === 'office-spreadsheet-midflight-restart-browser-to-rust'
+        ? 'spreadsheet'
+        : '';
+    const officeRestartFixtureBytes = officeRestartKind
+      ? {
+          kind: officeRestartKind,
+          canonical: Array.from(fs.readFileSync(path.join(root, `tests/fixtures/office/${officeRestartKind}/edit-save.${officeRestartKind === 'document' ? 'docx' : 'xlsx'}`))),
+          editor: Array.from(fs.readFileSync(path.join(root, `tests/fixtures/office/${officeRestartKind}/edit-save.editor.bin`))),
+        }
+      : null;
     // Backlog OS-C3: the two-browser mode drives a second isolated peer from
     // the node side instead of the single-page evaluate below.
     const result = smokeMode === 'presence-merge-two-browsers'
       ? await runPresenceMergeTwoBrowsersMode(page)
-      : await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, threadsRightClickCapabilities }) => {
+      : await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, threadsRightClickCapabilities, officeRestartFixtureBytes }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -6460,6 +6476,10 @@ function ensureCtoxSmokeBinary() {
       const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust' || ticketClarificationSmokeMode;
       const outboundActiveUiSmokeMode = smokeMode === 'outbound-active-ui';
       const codingAgentsUiSmokeMode = smokeMode === 'coding-agents-ui';
+      const spreadsheetsActiveUiSmokeMode = smokeMode === 'spreadsheets-active-ui';
+      const documentsActiveUiSmokeMode = smokeMode === 'documents-active-ui';
+      const invoicesActiveUiSmokeMode = smokeMode === 'invoices-active-ui';
+      const buchhaltungActiveUiSmokeMode = smokeMode === 'buchhaltung-active-ui';
       const businessOsAppReleaseUiSmokeMode = smokeMode === 'business-os-app-release-ui';
       const businessOsThreadsRightClickUiSmokeMode = smokeMode === 'business-os-threads-rightclick-ui';
       const businessOsThreadsScaleUiSmokeMode = smokeMode === 'business-os-threads-scale-ui';
@@ -6468,7 +6488,12 @@ function ensureCtoxSmokeBinary() {
         || smokeMode === 'command-burst-browser-to-rust'
         || smokeMode === 'command-reload-browser-to-rust'
         || smokeMode === 'command-restart-browser-to-rust'
-        || smokeMode === 'command-midflight-restart-browser-to-rust';
+        || smokeMode === 'command-midflight-restart-browser-to-rust'
+        || smokeMode === 'office-document-midflight-restart-browser-to-rust'
+        || smokeMode === 'office-spreadsheet-midflight-restart-browser-to-rust';
+      const officeDocumentRestartSmokeMode = smokeMode === 'office-document-midflight-restart-browser-to-rust';
+      const officeSpreadsheetRestartSmokeMode = smokeMode === 'office-spreadsheet-midflight-restart-browser-to-rust';
+      const officeRestartSmokeMode = officeDocumentRestartSmokeMode || officeSpreadsheetRestartSmokeMode;
       const materializeSmokeMode = smokeMode === 'workspace-large-materialize-rust-to-browser'
         || smokeMode === 'workspace-large-file-viewer-rust-to-browser'
         || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
@@ -6548,6 +6573,77 @@ function ensureCtoxSmokeBinary() {
             }
             await appState.db.raw.addCollections(codingAgentCollections);
           }
+        }
+        if (outboundActiveUiSmokeMode) {
+          const outboundSchemaMod = await import('/modules/outbound/schema.js');
+          const outboundCollections = {};
+          for (const [name, schema] of Object.entries(outboundSchemaMod.collections || {})) {
+            if (!appState.db.raw?.[name]) outboundCollections[name] = { schema };
+          }
+          if (Object.keys(outboundCollections).length) {
+            await appState.db.raw.addCollections(outboundCollections);
+          }
+        }
+        if (spreadsheetsActiveUiSmokeMode || officeSpreadsheetRestartSmokeMode) {
+          const schemaMod = await import('/modules/spreadsheets/schema.js');
+          const missing = {};
+          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
+            if (!appState.db.raw?.[name]) missing[name] = { schema };
+          }
+          if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
+          const handles = await Promise.all([
+            startAppSyncCollection(appState, 'spreadsheets', officeSpreadsheetRestartSmokeMode ? 'office-restart-smoke' : 'spreadsheets-active-ui'),
+            startAppSyncCollection(appState, 'spreadsheet_versions', officeSpreadsheetRestartSmokeMode ? 'office-restart-smoke' : 'spreadsheets-active-ui'),
+            startAppSyncCollection(appState, 'spreadsheet_blob_chunks', officeSpreadsheetRestartSmokeMode ? 'office-restart-smoke' : 'spreadsheets-active-ui'),
+          ]);
+          appSpreadsheetProjectionStates = handles.map((handle) => handle?.state || handle).filter(Boolean);
+          await Promise.all(appSpreadsheetProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
+        }
+        if (documentsActiveUiSmokeMode || officeDocumentRestartSmokeMode) {
+          const schemaMod = await import('/modules/documents/schema.js');
+          const missing = {};
+          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
+            if (!appState.db.raw?.[name]) missing[name] = { schema };
+          }
+          if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
+          const handles = await Promise.all([
+            startAppSyncCollection(appState, 'documents', officeDocumentRestartSmokeMode ? 'office-restart-smoke' : 'documents-active-ui'),
+            startAppSyncCollection(appState, 'document_versions', officeDocumentRestartSmokeMode ? 'office-restart-smoke' : 'documents-active-ui'),
+            startAppSyncCollection(appState, 'document_blob_chunks', officeDocumentRestartSmokeMode ? 'office-restart-smoke' : 'documents-active-ui'),
+          ]);
+          appDocumentProjectionStates = handles.map((handle) => handle?.state || handle).filter(Boolean);
+          await Promise.all(appDocumentProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
+        }
+        if (invoicesActiveUiSmokeMode) {
+          const schemaMod = await import('/modules/invoices/schema.js');
+          const required = ['customer_accounts', 'accounting_invoices'];
+          const missing = {};
+          for (const name of required) {
+            if (!appState.db.raw?.[name]) {
+              const definition = schemaMod.collections[name];
+              missing[name] = definition?.schema ? definition : { schema: definition };
+            }
+          }
+          if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
+          const handles = await Promise.all(required.map((name) => startAppSyncCollection(appState, name, 'invoices-active-ui')));
+          appInvoiceProjectionStates = handles.map((handle) => handle?.state || handle).filter(Boolean);
+          await Promise.all(appInvoiceProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
+        }
+        if (buchhaltungActiveUiSmokeMode) {
+          const schemaMod = await import('/modules/buchhaltung/schema.js');
+          const required = [
+            'accounting_accounts',
+            'accounting_journal_entries',
+            'accounting_journal_entry_lines',
+          ];
+          const missing = {};
+          for (const name of required) {
+            if (!appState.db.raw?.[name]) missing[name] = { schema: schemaMod.collections[name] };
+          }
+          if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
+          const handles = await Promise.all(required.map((name) => startAppSyncCollection(appState, name, 'buchhaltung-active-ui')));
+          appAccountingProjectionStates = handles.map((handle) => handle?.state || handle).filter(Boolean);
+          await Promise.all(appAccountingProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
@@ -13667,6 +13763,86 @@ function ensureCtoxSmokeBinary() {
         }
         const now = Date.now();
         const id = `command_smoke_${now}`;
+        let officeRestartFixture = null;
+        if (officeRestartSmokeMode) {
+          if (!officeRestartFixtureBytes?.canonical?.length || !officeRestartFixtureBytes?.editor?.length) {
+            throw new Error('Office restart fixture bytes were not supplied by the smoke host');
+          }
+          const canonicalBytes = new Uint8Array(officeRestartFixtureBytes.canonical);
+          const editorBytes = new Uint8Array(officeRestartFixtureBytes.editor);
+          const sha256 = async (bytes) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+            .map((value) => value.toString(16).padStart(2, '0')).join('');
+          const encodeBase64 = (bytes) => {
+            let binary = '';
+            for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+              binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+            }
+            return btoa(binary);
+          };
+          const kind = officeRestartFixtureBytes.kind;
+          const isDocument = kind === 'document';
+          const config = isDocument ? {
+            records: 'documents', versions: 'document_versions', chunks: 'document_blob_chunks',
+            recordIdField: 'document_id', extension: 'docx', sourceKind: 'docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            protocol: 'euro-office-document-binary-v10', feature: 'document.edit-save', module: 'documents',
+          } : {
+            records: 'spreadsheets', versions: 'spreadsheet_versions', chunks: 'spreadsheet_blob_chunks',
+            recordIdField: 'spreadsheet_id', extension: 'xlsx', sourceKind: 'xlsx',
+            mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            protocol: 'euro-office-cell-binary-v10', feature: 'spreadsheet.edit-save', module: 'spreadsheets',
+          };
+          const recordId = `office_restart_${isDocument ? 'doc' : 'sheet'}_${now}`;
+          const versionId = `${recordId}_v1`;
+          const canonicalBlobId = `${recordId}_canonical`;
+          const editorBlobId = `${recordId}_editor`;
+          const changedBlobId = `${recordId}_changed`;
+          const canonicalSha256 = await sha256(canonicalBytes);
+          const editorSha256 = await sha256(editorBytes);
+          await db[config.records].insert({
+            id: recordId,
+            title: 'Office restart smoke',
+            filename: `office-restart-smoke.${config.extension}`,
+            mime_type: config.mime,
+            ...(isDocument ? { document_type: 'word_document' } : {}),
+            status: 'Imported',
+            current_version_id: versionId,
+            source_sha256: canonicalSha256,
+            index_text: 'Office restart smoke',
+            is_deleted: false,
+            created_at_ms: now,
+            updated_at_ms: now,
+          });
+          await db[config.versions].insert({
+            id: versionId,
+            [config.recordIdField]: recordId,
+            version: 1,
+            source_kind: config.sourceKind,
+            blob_id: canonicalBlobId,
+            editor_blob_id: editorBlobId,
+            source_sha256: canonicalSha256,
+            editor_sha256: editorSha256,
+            editor_protocol: config.protocol,
+            editor_protocol_version: 10,
+            conversion_state: 'prepared',
+            model_json: {},
+            diagnostics: [],
+            created_at_ms: now,
+            updated_at_ms: now,
+          });
+          const chunk = (blobId, bytes, mimeType) => ({
+            id: `${blobId}_0000`, blob_id: blobId, [config.recordIdField]: recordId, version_id: versionId,
+            idx: 0, total: 1, mime_type: mimeType, encoding: 'base64', data: encodeBase64(bytes), created_at_ms: now,
+          });
+          await db[config.chunks].bulkInsert([
+            chunk(canonicalBlobId, canonicalBytes, config.mime),
+            chunk(editorBlobId, editorBytes, 'application/octet-stream'),
+            chunk(changedBlobId, editorBytes, 'application/octet-stream'),
+          ]);
+          const projectionStates = isDocument ? appDocumentProjectionStates : appSpreadsheetProjectionStates;
+          await Promise.all(projectionStates.map((state) => bounded(state?.awaitInSync?.(), 30000)));
+          officeRestartFixture = { recordId, versionId, changedBlobId, editorSha256, canonicalSha256, kind, config };
+        }
         if (smokeMode === 'command-restart-browser-to-rust') {
           if (useAppDb) {
             const repairedState = await repairAppFileAndCommandReplicationAfterNativeRestart();
@@ -13684,12 +13860,30 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
           await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
         }
-        if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+        if (smokeMode === 'command-midflight-restart-browser-to-rust' || officeRestartSmokeMode) {
           const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
           if (!commandBus?.dispatch) throw new Error('Business OS command bus is not available for mid-flight restart smoke');
           const restartPromise = globalThis.__ctoxRestartNativePeer?.();
           await delay(50);
-          const midflightCommand = {
+          const midflightCommand = officeRestartSmokeMode ? {
+            id,
+            module: officeRestartFixture.config.module,
+            type: `office.${officeRestartFixture.kind}.commit`,
+            record_id: officeRestartFixture.recordId,
+            inbound_channel: 'ctox',
+            payload: {
+              [`${officeRestartFixture.kind}_id`]: officeRestartFixture.recordId,
+              version_id: officeRestartFixture.versionId,
+              base_version_id: officeRestartFixture.versionId,
+              editor_blob_id: officeRestartFixture.changedBlobId,
+              editor_sha256: officeRestartFixture.editorSha256,
+              editor_protocol: officeRestartFixture.config.protocol,
+              editor_protocol_version: 10,
+              implemented_features: [officeRestartFixture.config.feature],
+              reason: 'native-peer-restart-smoke',
+            },
+            client_context: { source: 'ctox-office-esm', surface: `business-os-${officeRestartFixture.config.module}`, transport: 'rxdb-webrtc' },
+          } : {
             id,
             module: 'ctox',
             type: 'business_os.smoke',
@@ -13767,15 +13961,53 @@ function ensureCtoxSmokeBinary() {
           const commandDoc = await db.business_commands.findOne(id).exec();
           const command = commandDoc?.toJSON?.();
           const taskId = command?.task_id || '';
-          if (command && command.status !== 'pending_sync' && taskId) {
-            const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
-            const task = taskDoc?.toJSON?.();
-            if (task) {
+          const officeTerminal = officeRestartSmokeMode
+            && command?.status === 'completed'
+            && command?.result?.ok === true;
+          if (command && command.status !== 'pending_sync' && (taskId || officeTerminal)) {
+            const taskDoc = taskId ? await db.ctox_queue_tasks.findOne(taskId).exec() : null;
+            const task = taskDoc?.toJSON?.() || null;
+            if (task || officeTerminal) {
               const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
-              if (queueTasksForCommand.length !== 1) {
-                throw new Error(`command ${id} produced ${queueTasksForCommand.length} queue tasks: ${JSON.stringify(queueTasksForCommand)}`);
+              const expectedQueueTasks = officeRestartSmokeMode ? 0 : 1;
+              if (queueTasksForCommand.length !== expectedQueueTasks) {
+                throw new Error(`command ${id} produced ${queueTasksForCommand.length} queue tasks, expected ${expectedQueueTasks}: ${JSON.stringify(queueTasksForCommand)}`);
+              }
+              let officeCommit = null;
+              if (officeRestartSmokeMode) {
+                const state = globalThis.ctoxBusinessOsSmoke?.state;
+                const { records, versions, chunks } = officeRestartFixture.config;
+                const resumed = await state.sync.resumeCollections([records, versions, chunks]);
+                const officeProjectionStates = resumed.map((handle) => handle?.state || handle).filter(Boolean);
+                if (officeDocumentRestartSmokeMode) appDocumentProjectionStates = officeProjectionStates;
+                else appSpreadsheetProjectionStates = officeProjectionStates;
+                await Promise.all(officeProjectionStates.map((replication) => bounded(replication?.awaitInitialReplication?.(), 30000)));
+                await Promise.all(officeProjectionStates.map((replication) => bounded(replication?.awaitInSync?.(), 30000)));
+                const deadline = Date.now() + 30000;
+                let record = null;
+                while (Date.now() < deadline) {
+                  record = (await db[records].findOne(officeRestartFixture.recordId).exec())?.toJSON?.() || null;
+                  if (record?.current_version_id && record.current_version_id !== officeRestartFixture.versionId) break;
+                  await delay(250);
+                }
+                if (!record?.current_version_id || record.current_version_id === officeRestartFixture.versionId) {
+                  throw new Error(`Office commit did not advance the ${officeRestartFixture.kind} version after restart: ${JSON.stringify(record)}`);
+                }
+                const committedVersion = (await db[versions].findOne(record.current_version_id).exec())?.toJSON?.() || null;
+                const nativeChunkCount = Number(command?.result?.chunks || 0);
+                if (!committedVersion || nativeChunkCount < 1) {
+                  throw new Error(`Office commit projection is incomplete after restart: ${JSON.stringify({ record, committedVersion, nativeChunkCount })}`);
+                }
+                officeCommit = {
+                  recordId: officeRestartFixture.recordId,
+                  kind: officeRestartFixture.kind,
+                  baseVersionId: officeRestartFixture.versionId,
+                  versionId: record.current_version_id,
+                  blobId: committedVersion.blob_id,
+                  blobChunkCount: nativeChunkCount,
+                };
               }
               await Promise.all(replicationStates.map((state) => state.cancel?.()));
               if (ownsDb) await db.close();
@@ -13784,8 +14016,9 @@ function ensureCtoxSmokeBinary() {
                 id,
                 status: command.status,
                 taskId,
-                taskStatus: command.task_status || task.status || '',
+                taskStatus: command.task_status || task?.status || command.status || '',
                 taskCountForCommand: queueTasksForCommand.length,
+                officeCommit,
               };
             }
           }
@@ -14933,7 +15166,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, threadsRightClickCapabilities });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, threadsRightClickCapabilities, officeRestartFixtureBytes });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
@@ -15323,7 +15556,9 @@ function ensureCtoxSmokeBinary() {
     } else if (result.mode === 'command-browser-to-rust'
       || result.mode === 'migration-version-browser-to-rust'
       || result.mode === 'command-restart-browser-to-rust'
-      || result.mode === 'command-midflight-restart-browser-to-rust') {
+      || result.mode === 'command-midflight-restart-browser-to-rust'
+      || result.mode === 'office-document-midflight-restart-browser-to-rust'
+      || result.mode === 'office-spreadsheet-midflight-restart-browser-to-rust') {
       if (result.mode === 'migration-version-browser-to-rust') {
         const commandTable = 'ctox_business_os__business_commands__v1';
         const staleCommandTable = 'ctox_business_os__business_commands__v0';
@@ -15349,6 +15584,14 @@ function ensureCtoxSmokeBinary() {
       console.log(`task_count_for_command=${result.taskCountForCommand}`);
       console.log(`status=${result.status}`);
       console.log(`task_status=${result.taskStatus}`);
+      if (result.officeCommit) {
+        console.log(`office_kind=${result.officeCommit.kind}`);
+        console.log(`office_record_id=${result.officeCommit.recordId}`);
+        console.log(`office_base_version_id=${result.officeCommit.baseVersionId}`);
+        console.log(`office_committed_version_id=${result.officeCommit.versionId}`);
+        console.log(`office_canonical_blob_id=${result.officeCommit.blobId}`);
+        console.log(`office_canonical_blob_chunk_count=${result.officeCommit.blobChunkCount}`);
+      }
     } else if (result.mode === 'tickets-browser-to-rust') {
       console.log(`command_id=${result.id}`);
       console.log(`task_id=${result.taskId}`);

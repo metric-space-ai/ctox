@@ -1,0 +1,21 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.docx-roundtrip-corpus",
+  "kind": "aggregate-corpus-gate",
+  "oracle_release": "v9.3.1",
+  "manifest": "tests/fixtures/office/document/corpus.json",
+  "steps": [
+    { "action": "validate_all_feature_dependencies", "expected": "document features 1 through 11 are differential_passed" },
+    { "action": "verify_fixture_manifest", "expected": "all fixture byte counts, SHA-256 hashes and package-part counts match" },
+    { "action": "native_docy_roundtrip", "runtime": "ctox-office-engine-rust", "expected": "DOCX to native DOCY to DOCX preserves primary semantics, every original package part and every declared escrow part for all eleven fixtures" },
+    { "action": "verify_feature_exports", "expected": "every canonical CTOX export matches its recorded hash and reopens in CTOX and Euro-Office" },
+    { "action": "verify_package_preservation", "expected": "no original parts are missing, no unintended parts are added and declared escrow parts remain readable" },
+    { "action": "verify_browser_evidence", "expected": "clean-profile evidence, clean console and no HTTP business-data route exist for every feature" },
+    { "action": "aggregate_side_by_side_evidence", "expected": "all eleven dependency features have current original-Euro-Office split-screen evidence with exact document-ready, equal geometry, save and both reopen directions" },
+    { "action": "reject_invalid_packages", "expected": "non-ZIP and incomplete DOCX packages are rejected" }
+  ],
+  "automation": [
+    "node src/apps/business-os/office-engine/oracle/validate-document-corpus.mjs",
+    "cargo test business_os::office_engine::tests"
+  ]
+}

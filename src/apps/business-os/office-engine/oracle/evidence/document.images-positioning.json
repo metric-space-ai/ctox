@@ -1,0 +1,330 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.images-positioning",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/images-positioning.docx",
+    "bytes": 38869,
+    "sha256": "feb9d3611f3187ffa7068b92a452ec31b9e61fd1c120408609f542476b8c3339",
+    "drawings": 2,
+    "inline_image": {
+      "description": "CTOX_INLINE_IMAGE_TARGET",
+      "extent_emu": [
+        1828800,
+        914400
+      ]
+    },
+    "floating_image": {
+      "description": "CTOX_FLOATING_IMAGE_TARGET",
+      "extent_emu": [
+        1143000,
+        1143000
+      ],
+      "horizontal": {
+        "relative_from": "column",
+        "offset_emu": 1397000
+      },
+      "vertical": {
+        "relative_from": "paragraph",
+        "offset_emu": 76200
+      },
+      "wrap": "wrapSquare"
+    },
+    "preservation_parts": [
+      "word/media/ctox-preserve-control.png",
+      "customXml/ctox-image-preserve.xml",
+      "customXml/_rels/ctox-image-preserve.xml.rels"
+    ]
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": {
+      "width": 1280,
+      "height": 759
+    },
+    "locale": "de-DE",
+    "measured_document_page_bounds": {
+      "left": 233,
+      "top": 169,
+      "right": 1050,
+      "bottom": 688
+    }
+  },
+  "expected_semantic_state": {
+    "inline_image": {
+      "type": "wp:inline",
+      "extent_emu": [
+        2516400,
+        1260000
+      ],
+      "display_width_cm": 6.99,
+      "aspect_ratio_locked": true
+    },
+    "floating_image": {
+      "type": "wp:anchor",
+      "extent_emu": [
+        1143000,
+        1143000
+      ],
+      "horizontal": {
+        "relative_from": "column",
+        "offset_emu": 2743200,
+        "display_cm": 7.62
+      },
+      "vertical": {
+        "relative_from": "paragraph",
+        "offset_emu": 320400,
+        "display_cm": 0.89
+      },
+      "wrap": "wrapSquare"
+    },
+    "preserved_text": [
+      "INLINE_BEFORE",
+      "INLINE_AFTER",
+      "FLOATING_WRAP_TEXT_ALPHA",
+      "FLOATING_WRAP_TEXT_EPSILON",
+      "PRESERVE_IMAGES_UNRELATED_A91E"
+    ]
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/view/ImageSettings.js:493-523",
+    "web-apps/apps/documenteditor/main/app/view/ImageSettings.js:539-593",
+    "web-apps/apps/documenteditor/main/app/view/ImageSettingsAdvanced.js:136-190",
+    "web-apps/apps/documenteditor/main/app/view/ImageSettingsAdvanced.js:1874-2008",
+    "sdkjs/word/api.js:6377-6614"
+  ],
+  "oracle_export": {
+    "path": "runtime/office-oracle/document.images-positioning/oracle-saved.docx",
+    "bytes": 42149,
+    "sha256": "9d72e90bca8a608212fed80b9fd2960fe773a085c4c9fc0e57ad2e59baa970b0",
+    "callback_statuses": [
+      1,
+      6
+    ],
+    "reopen_in_oracle": "passed",
+    "notes": [
+      "The Oracle omits the deliberately unreferenced media, custom XML, and relationship control parts; CTOX escrow preservation is asserted against the original fixture."
+    ]
+  },
+  "screenshots": [
+    {
+      "path": "output/playwright/ctox-office/fixtures/document.images-positioning-render/page-1.png",
+      "sha256": "65e8db69372f8d5b11ccb09578933d5cfde958414cc2e33c36e8a046dcf57083"
+    },
+    {
+      "path": "output/playwright/ctox-office/oracle/document.images-positioning/oracle-initial.png",
+      "sha256": "b0c75a758e72c083e4059ce27099a85bc6951ffeb2ba842cbdba3f347427c815"
+    },
+    {
+      "path": "output/playwright/ctox-office/oracle/document.images-positioning/oracle-after-inline-resize.png",
+      "sha256": "18c006589d92618ffd60259a5ddef707b9e46fde35bb4e3c11bca062447bc5fa"
+    },
+    {
+      "path": "output/playwright/ctox-office/oracle/document.images-positioning/oracle-terminal.png",
+      "sha256": "21c8b7e9655b69e1f8b633e40298e7df91180bc14b59ef340fe97018ac9a87da"
+    },
+    {
+      "path": "output/playwright/ctox-office/comparison/document.images-positioning/differential-terminal-images-positioning.png",
+      "sha256": "303b7b1b12597c1ba59962c136cb5df8bd1661044b09713721ee8c62c52929ac"
+    },
+    {
+      "path": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-saved-reopen-images-positioning.png",
+      "sha256": "dc2ae25763038c73e0c9634a7b38089a593707641ca0724698452c0a11caaf58"
+    },
+    {
+      "path": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-export-reopen-oracle-images-positioning.png",
+      "sha256": "b1277b543bbf7a54014e525f7261e658cb88741fe7b5716be16ee4f6b18917f3"
+    }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/rust/document.images-positioning/ctox-saved.Editor.bin",
+      "bytes": 364909,
+      "sha256": "ffdfc104a4a05f15b5b58fe4741ea7672873a95ef9b9ca8cc123fd426982da00",
+      "protocol": "euro-office-word-binary-v10"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.images-positioning/ctox-canonical.docx",
+      "bytes": 37457,
+      "sha256": "bd64c0283a6c227242e6e2c294795719c383bee958094acc16763ee5036e3597",
+      "package_parts": 22,
+      "unchanged_parts": 21,
+      "changed_parts": [
+        "word/document.xml"
+      ],
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "media_parts_unchanged": [
+        "word/media/image1.png",
+        "word/media/image2.png",
+        "word/media/ctox-preserve-control.png"
+      ],
+      "relationships_unchanged": [
+        "word/_rels/document.xml.rels",
+        "customXml/_rels/ctox-image-preserve.xml.rels"
+      ],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_reopen": "passed"
+    },
+    "semantic_verification": {
+      "split_screen_flow": "passed",
+      "save_reopen_in_ctox": "passed",
+      "inline_extent_emu": [
+        2516400,
+        1260000
+      ],
+      "floating_horizontal_offset_emu": 2743200,
+      "floating_vertical_offset_emu": 320400,
+      "floating_wrap": "wrapSquare",
+      "clean_profile_reopen": "passed"
+    },
+    "required_preservation": {
+      "understood_parts": [
+        "word/document.xml"
+      ],
+      "unrelated_original_parts_unchanged": true,
+      "must_preserve_parts": [
+        "word/media/ctox-preserve-control.png",
+        "customXml/ctox-image-preserve.xml",
+        "customXml/_rels/ctox-image-preserve.xml.rels"
+      ],
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    }
+  },
+  "latest_side_by_side_attempt": {
+    "status": "differential_passed",
+    "date": "2026-07-12",
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.images-positioning",
+    "gate": "passed for exact document-ready readiness, same-origin geometry, upstream ESM capsule, matching Oracle/CTOX config, save, CTOX reopen, Rust export, and Oracle reopen",
+    "finding": "The full split-screen flow now runs against the real Euro-Office DocumentEditor on both sides. It selects the same inline and floating image in each iframe, applies resize, wrap and position through original sdkjs image-property APIs, saves both editors, captures CTOX's DOCY editor payload, exports it through Rust to canonical DOCX, reopens the saved payload in CTOX, and reopens the canonical DOCX in the pinned Oracle.",
+    "root_cause": "The invalid earlier comparison was caused by two separate issues: the CTOX iframe did not resolve DOCX media parts for Euro-Office media/image*.png loads, and the side-by-side gate treated app-ready as ready because it matched /ready/i. The runtime now extracts word/media/* to same-origin blob URLs, and the harness accepts only the exact document-ready state.",
+    "required_next_work": "Advance to document.sections-headers-footers; no remaining gate for document.images-positioning.",
+    "screenshot": {
+      "path": "output/playwright/ctox-office/comparison/document.images-positioning/differential-terminal-images-positioning.png",
+      "sha256": "303b7b1b12597c1ba59962c136cb5df8bd1661044b09713721ee8c62c52929ac"
+    },
+    "rust_prepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.images-positioning/ctox-rust.Editor.bin",
+      "bytes": 37284,
+      "sha256": "31313e80bc3a3e7ed5a49e3b9eaa932fe88fe05d3c1fa42d0372210e241ac3c2",
+      "protocol": "euro-office-word-binary-v10"
+    },
+    "differential_flow": {
+      "status": "passed",
+      "date": "2026-07-12",
+      "flow": "src/apps/business-os/office-engine/oracle/flows/document.images-positioning.playwright.js",
+      "result": "output/playwright/ctox-office/comparison/document.images-positioning/differential-terminal-images-positioning.result.json",
+      "result_sha256": "57a9a201cdda7ae99db7ab177bfbe78d6ddaba28e74d697c7f5291fae353d730",
+      "terminal_state": {
+        "inline_width_mm": 69.9,
+        "inline_height_mm": 34.95,
+        "floating_width_mm": 31.75,
+        "floating_height_mm": 31.75,
+        "floating_wrap": 1,
+        "floating_horizontal_relative_from": 1,
+        "floating_horizontal_value_mm": 76.2,
+        "floating_vertical_relative_from": 6,
+        "floating_vertical_value_mm": 8.89
+      },
+      "oracle_callbacks": [
+        1,
+        6
+      ],
+      "ctox_commit": "passed",
+      "console_errors": 0,
+      "failed_requests": 0
+    },
+    "reopen_and_export": {
+      "status": "passed",
+      "date": "2026-07-12",
+      "ctox_saved_reopen_screenshot": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-saved-reopen-images-positioning.png",
+      "oracle_export_reopen_screenshot": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-export-reopen-oracle-images-positioning.png",
+      "result": "output/playwright/ctox-office/comparison/document.images-positioning/reopen-images-positioning.result.json",
+      "result_sha256": "e27ce844d9b8fb4ee761ffadcc063992ec2626af28eb6770a320858608876e9f",
+      "rust_export": {
+        "command": "cargo run --manifest-path src/core/office-engine/Cargo.toml -- export document output/playwright/ctox-office/rust/document.images-positioning/ctox-saved.Editor.bin tests/fixtures/office/document/images-positioning.docx output/playwright/ctox-office/ctox/document.images-positioning/ctox-canonical.docx",
+        "changed_parts": [
+          "word/document.xml"
+        ],
+        "unchanged_original_parts": 21,
+        "missing_original_parts": [],
+        "added_parts": []
+      }
+    },
+    "native_regression_guard": {
+      "test": "cargo test --manifest-path src/core/office-engine/Cargo.toml --lib document_prepare_preserves_drawing_runs_for_escrow_export",
+      "verified": [
+        "two DOCX w:drawing runs are preserved as DOCY pptxDrawing runs",
+        "each drawing has a non-empty Euro-Office PptxData/ImageShape block",
+        "inline raster id media/image1.png is decoded from PptxData",
+        "floating raster id media/image2.png is decoded from PptxData",
+        "inline extent 1828800x914400 EMU is decoded",
+        "floating extent 1143000x1143000 EMU is decoded",
+        "original-package escrow export keeps CTOX_INLINE_IMAGE_TARGET and CTOX_FLOATING_IMAGE_TARGET"
+      ]
+    },
+    "ctox_only_pptxdata_smoke": {
+      "status": "failed",
+      "date": "2026-07-12",
+      "result": "CTOX ESM runtime reached document-ready with the new PptxData payload, then attempted to load media/image1.png and media/image2.png from the upstream documenteditor path; both returned 404, proving the next blocker is media blob resolution.",
+      "console_errors": [
+        "GET /src/apps/business-os/vendor/ctox-office/upstream/web-apps/apps/documenteditor/main/media/image1.png 404",
+        "GET /src/apps/business-os/vendor/ctox-office/upstream/web-apps/apps/documenteditor/main/media/image2.png 404"
+      ],
+      "screenshot": {
+        "path": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-pptxdata-smoke.png",
+        "sha256": "0e02feabd54c070e683cb0fb492c21cda31a3e927d3af165dc32c7e8c97dae93"
+      }
+    },
+    "ctox_only_media_resolver_smoke": {
+      "status": "passed",
+      "date": "2026-07-12",
+      "result": "CTOX ESM runtime reached document-ready with the real Euro-Office document UI, extracted three DOCX media parts, registered blob URLs for media/image1.png and media/image2.png, made no /media/image*.png HTTP requests, and visibly rendered the inline blue image plus the floating orange image.",
+      "console_errors": 0,
+      "media_http_requests": [],
+      "resolver": {
+        "media_parts_extracted": 3,
+        "registered_keys": [
+          "media/image1.png",
+          "media/media/image1.png",
+          "image1.png",
+          "media/image2.png",
+          "media/media/image2.png",
+          "image2.png"
+        ]
+      },
+      "screenshot": {
+        "path": "output/playwright/ctox-office/comparison/document.images-positioning/ctox-media-resolver-smoke.png",
+        "sha256": "cd1559e02911d7f20b060632feb79cfaefbe7d044ed1192a11e62a4745da965c"
+      }
+    },
+    "latest_infrastructure_attempt": {
+      "status": "invalid",
+      "date": "2026-07-12",
+      "reason": "Temporary Oracle DocumentServer run reached app-ready but not document-ready because the callback/save/download path stayed in error state; this attempt is not differential evidence.",
+      "screenshot": {
+        "path": "output/playwright/ctox-office/comparison/document.images-positioning/debug-after-drawing-run-preserve.png",
+        "sha256": "f2366a374cdd4762d09dfb98d439f9450591c59703bd5ae0f1f12dccb3241b65"
+      }
+    },
+    "remaining_gate": "none for document.images-positioning"
+  }
+}

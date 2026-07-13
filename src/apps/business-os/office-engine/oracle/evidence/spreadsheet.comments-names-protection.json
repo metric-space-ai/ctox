@@ -1,0 +1,102 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.comments-names-protection",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/comments-names-protection.xlsx",
+    "bytes": 6604,
+    "package_parts": 15,
+    "sha256": "c5a7053c0d2a469b80fc27c15bf56409fe412bea250eb20189eb9af2c58f7421",
+    "escrow_marker": "SPREADSHEET_COMMENTS_NAMES_PROTECTION_ESCROW_6E21",
+    "comment": { "cell": "B4", "text": "CTOX_EXISTING_CELL_COMMENT", "author": "CTOX" },
+    "defined_names": ["CTOX_Amount", "CTOX_LocalInput"],
+    "sheet_protected": true,
+    "workbook_protected": true
+  },
+  "expected_semantics": {
+    "comments": ["B4:CTOX_EXISTING_CELL_COMMENT", "C4:CTOX_ADDED_CELL_COMMENT"],
+    "defined_names": ["CTOX_Amount_Reviewed", "CTOX_LocalInput"],
+    "sheet_protected": false,
+    "workbook_protected": false,
+    "vml_note_shapes": 2
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "runtime": "original-documentserver-spreadsheeteditor",
+    "saved_path": "runtime/office-oracle/spreadsheet.comments-names-protection/oracle-saved.xlsx",
+    "saved_bytes": 14400,
+    "saved_sha256": "b3286be616f4354b565a78891232116695bb78a52a543fa9e912194f1de2dea0",
+    "callback_statuses": [1, 2, 6, 2],
+    "comment_name_protection_verified": true,
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "protocol": "euro-office-cell-binary-v10",
+    "protocol_version": 10,
+    "rust_generated": true,
+    "initial_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.comments-names-protection/ctox-rust.Editor.bin",
+      "bytes": 2398,
+      "sha256": "dfcb6b2e0bce934a2582d0cc0f170c073c21e0ca316e1d1edb2648aa97f964c8"
+    },
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.comments-names-protection/ctox-editor.xlsx",
+      "bytes": 6590,
+      "sha256": "5a4bddea2bee51313055876bbf72f01ea12918868eb6ffa254a587c1e0d7cb39",
+      "comments": ["B4:CTOX_EXISTING_CELL_COMMENT", "C4:CTOX_ADDED_CELL_COMMENT"],
+      "defined_names": ["CTOX_LocalInput", "CTOX_Amount_Reviewed"],
+      "sheet_protected": false,
+      "workbook_protected": false
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.comments-names-protection/ctox-canonical.xlsx",
+      "bytes": 6495,
+      "sha256": "57ef7f632860613b57b18daf26e610b9a7636463a75042155b529648ac14a5b2",
+      "package_parts": 15,
+      "changed_parts": ["xl/comments1.xml", "xl/drawings/vmlDrawing1.vml", "xl/workbook.xml", "xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 11,
+      "missing_original_parts": [],
+      "added_parts": [],
+      "vml_note_shapes": 2,
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    },
+    "reprepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.comments-names-protection/ctox-export.Editor.bin",
+      "bytes": 2455,
+      "sha256": "6296e1f84c9b5f69a0d0d67567a17ed4273951ed8c9d452e1f4806e142de5015"
+    },
+    "business_os_mount": {
+      "wrapper": "modules/spreadsheets.mount(ctx)",
+      "command": "office.spreadsheet.commit",
+      "base_version_id": "sheet_business_os_oracle_v1",
+      "transport": "rxdb-webrtc",
+      "until": "terminal",
+      "editor_blob_bytes": 6590,
+      "badge": "Gespeichert"
+    }
+  },
+  "browser_health": {
+    "same_iframe_geometry": { "width": 799.5, "height": 813 },
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.comments-names-protection/differential-terminal-before-save.png", "sha256": "0b3ee9f9be1e344dd652ec177648de9b6796d115840862e04f0b205a5bc97e23" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.comments-names-protection/side-by-side-reopen.png", "sha256": "360196d926a26d7e7d733e31a4dbf0bcb83ef299e6ffdae36db7c93ca5ffa4ec" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.comments-names-protection/business-os-mount-validation.png", "sha256": "5fabe50eadb18c5cce11ca3cd450a8af9240dea30e431c3adc43a38262a6cd29" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/Toolbar.js:1784-1810",
+    "web-apps/apps/spreadsheeteditor/main/app/view/WBProtection.js:114-137",
+    "web-apps/apps/spreadsheeteditor/main/app/controller/WBProtection.js:101-220",
+    "sdkjs/cell/model/Serialize.js:276-345,3765-4012,4957-5026,5363-5456,5599-5710,6849-7045,11195-11283,11694-11745,12659-12795"
+  ]
+}

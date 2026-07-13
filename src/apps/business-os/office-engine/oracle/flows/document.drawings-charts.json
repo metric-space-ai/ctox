@@ -1,0 +1,28 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.drawings-charts",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.drawings-charts",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1600x900 CSS pixels"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.drawings-charts", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready and page count=1" },
+    { "action": "dismiss_transient", "label": "Multipage view", "button": "OK" },
+    { "action": "select_canvas_object", "object": "CTOX_EXISTING_BUSINESS_SHAPE", "coordinates_from": "measured shape bounds" },
+    { "action": "apply_original_runtime_shape_properties", "fill": "F4B183", "rotation_degrees": 90 },
+    { "action": "assert_semantic", "values": { "shape_fill": "F4B183", "shape_rotation_degrees": 90, "shape_text": "CTOX_EXISTING_BUSINESS_SHAPE" } },
+    { "action": "select_canvas_object", "object": "CTOX_CHART_TARGET", "coordinates_from": "measured chart bounds" },
+    { "action": "apply_original_runtime_chart_properties", "width_cm": 14, "height_cm": 7, "style": 102 },
+    { "action": "assert_semantic", "values": { "chart_width_cm": 14, "chart_height_cm": 7, "chart_style": 102, "series": ["Revenue", "Costs"], "categories": ["Q1", "Q2", "Q3"] } },
+    { "action": "assert_preserved", "values": ["PRESERVE_DRAWINGS_CHARTS_UNRELATED_D4A7", "embedded chart workbook"] },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=2/6 and saved=true" },
+    { "action": "native_export", "expected_changed_parts": ["word/document.xml", "word/charts/chart1.xml"] },
+    { "action": "reopen_split_screen", "source": "saved", "expected": "both document-ready" },
+    { "action": "reopen_split_screen", "source": "ctox-export", "expected": "both document-ready" }
+  ]
+}

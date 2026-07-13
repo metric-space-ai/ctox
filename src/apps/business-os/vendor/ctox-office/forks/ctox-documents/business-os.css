@@ -1,0 +1,7 @@
+body[data-ctox-product="ctox-documents"] #file {
+  color: var(--ctox-fork-accent) !important;
+}
+
+body[data-ctox-product="ctox-documents"] #editor-container canvas {
+  image-rendering: auto;
+}

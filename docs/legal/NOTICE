@@ -53,6 +53,14 @@ been retired.
   475cddd5539d8eeb6ec1b86dbe1e57db8d1c03b7. The OSKO-derived code has been
   refactored into its CTOX-native form and is owned and maintained by CTOX.
 
+- src/apps/business-os/office-engine/
+  Contains the CTOX-native browser port boundary for selected Euro-Office
+  document and spreadsheet editor sources. Euro-Office is an AGPL-3.0 fork of
+  ONLYOFFICE. The exact release, submodule revisions, image digest, excluded
+  product surfaces, and update policy are pinned in
+  `office-engine/upstream/euro-office-v9.3.1.json`. The pinned DocumentServer
+  image is a development oracle only and is not part of the CTOX runtime.
+
 The root AGPLv3 LICENSE applies to first-party CTOX repository code unless
 an integrated source subtree or file states otherwise.
 

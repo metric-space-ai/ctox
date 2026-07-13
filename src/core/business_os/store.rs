@@ -352,6 +352,7 @@ pub(crate) struct WorkspaceBrandingProjectionStamp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeSettingsCacheStamp {
     runtime_config: BusinessOsSqliteStoreStamp,
+    office_config: BusinessOsSqliteStoreStamp,
     secrets: BusinessOsSqliteStoreStamp,
     service: RuntimeSettingsServiceStamp,
     update_state: BusinessOsFileChangeStamp,
@@ -791,6 +792,14 @@ pub struct RuntimeSettingsRequest {
     pub max_run_secs: Option<u64>,
     #[serde(default)]
     pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OfficeRuntimeSettingsRequest {
+    #[serde(default)]
+    pub documents_engine: String,
+    #[serde(default)]
+    pub spreadsheets_engine: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -5522,6 +5531,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "error": error.to_string(),
         })
     });
+    let office = load_office_runtime_settings(root)?;
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
         "id": "runtime-settings",
@@ -5533,6 +5543,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "communication_channels": communication_channels,
         "web_stack": web_stack,
         "platform": platform,
+        "office": office,
         "runtime": {
             "source": source,
             "provider": provider,
@@ -5588,10 +5599,103 @@ fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
     let runtime = root.join("runtime");
     RuntimeSettingsCacheStamp {
         runtime_config: business_os_sqlite_store_stamp(&runtime.join("ctox-runtime.sqlite3")),
+        office_config: business_os_sqlite_store_stamp(&runtime.join("ctox-office.sqlite3")),
         secrets: business_os_sqlite_store_stamp(&runtime.join("ctox-secrets.sqlite3")),
         service: runtime_settings_service_stamp(&runtime.join("ctox_service.pid")),
         update_state: business_os_file_change_stamp(&runtime.join("update_state.json")),
     }
+}
+
+fn office_runtime_settings_path(root: &Path) -> PathBuf {
+    root.join("runtime").join("ctox-office.sqlite3")
+}
+
+fn normalize_office_engine(value: &str, kind: &str) -> anyhow::Result<&'static str> {
+    // ctox_office/ctox-office are read-only migration aliases for settings
+    // persisted before Documents and Spreadsheets became separate products.
+    match (kind, value.trim().to_ascii_lowercase().as_str()) {
+        ("document", "" | "ctox_documents" | "ctox-documents" | "ctox_office" | "ctox-office") => {
+            Ok("ctox_documents")
+        }
+        (
+            "spreadsheet",
+            "" | "ctox_spreadsheets" | "ctox-spreadsheets" | "ctox_office" | "ctox-office",
+        ) => Ok("ctox_spreadsheets"),
+        (_, "legacy") => Ok("legacy"),
+        (_, other) => anyhow::bail!("unsupported {kind} office engine: {other}"),
+    }
+}
+
+fn open_office_runtime_settings(root: &Path) -> anyhow::Result<Connection> {
+    let path = office_runtime_settings_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let conn = Connection::open(&path)
+        .with_context(|| format!("open Office runtime settings {}", path.display()))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS office_runtime_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            documents_engine TEXT NOT NULL,
+            spreadsheets_engine TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );",
+    )?;
+    Ok(conn)
+}
+
+fn load_office_runtime_settings(root: &Path) -> anyhow::Result<Value> {
+    let conn = open_office_runtime_settings(root)?;
+    let value = conn
+        .query_row(
+            "SELECT documents_engine, spreadsheets_engine, updated_at_ms
+             FROM office_runtime_settings WHERE id = 1",
+            [],
+            |row| {
+                Ok(serde_json::json!({
+                    "documents_engine": row.get::<_, String>(0)?,
+                    "spreadsheets_engine": row.get::<_, String>(1)?,
+                    "updated_at_ms": row.get::<_, i64>(2)?,
+                    "document_available": true,
+                    "spreadsheet_available": true,
+                    "protocol": super::office_engine::EDITOR_PROTOCOL,
+                    "protocol_version": super::office_engine::EDITOR_PROTOCOL_VERSION,
+                }))
+            },
+        )
+        .optional()?;
+    Ok(value.unwrap_or_else(|| {
+        serde_json::json!({
+            "documents_engine": "ctox_documents",
+            "spreadsheets_engine": "ctox_spreadsheets",
+            "updated_at_ms": 0,
+            "document_available": true,
+            "spreadsheet_available": true,
+            "protocol": super::office_engine::EDITOR_PROTOCOL,
+            "protocol_version": super::office_engine::EDITOR_PROTOCOL_VERSION,
+        })
+    }))
+}
+
+fn save_office_runtime_settings(
+    root: &Path,
+    request: OfficeRuntimeSettingsRequest,
+) -> anyhow::Result<Value> {
+    let documents_engine = normalize_office_engine(&request.documents_engine, "document")?;
+    let spreadsheets_engine = normalize_office_engine(&request.spreadsheets_engine, "spreadsheet")?;
+    let updated_at_ms = now_ms() as i64;
+    let conn = open_office_runtime_settings(root)?;
+    conn.execute(
+        "INSERT INTO office_runtime_settings
+            (id, documents_engine, spreadsheets_engine, updated_at_ms)
+         VALUES (1, ?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET
+            documents_engine = excluded.documents_engine,
+            spreadsheets_engine = excluded.spreadsheets_engine,
+            updated_at_ms = excluded.updated_at_ms",
+        params![documents_engine, spreadsheets_engine, updated_at_ms],
+    )?;
+    load_office_runtime_settings(root)
 }
 
 fn business_os_sqlite_store_stamp(path: &Path) -> BusinessOsSqliteStoreStamp {
@@ -20210,6 +20314,8 @@ fn is_rxdb_control_command_type(command_type: &str) -> bool {
         || command_type.starts_with("ctox.channel.")
         || is_appsec_business_command(command_type)
         || command_type.starts_with("ctox.ticket.")
+        || command_type.starts_with("office.document.")
+        || command_type.starts_with("office.spreadsheet.")
         || super::support::is_support_command(command_type)
         || super::threads::is_threads_command(command_type)
 }
@@ -20949,6 +21055,26 @@ pub fn accept_rxdb_business_command_with_origin(
                 outcome,
             );
         }
+        "ctox.office.settings.save" => {
+            let mutation: OfficeRuntimeSettingsRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.office.settings.save payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::RuntimeManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = save_office_runtime_settings(root, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                Some("runtime-settings"),
+                Some("completed"),
+                serde_json::json!({ "ok": true, "office": outcome }),
+            );
+        }
         "ctox.secret.list" => {
             let session = rxdb_authenticated_session(root, &command)?;
             let decision =
@@ -21079,6 +21205,56 @@ pub fn accept_rxdb_business_command_with_origin(
                 Some("completed"),
                 outcome,
             );
+        }
+        command_type
+            if command_type.starts_with("office.document.")
+                || command_type.starts_with("office.spreadsheet.") =>
+        {
+            let module_id = if command_type.starts_with("office.document.") {
+                "documents"
+            } else {
+                "spreadsheets"
+            };
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                module_policy_decision(root, &session, BusinessOsPermission::DataWrite, module_id)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            match handle_office_control_command(root, &command) {
+                Ok(outcome) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        command.record_id.as_deref(),
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let error_code = if error.to_string().contains("version_conflict") {
+                        "version_conflict"
+                    } else if error.to_string().contains("feature_dependency_pending") {
+                        "feature_dependency_pending"
+                    } else {
+                        "office_engine_failed"
+                    };
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error_code": error_code,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
         }
         command_type if is_customers_active_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
@@ -30651,6 +30827,920 @@ fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<
         },
     )
     .with_context(|| format!("business command not found: {command_id}"))
+}
+
+fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    use super::office_engine::{
+        apply_changes, export, prepare, sha256_hex, ApplyChangesOptions, OfficeKind, PrepareOptions,
+    };
+
+    let (kind, module_id, records_collection, versions_collection, chunks_collection) =
+        if command.command_type.starts_with("office.document.") {
+            (
+                OfficeKind::Document,
+                "documents",
+                "documents",
+                "document_versions",
+                "document_blob_chunks",
+            )
+        } else {
+            (
+                OfficeKind::Spreadsheet,
+                "spreadsheets",
+                "spreadsheets",
+                "spreadsheet_versions",
+                "spreadsheet_blob_chunks",
+            )
+        };
+    anyhow::ensure!(
+        command.module == module_id,
+        "office command module mismatch: expected {module_id}, got {}",
+        command.module
+    );
+    let record_id = first_string_field(
+        &command.payload,
+        &["document_id", "spreadsheet_id", "record_id"],
+    )
+    .or_else(|| command.record_id.clone())
+    .context("office command record id is required")?;
+    let record = load_rxdb_office_document(root, records_collection, &record_id)?
+        .with_context(|| format!("office record not found: {record_id}"))?;
+    let requested_version_id =
+        first_string_field(&command.payload, &["version_id", "base_version_id"]);
+    let version_id = requested_version_id
+        .or_else(|| {
+            record
+                .get("current_version_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .filter(|value| !value.is_empty())
+        .context("office command version id is required")?;
+    let version = load_rxdb_office_document(root, versions_collection, &version_id)?
+        .with_context(|| format!("office version not found: {version_id}"))?;
+
+    match command.command_type.as_str() {
+        "office.document.prepare" | "office.spreadsheet.prepare" => {
+            let source_blob_id = version
+                .get("blob_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("office version has no canonical blob")?;
+            let source = load_rxdb_office_blob(root, chunks_collection, source_blob_id)?;
+            let prepared = prepare(
+                kind,
+                &source,
+                PrepareOptions {
+                    implemented_features: if kind == OfficeKind::Document {
+                        vec![
+                            "document.open-render-zoom".to_string(),
+                            "document.edit-save".to_string(),
+                            "document.undo-clipboard-keyboard".to_string(),
+                            "document.character-paragraph-formatting".to_string(),
+                            "document.styles-lists-numbering".to_string(),
+                            "document.tables".to_string(),
+                            "document.images-positioning".to_string(),
+                            "document.sections-headers-footers".to_string(),
+                            "document.links-bookmarks-fields".to_string(),
+                            "document.comments-track-changes".to_string(),
+                            "document.drawings-charts".to_string(),
+                        ]
+                    } else {
+                        vec!["spreadsheet.open-render-sheets".to_string()]
+                    },
+                },
+            )?;
+            let editor_blob_id = if prepared.editor_payload == source {
+                source_blob_id.to_string()
+            } else {
+                persist_office_editor_blob(
+                    root,
+                    kind,
+                    chunks_collection,
+                    &record_id,
+                    &version_id,
+                    &prepared,
+                )?
+            };
+            let mut next_version = version.clone();
+            let object = next_version
+                .as_object_mut()
+                .context("office version must be an object")?;
+            object.insert(
+                "editor_blob_id".to_string(),
+                Value::String(editor_blob_id.clone()),
+            );
+            object.insert(
+                "editor_protocol".to_string(),
+                Value::String(prepared.protocol.clone()),
+            );
+            object.insert(
+                "editor_protocol_version".to_string(),
+                Value::from(prepared.protocol_version),
+            );
+            object.insert(
+                "source_sha256".to_string(),
+                Value::String(prepared.source_sha256.clone()),
+            );
+            object.insert(
+                "editor_sha256".to_string(),
+                Value::String(prepared.editor_sha256.clone()),
+            );
+            object.insert(
+                "conversion_state".to_string(),
+                Value::String("prepared".to_string()),
+            );
+            object.insert(
+                "implemented_features".to_string(),
+                serde_json::to_value(&prepared.implemented_features)?,
+            );
+            object.insert(
+                "office_manifest".to_string(),
+                serde_json::to_value(&prepared.manifest)?,
+            );
+            object.insert(
+                "editor_manifest".to_string(),
+                serde_json::to_value(&prepared.editor_manifest)?,
+            );
+            object.insert("updated_at_ms".to_string(), Value::from(now_ms() as i64));
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                versions_collection,
+                &version_id,
+                now_ms() as i64,
+                next_version,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "operation": "prepare",
+                "record_id": record_id,
+                "version_id": version_id,
+                "editor_blob_id": editor_blob_id,
+                "editor_protocol": prepared.protocol,
+                "editor_protocol_version": prepared.protocol_version,
+                "source_sha256": prepared.source_sha256,
+                "editor_sha256": prepared.editor_sha256,
+                "manifest": prepared.manifest,
+                "editor_manifest": prepared.editor_manifest,
+                "diagnostics": prepared.diagnostics,
+            }))
+        }
+        "office.document.commit" | "office.spreadsheet.commit" => {
+            let base_version_id = first_string_field(&command.payload, &["base_version_id"])
+                .context("office commit requires base_version_id")?;
+            anyhow::ensure!(
+                base_version_id == version_id,
+                "version_conflict: requested base version differs from loaded version"
+            );
+            let current_version_id = record
+                .get("current_version_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            anyhow::ensure!(
+                current_version_id == base_version_id,
+                "version_conflict: current version is {current_version_id}, expected {base_version_id}"
+            );
+            let editor_blob_id = first_string_field(&command.payload, &["editor_blob_id"])
+                .context("office commit requires editor_blob_id")?;
+            let changed_payload = load_rxdb_office_blob(root, chunks_collection, &editor_blob_id)?;
+            if let Some(expected) = first_string_field(&command.payload, &["editor_sha256"]) {
+                anyhow::ensure!(
+                    sha256_hex(&changed_payload) == expected,
+                    "office staged editor payload hash mismatch"
+                );
+            }
+            let canonical_base_blob_id = version
+                .get("blob_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("base office version has no blob")?;
+            let canonical_base_payload =
+                load_rxdb_office_blob(root, chunks_collection, canonical_base_blob_id)?;
+            let base_editor_blob_id = version
+                .get("editor_blob_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(canonical_base_blob_id);
+            let base_payload = load_rxdb_office_blob(root, chunks_collection, base_editor_blob_id)?;
+            let expected_base_sha256 = version
+                .get("editor_sha256")
+                .or_else(|| version.get("source_sha256"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| sha256_hex(&base_payload));
+            let implemented_features = command
+                .payload
+                .get("implemented_features")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let prepared = apply_changes(
+                kind,
+                &base_payload,
+                &changed_payload,
+                ApplyChangesOptions {
+                    expected_base_sha256,
+                    implemented_features,
+                },
+            )?;
+            let package = export(
+                kind,
+                &prepared.editor_payload,
+                Some(&canonical_base_payload),
+            )?;
+            match kind {
+                super::office_engine::OfficeKind::Document => commit_office_document_version(
+                    root,
+                    command,
+                    &record,
+                    &version,
+                    &base_version_id,
+                    &editor_blob_id,
+                    &package,
+                    &prepared,
+                ),
+                super::office_engine::OfficeKind::Spreadsheet => commit_office_spreadsheet_version(
+                    root,
+                    command,
+                    &record,
+                    &version,
+                    &base_version_id,
+                    &editor_blob_id,
+                    &package,
+                    &prepared,
+                ),
+            }
+        }
+        "office.document.export" | "office.spreadsheet.export" => {
+            let blob_id = version
+                .get("blob_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("office version has no export blob")?;
+            let bytes = load_rxdb_office_blob(root, chunks_collection, blob_id)?;
+            let package = export(kind, &bytes, None)?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "operation": "export",
+                "record_id": record_id,
+                "version_id": version_id,
+                "blob_id": blob_id,
+                "mime_type": package.mime_type,
+                "extension": package.extension,
+                "sha256": package.sha256,
+                "bytes": package.bytes.len(),
+                "manifest": package.manifest,
+                "diagnostics": package.diagnostics,
+            }))
+        }
+        other => anyhow::bail!("unsupported office command type: {other}"),
+    }
+}
+
+fn load_rxdb_office_document(
+    root: &Path,
+    collection: &str,
+    document_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let table = match collection {
+        "documents" => "ctox_business_os__documents__v0",
+        "document_versions" => "ctox_business_os__document_versions__v0",
+        "spreadsheets" => "ctox_business_os__spreadsheets__v0",
+        "spreadsheet_versions" => "ctox_business_os__spreadsheet_versions__v0",
+        _ => anyhow::bail!("unsupported office collection: {collection}"),
+    };
+    let path = rxdb_store_path(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open Office RxDB store {}", path.display()))?;
+    if !sqlite_table_exists(&conn, table)? {
+        return Ok(None);
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            &format!("SELECT data FROM \"{table}\" WHERE id = ?1 AND COALESCE(deleted, 0) = 0"),
+            params![document_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.map(|value| serde_json::from_str(&value).context("decode Office RxDB document"))
+        .transpose()
+}
+
+fn load_rxdb_office_blob(root: &Path, collection: &str, blob_id: &str) -> anyhow::Result<Vec<u8>> {
+    let table = match collection {
+        "document_blob_chunks" => "ctox_business_os__document_blob_chunks__v0",
+        "spreadsheet_blob_chunks" => "ctox_business_os__spreadsheet_blob_chunks__v0",
+        _ => anyhow::bail!("unsupported office blob collection: {collection}"),
+    };
+    let path = rxdb_store_path(root);
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open Office RxDB store {}", path.display()))?;
+    anyhow::ensure!(
+        sqlite_table_exists(&conn, table)?,
+        "office blob table is missing"
+    );
+    let lower = format!("{blob_id}_");
+    let upper = format!("{lower}\u{10ffff}");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT data FROM \"{table}\" WHERE id >= ?1 AND id < ?2 AND COALESCE(deleted, 0) = 0 ORDER BY id"
+    ))?;
+    let rows = stmt.query_map(params![lower, upper], |row| row.get::<_, String>(0))?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        let value: Value = serde_json::from_str(&row?)?;
+        if value.get("blob_id").and_then(Value::as_str) != Some(blob_id) {
+            continue;
+        }
+        chunks.push(value);
+    }
+    chunks.sort_by_key(|value| value.get("idx").and_then(Value::as_u64).unwrap_or(u64::MAX));
+    anyhow::ensure!(!chunks.is_empty(), "office blob has no chunks: {blob_id}");
+    let total = chunks[0]
+        .get("total")
+        .and_then(Value::as_u64)
+        .context("office blob chunk has no total")?;
+    anyhow::ensure!(
+        chunks.len() == total as usize,
+        "office blob is incomplete: {blob_id}"
+    );
+    let mut bytes = Vec::new();
+    for (expected_idx, chunk) in chunks.iter().enumerate() {
+        anyhow::ensure!(
+            chunk.get("idx").and_then(Value::as_u64) == Some(expected_idx as u64)
+                && chunk.get("total").and_then(Value::as_u64) == Some(total),
+            "office blob chunk sequence is invalid: {blob_id}"
+        );
+        let encoded = chunk
+            .get("data")
+            .and_then(Value::as_str)
+            .context("office blob chunk has no data")?;
+        bytes.extend(base64::engine::general_purpose::STANDARD.decode(encoded)?);
+    }
+    Ok(bytes)
+}
+
+fn persist_office_editor_blob(
+    root: &Path,
+    kind: super::office_engine::OfficeKind,
+    chunks_collection: &str,
+    record_id: &str,
+    version_id: &str,
+    prepared: &super::office_engine::PreparedEditorPayload,
+) -> anyhow::Result<String> {
+    let suffix = prepared
+        .editor_sha256
+        .get(..12)
+        .unwrap_or(&prepared.editor_sha256);
+    let blob_id = format!("{version_id}_editor_{suffix}");
+    let total = prepared
+        .editor_payload
+        .len()
+        .div_ceil(DOCUMENT_BLOB_CHUNK_SIZE)
+        .max(1);
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let record_field = match kind {
+        super::office_engine::OfficeKind::Document => "document_id",
+        super::office_engine::OfficeKind::Spreadsheet => "spreadsheet_id",
+    };
+    for (index, chunk) in prepared
+        .editor_payload
+        .chunks(DOCUMENT_BLOB_CHUNK_SIZE)
+        .enumerate()
+    {
+        let chunk_id = format!("{blob_id}_{index:04}");
+        let mut payload = serde_json::json!({
+            "id": chunk_id,
+            "blob_id": blob_id,
+            "version_id": version_id,
+            "idx": index,
+            "total": total,
+            "mime_type": "application/vnd.ctox.euro-office-editor-binary",
+            "encoding": "base64",
+            "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+            "sha256": super::office_engine::sha256_hex(chunk),
+            "created_at_ms": now,
+        });
+        payload
+            .as_object_mut()
+            .expect("editor chunk payload object")
+            .insert(
+                record_field.to_string(),
+                Value::String(record_id.to_string()),
+            );
+        upsert_business_record(&tx, chunks_collection, &chunk_id, now, payload)?;
+    }
+    tx.commit()?;
+    Ok(blob_id)
+}
+
+fn commit_office_document_version(
+    root: &Path,
+    command: &BusinessCommand,
+    record: &Value,
+    base_version: &Value,
+    base_version_id: &str,
+    staged_editor_blob_id: &str,
+    package: &super::office_engine::OfficePackage,
+    prepared: &super::office_engine::PreparedEditorPayload,
+) -> anyhow::Result<Value> {
+    let document_id = record
+        .get("id")
+        .or_else(|| record.get("document_id"))
+        .and_then(Value::as_str)
+        .context("office document id is missing")?;
+    let now = now_ms() as i64;
+    let version_number = base_version
+        .get("version")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        + 1;
+    let command_id = command
+        .id
+        .as_deref()
+        .context("office commit command id is required")?;
+    let version_id = format!(
+        "{document_id}_office_v{version_number}_{}",
+        short_hash(command_id)
+    );
+    let blob_id = format!("{version_id}_blob");
+    let conn = open_store(root)?;
+    let replay: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'document_versions' AND record_id = ?1 AND deleted = 0",
+            params![version_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(replay) = replay {
+        let value: Value = serde_json::from_str(&replay)?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "idempotent_replay": true,
+            "operation": "commit",
+            "document_id": document_id,
+            "base_version_id": base_version_id,
+            "version_id": version_id,
+            "blob_id": value.get("blob_id").and_then(Value::as_str).unwrap_or(&blob_id),
+            "editor_blob_id": value.get("editor_blob_id").and_then(Value::as_str).unwrap_or(&blob_id),
+            "source_sha256": value.get("source_sha256").cloned().unwrap_or(Value::Null),
+            "editor_sha256": value.get("editor_sha256").cloned().unwrap_or(Value::Null),
+            "manifest": value.get("office_manifest").cloned().unwrap_or(Value::Null),
+            "diagnostics": value.get("diagnostics").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    let mut document_payload = record.clone();
+    let document_object = document_payload
+        .as_object_mut()
+        .context("office document payload must be an object")?;
+    document_object.insert(
+        "current_version_id".to_string(),
+        Value::String(version_id.clone()),
+    );
+    document_object.insert("status".to_string(), Value::String("Draft".to_string()));
+    document_object.insert(
+        "source_sha256".to_string(),
+        Value::String(package.sha256.clone()),
+    );
+    document_object.insert(
+        "index_text".to_string(),
+        Value::String(package.manifest.primary_text.chars().take(20_000).collect()),
+    );
+    document_object.insert("updated_at_ms".to_string(), Value::from(now));
+
+    let diagnostics = [prepared.diagnostics.clone(), package.diagnostics.clone()].concat();
+    let version_payload = serde_json::json!({
+        "id": version_id,
+        "version_id": version_id,
+        "document_id": document_id,
+        "version": version_number,
+        "source_kind": "office_edited_docx",
+        "blob_id": blob_id,
+        "base_version_id": base_version_id,
+        "editor_blob_id": staged_editor_blob_id,
+        "staged_editor_blob_id": staged_editor_blob_id,
+        "editor_protocol": prepared.protocol,
+        "editor_protocol_version": prepared.protocol_version,
+        "source_sha256": package.sha256,
+        "editor_sha256": prepared.editor_sha256,
+        "conversion_state": "prepared",
+        "implemented_features": prepared.implemented_features,
+        "office_manifest": package.manifest,
+        "diagnostics": diagnostics,
+        "model_json": {
+            "type": "docx",
+            "text": package.manifest.primary_text.chars().take(20_000).collect::<String>(),
+            "parts": package.manifest.parts.len(),
+        },
+        "business_command_id": command.id,
+        "created_at_ms": now,
+        "updated_at_ms": now,
+    });
+
+    let tx = conn.unchecked_transaction()?;
+    let title = record
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Document");
+    let filename = record
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("document.docx");
+    let created_at_ms = record
+        .get("created_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(now);
+    let tags_json = serde_json::to_string(record.get("tags").unwrap_or(&Value::Null))?;
+    tx.execute(
+        "INSERT INTO business_documents
+            (document_id, title, filename, mime_type, status, document_type, current_version_id,
+             source_sha256, page_count, diagnostics_count, tags_json, index_text, deleted,
+             created_at_ms, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'word_document', ?6, ?7, 0, 0, ?8, ?9, 0, ?10, ?11, ?12)
+         ON CONFLICT(document_id) DO NOTHING",
+        params![
+            document_id,
+            title,
+            filename,
+            super::office_engine::OfficeKind::Document.canonical_mime(),
+            record
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("Draft"),
+            base_version_id,
+            record
+                .get("source_sha256")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            tags_json,
+            record
+                .get("index_text")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            created_at_ms,
+            now,
+            serde_json::to_string(record)?,
+        ],
+    )?;
+    let authoritative_base: String = tx.query_row(
+        "SELECT current_version_id FROM business_documents WHERE document_id = ?1",
+        params![document_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        authoritative_base == base_version_id,
+        "version_conflict: authoritative current version is {authoritative_base}, expected {base_version_id}"
+    );
+
+    let total = package
+        .bytes
+        .len()
+        .div_ceil(DOCUMENT_BLOB_CHUNK_SIZE)
+        .max(1);
+    let mut chunk_projections = Vec::with_capacity(total);
+    for (idx, chunk) in package.bytes.chunks(DOCUMENT_BLOB_CHUNK_SIZE).enumerate() {
+        let chunk_id = format!("{blob_id}_{idx:04}");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(chunk);
+        let payload = serde_json::json!({
+            "id": chunk_id,
+            "blob_id": blob_id,
+            "document_id": document_id,
+            "version_id": version_id,
+            "idx": idx,
+            "total": total,
+            "mime_type": super::office_engine::OfficeKind::Document.canonical_mime(),
+            "encoding": "base64",
+            "data": encoded,
+            "created_at_ms": now,
+        });
+        tx.execute(
+            "INSERT INTO business_document_blob_chunks
+                (chunk_id, blob_id, document_id, version_id, idx, total, mime_type, encoding,
+                 data, deleted, created_at_ms, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'base64', ?8, 0, ?9, ?10)",
+            params![
+                chunk_id,
+                blob_id,
+                document_id,
+                version_id,
+                idx as i64,
+                total as i64,
+                super::office_engine::OfficeKind::Document.canonical_mime(),
+                encoded,
+                now,
+                serde_json::to_string(&payload)?,
+            ],
+        )?;
+        upsert_business_record(&tx, "document_blob_chunks", &chunk_id, now, payload.clone())?;
+        chunk_projections.push((chunk_id, payload));
+    }
+
+    tx.execute(
+        "INSERT INTO business_document_versions
+            (version_id, document_id, version, source_kind, blob_id, diagnostics_json,
+             model_json, deleted, created_at_ms, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, 'office_edited_docx', ?4, ?5, ?6, 0, ?7, ?8, ?9)",
+        params![
+            version_id,
+            document_id,
+            version_number,
+            blob_id,
+            serde_json::to_string(&diagnostics)?,
+            serde_json::to_string(version_payload.get("model_json").unwrap_or(&Value::Null))?,
+            now,
+            now,
+            serde_json::to_string(&version_payload)?,
+        ],
+    )?;
+    upsert_business_record(
+        &tx,
+        "document_versions",
+        &version_id,
+        now,
+        version_payload.clone(),
+    )?;
+    let updated = tx.execute(
+        "UPDATE business_documents
+         SET current_version_id = ?3, status = 'Draft', source_sha256 = ?4,
+             index_text = ?5, updated_at_ms = ?6, payload_json = ?7
+         WHERE document_id = ?1 AND current_version_id = ?2",
+        params![
+            document_id,
+            base_version_id,
+            version_id,
+            package.sha256,
+            package
+                .manifest
+                .primary_text
+                .chars()
+                .take(20_000)
+                .collect::<String>(),
+            now,
+            serde_json::to_string(&document_payload)?,
+        ],
+    )?;
+    anyhow::ensure!(
+        updated == 1,
+        "version_conflict: document changed during commit"
+    );
+    upsert_business_record(&tx, "documents", document_id, now, document_payload.clone())?;
+    tx.commit()?;
+
+    // Office commits are terminal control commands, so their new version and
+    // blob must be visible over RxDB/WebRTC when the terminal command result
+    // is observed. The periodic generic projector remains the reconciliation
+    // path, while these direct writes close the command/projection race.
+    for (chunk_id, payload) in chunk_projections {
+        upsert_rxdb_collection_record(root, "document_blob_chunks", &chunk_id, now, payload)?;
+    }
+    upsert_rxdb_collection_record(root, "document_versions", &version_id, now, version_payload)?;
+    upsert_rxdb_collection_record(root, "documents", document_id, now, document_payload)?;
+
+    let mut statement = conn.prepare(
+        "SELECT data FROM business_document_blob_chunks
+         WHERE blob_id = ?1 AND deleted = 0 ORDER BY idx",
+    )?;
+    let encoded_chunks = statement.query_map(params![blob_id], |row| row.get::<_, String>(0))?;
+    let mut verified_bytes = Vec::with_capacity(package.bytes.len());
+    for encoded in encoded_chunks {
+        verified_bytes.extend(base64::engine::general_purpose::STANDARD.decode(encoded?)?);
+    }
+    anyhow::ensure!(
+        verified_bytes.len() == package.bytes.len()
+            && super::office_engine::sha256_hex(&verified_bytes) == package.sha256,
+        "office commit integrity verification failed for {blob_id}"
+    );
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "operation": "commit",
+        "document_id": document_id,
+        "base_version_id": base_version_id,
+        "version_id": version_id,
+        "blob_id": blob_id,
+        "editor_blob_id": blob_id,
+        "source_sha256": package.sha256,
+        "editor_sha256": prepared.editor_sha256,
+        "bytes": package.bytes.len(),
+        "chunks": total,
+        "manifest": package.manifest,
+        "diagnostics": diagnostics,
+    }))
+}
+
+fn commit_office_spreadsheet_version(
+    root: &Path,
+    command: &BusinessCommand,
+    record: &Value,
+    base_version: &Value,
+    base_version_id: &str,
+    staged_editor_blob_id: &str,
+    package: &super::office_engine::OfficePackage,
+    prepared: &super::office_engine::PreparedEditorPayload,
+) -> anyhow::Result<Value> {
+    let spreadsheet_id = record
+        .get("id")
+        .or_else(|| record.get("spreadsheet_id"))
+        .and_then(Value::as_str)
+        .context("office spreadsheet id is missing")?;
+    let command_id = command
+        .id
+        .as_deref()
+        .context("office commit command id is required")?;
+    let now = now_ms() as i64;
+    let version_number = base_version
+        .get("version")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        + 1;
+    let version_id = format!(
+        "{spreadsheet_id}_office_v{version_number}_{}",
+        short_hash(command_id)
+    );
+    let blob_id = format!("{version_id}_blob");
+    let conn = open_store(root)?;
+    let replay: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'spreadsheet_versions' AND record_id = ?1 AND deleted = 0",
+            params![version_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(replay) = replay {
+        let value: Value = serde_json::from_str(&replay)?;
+        return Ok(serde_json::json!({
+            "ok": true, "idempotent_replay": true, "operation": "commit",
+            "spreadsheet_id": spreadsheet_id, "base_version_id": base_version_id,
+            "version_id": version_id,
+            "blob_id": value.get("blob_id").and_then(Value::as_str).unwrap_or(&blob_id),
+            "editor_blob_id": value.get("editor_blob_id").and_then(Value::as_str).unwrap_or(&blob_id),
+            "source_sha256": value.get("source_sha256").cloned().unwrap_or(Value::Null),
+            "editor_sha256": value.get("editor_sha256").cloned().unwrap_or(Value::Null),
+            "manifest": value.get("office_manifest").cloned().unwrap_or(Value::Null),
+            "diagnostics": value.get("diagnostics").cloned().unwrap_or(Value::Null),
+        }));
+    }
+
+    let mut spreadsheet_payload = record.clone();
+    let spreadsheet_object = spreadsheet_payload
+        .as_object_mut()
+        .context("office spreadsheet payload must be an object")?;
+    spreadsheet_object.insert(
+        "current_version_id".into(),
+        Value::String(version_id.clone()),
+    );
+    spreadsheet_object.insert("status".into(), Value::String("Draft".into()));
+    spreadsheet_object.insert(
+        "source_sha256".into(),
+        Value::String(package.sha256.clone()),
+    );
+    spreadsheet_object.insert(
+        "index_text".into(),
+        Value::String(package.manifest.primary_text.chars().take(20_000).collect()),
+    );
+    spreadsheet_object.insert("updated_at_ms".into(), Value::from(now));
+    let diagnostics = [prepared.diagnostics.clone(), package.diagnostics.clone()].concat();
+    let version_payload = serde_json::json!({
+        "id": version_id, "version_id": version_id, "spreadsheet_id": spreadsheet_id,
+        "version": version_number, "source_kind": "office_edited_xlsx", "blob_id": blob_id,
+        "base_version_id": base_version_id, "editor_blob_id": staged_editor_blob_id,
+        "staged_editor_blob_id": staged_editor_blob_id, "editor_protocol": prepared.protocol,
+        "editor_protocol_version": prepared.protocol_version, "source_sha256": package.sha256,
+        "editor_sha256": prepared.editor_sha256, "conversion_state": "prepared",
+        "implemented_features": prepared.implemented_features, "office_manifest": package.manifest,
+        "diagnostics": diagnostics,
+        "model_json": {
+            "type": "xlsx",
+            "text": package.manifest.primary_text.chars().take(20_000).collect::<String>(),
+            "parts": package.manifest.parts.len()
+        },
+        "business_command_id": command.id, "created_at_ms": now, "updated_at_ms": now
+    });
+
+    let tx = conn.unchecked_transaction()?;
+    let stored: Option<String> = tx
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'spreadsheets' AND record_id = ?1 AND deleted = 0",
+            params![spreadsheet_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let authoritative = stored
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()?
+        .unwrap_or_else(|| record.clone());
+    let authoritative_base = authoritative
+        .get("current_version_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        authoritative_base == base_version_id,
+        "version_conflict: authoritative current version is {authoritative_base}, expected {base_version_id}"
+    );
+
+    let total = package
+        .bytes
+        .len()
+        .div_ceil(DOCUMENT_BLOB_CHUNK_SIZE)
+        .max(1);
+    let mut chunk_projections = Vec::with_capacity(total);
+    for (idx, chunk) in package.bytes.chunks(DOCUMENT_BLOB_CHUNK_SIZE).enumerate() {
+        let chunk_id = format!("{blob_id}_{idx:04}");
+        let payload = serde_json::json!({
+            "id": chunk_id, "blob_id": blob_id, "spreadsheet_id": spreadsheet_id,
+            "version_id": version_id, "idx": idx, "total": total,
+            "mime_type": super::office_engine::OfficeKind::Spreadsheet.canonical_mime(),
+            "encoding": "base64", "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+            "created_at_ms": now
+        });
+        upsert_business_record(
+            &tx,
+            "spreadsheet_blob_chunks",
+            &chunk_id,
+            now,
+            payload.clone(),
+        )?;
+        chunk_projections.push((chunk_id, payload));
+    }
+    upsert_business_record(
+        &tx,
+        "spreadsheet_versions",
+        &version_id,
+        now,
+        version_payload.clone(),
+    )?;
+    upsert_business_record(
+        &tx,
+        "spreadsheets",
+        spreadsheet_id,
+        now,
+        spreadsheet_payload.clone(),
+    )?;
+    tx.commit()?;
+
+    for (chunk_id, payload) in chunk_projections {
+        upsert_rxdb_collection_record(root, "spreadsheet_blob_chunks", &chunk_id, now, payload)?;
+    }
+    upsert_rxdb_collection_record(
+        root,
+        "spreadsheet_versions",
+        &version_id,
+        now,
+        version_payload,
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "spreadsheets",
+        spreadsheet_id,
+        now,
+        spreadsheet_payload,
+    )?;
+
+    let conn = open_store(root)?;
+    let lower = format!("{blob_id}_");
+    let upper = format!("{lower}\u{10ffff}");
+    let mut statement = conn.prepare(
+        "SELECT payload_json FROM business_records
+         WHERE collection = 'spreadsheet_blob_chunks' AND record_id >= ?1 AND record_id < ?2
+           AND deleted = 0 ORDER BY record_id",
+    )?;
+    let rows = statement.query_map(params![lower, upper], |row| row.get::<_, String>(0))?;
+    let mut verified_bytes = Vec::with_capacity(package.bytes.len());
+    for row in rows {
+        let payload: Value = serde_json::from_str(&row?)?;
+        let encoded = payload
+            .get("data")
+            .and_then(Value::as_str)
+            .context("spreadsheet blob chunk has no data")?;
+        verified_bytes.extend(base64::engine::general_purpose::STANDARD.decode(encoded)?);
+    }
+    anyhow::ensure!(
+        verified_bytes.len() == package.bytes.len()
+            && super::office_engine::sha256_hex(&verified_bytes) == package.sha256,
+        "office commit integrity verification failed for {blob_id}"
+    );
+    Ok(serde_json::json!({
+        "ok": true, "operation": "commit", "spreadsheet_id": spreadsheet_id,
+        "base_version_id": base_version_id, "version_id": version_id, "blob_id": blob_id,
+        "editor_blob_id": staged_editor_blob_id, "source_sha256": package.sha256,
+        "editor_sha256": prepared.editor_sha256, "bytes": package.bytes.len(), "chunks": total,
+        "manifest": package.manifest, "diagnostics": diagnostics
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57260,6 +58350,226 @@ mod tests {
         assert_eq!(cli_read, bc_read);
         assert_eq!(cli_read["attribute"]["value"], serde_json::json!(21.0));
         assert_eq!(cli_read["attribute"]["timestamp"], serde_json::json!(2000));
+        Ok(())
+    }
+
+    #[test]
+    fn office_runtime_defaults_to_ctox_and_keeps_typed_legacy_rollback() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let defaults = load_office_runtime_settings(root.path())?;
+        assert_eq!(
+            defaults.get("documents_engine").and_then(Value::as_str),
+            Some("ctox_documents")
+        );
+        assert_eq!(
+            defaults.get("spreadsheets_engine").and_then(Value::as_str),
+            Some("ctox_spreadsheets")
+        );
+        assert_eq!(
+            defaults.get("document_available").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            defaults
+                .get("spreadsheet_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let rollback = save_office_runtime_settings(
+            root.path(),
+            OfficeRuntimeSettingsRequest {
+                documents_engine: "legacy".into(),
+                spreadsheets_engine: "legacy".into(),
+            },
+        )?;
+        assert_eq!(
+            rollback.get("documents_engine").and_then(Value::as_str),
+            Some("legacy")
+        );
+        assert_eq!(
+            rollback.get("spreadsheets_engine").and_then(Value::as_str),
+            Some("legacy")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn office_commits_survive_store_reopen_and_spreadsheets_never_write_document_collections(
+    ) -> anyhow::Result<()> {
+        use super::super::office_engine::{export, prepare, OfficeKind, PrepareOptions};
+
+        let root = tempfile::tempdir()?;
+        let source =
+            include_bytes!("../../../tests/fixtures/office/spreadsheet/open-render-sheets.xlsx");
+        let prepared = prepare(
+            OfficeKind::Spreadsheet,
+            source,
+            PrepareOptions {
+                implemented_features: vec!["spreadsheet.open-render-sheets".to_string()],
+            },
+        )?;
+        let package = export(
+            OfficeKind::Spreadsheet,
+            &prepared.editor_payload,
+            Some(source),
+        )?;
+        let record = serde_json::json!({
+            "id": "sheet_restart", "title": "Restart workbook", "filename": "restart.xlsx",
+            "mime_type": OfficeKind::Spreadsheet.canonical_mime(), "status": "Imported",
+            "current_version_id": "sheet_restart_v1", "source_sha256": prepared.source_sha256,
+            "tags": [], "index_text": "Restart workbook", "created_at_ms": 1, "updated_at_ms": 1
+        });
+        let base_version = serde_json::json!({
+            "id": "sheet_restart_v1", "spreadsheet_id": "sheet_restart", "version": 1,
+            "blob_id": "sheet_restart_blob", "editor_blob_id": "sheet_restart_editor",
+            "editor_sha256": prepared.editor_sha256, "created_at_ms": 1, "updated_at_ms": 1
+        });
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(&conn, "spreadsheets", "sheet_restart", 1, record.clone())?;
+            upsert_business_record(
+                &conn,
+                "spreadsheet_versions",
+                "sheet_restart_v1",
+                1,
+                base_version.clone(),
+            )?;
+        }
+
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_sheet_restart_commit".into()),
+            module: "spreadsheets".into(),
+            command_type: "office.spreadsheet.commit".into(),
+            record_id: Some("sheet_restart".into()),
+            payload: Value::Null,
+            client_context: Value::Null,
+        };
+        let outcome = commit_office_spreadsheet_version(
+            root.path(),
+            &command,
+            &record,
+            &base_version,
+            "sheet_restart_v1",
+            "sheet_restart_editor",
+            &package,
+            &prepared,
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            outcome.get("spreadsheet_id").and_then(Value::as_str),
+            Some("sheet_restart")
+        );
+        let committed_version = outcome
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("committed spreadsheet version")?;
+        let conn = open_store(root.path())?;
+        let spreadsheet: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'spreadsheets' AND record_id = 'sheet_restart'", [], |row| row.get(0),
+        )?;
+        let spreadsheet: Value = serde_json::from_str(&spreadsheet)?;
+        assert_eq!(
+            spreadsheet
+                .get("current_version_id")
+                .and_then(Value::as_str),
+            Some(committed_version)
+        );
+        let spreadsheet_versions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = 'spreadsheet_versions' AND record_id = ?1", params![committed_version], |row| row.get(0),
+        )?;
+        let leaked_document_versions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = 'document_versions' AND record_id = ?1", params![committed_version], |row| row.get(0),
+        )?;
+        assert_eq!(spreadsheet_versions, 1);
+        assert_eq!(leaked_document_versions, 0);
+        drop(conn);
+
+        let replay = commit_office_spreadsheet_version(
+            root.path(),
+            &command,
+            &record,
+            &base_version,
+            "sheet_restart_v1",
+            "sheet_restart_editor",
+            &package,
+            &prepared,
+        )?;
+        assert_eq!(
+            replay.get("idempotent_replay").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let document_source =
+            include_bytes!("../../../tests/fixtures/office/document/open-render-zoom.docx");
+        let document_prepared = prepare(
+            OfficeKind::Document,
+            document_source,
+            PrepareOptions {
+                implemented_features: vec!["document.open-render-zoom".to_string()],
+            },
+        )?;
+        let document_package = export(
+            OfficeKind::Document,
+            &document_prepared.editor_payload,
+            Some(document_source),
+        )?;
+        let document_record = serde_json::json!({
+            "id": "doc_restart", "title": "Restart document", "filename": "restart.docx",
+            "mime_type": OfficeKind::Document.canonical_mime(), "document_type": "word_document",
+            "status": "Imported", "current_version_id": "doc_restart_v1",
+            "source_sha256": document_prepared.source_sha256, "tags": [], "index_text": "Restart document",
+            "created_at_ms": 1, "updated_at_ms": 1
+        });
+        let document_base = serde_json::json!({
+            "id": "doc_restart_v1", "document_id": "doc_restart", "version": 1,
+            "blob_id": "doc_restart_blob", "editor_blob_id": "doc_restart_editor",
+            "editor_sha256": document_prepared.editor_sha256, "created_at_ms": 1, "updated_at_ms": 1
+        });
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(
+                &conn,
+                "documents",
+                "doc_restart",
+                1,
+                document_record.clone(),
+            )?;
+            upsert_business_record(
+                &conn,
+                "document_versions",
+                "doc_restart_v1",
+                1,
+                document_base.clone(),
+            )?;
+        }
+        let document_command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_restart_commit".into()),
+            module: "documents".into(),
+            command_type: "office.document.commit".into(),
+            record_id: Some("doc_restart".into()),
+            payload: Value::Null,
+            client_context: Value::Null,
+        };
+        let document_outcome = commit_office_document_version(
+            root.path(),
+            &document_command,
+            &document_record,
+            &document_base,
+            "doc_restart_v1",
+            "doc_restart_editor",
+            &document_package,
+            &document_prepared,
+        )?;
+        assert_eq!(
+            document_outcome.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            document_outcome.get("document_id").and_then(Value::as_str),
+            Some("doc_restart")
+        );
         Ok(())
     }
 }

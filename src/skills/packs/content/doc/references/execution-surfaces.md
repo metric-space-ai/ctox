@@ -6,34 +6,40 @@ oracle_captured → frontend_ported → rust_ported → differential_passed →
 shipped). A task class is usable when its feature group is `shipped`;
 `differential_passed` allows use behind the same rollout flag as the editor
 itself. Planned engine ops are usable when the op exists in
-`ctox-office-engine` (CLI) / `business_commands`.
+`ctox-office-engine` (CLI). The browser editor uses the separate typed
+`office.document.prepare|commit|export` lifecycle commands. Native batch ops
+must not be described as Business OS commands until they are registered in
+the server-authoritative command inventory and policy.
 
 Update this file when features.json statuses change or ops land; do not let
 the skill promise operations the build cannot perform.
 
 ## Editor-flow surface (layout-affecting)
 
-| Operation class | Feature group | Status (2026-07-11, re-baselined) |
+| Operation class | Feature group | Status |
 |---|---|---|
-| Open, render pages, zoom (visual QA) | `document.open-render-zoom` | oracle_captured |
-| Author/edit text, save | `document.edit-save` | oracle_captured |
-| Undo, clipboard, keyboard | `document.undo-clipboard-keyboard` | oracle_captured |
-| Character/paragraph formatting | `document.character-paragraph-formatting` | oracle_captured |
-| Styles, lists, real numbering | `document.styles-lists-numbering` | oracle_captured |
-| Tables (create, geometry, layout) | `document.tables` | oracle_captured |
-| Images and positioning | `document.images-positioning` | oracle_captured |
-| Sections, headers, footers | `document.sections-headers-footers` | oracle_captured |
-| Links, bookmarks, fields, TOC | `document.links-bookmarks-fields` | oracle_captured |
-| Tracked changes / comments in context | `document.comments-track-changes` | oracle_captured |
-| Drawings and charts | `document.drawings-charts` | oracle_captured |
+| Open, render pages, zoom (visual QA) | `document.open-render-zoom` | differential_passed |
+| Author/edit text, save | `document.edit-save` | differential_passed |
+| Undo, clipboard, keyboard | `document.undo-clipboard-keyboard` | differential_passed |
+| Character/paragraph formatting | `document.character-paragraph-formatting` | differential_passed |
+| Styles, lists, real numbering | `document.styles-lists-numbering` | differential_passed |
+| Tables (create, geometry, layout) | `document.tables` | differential_passed |
+| Images and positioning | `document.images-positioning` | differential_passed |
+| Sections, headers, footers | `document.sections-headers-footers` | differential_passed |
+| Links, bookmarks, fields, TOC | `document.links-bookmarks-fields` | differential_passed |
+| Tracked changes / comments in context | `document.comments-track-changes` | differential_passed |
+| Drawings and charts | `document.drawings-charts` | differential_passed |
+| Full DOCX round-trip corpus (release gate) | `document.docx-roundtrip-corpus` | differential_passed |
 
 Verify with `node src/scripts/check-office-skill-gating.mjs` after edits.
 
-## Native batch operations (deterministic OOXML, planned ctox-office-engine ops)
+## Native batch operations (deterministic OOXML)
 
-| Operation | Op (planned name) | Status (2026-07-11) |
+| Operation | Op | Status |
 |---|---|---|
 | Inspect package (manifest, parts, structure) | `inspect` | available |
+| Prepare source package as editor payload | `prepare-editor` | available |
+| Inspect a prepared editor payload | `inspect-editor` | available |
 | Export (byte-preserving round-trip/merge) | `export` | available |
 | Accept all tracked changes | `tracked-changes-accept` | **available** |
 | Reject all tracked changes (refuses `*PrChange`) | `tracked-changes-reject` | **available** |

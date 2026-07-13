@@ -1,0 +1,159 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.edit-save",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/edit-save.docx",
+    "bytes": 36863,
+    "sha256": "26cbc4974cb1ab2dbc8bb8ca64809b92b8e01fbdf40c6955a62d863bc517ecdd",
+    "edit_target": "CTOX_EDIT_TARGET_ALPHA",
+    "replacement": "CTOX_EDIT_RESULT_BRAVO_42",
+    "preservation_marker": "PRESERVE_THIS_UNRELATED_PARAGRAPH_7B21"
+  },
+  "browser": {
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "device_scale_factor": 2,
+    "locale": "de-DE"
+  },
+  "differential_browser": {
+    "viewport_css_px": { "width": 1600, "height": 900 },
+    "equal_editor_canvas_css_px": { "width": 687, "height": 617 },
+    "side_by_side_gate": "passed",
+    "coordinate_source": "measured #id_viewer_overlay rectangle"
+  },
+  "interaction": [
+    "Open the deterministic DOCX in desktop edit mode.",
+    "Click the target paragraph using coordinates derived from the measured page rectangle.",
+    "Press End and Shift+Home to select the complete marker line.",
+    "Type CTOX_EDIT_RESULT_BRAVO_42 and verify the editor becomes dirty.",
+    "Activate Save and wait for a successful force-save callback.",
+    "Reopen the saved package and verify the replacement and preservation marker."
+  ],
+  "expected_visible_state": {
+    "initial_marker": "CTOX_EDIT_TARGET_ALPHA",
+    "replacement_marker": "CTOX_EDIT_RESULT_BRAVO_42",
+    "preservation_marker": "PRESERVE_THIS_UNRELATED_PARAGRAPH_7B21",
+    "terminal_page": 1,
+    "terminal_pages": 1
+  },
+  "expected_semantic_state": {
+    "editor_mode": "edit",
+    "dirty_after_input": true,
+    "dirty_after_save": false,
+    "version_advanced": true,
+    "save_callback_status": 6,
+    "reopen_passed": true,
+    "primary_text_contains": [
+      "CTOX_EDIT_RESULT_BRAVO_42",
+      "PRESERVE_THIS_UNRELATED_PARAGRAPH_7B21"
+    ],
+    "primary_text_excludes": ["CTOX_EDIT_TARGET_ALPHA"]
+  },
+  "expected_ooxml": {
+    "required_parts": [
+      "[Content_Types].xml",
+      "_rels/.rels",
+      "word/document.xml",
+      "word/_rels/document.xml.rels",
+      "word/styles.xml",
+      "word/settings.xml"
+    ],
+    "ctox_changed_parts": ["word/document.xml"],
+    "ctox_unchanged_parts": 16,
+    "ctox_total_original_parts": 17,
+    "missing_original_parts": [],
+    "added_parts": [],
+    "preserve_unrelated_parts": true
+  },
+  "source_anchors": [
+    "sdkjs/word/Editor/Document.js:9985-10032",
+    "sdkjs/word/api.js:1068-1075",
+    "sdkjs/word/api.js:12773-12839",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1225-1231",
+    "web-apps/apps/documenteditor/main/app/controller/Main.js:554",
+    "web-apps/apps/documenteditor/main/app/controller/Main.js:1469-1472",
+    "web-apps/apps/documenteditor/main/app/controller/Main.js:2027",
+    "web-apps/apps/common/Gateway.js:298"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.edit-save/oracle-before.png", "sha256": "13cc6472f6853780c8018eab08a097cfd05a8a899b5f11f765a83bc1ace9036a" },
+    { "path": "output/playwright/ctox-office/oracle/document.edit-save/oracle-after-edit-v2.png", "sha256": "297d73e7935fbeab36a9ac11663d03b8bba8e3af5a2cfa3d3cb119cd37f5c20e" },
+    { "path": "output/playwright/ctox-office/oracle/document.edit-save/oracle-reopen.png", "sha256": "4ba53d37c0c62a7fa46e1a2b5b4b6343e8d1477dbfb0a8e347f2f6d05e32d444" },
+    { "path": "output/playwright/ctox-office/comparison/document.edit-save/split-style-parity-v2.png", "sha256": "c42602a8157bd3061e06e9f529f7ff30f02582ac8e160fef246d93050a8cc36e" },
+    { "path": "output/playwright/ctox-office/comparison/document.edit-save/differential-after-edit-save.png", "sha256": "96c2cf213999756be6d9bc7d5ddbf609d7f7fea334c485f122b0648cdadb0a7d" }
+  ],
+  "oracle_export": {
+    "bytes": 40136,
+    "sha256": "1d9943e4ad3ade8a184fa231829964b0ccce08f8a2cc47fe2d976c976f7f332c",
+    "callback_statuses": [1, 6],
+    "reopen_in_oracle": "passed"
+  },
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "runtime": "ctox-documents-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-word-binary-v10",
+    "editor_protocol_version": 10,
+    "implemented_features": ["document.open-render-zoom", "document.edit-save"],
+    "inspection_after_edit": {
+      "open": true,
+      "dirty": true,
+      "read_only": false,
+      "page_count": 1,
+      "current_page": 1,
+      "zoom_percent": 100
+    },
+    "inspection_after_save": {
+      "open": true,
+      "dirty": false,
+      "read_only": false,
+      "version_id": "doc_oracle_edit_v2"
+    },
+    "editor_export": {
+      "prepared_bytes": 821,
+      "prepared_sha256": "f2e5c341c5a06381f7010041755322719ff75a55bb4e95976aa318a8a6ee8eeb",
+      "saved_bytes": 243910,
+      "saved_sha256": "2c23f0f728ddac7cdcac0bb4e04b8aaf0917f867103f62867bd515de9cc154a9"
+    },
+    "canonical_export": {
+      "bytes": 35367,
+      "sha256": "4502a2141da9e14292078bd877b5b1c8f7ddfd620176a30bea8180ccf7bcaced",
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 16,
+      "missing_original_parts": [],
+      "added_parts": [],
+      "reopen_in_ctox": "passed",
+      "reopen_in_oracle": "passed"
+    },
+    "browser_health": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0,
+      "clean_profile_flow_passed": true,
+      "http_business_data_routes": false
+    },
+    "screenshots": [
+      { "path": "output/playwright/ctox-office/ctox/document.edit-save/ctox-after-edit.png", "sha256": "ccb21a94b067b85643941809cfc1fa42fd414d356e0913467760ecb6bf054035" },
+      { "path": "output/playwright/ctox-office/ctox/document.edit-save/ctox-reopen.png", "sha256": "ad6e20b945f74a744dc74acd1163848fda91057f6b2777e38fca66c6a9ab3e09" },
+      { "path": "output/playwright/ctox-office/ctox/document.edit-save/ctox-export-oracle-reopen.png", "sha256": "1fbf359f1ad1ad1933298e8974b6945c601f4e65f4464da90da87442064ec2ad" },
+      { "path": "output/playwright/ctox-office/comparison/document.edit-save/ctox-canonical-oracle-reopen.png", "sha256": "2a8dce5ecdfaa78ded7e2f0254affdfd91613154c5dc8577b76456de33534618" }
+    ],
+    "differential_flow": "oracle/flows/document.edit-save.playwright.js"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": "ctox-office-rollout-v2",
+  "default_engines": {
+    "document": "ctox_documents",
+    "spreadsheet": "ctox_spreadsheets"
+  },
+  "pre_switch_baseline": {
+    "last_published_release_version": "0.3.27",
+    "last_published_release_git_revision": "a96734e3e6ff5250bbd3a70485d4757d16d7fe88",
+    "last_published_release_url": "https://github.com/metric-space-ai/ctox/releases/tag/v0.3.27",
+    "highest_existing_tag_version": "0.3.31",
+    "highest_existing_tag_git_revision": "8350c95e1272a619a26729c68f5f082ca5ab2d96",
+    "highest_existing_tag_url": "https://github.com/metric-space-ai/ctox/releases/tag/v0.3.31"
+  },
+  "default_switch_release": null,
+  "minimum_stable_releases_after_switch": 1,
+  "qualifying_releases": [],
+  "legacy_removal_authorized": false,
+  "feature_status_before_authorization": "differential_passed",
+  "feature_status_after_authorization": "shipped",
+  "required_release_gates": [
+    "office-feature-matrix-24-of-24",
+    "office-document-midflight-restart-browser-to-rust",
+    "office-spreadsheet-midflight-restart-browser-to-rust",
+    "document-docx-roundtrip-corpus",
+    "spreadsheet-xlsx-roundtrip-corpus"
+  ],
+  "release_evidence_contract": {
+    "required_fields": [
+      "version",
+      "git_revision",
+      "released_at",
+      "release_workflow_url",
+      "office_document_restart_matrix_sha256",
+      "office_spreadsheet_restart_matrix_sha256",
+      "docx_corpus_evidence_sha256",
+      "xlsx_corpus_evidence_sha256"
+    ],
+    "default_switch_release_required_fields": [
+      "version",
+      "git_revision",
+      "released_at",
+      "release_workflow_url",
+      "office_document_restart_matrix_sha256",
+      "office_spreadsheet_restart_matrix_sha256"
+    ],
+    "requires_green_release_workflow": true,
+    "requires_zero_retry_office_restart_gates": true
+  }
+}

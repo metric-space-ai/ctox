@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CTOX Euro-Office Spreadsheet Port Smoke</title>
+  <style>
+    html, body, iframe { width: 100%; height: 100%; margin: 0; border: 0; }
+    body { overflow: hidden; }
+    #status {
+      position: fixed;
+      z-index: 100000;
+      right: 12px;
+      top: 8px;
+      padding: 5px 9px;
+      border-radius: 4px;
+      color: #fff;
+      background: #18231f;
+      font: 12px/1.2 ui-monospace, monospace;
+    }
+  </style>
+</head>
+<body>
+  <output id="status">loading-upstream</output>
+  <iframe id="editor" title="Euro Office spreadsheet Oracle"></iframe>
+  <script type="module">
+    const status = document.querySelector('#status');
+    const editor = document.querySelector('#editor');
+    const frameEditorId = 'ctox-upstream-spreadsheet-smoke';
+    const entry = new URL('/runtime/office-port-build/web-apps/apps/spreadsheeteditor/main/index.html', location.origin);
+    entry.searchParams.set('lang', 'de');
+    entry.searchParams.set('frameEditorId', frameEditorId);
+    entry.searchParams.set('parentOrigin', location.origin);
+    editor.src = entry.href;
+
+    const send = (command, data) => editor.contentWindow.postMessage(
+      JSON.stringify({ command, data }),
+      location.origin,
+    );
+    window.addEventListener('message', async (event) => {
+      if (event.origin !== location.origin || event.source !== editor.contentWindow) return;
+      let message = event.data;
+      if (typeof message === 'string') {
+        try { message = JSON.parse(message); } catch { return; }
+      }
+      if (!message || message.frameEditorId !== frameEditorId) return;
+      if (message.event === 'onAppReady') {
+        status.textContent = 'upstream-app-ready';
+        const upstream = editor.contentWindow;
+        const response = await fetch('/runtime/office-port-build/ctox-open-render.Editor.bin');
+        upstream.__ctoxEditorBinary = new Uint8Array(await response.arrayBuffer());
+        upstream.Asc.spreadsheet_api.prototype.asc_LoadDocument = function () {
+          this.asc_openDocumentFromBytes(upstream.__ctoxEditorBinary);
+        };
+        upstream.Asc.spreadsheet_api.prototype.asc_getEditorPermissions = function () {
+          const result = {
+            asc_getLicenseType: () => upstream.Asc.c_oLicenseResult.Success,
+            asc_getRights: () => upstream.Asc.c_oRights.Edit,
+            asc_getBuildVersion: () => '4.3.0',
+            asc_getBuildNumber: () => '0',
+            asc_getIsLight: () => false,
+            asc_getLiveViewerSupport: () => false,
+            asc_getIsAnalyticsEnable: () => false,
+            asc_getCanBranding: () => false,
+            asc_getCustomization: () => false,
+            asc_getLicenseMode: () => 0,
+            asc_getIsBeta: () => false,
+          };
+          this.sendEvent('asc_onGetEditorPermissions', result);
+        };
+        send('init', {
+          config: {
+            mode: 'edit',
+            lang: 'de',
+            region: 'de-DE',
+            targetApp: 'web',
+            user: { id: 'ctox-smoke', name: 'CTOX Port Smoke' },
+            customization: {
+              about: false,
+              feedback: false,
+              help: false,
+              plugins: false,
+              macros: false,
+            },
+          },
+        });
+        send('openDocument', {
+          doc: {
+            key: 'ctox-upstream-spreadsheet-smoke-v1',
+            url: 'ctox://spreadsheet/ctox-upstream-spreadsheet-smoke-v1',
+            title: 'CTOX Oracle · Open Render Sheets.xlsx',
+            fileType: 'xlsx',
+            permissions: {
+              edit: true,
+              download: true,
+              print: false,
+              comment: false,
+              chat: false,
+            },
+          },
+        });
+      } else if (message.event === 'onDocumentReady') {
+        status.textContent = 'upstream-document-ready';
+      } else if (message.event === 'onError') {
+        status.textContent = `upstream-error:${message.data?.errorCode ?? 'unknown'}`;
+      }
+    });
+    window.ctoxUpstreamSmoke = { editor, send };
+  </script>
+</body>
+</html>

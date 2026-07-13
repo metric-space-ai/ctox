@@ -1,0 +1,20 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.undo-clipboard-fill",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/spreadsheet-undo-clipboard-fill.html",
+  "viewport": { "width": 1600, "height": 900 },
+  "steps": [
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "edit", "cell": "A2", "append": "_ONE" },
+    { "action": "undo", "expected": "UNDO_FILL_BASE" },
+    { "action": "redo", "expected": "UNDO_FILL_BASE_ONE" },
+    { "action": "copy", "source": "A3", "value": "COPY_SOURCE_TEXT" },
+    { "action": "paste", "target": "B3", "expected": "COPY_SOURCE_TEXT" },
+    { "action": "select_range", "range": "B4:B5" },
+    { "action": "toolbar_fill_down", "path": ["Mehr", "Ausfüllen", "Nach unten"], "expected": { "B4": 125000, "B5": 125000 } },
+    { "action": "save", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_undo_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"] },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "mount_business_os_wrapper", "module": "spreadsheets", "runtime_setting": "office.spreadsheets_engine=ctox_spreadsheets", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

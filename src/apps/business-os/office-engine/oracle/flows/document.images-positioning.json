@@ -1,0 +1,32 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.images-positioning",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.images-positioning",
+  "browser_flow": "src/apps/business-os/office-engine/oracle/flows/document.images-positioning.playwright.js",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1600x900 CSS pixels",
+    "The side-by-side gate accepts only exact document-ready, not app-ready",
+    "Image bounds are measured from the rendered editor overlay before canvas actions"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.images-positioning", "method": "POST" },
+    { "action": "wait_for", "semantic": "side-by-side gate valid, oracle=document-ready, ctox=document-ready" },
+    { "action": "assert_runtime", "expected": "both panes are real Euro-Office DocumentEditor frames; CTOX frame is vendor/ctox-office/upstream web-apps/sdkjs ESM capsule" },
+    { "action": "select_image", "target": "CTOX_INLINE_IMAGE_TARGET", "method": "measured editor overlay ratio plus selected-element description" },
+    { "action": "resize_image", "target_width_mm": 69.9, "target_height_mm": 34.95, "method": "original sdkjs asc_CImgProperty plus editor.ImgApply" },
+    { "action": "assert_drawing", "target": "CTOX_INLINE_IMAGE_TARGET", "type": "wp:inline", "width_inches": 2.75 },
+    { "action": "select_image", "target": "CTOX_FLOATING_IMAGE_TARGET", "method": "measured editor overlay ratio plus selected-element description" },
+    { "action": "set_text_wrapping", "value": "square", "method": "Asc.c_oAscWrapStyle2.Square" },
+    { "action": "set_position", "horizontal_relative_from": "column", "horizontal_mm": 76.2, "vertical_relative_from": "paragraph", "vertical_mm": 8.89 },
+    { "action": "assert_drawing", "target": "CTOX_FLOATING_IMAGE_TARGET", "type": "wp:anchor", "wrap": "square" },
+    { "action": "assert_text", "values": ["INLINE_BEFORE", "INLINE_AFTER", "FLOATING_WRAP_TEXT_ALPHA", "PRESERVE_IMAGES_UNRELATED_A91E"] },
+    { "action": "click", "role": "button", "name": "Speichern (⌘+S)", "targets": ["oracle", "ctox"] },
+    { "action": "wait_for", "semantic": "Oracle callback status=6, CTOX commit captured, and saved=true" },
+    { "action": "rust_canonical_export", "input": "output/playwright/ctox-office/rust/document.images-positioning/ctox-saved.Editor.bin", "original": "tests/fixtures/office/document/images-positioning.docx", "output": "output/playwright/ctox-office/ctox/document.images-positioning/ctox-canonical.docx", "expected_changed_parts": ["word/document.xml"] },
+    { "action": "reopen_clean_profile", "source": "CTOX saved editor payload", "target": "ctox", "expected": "document-ready with resized inline image and moved floating image visible" },
+    { "action": "reopen_clean_profile", "source": "CTOX canonical DOCX export", "target": "euro-office-oracle", "expected": "document-ready with resized inline image and moved floating image visible" }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.tables",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/tables.docx",
+    "bytes": 37586,
+    "sha256": "10bc8478c3312c5230536ec00579a4ee4f9464fe00886ab7551845a6cb6a9b0c",
+    "top_level_tables": 3,
+    "all_tables": 4,
+    "main_shape": [3, 3],
+    "merge_split_shape": [2, 2],
+    "nested_shape": [2, 2],
+    "preservation_marker": "PRESERVE_TABLES_UNRELATED_6F3C",
+    "preservation_part": "customXml/ctox-table-preserve.xml"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "locale": "de-DE",
+    "measured_document_page_bounds": { "left": 194, "top": 169, "right": 1010, "bottom": 728 }
+  },
+  "expected_semantic_state": {
+    "top_level_tables": 3,
+    "all_tables_including_nested": 4,
+    "main_table": {
+      "rows": 4,
+      "cells_per_row": [4, 4, 4, 4],
+      "new_cell_text": "TABLE_EDITED_VALUE",
+      "preserved_text": ["TABLE_HEADER_A", "TABLE_ROW_ANCHOR", "TABLE_COLUMN_ANCHOR", "TABLE_KEEP_A", "TABLE_KEEP_B", "TABLE_KEEP_C"]
+    },
+    "merge_split_table": {
+      "rows": 3,
+      "cells_per_row": [2, 2, 2],
+      "merged_source_text_in_first_cell": ["TABLE_MERGE_LEFT", "TABLE_MERGE_RIGHT"],
+      "preserved_text": ["TABLE_SPLIT_TARGET", "TABLE_SPLIT_CONTROL"]
+    },
+    "nested_table": {
+      "rows": 2,
+      "cells_per_row": [2, 2],
+      "text": ["NESTED_A1", "NESTED_B1", "NESTED_A2", "NESTED_B2"]
+    },
+    "PRESERVE_TABLES_UNRELATED_6F3C": { "unchanged": true }
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/DocumentHolderExt.js:2292-2294",
+    "web-apps/apps/documenteditor/main/app/controller/DocumentHolderExt.js:2418-2424",
+    "web-apps/apps/documenteditor/main/app/controller/DocumentHolderExt.js:2630-2641",
+    "sdkjs/word/api.js:5704-5755",
+    "sdkjs/word/api.js:5848-5871"
+  ],
+  "oracle_export": {
+    "bytes": 40952,
+    "sha256": "c02be256fd7c2b3eeb9407dba4db3989695cd6a12dcec0305696aeaef3c0105f",
+    "callback_statuses": [2, 6],
+    "reopen_in_oracle": "passed",
+    "notes": [
+      "The Oracle omits the deliberately unreferenced customXml/ctox-table-preserve.xml control part; CTOX escrow preservation is therefore asserted against the original fixture, not against Oracle output."
+    ]
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-initial.png", "sha256": "d885935c19f8df027e1e5c1b68ccc98e3c9d22d85b69bc5b2d5de000ac50e5c7" },
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-after-row.png", "sha256": "9f369185fb9373ccb40c450dcc971578353aa996fd0a665fc6aca02c81c47cb0" },
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-after-column.png", "sha256": "15012fd77d13f86a84eec0b2ef455488388a2f7997ec7db8e4bae9cf7e9bfbd5" },
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-after-edit.png", "sha256": "4035dd81ca9c26c4d14841db0b7713f03af39f9abd001dc78b232b29a16f2c76" },
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-after-merge.png", "sha256": "2d85b330576c3f9faa447af915129df77a55e4ca077858c86346cc84e9b33013" },
+    { "path": "output/playwright/ctox-office/oracle/document.tables/oracle-terminal.png", "sha256": "6bc8d9d43ba7a6003612bd562dd46ea790bf5c6c92c847c68f89e79b61ed620b" },
+    { "path": "output/playwright/ctox-office/ctox/document.tables/ctox-final.png", "sha256": "97b9922544d2ab8ad443797db11a8e911e5ad302935d611136511797b8fb39ca" },
+    { "path": "output/playwright/ctox-office/comparison/document.tables/differential-terminal-tables.png", "sha256": "b8d1d38f67af2277ec931ac8f104296129fd3be9b843523927acd6ce26255399" },
+    { "path": "output/playwright/ctox-office/ctox/document.tables/oracle-reopen.png", "sha256": "909744926dc43b61691967ee1938073ec5a75e80fd68de7cc2757c5573ddae70" },
+    { "path": "output/playwright/ctox-office/comparison/document.tables/reopen-saved-side-by-side.png", "sha256": "6bb36d1dde8fe02558dbce2e027340740072dfb3e57309bb8a902e280211ab85" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "latest_side_by_side_attempt": {
+    "date": "2026-07-12",
+    "status": "differential_passed",
+    "harness_url": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.tables",
+    "screenshot": "output/playwright/ctox-office/comparison/document.tables/reopen-saved-side-by-side.png",
+    "screenshot_sha256": "6bb36d1dde8fe02558dbce2e027340740072dfb3e57309bb8a902e280211ab85",
+    "rust_prepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.tables/ctox-rust.Editor.bin",
+      "bytes": 39230,
+      "sha256": "5c339b1c5b989f1e8b76139134430ac9321f65de426ce5bdb8cb5dfac2fd33de",
+      "tables": ["signature", "settings", "numbering", "styles", "document"]
+    },
+    "initial_canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.tables/ctox-initial-canonical.docx",
+      "bytes": 36104,
+      "sha256": "888091cafd3f38430ce4241e207a38f7a323f46895a7bd45853ec8c29375956b",
+      "package_parts": 18,
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 17,
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "nested_table_text_preserved": true
+    },
+    "edited_ctox_canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.tables/ctox-canonical.docx",
+      "bytes": 36025,
+      "sha256": "f0f8ca4c7ba1eea5c2e6524c668c531c76e6dc9158f24762421ed4927dd1f326",
+      "document_xml_bytes": 9669,
+      "package_parts": 18,
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 17,
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "has_edited_cell": true,
+      "nested_table_text_preserved": true,
+      "preservation_part_present": true,
+      "table_count": 4,
+      "paragraph_count": 70
+    },
+    "reopen_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.tables/ctox-saved.Editor.bin",
+      "bytes": 39373,
+      "sha256": "9a5815c0c8a7f73eebef97e1910fe795d9b6b99b63c4aad4c11d2ca54dfb3f17",
+      "runtime_inspection": {
+        "document_ready": true,
+        "runtime": "ctox-documents-fork",
+        "source": { "web_apps": true, "sdkjs": true }
+      }
+    },
+    "progress": "The checked-in Playwright-CLI Browserflow now runs in the same-origin split-screen against the real Euro-Office DocumentEditor on both panes. Row insertion and column insertion use the original table context menu; cell text edit uses real keyboard input so Oracle becomes dirty and emits terminal save callbacks. Merge/split semantics are executed on the same real runtime and both panes end at the expected table shapes. The CTOX editor payload exports natively to DOCX with only word/document.xml changed, preserves customXml/ctox-table-preserve.xml plus NESTED_A1/NESTED_B2, reopens in the CTOX ESM capsule as document_ready, and the CTOX DOCX export opens in the pinned Oracle.",
+    "remaining_gate": "none for document.tables"
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/document.tables/ctox-editor.docx",
+      "bytes": 370119,
+      "sha256": "387262d0456a80d1fc396ca69e437a66e3d715e6859c1832c5a482cba5510266"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.tables/ctox-canonical.docx",
+      "bytes": 36025,
+      "sha256": "f0f8ca4c7ba1eea5c2e6524c668c531c76e6dc9158f24762421ed4927dd1f326",
+      "package_parts": 18,
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 17,
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "oracle_reopen": "passed"
+    },
+    "semantic_verification": {
+      "save_reopen_in_ctox": "passed",
+      "main_table_shape": [4, 4],
+      "edited_cell_present": true,
+      "merge_split_rows": 3,
+      "merge_split_cells_per_row": [2, 2, 2],
+      "nested_table_preserved": true,
+      "oracle_save_callback": "passed",
+      "oracle_reopen": "passed"
+    },
+    "required_preservation": {
+      "understood_parts": ["word/document.xml"],
+      "unrelated_original_parts_unchanged": true,
+      "must_preserve_parts": ["customXml/ctox-table-preserve.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    }
+  }
+}

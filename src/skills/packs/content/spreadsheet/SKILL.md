@@ -1,6 +1,6 @@
 ---
 name: "spreadsheet"
-description: "Create, edit, analyze, and verify .xlsx workbooks through the CTOX spreadsheets engine (Euro-Office port). Formula-driven, auditable models with typed values, invariant number formats, and a mandatory visual verification pass. Authoring capabilities are gated on the engine's feature matrix; read/render/analyze paths are available first."
+description: "Create, edit, analyze, and verify .xlsx workbooks through CTOX Spreadsheets. Build formula-driven, auditable models with typed values, invariant number formats, and a mandatory visual verification pass. Authoring capabilities are gated on the CTOX engine feature matrix and typed Business OS rollout."
 cluster: content
 ---
 
@@ -18,15 +18,17 @@ pandas.ExcelWriter, Office.js, or any external workbook library, and do not
 install dependencies at runtime. The execution surfaces are:
 
 1. **Workbook read/render surface.** Inspect sheets, values, and formulas;
-   render sheets or ranges to images for visual QA. Backed by the headless
-   CTOX spreadsheets editor (`spreadsheet.open-render-sheets`,
+   render sheets or ranges to images for visual QA. Backed by the CTOX
+   Spreadsheets editor (`spreadsheet.open-render-sheets`,
    `spreadsheet.edit-save`).
 2. **Editor flows (authoring).** Cell edits, formatting, formulas, charts,
-   conditional formatting, comments, and protection run against the headless
-   editor on the same code path users operate interactively. Most authoring
-   feature groups are still in progress — check gating before promising work.
-3. **Package export.** `ctox-office-engine export` produces the final `.xlsx`
-   with byte-preserving round-trip of untouched parts.
+   conditional formatting, comments, and protection run against the editor on
+   the same code path users operate interactively. All feature
+   groups currently have differential evidence, but remain gated by the same
+   typed rollout configuration as the CTOX Spreadsheets app.
+3. **Package operations.** `ctox-office-engine inspect|prepare-editor|inspect-editor|export`
+   provide package inspection, editor transcoding, payload inspection, and a
+   byte-preserving `.xlsx` round-trip of untouched parts.
 
 Capability gating: operations bind to `spreadsheet.*` feature groups in
 `src/apps/business-os/office-engine/features.json`. If a required group is
@@ -34,11 +36,11 @@ not shipped in this build, that is a blocker — report exactly what is missing
 instead of falling back to external tooling. See
 `references/execution-surfaces.md` for the operation map and current status.
 
-Check `references/execution-surfaces.md` for the live gating state — the
-matrix moves in both directions (a 2026-07-11 re-baseline set previously
-passed groups back to `oracle_captured`). When editor groups are not passed,
-the usable surface is package-level (`inspect`, `export`, batch ops) and
-editor-dependent authoring must be reported as blocked.
+Check `references/execution-surfaces.md` for the live gating state. The matrix
+moves in both directions. When an editor group is below
+`differential_passed`, or when the typed rollout does not select the CTOX
+engine, editor-dependent authoring must be reported as blocked; package-level
+inspection and export remain available.
 
 ## Formula rules (auditable models)
 

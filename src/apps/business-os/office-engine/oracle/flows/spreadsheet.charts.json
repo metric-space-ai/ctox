@@ -1,0 +1,26 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.charts",
+  "status": "differential_passed",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.charts",
+  "preconditions": [
+    "Euro-Office v9.3.1 oracle is running on port 8088",
+    "static harness is running on port 4179",
+    "both frames use the exact original SpreadsheetEditor runtime",
+    "fixture and native XLSY payload hashes match evidence"
+  ],
+  "captured_steps": [
+    { "action": "open_fixture", "expected": "Oracle renders the clustered column chart titled CTOX Revenue 2026" },
+    { "action": "validate_equal_iframe_geometry", "expected": "Both editor iframes are 599.5 by 670 CSS pixels" },
+    { "action": "select_chart_from_measured_editor_surface", "point": { "x_fraction": 0.78, "y_fraction": 0.48 }, "expected": "Original UI reports CTOX Revenue Chart and enables Diagrammeinstellungen" },
+    { "action": "compare_native_initial_ctox", "expected": "Gate passes with the same CTOX Spreadsheets runtime, chart title, four categories, four values and green series fill" }
+  ],
+  "implementation_flow": [
+    "Identify spreadsheet chart records and anchors in sdkjs writer/reader sources",
+    "Emit worksheet drawing records plus Chart2 payload into XLSY without replacing the CTOX Spreadsheets UI",
+    "Use the original visible Chart Settings UI to change title, style, size and chart type identically on both sides",
+    "Capture CTOX XLSY, export natively to XLSX and preserve unrelated package parts byte-for-byte",
+    "Reopen the CTOX export in CTOX and in the Euro-Office oracle",
+    "Run the identical original-UI flow through modules/spreadsheets.mount(ctx) and office.spreadsheet.commit"
+  ]
+}

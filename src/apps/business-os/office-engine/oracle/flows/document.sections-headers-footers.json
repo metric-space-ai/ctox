@@ -1,0 +1,35 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.sections-headers-footers",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.sections-headers-footers",
+  "playwright_flow": "oracle/flows/document.sections-headers-footers.playwright.js",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1600x900 CSS pixels",
+    "The side-by-side gate accepts only exact document-ready, not app-ready",
+    "CTOX uses output/playwright/ctox-office/rust/document.sections-headers-footers/ctox-rust.Editor.bin as the editor payload"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.sections-headers-footers", "method": "POST" },
+    { "action": "wait_for", "semantic": "side-by-side gate valid, oracle=document-ready, ctox=document-ready" },
+    { "action": "assert_runtime", "expected": "both panes are real Euro-Office DocumentEditor frames; CTOX frame is vendor/ctox-office/upstream web-apps/sdkjs ESM capsule" },
+    { "action": "assert_initial_layout", "expected": "Oracle page 1 of 2 and CTOX page 1 of 2 before interaction" },
+    { "action": "dismiss_transient", "label": "Multipage view", "button": "OK" },
+    { "action": "navigate", "target": "document end in section 2", "shortcut": "Meta+End" },
+    { "action": "click", "tab": "Layout", "control": "Orientierung", "value": "Querformat" },
+    { "action": "open_header", "target": "section 2 inherited default header", "method": "double click measured page-2 header bounds" },
+    { "action": "set", "label": "Kopfzeile oberhalb", "value_cm": 1.5 },
+    { "action": "set", "label": "Fußzeile von unten", "value_cm": 1.2 },
+    { "action": "toggle", "label": "Erste Seite anders", "value": true },
+    { "action": "toggle", "label": "Link zum vorherigen", "value": false, "expected": "explicit first-page header reference for section 2" },
+    { "action": "close_header_footer_mode" },
+    { "action": "navigate", "target": "document end", "shortcut": "Meta+End" },
+    { "action": "click", "tab": "Layout", "control": "Umbrüche", "submenu": "Abschnittsumbruch einfügen", "value": "Nächste Seite" },
+    { "action": "assert_semantic_sections", "values": { "sections": 3, "pages": 3, "section_2_orientation": "landscape", "section_2_title_page": true, "section_3_break_type": "nextPage" } },
+    { "action": "assert_text", "values": ["HEADER_SECTION1_FIRST", "HEADER_SECTION1_DEFAULT", "FOOTER_SECTION1_DEFAULT", "SECTION2_PAGE_SETUP_TARGET", "PRESERVE_SECTIONS_UNRELATED_4D72"] },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" }
+  ]
+}

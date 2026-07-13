@@ -66,6 +66,19 @@ jobs:
           npm --prefix src/apps/business-os test
           npm --prefix src/apps/business-os run test:module-bundles
 
+      - name: Capture CTOX Office release candidate evidence
+        run: |
+          node src/apps/business-os/office-engine/capture-release-evidence.mjs \
+            --version "${GITHUB_REF_NAME}" \
+            --git-revision "${GITHUB_SHA}" \
+            --captured-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --release-workflow-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --document-matrix runtime/build/office-document-restart-matrix.json \
+            --spreadsheet-matrix runtime/build/office-spreadsheet-restart-matrix.json \
+            --docx-corpus-evidence src/apps/business-os/office-engine/oracle/evidence/document.docx-roundtrip-corpus.json \
+            --xlsx-corpus-evidence src/apps/business-os/office-engine/oracle/evidence/spreadsheet.xlsx-roundtrip-corpus.json \
+            --output runtime/build/ctox-office-release-candidate-evidence.json
+
       - name: Install Business OS browser test runtime
         run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
 
@@ -203,6 +216,7 @@ jobs:
             runtime/build/ctox-sync-production-readiness-95-wan-turn-matrix.json
             runtime/build/ctox-sync-production-readiness-95-browser-recovery-matrix.json
             runtime/build/ctox-sync-production-readiness-95-app-runtime-package-gate.json
+            runtime/build/ctox-office-release-candidate-evidence.json
             output/playwright/business-os-design-matrix/
             output/playwright/business-os-design-diff/visual-diff.json
             output/playwright/business-os-accessibility-contract.json
@@ -686,4 +700,6 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           generate_release_notes: true
-          files: artifacts/*
+          files: |
+            artifacts/*
+            artifacts/**/ctox-office-release-candidate-evidence.json

@@ -1,0 +1,23 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.sort-filter-tables",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.sort-filter-tables",
+  "viewport": { "width": 1600, "height": 900 },
+  "preconditions": [
+    "Euro-Office Oracle v9.3.1 is running on 127.0.0.1:8088",
+    "CTOX uses the Rust-generated XLSY payload ctox-rust.Editor.bin",
+    "both editor frames use the original SpreadsheetEditor UI with identical geometry"
+  ],
+  "steps": [
+    { "action": "wait_for", "semantic": "both status=document-ready and comparison gate valid" },
+    { "action": "assert_original_table_ui", "tab": "Tabellen-Design", "name": "RevenueTable", "range": "A1:C6", "style": "TableStyleMedium4" },
+    { "action": "open_header_filter", "column": "Revenue", "coordinate_source": "Asc.editor.asc_getActiveCellCoord()" },
+    { "action": "sort_descending", "surface": "original filter dialog", "expected_values": [420, 310, 240, 180, 120] },
+    { "action": "open_header_filter", "column": "Region", "coordinate_source": "Asc.editor.asc_getActiveCellCoord()" },
+    { "action": "select_filter_values", "surface": "original filter value tree", "values": ["North"], "expected_visible_rows": [2, 3] },
+    { "action": "save", "surface": "original Save toolbar button", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_table_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/tables/table1.xml", "xl/worksheets/sheet1.xml"], "expected_unchanged_parts": 12 },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "target": "modules/spreadsheets.mount(ctx)", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

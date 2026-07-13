@@ -9,7 +9,7 @@
   height: 100%;
   min-height: 0;
   display: block;
-  background: var(--bg);
+  background: var(--surface);
   color: var(--text);
   overflow: hidden;
 }
@@ -61,7 +61,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: transparent;
+  background: var(--surface-2);
 }
 
 /* Module-specific grid for the pane tools row; the controls themselves are
@@ -106,28 +106,22 @@
   grid-template-columns: minmax(0, 1fr) 30px;
   gap: 4px;
   align-items: start;
-  border: 0;
-  border-radius: 12px;
+  border: 1px solid transparent;
+  border-radius: var(--surface-radius);
   background: transparent;
   color: inherit;
   box-sizing: border-box;
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s ease,
-              box-shadow 0.2s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .spreadsheets-card:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
-  transform: translateY(-1px);
-}
-
-.spreadsheets-card:active {
-  transform: scale(0.98);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .spreadsheets-card[aria-current="true"] {
-  background: var(--surface-2);
-  box-shadow: inset 3px 0 0 var(--accent), var(--sh-subtle);
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
 }
 
 .spreadsheets-card-main {
@@ -149,11 +143,11 @@
   margin: 8px 8px 0 0;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .spreadsheets-card-manage:hover,
@@ -161,7 +155,6 @@
   color: var(--accent);
   border-color: var(--accent);
   background: var(--surface);
-  box-shadow: var(--sh-subtle);
   outline: none;
 }
 
@@ -238,7 +231,7 @@
   max-width: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   padding: 1px 6px;
   color: var(--accent);
   font-size: 10px;
@@ -297,8 +290,8 @@
   flex-grow: 1;
   overflow: auto;
   position: relative;
-  background: var(--surface-2);
-  padding: 16px;
+  background: var(--surface);
+  padding: 8px;
   box-sizing: border-box;
 }
 
@@ -322,8 +315,8 @@
 .spreadsheets-editor-canvas .jexcel_container {
   font-family: inherit !important;
   border: 1px solid var(--line) !important;
-  box-shadow: var(--shadow-md) !important;
-  border-radius: 16px !important;
+  box-shadow: none !important;
+  border-radius: var(--surface-radius) !important;
   overflow: hidden !important;
   background: var(--surface) !important;
 }
@@ -331,8 +324,8 @@
 .spreadsheets-editor-canvas .jss_container {
   font-family: inherit !important;
   border: 1px solid var(--line) !important;
-  box-shadow: var(--shadow-md) !important;
-  border-radius: 8px !important;
+  box-shadow: none !important;
+  border-radius: var(--surface-radius) !important;
   overflow: hidden !important;
   background: var(--surface) !important;
   color: var(--text) !important;
@@ -494,18 +487,17 @@
 }
 
 .spreadsheets-runbook-card {
-  border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--surface-radius);
   background: var(--surface);
-  padding: 12px;
+  padding: 10px;
   cursor: pointer;
-  box-shadow: var(--sh-subtle);
-  transition: all 0.2s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .spreadsheets-runbook-card:hover {
   border-color: var(--accent);
-  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
 }
 
 .spreadsheets-runbook-card.is-active {
@@ -530,9 +522,9 @@
 .spreadsheets-runbook-workbench {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
   background: var(--surface-2);
   flex-shrink: 0;
 }
@@ -540,9 +532,9 @@
 .spreadsheets-runbook-workbench textarea {
   width: 100%;
   min-height: 80px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
-  border-radius: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
   background: var(--surface);
   color: var(--text);
   font: inherit;
@@ -554,28 +546,26 @@
 .spreadsheets-runbook-workbench textarea:focus {
   border-color: var(--accent);
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+  box-shadow: none;
 }
 
 .spreadsheets-runbook-workbench button {
-  height: 34px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-  color: var(--accent);
-  font-weight: 600;
+  min-height: 42px;
+  border: 1px solid color-mix(in srgb, var(--accent) 76%, var(--line));
+  border-radius: var(--surface-radius);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, var(--surface)), color-mix(in srgb, var(--success) 40%, var(--accent)));
+  color: var(--surface);
+  font-weight: 800;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: all 0.15s ease;
+  transition: filter 0.12s ease, opacity 0.12s ease;
 }
 
 .spreadsheets-runbook-workbench button:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--surface);
-  box-shadow: var(--sh-subtle);
+  filter: brightness(1.04);
 }
 
 .spreadsheets-runbook-workbench button:disabled {
@@ -584,6 +574,7 @@
   border-color: color-mix(in srgb, var(--line) 40%, transparent);
   color: var(--muted);
   background: var(--surface-2);
+  filter: none;
 }
 
 /* Drawer Dialog Styles */
@@ -624,9 +615,9 @@
 .spreadsheets-drawer-form select,
 .spreadsheets-drawer-form textarea {
   width: 100%;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
-  border-radius: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
   background: var(--surface);
   color: var(--text);
   font: inherit;
@@ -647,14 +638,14 @@
 }
 
 .spreadsheets-drawer-actions button {
-  height: 36px;
-  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
-  border-radius: 8px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
   background: var(--surface);
   color: var(--text);
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .spreadsheets-drawer-actions button[type="submit"] {
@@ -664,7 +655,6 @@
 
 .spreadsheets-drawer-actions button[type="submit"]:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  box-shadow: var(--sh-subtle);
 }
 
 .spreadsheets-drawer-actions button:disabled {
@@ -679,7 +669,6 @@
 
 .spreadsheets-drawer-actions button.danger-button:hover {
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-  box-shadow: var(--sh-subtle);
 }
 
 /* Formula Errors */
@@ -728,4 +717,42 @@ body[data-active-module="spreadsheets"] [data-resizer]::before {
   bottom: 0;
   height: auto;
   min-height: 100%;
+}
+
+@container business-app-window (max-width: 760px) {
+  .spreadsheets-explorer .spreadsheets-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .spreadsheets-editor-canvas {
+    padding: 6px;
+  }
+
+  .spreadsheets-runbook-list {
+    gap: 6px;
+    padding: 8px 0;
+  }
+
+  .spreadsheets-runbook-workbench {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 600px) {
+  .spreadsheets-empty,
+  .spreadsheets-loading,
+  .spreadsheets-error {
+    min-height: 220px;
+    padding: 12px;
+  }
+
+  .spreadsheets-runbook-workbench button {
+    min-height: 40px;
+  }
+
+  .spreadsheets-runbook-workbench textarea {
+    min-height: 56px;
+    max-height: 72px;
+  }
 }

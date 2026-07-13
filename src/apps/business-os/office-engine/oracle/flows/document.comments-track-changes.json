@@ -1,0 +1,35 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.comments-track-changes",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.comments-track-changes",
+  "playwright_flow": "oracle/flows/document.comments-track-changes.playwright.js",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1600x1000 CSS pixels",
+    "CTOX uses a Rust-generated DOCY payload and both panes run the original Euro-Office DocumentEditor UI"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.comments-track-changes", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready and page count=1" },
+    { "action": "dismiss_transient", "label": "Multipage view", "button": "OK" },
+    { "action": "find", "text": "COMMENT_CREATE_TARGET", "shortcut": "Meta+F", "selection_after_escape": true },
+    { "action": "create_comment", "text": "CTOX_ORACLE_COMMENT_BODY" },
+    { "action": "reply_comment", "text": "CTOX_ORACLE_COMMENT_REPLY" },
+    { "action": "resolve_comment", "text": "CTOX_ORACLE_COMMENT_BODY" },
+    { "action": "enable_track_changes", "tab": "Zusammenarbeit", "control": "Änderungen nachverfolgen" },
+    { "action": "find", "text": "TRACK_INSERT_TARGET", "shortcut": "Meta+F", "selection_after_escape": true },
+    { "action": "type", "value": "_CTOX_TRACKED_INSERT", "change_mode": "tracked" },
+    { "action": "find", "text": "TRACK_DELETE_TARGET", "shortcut": "Meta+F", "selection_after_escape": true },
+    { "action": "press", "key": "Backspace", "change_mode": "tracked" },
+    { "action": "reject_current_change", "expected_text": "TRACK_DELETE_TARGET" },
+    { "action": "accept_all_changes", "expected_plain_text": ["_CTOX_TRACKED_INSERT", "CTOX_EXISTING_INSERTION"], "expected_removed_text": "CTOX_EXISTING_DELETION" },
+    { "action": "find", "text": "TRACK_INSERT_TARGET_CTOX_TRACKED_INSERT", "shortcut": "Meta+F", "selection_after_escape": true },
+    { "action": "type", "value": "_CTOX_FINAL_REVIEW", "change_mode": "tracked" },
+    { "action": "assert_semantic", "values": { "comment_root_status": "resolved", "comment_reply": "CTOX_ORACLE_COMMENT_REPLY", "remaining_revision": "_CTOX_FINAL_REVIEW", "restored_text": "TRACK_DELETE_TARGET" } },
+    { "action": "assert_preserved", "values": ["CTOX_EXISTING_COMMENT_BODY", "PRESERVE_COMMENTS_TRACK_CHANGES_UNRELATED_C9E4"] },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" }
+  ]
+}

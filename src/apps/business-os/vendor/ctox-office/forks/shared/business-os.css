@@ -1,0 +1,173 @@
+/* CTOX downstream fork chrome. Editor canvas/layout rules remain owned by sdkjs. */
+:root[data-ctox-product] {
+  --ctox-fork-workspace: oklch(0.955 0.006 235);
+  --ctox-fork-surface: oklch(0.987 0.005 235);
+  --ctox-fork-surface-2: oklch(0.944 0.008 235);
+  --ctox-fork-line: oklch(0.82 0.012 235);
+  --ctox-fork-text: oklch(0.29 0.015 235);
+  --ctox-fork-muted: oklch(0.52 0.02 235);
+  --ctox-fork-accent: oklch(0.53 0.09 185);
+  --ctox-fork-accent-soft: oklch(0.91 0.035 185);
+  color-scheme: light;
+}
+
+:root[data-ctox-product][data-ctox-theme="dark"] {
+  --ctox-fork-workspace: oklch(0.2 0.008 235);
+  --ctox-fork-surface: oklch(0.24 0.009 235);
+  --ctox-fork-surface-2: oklch(0.28 0.011 235);
+  --ctox-fork-line: oklch(0.39 0.015 235);
+  --ctox-fork-text: oklch(0.9 0.01 235);
+  --ctox-fork-muted: oklch(0.69 0.018 235);
+  --ctox-fork-accent: oklch(0.72 0.09 185);
+  --ctox-fork-accent-soft: oklch(0.34 0.045 185);
+  color-scheme: dark;
+}
+
+body[data-ctox-product] {
+  background: var(--ctox-fork-workspace) !important;
+  color: var(--ctox-fork-text) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif !important;
+}
+
+body[data-ctox-product] #toolbar,
+body[data-ctox-product] #toolbar .toolbar,
+body[data-ctox-product] #toolbar .tabs,
+body[data-ctox-product] #toolbar .box-tabs,
+body[data-ctox-product] #toolbar .box-controls,
+body[data-ctox-product] #toolbar .panel,
+body[data-ctox-product] .toolbar-fullview-panel {
+  background: var(--ctox-fork-surface-2) !important;
+  color: var(--ctox-fork-text) !important;
+}
+
+body[data-ctox-product] #toolbar {
+  border-bottom: 1px solid var(--ctox-fork-line) !important;
+}
+
+body[data-ctox-product] #toolbar .extra.left,
+body[data-ctox-product] #left-btn-about,
+body[data-ctox-product] .synch-tip-root {
+  display: none !important;
+}
+
+body[data-ctox-product] #toolbar .box-tabs {
+  padding-inline: 6px !important;
+}
+
+body[data-ctox-product] #toolbar .tabs .ribtab > a {
+  color: var(--ctox-fork-muted) !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+body[data-ctox-product] #toolbar .tabs .ribtab.active > a,
+body[data-ctox-product] #toolbar .tabs .ribtab > a:hover,
+body[data-ctox-product] #toolbar .tabs .ribtab > a:focus-visible {
+  color: var(--ctox-fork-text) !important;
+}
+
+body[data-ctox-product] #toolbar .tabs .ribtab.active > a {
+  box-shadow: inset 0 -2px 0 var(--ctox-fork-accent) !important;
+}
+
+body[data-ctox-product] button,
+body[data-ctox-product] .btn,
+body[data-ctox-product] .btn-toolbar,
+body[data-ctox-product] .form-control,
+body[data-ctox-product] .combo-dataview,
+body[data-ctox-product] .dropdown-menu {
+  border-radius: 3px !important;
+  font-family: inherit !important;
+}
+
+body[data-ctox-product] button:focus-visible,
+body[data-ctox-product] .btn:focus-visible,
+body[data-ctox-product] input:focus-visible,
+body[data-ctox-product] [role="tab"]:focus-visible,
+body[data-ctox-product] [role="menuitem"]:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--ctox-fork-accent) 72%, transparent) !important;
+  outline-offset: 1px !important;
+}
+
+body[data-ctox-product] .btn-toolbar:hover,
+body[data-ctox-product] .btn-category:hover,
+body[data-ctox-product] .btn-category.active,
+body[data-ctox-product] .btn.active,
+body[data-ctox-product] .btn[aria-pressed="true"] {
+  background-color: var(--ctox-fork-accent-soft) !important;
+  color: var(--ctox-fork-text) !important;
+}
+
+body[data-ctox-product] .dropdown-menu,
+body[data-ctox-product] .context-menu,
+body[data-ctox-product] .popover,
+body[data-ctox-product] .side-panel,
+body[data-ctox-product] .settings-panel {
+  background: var(--ctox-fork-surface) !important;
+  color: var(--ctox-fork-text) !important;
+  border-color: var(--ctox-fork-line) !important;
+}
+
+body[data-ctox-product] .dropdown-menu > li > a,
+body[data-ctox-product] .menu-item,
+body[data-ctox-product] label,
+body[data-ctox-product] .header {
+  color: var(--ctox-fork-text) !important;
+  font-family: inherit !important;
+}
+
+body[data-ctox-product] .dropdown-menu > li > a:hover,
+body[data-ctox-product] .dropdown-menu > li > a:focus,
+body[data-ctox-product] .menu-item:hover {
+  background: var(--ctox-fork-surface-2) !important;
+}
+
+body[data-ctox-product] #left-menu,
+body[data-ctox-product] #right-menu,
+body[data-ctox-product] .tool-menu,
+body[data-ctox-product] .tool-menu-btns,
+body[data-ctox-product] #statusbar,
+body[data-ctox-product] .statusbar {
+  background: var(--ctox-fork-surface) !important;
+  color: var(--ctox-fork-text) !important;
+  border-color: var(--ctox-fork-line) !important;
+}
+
+body[data-ctox-product] .statusbar {
+  border-top: 1px solid var(--ctox-fork-line) !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+}
+
+body[data-ctox-product] .status-label,
+body[data-ctox-product] .statusbar .separator,
+body[data-ctox-product] .statusbar button {
+  color: var(--ctox-fork-muted) !important;
+}
+
+body[data-ctox-product] .form-control,
+body[data-ctox-product] input,
+body[data-ctox-product] textarea,
+body[data-ctox-product] select {
+  background: var(--ctox-fork-surface) !important;
+  color: var(--ctox-fork-text) !important;
+  border-color: var(--ctox-fork-line) !important;
+}
+
+body[data-ctox-product] #editor-container,
+body[data-ctox-product] #id_main,
+body[data-ctox-product] #viewport {
+  background-color: var(--ctox-fork-workspace) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-ctox-product] *,
+  body[data-ctox-product] *::before,
+  body[data-ctox-product] *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

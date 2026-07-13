@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>CTOX ESM Euro-Office Spreadsheet Smoke</title>
+  <style>
+    html, body, #host { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    #status { position: fixed; z-index: 100000; right: 12px; top: 8px; padding: 5px 9px; border-radius: 4px; color: #fff; background: #18231f; font: 12px/1.2 ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <output id="status">loading-esm</output>
+  <div id="host"></div>
+  <script type="module">
+    import { createCtoxOfficeEditor } from '../../vendor/ctox-office/ctox-office-spreadsheet.mjs';
+    const status = document.querySelector('#status');
+    const editorBytes = new Uint8Array(await (await fetch('/runtime/office-port-build/ctox-open-render.Editor.bin')).arrayBuffer());
+    const state = { versionId: 'ctox-esm-upstream-v1', editorBytes };
+    const bridge = {
+      async loadVersion() {
+        return {
+          record: { id: 'ctox-esm-upstream', filename: 'CTOX Oracle · Open Render Sheets.xlsx' },
+          version: { id: state.versionId, conversion_state: 'prepared', editor_protocol: 'euro-office-cell-binary-v10', editor_protocol_version: 10 },
+          editorBytes: state.editorBytes.slice(),
+          canonicalBytes: new Uint8Array(),
+        };
+      },
+      async prepare() { return { ok: true }; },
+      async commit(request) { state.editorBytes = new Uint8Array(request.bytes); return { ok: true, version_id: state.versionId }; },
+      async export() { return { ok: true, version_id: state.versionId, bytes: state.editorBytes.slice() }; },
+    };
+    const editor = await createCtoxOfficeEditor({
+      kind: 'spreadsheet',
+      host: document.querySelector('#host'),
+      bridge,
+      locale: 'de',
+      permissions: { read: true, write: true, export: true, comment: false },
+    });
+    editor.on('opened', () => { status.textContent = 'document-ready'; });
+    editor.on('error', (event) => { status.textContent = `error:${event?.code ?? 'unknown'}`; });
+    const opened = await editor.open({ recordId: 'ctox-esm-upstream', versionId: state.versionId });
+    status.textContent = opened.runtime === 'ctox-spreadsheets-fork' ? 'esm-upstream-opened' : 'wrong-runtime';
+    window.ctoxOfficeEvidence = { editor, state, opened };
+  </script>
+</body>
+</html>

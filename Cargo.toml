@@ -48,6 +48,7 @@ polars = { version = "0.52", default-features = false, features = [
 ratatui = "0.29"
 regex = "1"
 qrcode = "0.14"
+quick-xml = "0.37"
 roxmltree = "0.21"
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # IoT automation-widget trigger runtime (RFC 0011): Rust-native, sandboxed

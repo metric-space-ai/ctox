@@ -1,0 +1,153 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.drawings-charts",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/drawings-charts.docx",
+    "bytes": 44004,
+    "sha256": "8adf729d96daa34f10f11a538b84ac6e84769ad5fd29f9f113fa590c21c98a0a",
+    "package_parts": 21,
+    "shape": "CTOX_EXISTING_BUSINESS_SHAPE",
+    "chart_title": "CTOX Quarterly Business",
+    "chart_series": ["Revenue", "Costs"],
+    "embedded_workbook": "word/embeddings/ctox-chart-data.xlsx",
+    "preservation_part": "customXml/ctox-drawings-charts-preserve.xml"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1600, "height": 900 },
+    "locale": "de-DE"
+  },
+  "expected_semantic_state": {
+    "shape": { "text": "CTOX_EXISTING_BUSINESS_SHAPE", "fill": "F4B183", "stroke": "176B5B", "rotation_degrees": 90, "width_px": 240, "height_px": 72 },
+    "chart": { "type": "barChart", "style_id": 102, "width_cm": 14, "height_cm": 7, "series": [{ "name": "Revenue", "values": [12, 18, 27] }, { "name": "Costs", "values": [8, 11, 15] }], "categories": ["Q1", "Q2", "Q3"] },
+    "preserved_text": ["PRESERVE_DRAWINGS_CHARTS_UNRELATED_D4A7"]
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/view/ChartSettings.js:1014-1051",
+    "web-apps/apps/documenteditor/main/app/view/ShapeSettings.js:271-294",
+    "web-apps/apps/documenteditor/main/app/view/ShapeSettings.js:2117-2123",
+    "sdkjs/word/api.js:6374-6505",
+    "sdkjs/word/api.js:9578-9671"
+  ],
+  "oracle_export": {
+    "path": "runtime/office-oracle/document.drawings-charts/oracle-saved.docx",
+    "bytes": 49866,
+    "sha256": "9f0ab61ab8deff17ed07479c2fbb03e8718f619ec462111bd692effeaed3ab7f",
+    "callback_statuses": [2, 6],
+    "reopen_in_oracle": "passed",
+    "notes": [
+      "The Oracle export writes chart extent 5040000 x 2520000 EMU, built-in chart style 102/2, shape fill F4B183, and a 90-degree DrawingML rotation.",
+      "CTOX reproduces those normalized values and preserves the embedded workbook and unrelated customXml escrow part byte-for-byte."
+    ]
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/document.drawings-charts/initial-native-split.png", "sha256": "9de8da930143d25a6c1d33ba8969b960e8411d6d389e9df77170e8de4439569d" },
+    { "path": "output/playwright/ctox-office/comparison/document.drawings-charts/differential-terminal-drawings-charts.png", "sha256": "ef614e5dbcf7508a047b58e8bf5379c363aad918910b24f0a21f615a73d2d3fa" },
+    { "path": "output/playwright/ctox-office/comparison/document.drawings-charts/reopen-saved-split.png", "sha256": "805f8e848b3b85f7bdb907c4fd16edefa5cb9b8636f335300baf8564d891c901" },
+    { "path": "output/playwright/ctox-office/comparison/document.drawings-charts/reopen-ctox-export-split.png", "sha256": "0f83a30fb18fa39017420164b09fdc571071b23184eb84a5e83208cab2b603c0" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/document.drawings-charts/ctox-editor.docx",
+      "bytes": 368930,
+      "sha256": "87361759e9951456007cf205fb4bdcf587ca2355ac87097ed3cdac396cfef144"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.drawings-charts/ctox-canonical.docx",
+      "bytes": 42530,
+      "sha256": "ee6501feaabd373f8a88fab7b049c0baf2f93d4420ba31c0e7446988eea52001",
+      "package_parts": 21,
+      "unchanged_original_parts": 19,
+      "changed_understood_parts": ["word/charts/chart1.xml", "word/document.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "oracle_reopen": "passed"
+    },
+    "semantic_verification": {
+      "save_reopen_in_ctox": "passed",
+      "shape_fill": "F4B183",
+      "shape_rotation_degrees": 90,
+      "chart_extent_emu": { "cx": 5040000, "cy": 2520000 },
+      "chart_style_id": 102,
+      "chart_series_preserved": true,
+      "clean_profile_reopen": "passed"
+    },
+    "required_preservation": {
+      "understood_parts": ["word/document.xml", "word/charts/chart1.xml", "word/charts/_rels/chart1.xml.rels", "word/_rels/document.xml.rels", "[Content_Types].xml"],
+      "unrelated_original_parts_unchanged": true,
+      "must_preserve_parts": ["customXml/ctox-drawings-charts-preserve.xml", "word/embeddings/ctox-chart-data.xlsx"],
+      "custom_xml_sha256": "f3c47476a314085e2e9d13eda4dc5f866106390b6d8b44bb371aa2f9e70eae06",
+      "embedded_workbook_sha256": "11a403deeb78f1bcbabdcc36c3801c2baa5e13c28b074268a4b8bc6042e130f7",
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    }
+  },
+  "latest_side_by_side_attempt": {
+    "status": "differential_passed",
+    "date": "2026-07-12",
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.drawings-charts",
+    "gate": "Initial, saved DOCY and native CTOX DOCX export each reached exact document-ready with equal iframe geometry, matching configuration and the original Euro-Office runtime on both sides.",
+    "browser_flow": {
+      "path": "src/apps/business-os/office-engine/oracle/flows/document.drawings-charts.playwright.js",
+      "sha256": "b15b7deae4cb215de4af02446580ebc748464c2f977e289daf8b702db3f802d2",
+      "status": "passed",
+      "interaction": "measured editor-overlay object selection followed by original Asc shape/chart property APIs and both real Save controls"
+    },
+    "rust_prepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.drawings-charts/ctox-rust.Editor.bin",
+      "bytes": 38217,
+      "sha256": "16745aaa540a7ef0c6a3885da087f34c1781c761395058eebf03ec48ea654bb2",
+      "protocol": "euro-office-word-binary-v10",
+      "native_objects": ["PPTY shape", "Chart2 clustered bar chart"]
+    },
+    "saved_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.drawings-charts/ctox-saved.Editor.bin",
+      "bytes": 368930,
+      "sha256": "87361759e9951456007cf205fb4bdcf587ca2355ac87097ed3cdac396cfef144"
+    },
+    "native_roundtrip": {
+      "document_xml": {
+        "shape_fill": "F4B183",
+        "shape_stroke": "176B5B",
+        "shape_rotation_units": 5400000,
+        "chart_extent_emu": { "cx": 5040000, "cy": 2520000 }
+      },
+      "chart_xml": { "built_in_style": 2, "ui_style": 102, "series_and_categories_preserved": true },
+      "unchanged_original_parts": 19,
+      "changed_understood_parts": ["word/document.xml", "word/charts/chart1.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "embedded_workbook_byte_preserved": true,
+      "custom_xml_escrow_byte_preserved": true
+    },
+    "reopen": {
+      "saved_docy_split_screen": "passed",
+      "ctox_export_in_ctox": "passed",
+      "ctox_export_in_oracle": "passed",
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0
+    },
+    "finding": "The native Rust DOCX-to-DOCY writer renders the original shape and chart in the upstream ESM capsule. The saved DOCY decoder now materializes shape rotation/fill, chart extent and built-in style back into DrawingML/ChartML while retaining all 21 original package parts.",
+    "remaining_gate": "None for document.drawings-charts.",
+    "required_next_work": "Run and differential-approve document.docx-roundtrip-corpus."
+  }
+}

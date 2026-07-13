@@ -1,0 +1,11 @@
+{
+  "schema_version": "ctox-office-fork-v1",
+  "product_id": "ctox-spreadsheets",
+  "product_name": "CTOX Spreadsheets",
+  "kind": "spreadsheet",
+  "public_esm": "ctox-office-spreadsheet.mjs",
+  "runtime_entry": "runtime/ctox-spreadsheets.mjs",
+  "editor_protocol": "euro-office-cell-binary-v10",
+  "upstream_ancestry": "euro-office-v9.3.1",
+  "business_os_chrome": "forks/ctox-spreadsheets/business-os.css"
+}

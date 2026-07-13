@@ -5,6 +5,9 @@
   "description": "Declared dev dependency bootstrap for CTOX Business OS JS and browser tests. Runtime assets stay package-manager-free.",
   "type": "module",
   "scripts": {
+    "vendor:office": "node ../../scripts/vendor-builds/vendor-euro-office.mjs",
+    "build:office": "node ../../scripts/vendor-builds/build-ctox-office.mjs",
+    "check:office": "node office-engine/oracle/validate-feature-matrix.mjs && node office-engine/validate-rollout.mjs && node office-engine/validate-completion-audit.mjs && node office-engine/capture-release-evidence.mjs --self-test && node ../../scripts/check-office-skill-gating.mjs && node scripts/assert-managed-business-os-assets.mjs --self-test && node --test office-engine/office-engine.test.mjs",
     "check:deps": "node scripts/assert-business-os-js-bootstrap.mjs",
     "test:shared": "node --test shared/*.test.mjs",
     "test:app-store": "node modules/app-store/app-store.test.mjs",
@@ -17,7 +20,7 @@
     "qa:accessibility": "node scripts/assert-accessibility-contract.mjs",
     "qa:app-starter-browser": "node scripts/assert-app-starter-browser.mjs",
     "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
-    "test": "npm run check:deps && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store"
+    "test": "npm run check:deps && npm run check:office && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store"
   },
   "devDependencies": {
     "esbuild": "0.28.1",

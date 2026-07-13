@@ -1,0 +1,81 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.docx-roundtrip-corpus",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "oracle_release": "v9.3.1",
+  "source_anchors": [
+    "src/core/business_os/office_engine.rs:document_roundtrip_corpus_matches_manifest_and_preserves_identity",
+    "src/core/business_os/office_engine.rs:inspect_rejects_unsafe_or_incomplete_packages",
+    "src/apps/business-os/office-engine/oracle/validate-document-corpus.mjs",
+    "src/apps/business-os/office-engine/oracle/side-by-side.html",
+    "runtime/office-upstream/sdkjs/word/api.js",
+    "runtime/office-upstream/web-apps/apps/documenteditor/main"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/side-by-side.png", "sha256": "96fd2dcf984cf2ad33412d852818608135075f5c2861f67ace5c9e59e114dfad" },
+    { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/side-by-side-zoom120.png", "sha256": "9bfbc7e71a5d95f4c5b3502e84f7c23e179d4f7544b902bff6f47d1d0d0489e3" }
+  ],
+  "corpus": {
+    "manifest": "tests/fixtures/office/document/corpus.json",
+    "manifest_sha256": "000e902cb9a9bcc186893d624b94a4170fb0d93d798d5ee968b2a7e3c3b7ed3b",
+    "fixtures": 11,
+    "declared_package_parts": 204,
+    "total_fixture_bytes": 419713,
+    "covered_features": [
+      "document.open-render-zoom", "document.edit-save", "document.undo-clipboard-keyboard",
+      "document.character-paragraph-formatting", "document.styles-lists-numbering", "document.tables",
+      "document.images-positioning", "document.sections-headers-footers", "document.links-bookmarks-fields",
+      "document.comments-track-changes", "document.drawings-charts"
+    ]
+  },
+  "differential_verification": {
+    "all_dependencies_differential_passed": true,
+    "canonical_exports_hash_verified": 11,
+    "ctox_reopen_passed": 11,
+    "oracle_reopen_passed": 11,
+    "clean_profile_flows_passed": 11,
+    "console_errors": 0,
+    "console_warnings": 0,
+    "http_business_data_routes": false,
+    "missing_original_parts": [],
+    "unintended_added_parts": []
+  },
+  "side_by_side": {
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html",
+    "feature": "document.open-render-zoom",
+    "viewport_css_pixels": { "width": 1600, "height": 900 },
+    "oracle_iframe_css_pixels": { "width": 800, "height": 813 },
+    "ctox_iframe_css_pixels": { "width": 800, "height": 813 },
+    "oracle_status": "document-ready",
+    "ctox_status": "document-ready",
+    "same_action_result": { "action": "zoom in twice", "oracle": "120%", "ctox": "120%" },
+    "console_errors": 0,
+    "console_warnings": 0,
+    "screenshots": [
+      { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/side-by-side.png", "sha256": "96fd2dcf984cf2ad33412d852818608135075f5c2861f67ace5c9e59e114dfad" },
+      { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/side-by-side-zoom120.png", "sha256": "9bfbc7e71a5d95f4c5b3502e84f7c23e179d4f7544b902bff6f47d1d0d0489e3" }
+    ]
+  },
+  "rust_verification": {
+    "native_docy_roundtrip_fixtures": 11,
+    "native_docy_roundtrip": "passed",
+    "path": "DOCX -> native Rust DOCY v10 -> native Rust DOCX export",
+    "primary_semantics_preserved": true,
+    "all_original_package_parts_preserved": true,
+    "only_understood_added_parts_allowed": true,
+    "manifest_hash_and_part_counts": "passed",
+    "escrow_parts_byte_preserved": "passed",
+    "non_zip_rejected": true,
+    "incomplete_package_rejected": true
+  },
+  "automation": {
+    "validator": "src/apps/business-os/office-engine/oracle/validate-document-corpus.mjs",
+    "validator_sha256": "700c1a8c3b13370b00f02b8ebcc4f3de04d3c358e0f8dd0ae8bcda0ec1eefe5f",
+    "validator_result": "CTOX document corpus OK (11 fixtures, 204 package parts declared)",
+    "javascript_tests": { "passed": 24, "failed": 0 },
+    "rust_office_engine_tests": { "passed": 32, "failed": 0 },
+    "cargo_fmt_check": "passed"
+  },
+  "rollout_note": "differential_passed closes the Documents feature dependency chain; shipped remains gated by the complete rollout scenario matrix and a stable release period"
+}

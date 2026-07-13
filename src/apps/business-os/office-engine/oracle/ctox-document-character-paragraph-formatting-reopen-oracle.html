@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>Euro-Office Oracle · CTOX character/paragraph export</title>
+    <style>
+      html,body,#oracle-editor{height:100%;margin:0;overflow:hidden;background:#e7ebea}
+      #oracle-status{position:fixed;z-index:20;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:#17211fee;color:#fff;font:12px ui-monospace,monospace;pointer-events:none}
+    </style>
+    <script src="http://127.0.0.1:8088/web-apps/apps/api/documents/api.js"></script>
+  </head>
+  <body>
+    <div id="oracle-status" role="status">booting</div>
+    <div id="oracle-editor"></div>
+    <script>
+      const status = document.querySelector('#oracle-status');
+      const events = [];
+      const record = (name, payload = {}) => {
+        events.push({ name, payload, at_ms: Date.now() });
+        status.textContent = name;
+      };
+      const documentUrl = 'http://host.lima.internal:4180/saved-ctox/document.character-paragraph-formatting.docx';
+      const oracleRun = new URLSearchParams(location.search).get('run') || 'standalone';
+      const config = {
+        type: 'desktop', width: '100%', height: '100%', documentType: 'word',
+        document: {
+          fileType: 'docx', key: `ctox-format-export-${oracleRun}`,
+          title: 'CTOX Character Paragraph Export.docx', url: documentUrl,
+          permissions: { edit: false, download: true, print: false, comment: false, review: false },
+        },
+        editorConfig: {
+          lang: 'de', mode: 'view',
+          user: { id: 'ctox-oracle', name: 'CTOX Oracle' },
+          customization: {
+            about: false, feedback: false, help: false, plugins: false,
+            compactHeader: true, compactToolbar: false, hideRightMenu: true, zoom: 100,
+          },
+        },
+        events: {
+          onAppReady: (event) => record('app-ready', event?.data),
+          onDocumentReady: (event) => record('document-ready', event?.data),
+          onError: (event) => record('error', event?.data),
+          onInfo: (event) => record('info', event?.data),
+          onWarning: (event) => record('warning', event?.data),
+        },
+      };
+      window.oracleEvidence = { feature_id: 'document.character-paragraph-formatting', document_url: documentUrl, config, events };
+      window.oracleEditor = new DocsAPI.DocEditor('oracle-editor', config);
+    </script>
+  </body>
+</html>

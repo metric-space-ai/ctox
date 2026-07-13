@@ -1,0 +1,212 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.open-render-sheets",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/open-render-sheets.xlsx",
+    "bytes": 4951,
+    "package_parts": 12,
+    "sha256": "e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043",
+    "worksheets": ["Overview", "Details", "Archive"],
+    "visible_worksheets": ["Overview", "Details"],
+    "hidden_worksheets": ["Archive"],
+    "preservation_part": "customXml/ctox-spreadsheet-preserve.xml"
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "document_type": "cell",
+    "document_ready": true,
+    "initial_sheet": "Overview",
+    "details_navigation": "passed",
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox_frontend_port": {
+    "runtime": "ctox-spreadsheets-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-cell-binary-v10",
+    "editor_protocol_version": 10,
+    "editor_fixture_path": "output/playwright/ctox-office/rust/spreadsheet.open-render-sheets/ctox-rust.Editor.bin",
+    "editor_fixture_bytes": 2009,
+    "editor_fixture_sha256": "1eefd2c0a76cfb03d173a7791ae4ea5c88a4df5accc50cfc2ab8896f3e321450",
+    "editor_fixture_origin": "native Rust OOXML-to-XLSY-v10 writer",
+    "document_ready": true,
+    "initial_sheet": "Overview",
+    "dirty": false,
+    "public_api": "ctox-office-spreadsheet.mjs#createCtoxOfficeEditor",
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "business_os_wrapper": {
+    "typed_runtime_setting": "office.spreadsheets_engine = ctox_spreadsheets",
+    "source_collection": "spreadsheet_blob_chunks",
+    "prepare_command": "office.spreadsheet.prepare",
+    "export_command": "office.spreadsheet.export",
+    "command_transport": "rxdb-webrtc",
+    "prepare_dispatched": true,
+    "export_dispatched": true,
+    "legacy_engine_remains_selectable": true,
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "rust_verification": {
+    "manifest_path": "src/core/office-engine/Cargo.toml",
+    "tests_passed": 11,
+    "tests_failed": 0,
+    "spreadsheet_identity_roundtrip": "passed",
+    "sheet_manifest": "Overview\\nDetails\\nArchive",
+    "escrow_part_preserved": true,
+    "native_editor_protocol": {
+      "operation": "ctox-office-engine inspect-editor spreadsheet",
+      "schema_version": "ctox-office-editor-payload-manifest-v1",
+      "protocol": "euro-office-cell-binary-v10",
+      "protocol_version": 10,
+      "payload_bytes": 3145,
+      "payload_sha256": "9782211fcd7cbb9e1812c0f736f91b5cf43ece40a251a4919f7a81d33c6e19c4",
+      "table_directory_bytes": 41,
+      "tables": ["app", "core", "shared_strings", "styles", "workbook", "worksheets", "other", "customs"],
+      "decoded_worksheets": [
+        { "name": "Overview", "sheet_id": 1, "visibility": "visible" },
+        { "name": "Details", "sheet_id": 2, "visibility": "visible" },
+        { "name": "Archive", "sheet_id": 3, "visibility": "hidden" }
+      ],
+      "decoded_shared_strings": {
+        "count": 18,
+        "first": "CTOX OVERVIEW",
+        "preservation_markers": ["ORACLE_SHEET_OVERVIEW_71C9", "ORACLE_SHEET_DETAILS_24AF", "ORACLE_SHEET_ARCHIVE_B83D"],
+        "last": "Closed"
+      },
+      "decoded_xlsb_cells": {
+        "Overview": { "count": 8, "B4": "125000", "B5": "98000" },
+        "Details": { "count": 8, "B4": "42", "B5": "18" },
+        "Archive": { "count": 6, "A4": "2025", "B4": "Closed" }
+      },
+      "document_server_used": false
+    },
+    "native_writer": {
+      "operation": "ctox-office-engine prepare-editor spreadsheet",
+      "source": "tests/fixtures/office/spreadsheet/open-render-sheets.xlsx",
+      "output": "output/playwright/ctox-office/rust/spreadsheet.open-render-sheets/ctox-rust.Editor.bin",
+      "bytes": 2009,
+      "sha256": "1eefd2c0a76cfb03d173a7791ae4ea5c88a4df5accc50cfc2ab8896f3e321450",
+      "implemented_tables": ["shared_strings", "styles", "workbook", "worksheets", "other"],
+      "implemented_semantics": ["sheet order", "sheet visibility", "shared strings", "numeric cells", "boolean cells", "cell styles", "fonts", "fills", "horizontal alignment", "column widths", "row heights"],
+      "browser_document_ready": true,
+      "render_matches_oracle": true,
+      "console_errors": 0,
+      "console_warnings": 0
+    }
+  },
+  "canonical_export": {
+    "business_os_path": "output/playwright/ctox-office/ctox/spreadsheet.open-render-sheets/business-os-canonical.xlsx",
+    "rust_path": "output/playwright/ctox-office/ctox/spreadsheet.open-render-sheets/ctox-rust-canonical.xlsx",
+    "bytes": 4951,
+    "sha256": "e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043",
+    "package_parts": 12,
+    "all_parts_byte_identical": true,
+    "missing_original_parts": [],
+    "unintended_added_parts": [],
+    "custom_xml_sha256": "1190c314c269fc7d1d73da50eb786d029c65a7a1cb405272642624c4d8c2f6ce",
+    "ctox_clean_profile_reopen": "passed",
+    "oracle_clean_profile_reopen": "passed"
+  },
+  "side_by_side": {
+    "oracle_iframe_css_pixels": { "width": 800, "height": 813 },
+    "ctox_iframe_css_pixels": { "width": 800, "height": 813 },
+    "oracle_status": "document-ready",
+    "ctox_status": "document-ready",
+    "configuration_gate": "passed",
+    "runtime_provenance_gate": "passed",
+    "visible_structure_review": "matching original Euro-Office toolbar, formula bar, grid, side rail, sheets and status bar",
+    "pixel_diff": {
+      "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/pixel-diff-800x813.json",
+      "raw_changed_pixels": 33960,
+      "changed_pixels_threshold_32": 11925,
+      "changed_ratio_threshold_32": 0.01833487084870849,
+      "classification": "within-versioned-reviewed-tolerance"
+    },
+    "visual_tolerance": {
+      "path": "src/apps/business-os/office-engine/oracle/visual-tolerances.json",
+      "review": "accepted",
+      "max_changed_ratio": 0.019,
+      "actual_changed_ratio": 0.01833487084870849,
+      "masks": []
+    },
+    "frontend_ported_gate": "passed-after-document.docx-roundtrip-corpus"
+  },
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/Statusbar.js:449-512",
+    "web-apps/apps/spreadsheeteditor/main/app/view/Statusbar.js:656-667",
+    "web-apps/apps/spreadsheeteditor/main/app/controller/ViewTab.js:59-87",
+    "sdkjs/cell/api.js:1082-1134",
+    "sdkjs/cell/apiDefines.js:516-537"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/rust-writer-styles-split-1600x900.png", "sha256": "f7d10446b5aec65336d748a470ce8d7beccea1a0b3e438f9eb6bd29a81983ce8" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/rust-writer-oracle-frame.png", "sha256": "82966d38f61f93bf99f3a07577c0031721133ad057a211076c948049e8e0c5d1" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/rust-writer-ctox-frame.png", "sha256": "98a7a48406122e686625f2da2dbd2667f6d70d48ae64447a4deaf5ead768f8c6" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/upstream-esm-split-v931-1600x900.png", "sha256": "12e381133cbf306543cdbee43e2457e0a1f69c53fb97468e0ff0e7c039ed09d8" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/oracle-frame-800x813.png", "sha256": "82966d38f61f93bf99f3a07577c0031721133ad057a211076c948049e8e0c5d1" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/ctox-frame-800x813.png", "sha256": "98a7a48406122e686625f2da2dbd2667f6d70d48ae64447a4deaf5ead768f8c6" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/pixel-diff-800x813.png", "sha256": "31afb992403f9f0c81f2fcb3ef3278db4803d31271a427c0834259c43b4e608c" },
+    { "path": "output/playwright/ctox-office/oracle/spreadsheet.open-render-sheets/oracle-overview.png", "sha256": "5e02da857747a333a997fce1cddbf64090129633fec27af5a29e8eedc3930a4b" },
+    { "path": "output/playwright/ctox-office/ctox/spreadsheet.open-render-sheets/ctox-overview.png", "sha256": "ccd81ae3ef22b9453ca3b0f65753d550961aa86c8c43572911aea4adfe4ca284" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/side-by-side-details.png", "sha256": "447fe4d3a0a9f0a1722b952e63fe7748ad669341ee3ad41d188d72776b07dc69" },
+    { "path": "output/playwright/ctox-office/business-os/spreadsheet.open-render-sheets/wrapper-details.png", "sha256": "c8ce8038ff67cbdda8a87dbd6f781469d11f4f1ef8b4be080dc807a16e64612d" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/canonical-clean-reopen.png", "sha256": "447fe4d3a0a9f0a1722b952e63fe7748ad669341ee3ad41d188d72776b07dc69" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/differential-initial-open-render.png", "sha256": "2d807b39fdde76798a6a65186c9dc2efe48025e176475f051e16c8818fb4514b" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.open-render-sheets/differential-details-open-render.png", "sha256": "b6e6700eca23e9526de7cb1881f80ae670ed99200c6f0491931cc49b16203a91" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "latest_side_by_side_attempt": {
+    "status": "differential_passed",
+    "date": "2026-07-12",
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.open-render-sheets",
+    "gate": "Both equal 799.5 x 813 CSS-pixel panes reached exact document-ready with matching view configuration and the pinned original SpreadsheetEditor runtime.",
+    "browser_flow": {
+      "path": "src/apps/business-os/office-engine/oracle/flows/spreadsheet.open-render-sheets.playwright.js",
+      "sha256": "7b111488bc48fbc399f9ca954cb1ee664420674e3de08c558fab88e19d6f2d1c",
+      "status": "passed",
+      "interaction": "real original-runtime status-bar Details worksheet tab click on both panes"
+    },
+    "initial_semantic_parity": {
+      "active_sheet": "Overview",
+      "worksheets": ["Overview", "Details", "Archive"],
+      "visible_worksheets": 2,
+      "archive_hidden": true,
+      "modified": false
+    },
+    "terminal_semantic_parity": {
+      "active_sheet": "Details",
+      "formula_bar": "CTOX DETAILS",
+      "marker": "ORACLE_SHEET_DETAILS_24AF",
+      "values": { "Consulting": 42, "Support": 18 },
+      "modified": false
+    },
+    "native_writer": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.open-render-sheets/ctox-rust.Editor.bin",
+      "bytes": 2009,
+      "sha256": "1eefd2c0a76cfb03d173a7791ae4ea5c88a4df5accc50cfc2ab8896f3e321450",
+      "protocol": "euro-office-cell-binary-v10"
+    },
+    "no_change_export": {
+      "strategy": "canonical XLSX escrow remains byte-identical because navigation is read-only",
+      "bytes": 4951,
+      "sha256": "e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043",
+      "package_parts": 12,
+      "ctox_reopen": "passed",
+      "oracle_reopen": "passed"
+    },
+    "browser_health": { "console_errors": 0, "console_warnings": 0, "failed_requests": 0 },
+    "finding": "The first Spreadsheet feature now runs the original Euro-Office SpreadsheetEditor on both sides. Rust supplies the CTOX pane with a native XLSY-v10 workbook whose sheet order, hidden state, cell values, styles and geometry visibly match the Oracle before and after real sheet-tab navigation.",
+    "remaining_gate": "None for spreadsheet.open-render-sheets.",
+    "required_next_work": "Proceed to spreadsheet.edit-save."
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.multi-sheet-merge-freeze",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.multi-sheet-merge-freeze",
+  "viewport": { "width": 1600, "height": 900 },
+  "preconditions": [
+    "Euro-Office Oracle v9.3.1 is running on 127.0.0.1:8088",
+    "CTOX uses the Rust-generated XLSY payload ctox-rust.Editor.bin",
+    "both editor frames use the original SpreadsheetEditor UI with identical geometry"
+  ],
+  "steps": [
+    { "action": "wait_for", "semantic": "both status=document-ready and comparison gate valid" },
+    { "action": "switch_sheet", "from": "Overview", "to": "Details", "expected_marker": "OPERATIONS_MARKER_A9C4" },
+    { "action": "switch_sheet", "from": "Details", "to": "Overview", "expected_marker": "OVERVIEW_MARKER_6F21" },
+    { "action": "verify_hidden_sheet", "sheet": "Archive", "expected": "not rendered in visible sheet tabs, preserved in XLSY/XLSX manifests" },
+    { "action": "unmerge", "range": "B2:C2", "surface": "original Merge and Center toolbar button" },
+    { "action": "merge", "range": "B3:C3", "surface": "original Merge and Center toolbar button" },
+    { "action": "freeze_at", "cell": "B3", "surface": "original sdkjs command used by ViewTab", "expected": { "x_split": 1, "y_split": 2, "active_pane": "bottomRight" } },
+    { "action": "save", "surface": "original Save toolbar button", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_merge_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/worksheets/sheet1.xml"], "expected_unchanged_parts": 11 },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "target": "modules/spreadsheets.mount(ctx)", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

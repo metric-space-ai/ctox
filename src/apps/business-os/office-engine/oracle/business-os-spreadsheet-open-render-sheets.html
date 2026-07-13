@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+    <link rel="stylesheet" href="../../app.css"><link rel="stylesheet" href="../../shared/base.css">
+    <title>Business OS · spreadsheet.open-render-sheets</title>
+    <style>html,body,#shell,#app{height:100%;margin:0;overflow:hidden}#shell{display:grid;grid-template-columns:240px minmax(0,1fr) 260px;background:var(--bg)}#left,#right{min-width:0;overflow:auto;background:var(--surface);color:var(--text)}#status{position:fixed;z-index:9999;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:color-mix(in srgb,var(--text) 92%,transparent);color:var(--surface);font:12px ui-monospace,monospace;pointer-events:none}@media(max-width:720px){#shell{grid-template-columns:minmax(0,1fr)}#left,#right{display:none}#status{right:6px;top:4px}}</style>
+  </head>
+  <body>
+    <div id="status" role="status">booting</div><div id="shell"><aside id="left"></aside><main id="app"></main><aside id="right"></aside></div>
+    <script type="module">
+      import { mount } from '../../modules/spreadsheets/index.js';
+      const params = new URLSearchParams(location.search);
+      const initialStorage = { localStorageKeys: Object.keys(localStorage), sessionStorageKeys: Object.keys(sessionStorage) };
+      const feature = params.get('feature') || 'open-render-sheets';
+      const locale = params.get('locale') === 'en' ? 'en' : 'de';
+      const shellStyle = params.get('shell') === 'macos' ? 'macos' : 'windows';
+      const theme = params.get('theme') === 'dark' ? 'dark' : 'light';
+      document.documentElement.lang = locale;
+      document.documentElement.dataset.shellStyle = shellStyle;
+      document.documentElement.dataset.theme = theme;
+      const isEditSave = feature === 'edit-save';
+      const isUndoClipboardFill = feature === 'undo-clipboard-fill';
+      const isCellFormat = feature === 'cell-format-rows-columns';
+      const isFormulas = feature === 'formulas-references';
+      const isMultiSheet = feature === 'multi-sheet-merge-freeze';
+      const isSortFilter = feature === 'sort-filter-tables';
+      const isValidationConditional = feature === 'validation-conditional-formatting';
+      const isCommentsNamesProtection = feature === 'comments-names-protection';
+      const isCharts = feature === 'charts';
+      const isPivotPrintLayout = feature === 'pivot-print-layout';
+      const fixtureUrl = isPivotPrintLayout
+        ? '/tests/fixtures/office/spreadsheet/pivot-print-layout.xlsx'
+        : isCharts
+        ? '/tests/fixtures/office/spreadsheet/charts.xlsx'
+        : isCommentsNamesProtection
+        ? '/tests/fixtures/office/spreadsheet/comments-names-protection.xlsx'
+        : isValidationConditional
+        ? '/tests/fixtures/office/spreadsheet/validation-conditional-formatting.xlsx'
+        : isSortFilter
+        ? '/tests/fixtures/office/spreadsheet/sort-filter-tables.xlsx'
+        : isMultiSheet
+        ? '/tests/fixtures/office/spreadsheet/multi-sheet-merge-freeze.xlsx'
+        : isFormulas
+        ? '/tests/fixtures/office/spreadsheet/formulas-references.xlsx'
+        : isCellFormat
+        ? '/tests/fixtures/office/spreadsheet/cell-format-rows-columns.xlsx'
+        : isUndoClipboardFill
+        ? '/tests/fixtures/office/spreadsheet/undo-clipboard-fill.xlsx'
+        : isEditSave
+          ? '/tests/fixtures/office/spreadsheet/edit-save.xlsx'
+          : '/tests/fixtures/office/spreadsheet/open-render-sheets.xlsx';
+      const editorFixtureUrl = isPivotPrintLayout
+        ? '/output/playwright/ctox-office/rust/spreadsheet.pivot-print-layout/ctox-rust.Editor.bin'
+        : isCharts
+        ? '/output/playwright/ctox-office/rust/spreadsheet.charts/ctox-rust.Editor.bin'
+        : isCommentsNamesProtection
+        ? '/output/playwright/ctox-office/rust/spreadsheet.comments-names-protection/ctox-rust.Editor.bin'
+        : isValidationConditional
+        ? '/output/playwright/ctox-office/rust/spreadsheet.validation-conditional-formatting/ctox-rust.Editor.bin'
+        : isSortFilter
+        ? '/output/playwright/ctox-office/rust/spreadsheet.sort-filter-tables/ctox-rust.Editor.bin'
+        : isMultiSheet
+        ? '/output/playwright/ctox-office/rust/spreadsheet.multi-sheet-merge-freeze/ctox-rust.Editor.bin'
+        : isFormulas
+        ? '/output/playwright/ctox-office/rust/spreadsheet.formulas-references/ctox-rust.Editor.bin'
+        : isCellFormat
+        ? '/output/playwright/ctox-office/rust/spreadsheet.cell-format-rows-columns/ctox-rust.Editor.bin'
+        : isUndoClipboardFill
+        ? '/output/playwright/ctox-office/rust/spreadsheet.undo-clipboard-fill/ctox-rust.Editor.bin'
+        : isEditSave
+          ? '/output/playwright/ctox-office/rust/spreadsheet.edit-save/ctox-rust.Editor.bin'
+          : '/output/playwright/ctox-office/rust/spreadsheet.open-render-sheets/ctox-rust.Editor.bin';
+      const bytes = new Uint8Array(await (await fetch(fixtureUrl)).arrayBuffer());
+      const editorBytes = new Uint8Array(await (await fetch(editorFixtureUrl)).arrayBuffer());
+      const base64 = btoa(String.fromCharCode(...bytes));
+      const editorBase64 = btoa(String.fromCharCode(...editorBytes));
+      const now = Date.now();
+      const record = {
+        id: 'sheet_business_os_oracle', title: 'CTOX Oracle Workbook', filename: isPivotPrintLayout ? 'pivot-print-layout.xlsx' : isCharts ? 'charts.xlsx' : isCommentsNamesProtection ? 'comments-names-protection.xlsx' : isValidationConditional ? 'validation-conditional-formatting.xlsx' : isSortFilter ? 'sort-filter-tables.xlsx' : isMultiSheet ? 'multi-sheet-merge-freeze.xlsx' : isFormulas ? 'formulas-references.xlsx' : isCellFormat ? 'cell-format-rows-columns.xlsx' : isUndoClipboardFill ? 'undo-clipboard-fill.xlsx' : isEditSave ? 'edit-save.xlsx' : 'open-render-sheets.xlsx',
+        mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', spreadsheet_type: 'xlsx',
+        status: 'Imported', current_version_id: 'sheet_business_os_oracle_v1', source_sha256: 'e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043',
+        row_count: 0, col_count: 0, diagnostics_count: 0, linked_records: [], tags: ['oracle'], index_text: 'CTOX Oracle Workbook',
+        is_deleted: false, created_at_ms: now, updated_at_ms: now,
+      };
+      const version = {
+        id: 'sheet_business_os_oracle_v1', spreadsheet_id: record.id, version: 1, source_kind: 'imported_xlsx',
+        blob_id: 'sheet_business_os_oracle_blob', editor_blob_id: 'sheet_business_os_oracle_editor_blob',
+        editor_protocol: 'euro-office-cell-binary-v10', editor_protocol_version: 10, conversion_state: 'prepared',
+        model_json: { format: 'xlsx', summary: { filename: record.filename, bytes: bytes.byteLength }, data: [], columns: [] },
+        diagnostics: [], created_at_ms: now, updated_at_ms: now,
+      };
+      const chunks = [{
+        id: 'sheet_business_os_oracle_blob_0', blob_id: version.blob_id, spreadsheet_id: record.id, version_id: version.id,
+        idx: 0, total: 1, mime_type: record.mime_type, encoding: 'base64', data: base64, created_at_ms: now,
+      }, {
+        id: 'sheet_business_os_oracle_editor_blob_0', blob_id: version.editor_blob_id, spreadsheet_id: record.id, version_id: version.id,
+        idx: 0, total: 1, mime_type: 'application/octet-stream', encoding: 'base64', data: editorBase64, created_at_ms: now,
+      }];
+      const runbooks = [];
+      const commands = [];
+      const runtimeSettings = { id: 'runtime-settings', office: { spreadsheets_engine: 'ctox_spreadsheets' } };
+      const syncEvents = [];
+      const syncWaiters = new Set();
+      let replicationUp = navigator.onLine;
+      const setReplicationUp = (value) => {
+        replicationUp = Boolean(value); syncEvents.push({ event: replicationUp ? 'online' : 'offline', at: Date.now() });
+        if (replicationUp) { for (const resolve of syncWaiters) resolve(); syncWaiters.clear(); }
+      };
+      window.addEventListener('offline', () => setReplicationUp(false));
+      window.addEventListener('online', () => setReplicationUp(true));
+      const sync = { async startCollection(name) { syncEvents.push({ event: 'start', collection: name, replicationUp, at: Date.now() }); return { state: { awaitInSync: () => replicationUp ? Promise.resolve() : new Promise((resolve) => syncWaiters.add(resolve)) } }; } };
+      const doc = (value) => value ? { ...value, toJSON() { return { ...value }; }, async incrementalPatch(patch) { Object.assign(value, patch); } } : null;
+      const collection = (name) => ({
+        $: { subscribe() { return { unsubscribe() {} }; } },
+        findOne(id) { return { async exec() {
+          if (name === 'spreadsheets') return id === record.id ? doc(record) : null;
+          if (name === 'spreadsheet_versions') return id === version.id ? doc(version) : null;
+          if (name === 'ctox_runtime_settings') return id === 'runtime-settings' ? doc(runtimeSettings) : null;
+          return null;
+        } }; },
+        find(query = {}) { return { async exec() {
+          if (name === 'spreadsheets') return [doc(record)];
+          if (name === 'spreadsheet_versions') return query.selector?.spreadsheet_id === record.id ? [doc(version)] : [];
+          if (name === 'spreadsheet_blob_chunks') return chunks.filter((row) => row.blob_id === query.selector?.blob_id).map(doc);
+          if (name === 'spreadsheet_runbooks') return runbooks.map(doc);
+          return [];
+        } }; },
+        async insert(value) { if (name === 'spreadsheet_runbooks') runbooks.push(value); return doc(value); },
+        async bulkUpsert(values) { if (name === 'spreadsheet_blob_chunks') chunks.push(...values); return values.map(doc); },
+      });
+      const ctx = {
+        host: document.querySelector('#app'), left: document.querySelector('#left'), right: document.querySelector('#right'), locale, shellStyle, module: { id: 'spreadsheets' }, db: { collection },
+        permissions: { canWriteCollection: () => true }, sync,
+        commandBus: { async dispatch(command, options) {
+          commands.push({ command, options });
+          if (command.type === 'office.spreadsheet.commit') {
+            Object.assign(version, {
+              id: 'sheet_business_os_oracle_v2', version: 2,
+              editor_blob_id: command.payload.editor_blob_id,
+              editor_protocol: command.payload.editor_protocol,
+              editor_protocol_version: command.payload.editor_protocol_version,
+            });
+          }
+          return { status: 'completed', payload: { outcome: { ok: true, record_id: record.id, version_id: version.id, blob_id: version.blob_id } } };
+        } },
+        notifications: { success() {}, error(message) { console.error(message); } }, getActionIcon: () => '',
+        closeDrawers() { document.querySelector('#test-drawer')?.remove(); },
+        openLeftDrawer(content) { const drawer = document.createElement('aside'); drawer.id = 'test-drawer'; drawer.append(content); document.body.append(drawer); },
+        openRightDrawer() {}, openBottomDrawer() {},
+      };
+      let cleanup = await mount(ctx);
+      async function remount(engine = runtimeSettings.office.spreadsheets_engine) {
+        await cleanup?.();
+        runtimeSettings.office.spreadsheets_engine = engine === 'ctox_spreadsheets' ? 'ctox_spreadsheets' : 'legacy';
+        ctx.host.replaceChildren(); ctx.left.replaceChildren(); ctx.right.replaceChildren();
+        cleanup = await mount(ctx);
+        evidence.cleanup = cleanup;
+        return runtimeSettings.office.spreadsheets_engine;
+      }
+      const evidence = window.businessOsSpreadsheetEvidence = { ctx, record, version, chunks, commands, syncEvents, cleanup, remount, runtimeSettings, locale, shellStyle, initialStorage, fixture_url: fixtureUrl, editor_fixture_url: editorFixtureUrl };
+      const status = document.querySelector('#status');
+      const wait = setInterval(() => {
+        if (document.querySelector('iframe[data-ctox-office-kind="spreadsheet"]')) {
+          clearInterval(wait); status.textContent = 'document-ready';
+        }
+      }, 50);
+    </script>
+  </body>
+</html>

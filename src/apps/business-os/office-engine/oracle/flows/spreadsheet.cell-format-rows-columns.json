@@ -1,0 +1,26 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.cell-format-rows-columns",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.cell-format-rows-columns",
+  "viewport": { "width": 1600, "height": 900 },
+  "steps": [
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "assert_original_runtime", "targets": ["oracle", "ctox"], "equal_iframe_geometry": true, "protocol": "XLSY v10" },
+    { "action": "select", "cell": "A2" },
+    { "action": "format", "values": { "bold": true, "italic": true } },
+    { "action": "select", "cell": "B4" },
+    { "action": "number_format", "value": "Euro accounting" },
+    { "action": "select", "cell": "A4" },
+    { "action": "row_height", "points": 27.75 },
+    { "action": "select", "cell": "B3" },
+    { "action": "column_width", "characters": 32.625 },
+    { "action": "select", "cell": "A5" },
+    { "action": "hide_row", "row": 5 },
+    { "action": "show_row", "row": 5 },
+    { "action": "assert_unrelated_style", "cell": "A1", "bold": true, "italic": false },
+    { "action": "save", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_format_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/styles.xml", "xl/worksheets/sheet1.xml"] },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "wrapper": "modules/spreadsheets.mount(ctx)", "command": "office.spreadsheet.commit", "transport": "rxdb-webrtc", "until": "terminal" }
+  ]
+}

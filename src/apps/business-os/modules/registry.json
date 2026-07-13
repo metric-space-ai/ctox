@@ -264,8 +264,8 @@
     },
     {
       "id": "documents",
-      "title": "Documents",
-      "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+      "title": "CTOX Documents",
+      "description": "Native DOCX workspace with the CTOX Documents fork, explorer, versions, and CTOX runbooks.",
       "entry": "modules/documents/index.html",
       "collections": [
         "business_commands",
@@ -282,24 +282,56 @@
       "editable": true,
       "deletable": true,
       "layout": {
+        "shell": "windowed",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-documents\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-documents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z\" fill=\"url(#grad-documents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 2v4a2 2 0 0 0 2 2h4\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"16\" x2=\"16\" y2=\"16\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"8\" x2=\"10\" y2=\"8\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line></svg>",
         "left": "document navigation and explorer",
         "center": "DOCX viewer/editor workbench",
-        "right": "document runbooks and automation prompts"
+        "right": "document runbooks and automation prompts",
+        "drawers": {
+          "left": "document metadata and import settings",
+          "right": "runbook details and generated commands",
+          "bottom": "diagnostics, export evidence, and selected document context"
+        }
       },
-      "version": "v0.1",
+      "version": "v1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "store": {
-        "summary": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+        "summary": "DOCX and Markdown workspace with the CTOX Documents ESM fork, native Rust roundtrip, versions, blob chunks, and automation runbooks.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/documents",
-        "installable": true,
+        "installable": false,
         "editable_after_install": true,
-        "distribution": "catalog-module"
+        "distribution": "starter-module"
       },
-      "install_scope": "local",
-      "default_installed": true
+      "install_scope": "starter",
+      "default_installed": true,
+      "category": "Knowledge",
+      "tags": [
+        "documents",
+        "docx",
+        "markdown",
+        "runbooks"
+      ],
+      "launch_kind": "desktop-app",
+      "presentation": {
+        "default_mode": "window",
+        "supported_modes": [
+          "window",
+          "maximized",
+          "focus"
+        ],
+        "initial_size": {
+          "width": 1180,
+          "height": 800
+        },
+        "minimum_size": {
+          "width": 640,
+          "height": 480
+        },
+        "multi_instance": false,
+        "auto_restore": false
+      }
     },
     {
       "id": "knowledge",
@@ -666,8 +698,8 @@
     },
     {
       "id": "spreadsheets",
-      "title": "Spreadsheets",
-      "description": "Native XLSX spreadsheet workspace with spreadsheet explorer, spreadsheet editor surface based on JSpreadsheet, and CTOX runbooks.",
+      "title": "CTOX Spreadsheets",
+      "description": "Native XLSX workspace with the CTOX Spreadsheets fork, explorer, versions, and CTOX runbooks.",
       "entry": "modules/spreadsheets/index.html",
       "collections": [
         "business_commands",
@@ -681,24 +713,56 @@
       "editable": true,
       "deletable": true,
       "layout": {
+        "shell": "windowed",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-spreadsheets\"><defs><linearGradient id=\"grad-spreadsheets\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#10b981\" /><stop offset=\"100%\" stop-color=\"#059669\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-spreadsheets)\" fill-opacity=\"0.12\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"9\" y1=\"3\" x2=\"9\" y2=\"21\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"15\" x2=\"21\" y2=\"15\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M5 17l3-3 4 2 4-4\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"16\" cy=\"12\" r=\"1.5\" fill=\"#ffffff\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1\"></circle></svg>",
         "left": "spreadsheet navigation and explorer",
         "center": "Spreadsheet viewer/editor workbench",
-        "right": "spreadsheet runbooks and automation prompts"
+        "right": "spreadsheet runbooks and automation prompts",
+        "drawers": {
+          "left": "spreadsheet metadata and import settings",
+          "right": "runbook details and generated commands",
+          "bottom": "diagnostics, export evidence, and selected spreadsheet context"
+        }
       },
-      "version": "v0.1",
+      "version": "v1",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "store": {
-        "summary": "Native XLSX spreadsheet workspace with spreadsheet explorer, spreadsheet editor surface based on JSpreadsheet, and CTOX runbooks.",
+        "summary": "XLSX spreadsheet workspace with the CTOX Spreadsheets ESM fork, native Rust roundtrip, versions, and automation runbooks.",
         "repository": "metric-space-ai/ctox",
         "source_path": "modules/spreadsheets",
-        "installable": true,
+        "installable": false,
         "editable_after_install": true,
-        "distribution": "catalog-module"
+        "distribution": "starter-module"
       },
-      "install_scope": "local",
-      "default_installed": true
+      "install_scope": "starter",
+      "default_installed": true,
+      "category": "Analytics",
+      "tags": [
+        "spreadsheets",
+        "xlsx",
+        "tables",
+        "runbooks"
+      ],
+      "launch_kind": "desktop-app",
+      "presentation": {
+        "default_mode": "window",
+        "supported_modes": [
+          "window",
+          "maximized",
+          "focus"
+        ],
+        "initial_size": {
+          "width": 1280,
+          "height": 820
+        },
+        "minimum_size": {
+          "width": 640,
+          "height": 480
+        },
+        "multi_instance": false,
+        "auto_restore": false
+      }
     },
     {
       "id": "notes",

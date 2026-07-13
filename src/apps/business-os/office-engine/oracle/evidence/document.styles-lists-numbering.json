@@ -1,0 +1,142 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.styles-lists-numbering",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/styles-lists-numbering.docx",
+    "bytes": 37033,
+    "sha256": "e484952184b361976888ed7b116e1b69ffaa1d97f9b7d2fc78e208c3558f03c5",
+    "style_targets": ["STYLE_HEADING1_TARGET", "STYLE_QUOTE_TARGET"],
+    "bullet_targets": ["BULLET_BASE_ALPHA", "BULLET_NEST_TARGET"],
+    "number_targets": ["NUMBER_BASE_ONE", "NUMBER_BASE_TWO", "NUMBER_BASE_THREE", "NUMBER_CONTINUE_TARGET"],
+    "preservation_marker": "PRESERVE_STYLES_LISTS_UNRELATED_E52A"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "locale": "de-DE"
+  },
+  "expected_semantic_state": {
+    "STYLE_HEADING1_TARGET": { "style_id": "693", "style_name": "Heading 1" },
+    "STYLE_QUOTE_TARGET": { "style_id": "734", "style_name": "Quote" },
+    "BULLET_BASE_ALPHA": { "style_id": "723", "style_name": "List Bullet", "num_id": 1, "abstract_num_id": 8, "level": 0 },
+    "BULLET_NEST_TARGET": { "style_id": "723", "style_name": "List Bullet", "num_id": 1, "abstract_num_id": 8, "level": 1 },
+    "NUMBER_BASE_ONE": { "style_id": "726", "style_name": "List Number", "num_id": 5, "abstract_num_id": 7, "visible_number": 1 },
+    "NUMBER_BASE_TWO": { "style_id": "726", "style_name": "List Number", "num_id": 5, "abstract_num_id": 7, "visible_number": 2 },
+    "NUMBER_BASE_THREE": { "style_id": "726", "style_name": "List Number", "num_id": 5, "abstract_num_id": 7, "visible_number": 3 },
+    "NUMBER_CONTINUE_TARGET": { "style_id": "713", "style_name": "List Paragraph", "num_id": 5, "level": 0, "visible_number": 4 },
+    "PRESERVE_STYLES_LISTS_UNRELATED_E52A": { "unchanged": true }
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1621-1654",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1709-1772",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:2692-2698",
+    "web-apps/apps/documenteditor/main/app/controller/DocumentHolderExt.js:2238-2253",
+    "sdkjs/word/api.js:4316-4350",
+    "sdkjs/word/api.js:4413-4427",
+    "sdkjs/word/api.js:4565-4583",
+    "sdkjs/word/api.js:4605-4610"
+  ],
+  "oracle_export": {
+    "bytes": 40518,
+    "sha256": "6a79ba26487c4a37ccf5c3bf51e466328fdccd7236e88490c5224a20de3a467f",
+    "callback_statuses": [6],
+    "reopen_in_oracle": "passed"
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-initial.png", "sha256": "95dc0247c348b5a88f12804efafea9c5b4b07986962909de8fefc221b8fce2a6" },
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-after-heading1.png", "sha256": "becefc870d18b1129e0dfb5aaa08e0fb323bf5923f6a0d584cb02579050e583a" },
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-after-quote.png", "sha256": "28cfdbe0fe3c2598d8a2a6c028559e00047f6c75339e3e32b14fd06170919598" },
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-after-bullet-level.png", "sha256": "b512a8b0efa1514ca8a729c09169ed51357d5c4325143f0782282c28a53e0b09" },
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-after-numbering-start.png", "sha256": "358a42fa3f62592a6418b13de88e770c85befe14fbcdacb43c004944154da36e" },
+    { "path": "output/playwright/ctox-office/oracle/document.styles-lists-numbering/oracle-terminal.png", "sha256": "5f1f0182f63a0f4a8c029ccfcb7b593fec11bccce612c642b476b8879d8cbe0e" },
+    { "path": "output/playwright/ctox-office/ctox/document.styles-lists-numbering/ctox-terminal.png", "sha256": "1f6a90a401105f76d1a2d0e54f2d0d98c7937a886f823e3bc22898b5cdbe19cf" },
+    { "path": "output/playwright/ctox-office/ctox/document.styles-lists-numbering/ctox-clean-reopen.png", "sha256": "414206535b8da3a07643873e040634f8d5b8e82673b7fbd053aebcef5055dfe5" },
+    { "path": "output/playwright/ctox-office/ctox/document.styles-lists-numbering/oracle-reopen.png", "sha256": "11758222e46d64de292ee0e7b6c7725b20c3f75eae22b5cf0e2525a174910b49" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "latest_side_by_side_attempt": {
+    "date": "2026-07-12",
+    "status": "differential_passed",
+    "harness_url": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.styles-lists-numbering",
+    "screenshot": "output/playwright/ctox-office/comparison/document.styles-lists-numbering/differential-terminal-styles-lists.png",
+    "screenshot_sha256": "627357f2862c507fd2f4f112b5625e3196bf21021a95aae8612f1bcf350b42bb",
+    "rust_prepared_editor_payload": {
+      "bytes": 37272,
+      "sha256": "a5f1e06eac222c7420a3c132142eb7883bf6199c86ab61d394b2ed5a0b3c751b",
+      "tables": ["signature", "settings", "numbering", "styles", "document"]
+    },
+    "ctox_saved_editor_payload": {
+      "bytes": 365784,
+      "sha256": "3ad1708e8e39784b502add62fb853d3002833fdc4b3a97f32856eae8138c8a76"
+    },
+    "browser_health": {
+      "console_errors": 0,
+      "console_warnings": 2,
+      "console_warning_notes": ["WebGL GL_CLOSE_PATH_NV ReadPixels performance warnings only"],
+      "failed_requests": 0
+    },
+    "progress": "Rust writes the Euro-Office DOCY styles table (table_type 5), applies OOXML latentStyles defaults/exceptions so linked *Char styles remain semi-hidden, resolves theme fonts from word/theme/theme1.xml, and no longer flattens default run properties into every document run. The side-by-side flow uses real Euro-Office UI interactions; paragraph-style targets are selected via Builder Search plus GetAllParagraphs()[0].Select(), and style gallery tiles are clicked via measured bounding boxes because frame.locator().click() did not dispatch the Heading tile reliably inside the CTOX iframe.",
+    "visual_gate": "Passed in the same-origin split-screen harness with the original Euro-Office DocumentEditor on both sides. The terminal toolbar reports Calibri 14 and Heading 1 on both Oracle and CTOX; visible canvas state matches for Heading 1, Quote, bullet nesting, and numbered-list continuation."
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/document.styles-lists-numbering/ctox-editor.docx",
+      "bytes": 365784,
+      "sha256": "3ad1708e8e39784b502add62fb853d3002833fdc4b3a97f32856eae8138c8a76"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.styles-lists-numbering/ctox-canonical.docx",
+      "bytes": 35610,
+      "sha256": "9bc2f7bff05ae8fa93a6369c418c61d4b59860d74aa4a0717a1879dddf8b3b1f",
+      "package_parts": 17,
+      "changed_parts": ["word/document.xml", "word/numbering.xml"],
+      "unchanged_original_parts": 15,
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "reopen_in_ctox": "passed",
+      "reopen_in_oracle": "passed"
+    },
+    "semantic_state": {
+      "STYLE_HEADING1_TARGET": { "style_id": "Heading1", "style_name": "Heading 1" },
+      "STYLE_QUOTE_TARGET": { "style_id": "Quote", "style_name": "Quote" },
+      "BULLET_NEST_TARGET": { "style_id": "ListBullet", "num_id": 1, "abstract_num_id": 8, "level": 1 },
+      "NUMBER_CONTINUE_TARGET": { "style_id": "ListParagraph", "num_id": 5, "level": 0, "visible_number": 4 }
+    },
+    "required_preservation": {
+      "understood_parts": ["word/document.xml", "word/numbering.xml"],
+      "unrelated_original_parts_unchanged": true,
+      "unchanged_original_parts": 15,
+      "original_parts": 17,
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    },
+    "semantic_verification": {
+      "save_reopen_in_ctox": "passed",
+      "clean_profile_reopen": "passed",
+      "oracle_reopen": "passed",
+      "exported_markers_verified": true
+    },
+    "verification": {
+      "javascript_tests": { "passed": 3, "failed": 0 },
+      "rust_tests": { "passed": 5, "failed": 0 },
+      "feature_matrix_validator": "passed"
+    }
+  }
+}

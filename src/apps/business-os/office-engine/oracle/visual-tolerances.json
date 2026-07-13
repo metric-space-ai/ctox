@@ -1,0 +1,15 @@
+{
+  "schema_version": "ctox-office-visual-tolerances-v1",
+  "comparisons": {
+    "spreadsheet.open-render-sheets": {
+      "viewport": { "width": 1600, "height": 900, "device_scale_factor": 1 },
+      "iframe": { "width": 800, "height": 813 },
+      "max_channel_threshold": 32,
+      "max_changed_ratio": 0.019,
+      "actual_changed_ratio": 0.01833487084870849,
+      "masks": [],
+      "review": "accepted",
+      "rationale": "The two original Euro-Office canvases are compositionally identical. CTOX adds one same-origin capsule iframe layer, which changes subpixel text/canvas antialiasing. The Rust-generated CTOX frame is byte-identical to the previously reviewed frame rendered from the Oracle-captured XLSY payload."
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.pivot-print-layout",
+  "status": "differential_passed",
+  "oracle": { "version": "v9.3.1", "role": "development-only-reference" },
+  "fixture": { "path": "tests/fixtures/office/spreadsheet/pivot-print-layout.xlsx", "bytes": 8212, "sha256": "c1f6d5b9952a659ba8884647f6958b995822403a2484dcc84427c4b0511a8532", "parts": 18 },
+  "oracle_capture": {
+    "document_ready": true,
+    "pivot_table": "CTOXRevenuePivot",
+    "pivot_range": "E3:F7",
+    "view": "pageBreakPreview",
+    "pages": 2,
+    "paper": "A4 landscape",
+    "print_area": "Overview!$A$1:$F$10",
+    "print_titles": "Overview!$1:$1"
+    ,"saved": { "path": "runtime/office-oracle/spreadsheet.pivot-print-layout/oracle-saved.xlsx", "bytes": 14280, "sha256": "24ecaf30bcb7a02b65e158d1bcf9533cb0c6e1fc00a9f36f7bca33e9f9b9c4dc" }
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "initial_editor_payload": { "path": "runtime/office-evidence/spreadsheet.pivot-print-layout/initial.xlsy", "bytes": 5394, "sha256": "f1e1b5041815e2a1197c88148bf114b8e43b54c85bd183eef2a1b338345a00d8" },
+    "native_import": { "pivot_cache": true, "pivot_table": true, "page_margins": true, "page_setup": true, "fit_to_page": true, "header_footer": true, "manual_breaks": true },
+    "saved_editor_payload": { "path": "output/playwright/ctox-office/ctox/spreadsheet.pivot-print-layout/ctox-editor.xlsx", "bytes": 8427, "sha256": "1f4c6bb11171bca86796e0febc9827cff881c6f70945d1e1cab2ecccf4096ee2" },
+    "canonical_export": { "path": "output/playwright/ctox-office/ctox/spreadsheet.pivot-print-layout/ctox-canonical.xlsx", "bytes": 8316, "sha256": "b3b74069cc74852ee9196b094480e88d777ee6851668f09295a1712e2667a2f7", "parts": 18, "changed_parts": ["xl/pivotTables/pivotTable1.xml", "xl/worksheets/sheet1.xml"], "unchanged_parts": 16, "pivot_name": "CTOXRevenuePivot2026", "different_first_page": true },
+    "reprepared_payload": { "path": "output/playwright/ctox-office/rust/spreadsheet.pivot-print-layout/ctox-export.Editor.bin", "bytes": 5539, "sha256": "2ef503779bda9aa0ac7d2864d492ff9917f4ae96f3b35909af0388e059b9e2be" },
+    "reopen": { "ctox": "document-ready", "oracle": "document-ready", "initial_visual_gate": true, "export_visual_gate": true },
+    "business_os_mount": { "wrapper": "modules/spreadsheets.mount(ctx)", "command": "office.spreadsheet.commit", "base_version_id": "sheet_business_os_oracle_v1", "transport": "rxdb-webrtc", "until": "terminal", "editor_blob_bytes": 8427, "badge": "Gespeichert" }
+  },
+  "geometry": { "viewport": { "width": 1800, "height": 1100 }, "oracle_iframe": { "width": 899.5, "height": 1013 }, "ctox_iframe": { "width": 899.5, "height": 1013 } },
+  "screenshots": [{ "path": "output/playwright/ctox-office/comparison/spreadsheet.pivot-print-layout/native-pivot-print-fit.png", "sha256": "95e9a017b1ede7c49b4a45c8af3b73211d9c8f3be40a80164e0bfd21a5ce7b7b" }, { "path": "output/playwright/ctox-office/comparison/spreadsheet.pivot-print-layout/native-export-reopen.png", "sha256": "6cdacc503fed6edb010fc312aad06323ddeaaddf093745d2b802e853585919f3" }, { "path": "output/playwright/ctox-office/comparison/spreadsheet.pivot-print-layout/business-os-mount-validation.png", "sha256": "f30d8891525c5e6d99a3e6e41bac3c9086343cb1c1fe0fe78c80f575105a4217" }],
+  "source_anchors": ["sdkjs/cell/model/Serialize.js:3760-3775,4058-4084,5317-5427,5966-6020,6063-6240,7395-7490", "sdkjs/cell/model/PivotTables.js:4035-4310"]
+}

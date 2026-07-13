@@ -1,0 +1,37 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.undo-clipboard-keyboard",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-undo-clipboard-keyboard.html",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1200x759 CSS pixels"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.undo-clipboard-keyboard", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "click", "target": "paragraph containing UNDO_CLIPBOARD_BASE", "coordinates_from": "measured editor page rectangle" },
+    { "action": "press", "key": "End" },
+    { "action": "type", "value": "_ONE" },
+    { "action": "press", "key": "Meta+Z", "assert_text": "UNDO_CLIPBOARD_BASE" },
+    { "action": "press", "key": "Meta+Y", "assert_text": "UNDO_CLIPBOARD_BASE_ONE" },
+    { "action": "press", "key": "End" },
+    { "action": "press", "key": "Shift+Home", "effect": "select complete source marker line" },
+    { "action": "press", "key": "Meta+C" },
+    { "action": "click", "target": "paragraph containing PASTE_DESTINATION", "coordinates_from": "measured editor page rectangle" },
+    { "action": "press", "key": "End" },
+    { "action": "press", "key": "Shift+Home" },
+    { "action": "press", "key": "Meta+V", "assert_count": { "value": "UNDO_CLIPBOARD_BASE_ONE", "count": 2 } },
+    { "action": "press", "key": "End" },
+    { "action": "press", "key": "Shift+Home" },
+    { "action": "press", "key": "Meta+X" },
+    { "action": "press", "key": "Meta+V", "assert_count": { "value": "UNDO_CLIPBOARD_BASE_ONE", "count": 2 } },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" },
+    { "action": "reopen", "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-undo-clipboard-keyboard-reopen.html" },
+    { "action": "assert_count", "value": "UNDO_CLIPBOARD_BASE_ONE", "count": 2 },
+    { "action": "assert_text", "value": "PRESERVE_UNDO_CLIPBOARD_UNRELATED_4C19" },
+    { "action": "assert_absent", "value": "PASTE_DESTINATION" }
+  ]
+}

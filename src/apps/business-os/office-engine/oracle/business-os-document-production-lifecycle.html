@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+    <link rel="stylesheet" href="../../app.css"><link rel="stylesheet" href="../../shared/base.css">
+    <title>Business OS · document.production-lifecycle</title>
+    <style>html,body,#shell,#app{height:100%;margin:0;overflow:hidden}#shell{display:grid;grid-template-columns:240px minmax(0,1fr) 260px;background:var(--bg)}#left,#right{min-width:0;overflow:auto;background:var(--surface);color:var(--text)}#status{position:fixed;z-index:9999;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:color-mix(in srgb,var(--text) 92%,transparent);color:var(--surface);font:12px ui-monospace,monospace;pointer-events:none}@media(max-width:720px){#shell{grid-template-columns:minmax(0,1fr)}#left,#right{display:none}#status{right:6px;top:4px}}</style>
+  </head>
+  <body>
+    <div id="status" role="status">booting</div><div id="shell"><aside id="left"></aside><main id="app"></main><aside id="right"></aside></div>
+    <script type="module">
+      import { mount } from '../../modules/documents/index.js';
+      const params = new URLSearchParams(location.search);
+      const initialStorage = { localStorageKeys: Object.keys(localStorage), sessionStorageKeys: Object.keys(sessionStorage) };
+      const locale = params.get('locale') === 'en' ? 'en' : 'de';
+      const shellStyle = params.get('shell') === 'macos' ? 'macos' : 'windows';
+      const theme = params.get('theme') === 'dark' ? 'dark' : 'light';
+      document.documentElement.lang = locale;
+      document.documentElement.dataset.shellStyle = shellStyle;
+      document.documentElement.dataset.theme = theme;
+      const sourceBytes = new Uint8Array(await (await fetch('/tests/fixtures/office/document/open-render-zoom.docx')).arrayBuffer());
+      const editorBytes = new Uint8Array(await (await fetch('/output/playwright/ctox-office/rust/document.open-render-zoom/ctox-rust.Editor.bin')).arrayBuffer());
+      const encode = (bytes) => btoa(String.fromCharCode(...bytes));
+      const now = Date.now();
+      const record = {
+        id: 'doc_business_os_lifecycle', title: 'CTOX Lifecycle Document', filename: 'open-render-zoom.docx',
+        mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', document_type: 'word_document',
+        status: 'Imported', current_version_id: 'doc_business_os_lifecycle_v1', diagnostics_count: 0, tags: ['oracle'],
+        index_text: 'CTOX Lifecycle Document', is_deleted: false, created_at_ms: now, updated_at_ms: now,
+      };
+      const version = {
+        id: 'doc_business_os_lifecycle_v1', document_id: record.id, version: 1, source_kind: 'imported_docx',
+        blob_id: 'doc_business_os_lifecycle_blob', editor_blob_id: 'doc_business_os_lifecycle_editor_blob',
+        editor_protocol: 'euro-office-word-binary-v10', editor_protocol_version: 10, conversion_state: 'prepared',
+        model_json: { type: 'docx', text: 'CTOX Lifecycle Document' }, diagnostics: [], created_at_ms: now, updated_at_ms: now,
+      };
+      const chunks = [
+        { id: `${version.blob_id}_0000`, blob_id: version.blob_id, document_id: record.id, version_id: version.id, idx: 0, total: 1, mime_type: record.mime_type, encoding: 'base64', data: encode(sourceBytes), created_at_ms: now },
+        { id: `${version.editor_blob_id}_0000`, blob_id: version.editor_blob_id, document_id: record.id, version_id: version.id, idx: 0, total: 1, mime_type: 'application/octet-stream', encoding: 'base64', data: encode(editorBytes), created_at_ms: now },
+      ];
+      const runbooks = [];
+      const commands = [];
+      const runtimeSettings = { id: 'runtime-settings', office: { documents_engine: 'ctox_documents' } };
+      const syncEvents = [];
+      const syncWaiters = new Set();
+      let replicationUp = navigator.onLine;
+      const setReplicationUp = (value) => {
+        replicationUp = Boolean(value); syncEvents.push({ event: replicationUp ? 'online' : 'offline', at: Date.now() });
+        if (replicationUp) { for (const resolve of syncWaiters) resolve(); syncWaiters.clear(); }
+      };
+      window.addEventListener('offline', () => setReplicationUp(false));
+      window.addEventListener('online', () => setReplicationUp(true));
+      const sync = { async startCollection(name) { syncEvents.push({ event: 'start', collection: name, replicationUp, at: Date.now() }); return { state: { awaitInSync: () => replicationUp ? Promise.resolve() : new Promise((resolve) => syncWaiters.add(resolve)) } }; } };
+      const wrap = (value) => value ? {
+        ...value,
+        toJSON() { return { ...value }; },
+        get(key) { return value[key]; },
+        async incrementalPatch(patch) { Object.assign(value, patch); },
+      } : null;
+      const collection = (name) => ({
+        $: { subscribe() { return { unsubscribe() {} }; } },
+        findOne(id) { return { async exec() {
+          if (name === 'documents') return id === record.id ? wrap(record) : null;
+          if (name === 'document_versions') return id === version.id ? wrap(version) : null;
+          if (name === 'ctox_runtime_settings') return id === 'runtime-settings' ? wrap(runtimeSettings) : null;
+          return null;
+        } }; },
+        find(query = {}) { return { async exec() {
+          if (name === 'documents') return [wrap(record)];
+          if (name === 'document_versions') return query.selector?.document_id === record.id ? [wrap(version)] : [];
+          if (name === 'document_blob_chunks') return chunks.filter((row) => row.blob_id === query.selector?.blob_id).map(wrap);
+          if (name === 'document_runbooks') return runbooks.map(wrap);
+          return [];
+        } }; },
+        async insert(value) { if (name === 'document_runbooks') runbooks.push(value); return wrap(value); },
+        async bulkUpsert(values) { if (name === 'document_blob_chunks') chunks.push(...values); return values.map(wrap); },
+      });
+      const ctx = {
+        host: document.querySelector('#app'), left: document.querySelector('#left'), right: document.querySelector('#right'),
+        locale, shellStyle, module: { id: 'documents' }, db: { collection }, permissions: { canWriteCollection: () => true }, sync,
+        commandBus: { async dispatch(command, options) { commands.push({ command, options }); return { status: 'completed', payload: { outcome: { ok: true, record_id: record.id, version_id: version.id, blob_id: version.blob_id } } }; } },
+        notifications: { success() {}, error(message) { console.error(message); } }, getActionIcon: () => '',
+        closeDrawers() {}, openLeftDrawer() {}, openRightDrawer() {}, openBottomDrawer() {},
+      };
+      let cleanup = await mount(ctx);
+      const evidence = window.businessOsDocumentEvidence = { ctx, record, version, chunks, commands, syncEvents, runtimeSettings, locale, shellStyle, initialStorage, cleanup, remount };
+      async function remount(engine = runtimeSettings.office.documents_engine) {
+        await cleanup?.();
+        runtimeSettings.office.documents_engine = engine === 'ctox_documents' ? 'ctox_documents' : 'legacy';
+        ctx.host.replaceChildren(); ctx.left.replaceChildren(); ctx.right.replaceChildren();
+        cleanup = await mount(ctx); evidence.cleanup = cleanup;
+        return runtimeSettings.office.documents_engine;
+      }
+      const timer = setInterval(() => {
+        if (document.querySelector('iframe[data-ctox-office-kind="document"]')) {
+          clearInterval(timer); document.querySelector('#status').textContent = 'document-ready';
+        }
+      }, 50);
+    </script>
+  </body>
+</html>

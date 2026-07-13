@@ -1,6 +1,6 @@
 ---
 name: "doc"
-description: "Create, edit, redline, review, and comment on .docx documents through the CTOX documents engine (Euro-Office port), with a strict render-and-verify workflow. Authoring and layout changes run as editor flows; deterministic OOXML batch operations run as native office-engine ops. Never assume a document is correct without rendering and visually inspecting every page."
+description: "Create, edit, redline, review, and comment on .docx documents through CTOX Documents, with a strict render-and-verify workflow. Authoring and layout changes run as CTOX editor flows; deterministic OOXML batch operations run as native office-engine ops. Never assume a document is correct without rendering and visually inspecting every page."
 cluster: content
 ---
 
@@ -19,14 +19,17 @@ runtime. There are two execution surfaces:
 
 1. **Editor flows (layout-affecting work).** Authoring, formatting, styles,
    tables, images, sections, and in-context review actions run against the
-   headless CTOX documents editor (Euro-Office port) on the same code path
+   CTOX Documents editor on the same code path
    users operate interactively. Rendering for visual QA comes from the same
    engine.
 2. **Native batch operations (deterministic OOXML work).** Operations that
    transform the package without needing layout — accepting tracked changes in
    bulk, extracting comments, scrubbing metadata, redaction, protection,
-   merging, audits — run as `ctox-office-engine` operations (thin CLI for the
-   harness, `business_commands` for apps).
+   merging, audits — run as `ctox-office-engine` operations through its thin
+   CLI for the harness. The Business OS editor persists only through the typed
+   `office.document.prepare|commit|export` commands today; do not claim a
+   browser batch-op command until that command is registered in native policy
+   and inventory.
 
 Capability gating: each operation class below is bound to a feature group in
 `src/apps/business-os/office-engine/features.json` or to a planned engine op.
@@ -36,15 +39,18 @@ not fall back to external document tooling. See
 `references/execution-surfaces.md` for the full operation-to-surface map and
 current gating status.
 
-Available today at package level: `inspect`, `export` (byte-preserving OOXML
-round-trip), and the batch ops — `comments-extract|add|resolve|strip`,
+Available today at package level: `inspect`, `prepare-editor`,
+`inspect-editor`, `export` (byte-preserving OOXML round-trip), and the batch
+ops — `comments-extract|add|resolve|strip`,
 `a11y-audit`, `a11y-fix`, `privacy-scrub`, `redact`,
 `tracked-changes-accept|reject|replace`, `protection-set`, `style-lint`,
-`fields-report`, `fields-materialize`, `watermark-audit|remove`,
-`table-export`, `merge-append`. Everything listed as gated or planned must
-be treated as unavailable until its status says otherwise; the editor-flow
-surface follows the feature matrix, which moves in both directions
-(re-baselines can regress statuses).
+`style-normalize`, `fields-report`, `fields-materialize`,
+`watermark-audit|add|remove`, `table-export|import`, `merge-append`.
+Editor flows currently have differential evidence and are usable behind the
+same typed rollout configuration as the CTOX Documents app; they are not
+globally `shipped`. Everything listed as gated or planned must be treated as
+unavailable until its status says otherwise. The feature matrix can move in
+both directions when evidence is re-baselined.
 
 ## Non-negotiable: render, inspect, iterate
 
@@ -134,8 +140,9 @@ When editing an existing document, preserve it:
 
 ## Batch operations (native engine ops)
 
-These are deterministic OOXML operations planned as `ctox-office-engine` ops
-with CLI and `business_commands` surfaces (see
+These are deterministic OOXML operations implemented as
+`ctox-office-engine` CLI ops. The corresponding Business OS batch-command
+surface is not registered yet (see
 `references/execution-surfaces.md` for status): accept/reject tracked
 changes; add/extract/resolve/strip comments; privacy scrub (author metadata,
 revision ids, custom properties); layout-preserving redaction; edit

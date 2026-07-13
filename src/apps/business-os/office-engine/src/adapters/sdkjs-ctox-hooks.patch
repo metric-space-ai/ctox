@@ -1,0 +1,25 @@
+diff --git a/common/apiBase.js b/common/apiBase.js
+index 28b924884..1161a0614 100644
+--- a/common/apiBase.js
++++ b/common/apiBase.js
+@@ -1472,6 +1472,12 @@
+ 		}
+ 		this._openDocumentEndCallback();
+ 	};
++	// CTOX adapter: the native command pipeline replaces DocumentServer and
++	// therefore owns the point at which the initial server/change phase is done.
++	baseEditorsApi.prototype.ctox_completeInitialServerPhase = function()
++	{
++		this.asyncServerIdEndLoaded();
++	};
+ 	baseEditorsApi.prototype.asyncFontStartLoaded                = function()
+ 	{
+ 		// здесь прокинуть евент о заморозке меню
+@@ -6244,6 +6250,7 @@
+ 	prot['asc_getCurrencySymbols'] = prot.asc_getCurrencySymbols;
+ 	prot["asc_openExternalReference"] = prot.asc_openExternalReference;
+ 	prot['asc_openDocumentFromBytes'] = prot.asc_openDocumentFromBytes;
++	prot['ctox_completeInitialServerPhase'] = prot.ctox_completeInitialServerPhase;
+ 	prot['asc_onMediaPlayerEvent'] = prot.asc_onMediaPlayerEvent;
+ 	prot['asc_hideMediaControl'] = prot.asc_hideMediaControl;
+ 	prot['asc_getInputLanguage'] = prot.asc_getInputLanguage;

@@ -1,0 +1,23 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.validation-conditional-formatting",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.validation-conditional-formatting",
+  "viewport": { "width": 1600, "height": 900 },
+  "preconditions": [
+    "Euro-Office Oracle v9.3.1 is running on 127.0.0.1:8088",
+    "CTOX uses the Rust-generated XLSY payload ctox-rust.Editor.bin",
+    "both editor frames use the original SpreadsheetEditor UI with identical geometry"
+  ],
+  "steps": [
+    { "action": "wait_for", "semantic": "both status=document-ready and comparison gate valid" },
+    { "action": "select", "cell": "B2" },
+    { "action": "open_data_validation", "surface": "original Daten tab and Datenüberprüfung dialog" },
+    { "action": "extend_list_source", "from": "Draft;Review;Final", "to": "Draft;Review;Final;Approved" },
+    { "action": "edit_cells", "values": { "B2": "Approved", "C2": 8, "E2": 80 } },
+    { "action": "verify_conditional_effect", "rules": ["colorScale:D2:D6", "cellIs:E2:E6"], "visible_value": 80 },
+    { "action": "save", "surface": "original Save toolbar button", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_validation_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"], "expected_unchanged_parts": 10 },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "target": "modules/spreadsheets.mount(ctx)", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

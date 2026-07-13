@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+    <title>Euro-Office Oracle · spreadsheet.cell-format-rows-columns</title>
+    <style>html,body,#oracle-editor{height:100%;margin:0;overflow:hidden;background:#e7ebea}#oracle-status{position:fixed;z-index:20;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:#17211fee;color:#fff;font:12px ui-monospace,monospace;pointer-events:none}</style>
+    <script src="http://127.0.0.1:8088/web-apps/apps/api/documents/api.js"></script>
+  </head>
+  <body>
+    <div id="oracle-status" role="status">booting</div><div id="oracle-editor"></div>
+    <script>
+      const status = document.querySelector('#oracle-status');
+      const events = [];
+      const record = (name, payload = {}) => { events.push({ name, payload, at_ms: Date.now() }); status.textContent = name; };
+      const params = new URLSearchParams(location.search);
+      const source = params.get('source') || 'initial';
+      const readOnly = source !== 'initial';
+      const fixtureUrl = source === 'ctox-export'
+        ? 'http://host.lima.internal:4179/output/playwright/ctox-office/ctox/spreadsheet.cell-format-rows-columns/ctox-canonical.xlsx'
+        : 'http://host.lima.internal:4179/tests/fixtures/office/spreadsheet/cell-format-rows-columns.xlsx';
+      const callbackUrl = 'http://host.lima.internal:4180/callback/spreadsheet.cell-format-rows-columns';
+      const config = {
+        type: 'desktop', width: '100%', height: '100%', documentType: 'cell',
+        document: { fileType: 'xlsx', key: `ctox-oracle-spreadsheet-format-${source}-${params.get('run') || Date.now()}`, title: 'CTOX Oracle · Cell Format Rows Columns.xlsx', url: fixtureUrl, permissions: { edit: !readOnly, download: true, print: false, comment: false } },
+        editorConfig: { callbackUrl: readOnly ? undefined : callbackUrl, lang: 'de', mode: readOnly ? 'view' : 'edit', user: { id: 'ctox-local-user', name: 'CTOX' }, customization: { about: false, feedback: false, help: false, plugins: false, compactHeader: true, compactToolbar: false, forcesave: true, hideRightMenu: true, zoom: 100 } },
+        events: {
+          onAppReady: (event) => record('app-ready', event?.data), onDocumentReady: (event) => record('document-ready', event?.data),
+          onDocumentStateChange: (event) => record(event?.data ? 'dirty' : 'clean', event?.data), onError: (event) => record('error', event?.data),
+          onInfo: (event) => record('info', event?.data), onWarning: (event) => record('warning', event?.data),
+        },
+      };
+      window.oracleEvidence = { feature_id: 'spreadsheet.cell-format-rows-columns', fixture_url: fixtureUrl, callback_url: callbackUrl, config, events, comparison_config: {
+        version: 'v9.3.1', mode: readOnly ? 'view' : 'edit', lang: 'de', title: 'CTOX Oracle · Cell Format Rows Columns.xlsx',
+        user: { id: 'ctox-local-user', name: 'CTOX' }, permissions: { edit: !readOnly, download: true, print: false, comment: false, chat: false },
+        customization: { about: false, feedback: false, help: false, plugins: false, compactHeader: true, compactToolbar: false, hideRightMenu: true, zoom: 100 },
+      } };
+      window.oracleEditor = new DocsAPI.DocEditor('oracle-editor', config);
+    </script>
+  </body>
+</html>

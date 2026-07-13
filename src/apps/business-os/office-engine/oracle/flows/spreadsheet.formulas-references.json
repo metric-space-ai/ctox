@@ -1,0 +1,20 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.formulas-references",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.formulas-references",
+  "viewport": { "width": 1600, "height": 900 },
+  "steps": [
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "assert_original_runtime", "targets": ["oracle", "ctox"], "equal_iframe_geometry": true, "protocol": "XLSY v10", "rust_generated": true },
+    { "action": "assert_formulas", "cells": { "B3": "=B2*2", "B4": "=$B$2+5", "B5": "=SUM(B2:B4)", "B6": "='Details'!B4+1", "B8": "=1/0" } },
+    { "action": "replace_formula", "cell": "D3", "formula": "=D2*3", "expected_cached_value": 15 },
+    { "action": "copy", "source": "B7", "formula": "=B2+1" },
+    { "action": "paste", "target": "C7", "expected_formula": "=C2+1", "expected_cached_value": 21 },
+    { "action": "assert_error", "cell": "B8", "formula": "=1/0", "cached_value": "#DIV/0!" },
+    { "action": "save", "oracle_callback_status": 6, "ctox_base_version_id": "sheet_formula_v1" },
+    { "action": "assert_export_xml", "part": "xl/worksheets/sheet1.xml", "changed_cells": ["D3", "C7"] },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/worksheets/sheet1.xml"] },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "wrapper": "modules/spreadsheets.mount(ctx)", "command": "office.spreadsheet.commit", "transport": "rxdb-webrtc", "until": "terminal" }
+  ]
+}

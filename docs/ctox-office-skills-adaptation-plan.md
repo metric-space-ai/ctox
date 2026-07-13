@@ -1,6 +1,7 @@
 # CTOX Office-Skills-Adaption: Word, Excel, PDF
 
-Stand: 2026-07-11. Status: Phase 1 vollständig umgesetzt.
+Stand: 2026-07-13. Status: Phase 1 vollständig; Editor-Flows für Documents
+und Spreadsheets `differential_passed`, Rollout noch nicht global `shipped`.
 
 Umsetzungsstand:
 
@@ -35,14 +36,17 @@ Umsetzungsstand:
   und Header-Zeile). 38 Tests grün. **Damit ist die komplette Op-Liste
   aus der ursprünglichen Capability-Matrix implementiert** (alle 20
   geplanten Batch-Operationen verfügbar).
-- **Gating-Guard** (`src/scripts/check-office-skill-gating.mjs`, Commit
-  `e5d0dd216`): diffst die execution-surfaces-Tabellen gegen `features.json`,
-  schlägt bei Drift oder unreferenzierten Gruppen fehl. Hat unmittelbar die
-  Matrix-Re-Baseline vom 2026-07-11 erkannt (differential_passed →
-  oracle_captured); Tabellen und Skill-Prosa folgen jetzt dem Ist-Stand.
-- Weiterhin extern blockiert: `business_commands`-Fläche der Ops
-  (`business_os/mod.rs`/`server.rs` in-flight beim Port-Agenten) sowie
-  Phase 2/3 (keine Gruppe `shipped`; Re-Baseline hat Statusse regressiert).
+- **Gating-Guard** (`src/scripts/check-office-skill-gating.mjs`): gleicht die
+  execution-surfaces-Tabellen mit `features.json` ab und prüft zusätzlich die
+  vollständige native Operationsliste gegen den Rust-CLI-Dispatcher. Drift,
+  unreferenzierte Gruppen und erfundene oder undokumentierte Ops stoppen CI.
+- Alle 24 Editor-Gruppen sind erneut `differential_passed`. Sie bleiben an
+  dieselbe typisierte Rollout-Konfiguration wie die Business-OS-Apps gebunden;
+  `differential_passed` ist nicht gleichbedeutend mit global `shipped`.
+- Weiter offen ist nur die Business-OS-Command-Fläche für native Batch-Ops.
+  Browser-Lifecycle-Kommandos `office.{document,spreadsheet}.{prepare,commit,export}`
+  sind implementiert; OOXML-Batch-Ops sind derzeit ausschließlich über die
+  bounded `ctox-office-engine`-CLI nutzbar.
 
 ## Lizenz-Randbedingung (Umsetzungserkenntnis)
 
@@ -153,10 +157,10 @@ Spreadsheet-Editor** über den bestehenden MessageChannel-Protokollpfad:
 |---|---|---|---|
 | `workbook.inspect` (values/formulas/match) | Read-API auf Editor oder `inspect` in office_engine erweitern | `spreadsheet.open-render-sheets`, `edit-save` | differential_passed |
 | `workbook.render({sheet, range, scale})` | Engine-Render | `spreadsheet.open-render-sheets` | differential_passed |
-| Zell-/Formel-Authoring | Editor-Flows | `spreadsheet.formulas-references` | **discovered** — gated |
-| Charts (`charts.md`) | Editor-Flows | `spreadsheet.charts` | **discovered** — gated |
-| Conditional Formatting erweitern | Editor-Flows | `spreadsheet.validation-conditional-formatting` | **discovered** — gated |
-| Kommentare/Protection | Editor-Flows + Ebene B | `spreadsheet.comments-names-protection` | **discovered** — gated |
+| Zell-/Formel-Authoring | Editor-Flows | `spreadsheet.formulas-references` | differential_passed (Rollout-gated) |
+| Charts (`charts.md`) | Editor-Flows | `spreadsheet.charts` | differential_passed (Rollout-gated) |
+| Conditional Formatting erweitern | Editor-Flows | `spreadsheet.validation-conditional-formatting` | differential_passed (Rollout-gated) |
+| Kommentare/Protection | Editor-Flows + Ebene B | `spreadsheet.comments-names-protection` | differential_passed (Rollout-gated) |
 | `exportXlsx` | `office_engine::export` (byte-erhaltend) | — | vorhanden |
 
 Vollständig portierbar ab sofort (execution-agnostisch): Formelregeln
@@ -212,9 +216,10 @@ Nutzung hinter dem gleichen Rollout-Flag wie der Editor selbst. Damit können
 die Skill-Texte vollständig vorbereitet werden, ohne dass ein Skill
 Operationen verspricht, die es nicht gibt.
 
-Heute bedeutet das: Documents-Tasks sind vorbereitbar (12/12
-differential_passed), Spreadsheet-Authoring bleibt auf Lesen/Analysieren/
-Rendern beschränkt, bis `formulas-references` u. a. landen.
+Heute bedeutet das: Documents- und Spreadsheet-Tasks sind hinter dem jeweils
+gleichen typisierten App-Rollout nutzbar (24/24 Gruppen
+`differential_passed`). Ist die CTOX-Engine nicht ausgewählt, bleibt die
+Ausführung auf Paket-Inspektion und -Export beschränkt.
 
 ## Rückwirkungen auf den Office-Port (Gegenprobe)
 
@@ -241,12 +246,11 @@ Kandidaten für neue Feature-Gruppen oder explizite Ebene-B-Entscheidungen:
   c) Skill-Texte v2 für doc/spreadsheet schreiben (Schichten 1+2 portieren,
      Ausführungsabschnitte gegen die CTOX-Flächen formulieren, Gating-
      Frontmatter einführen).
-- **Phase 2 (wenn Editor-Gruppen shipped):** Editor-Flow-Fläche als typisierte
-  Headless-API freigeben (Oracle-Flow-Infrastruktur generalisieren);
-  documents-Tasks scharf schalten.
-- **Phase 3:** Spreadsheet-Authoring-Tasks in dem Takt aktivieren, in dem die
-  Spreadsheet-Gruppen durch die Matrix wandern; Workbook-Read/Render-API
-  analog artifact-tool anbieten.
+- **Phase 2 (differential abgeschlossen):** Editor-Flow-Fläche bleibt hinter
+  der typisierten CTOX-Engine-Auswahl aktiv; die Skills prüfen Matrix und
+  Rollout, bevor sie Documents- oder Spreadsheet-Authoring zusagen.
+- **Phase 3 (Release):** globale Umschaltung erst nach den im Office-Portplan
+  definierten Release- und Korpus-Gates; anschließend Status `shipped` setzen.
 
 ## Nicht portieren
 
@@ -257,15 +261,14 @@ Kandidaten für neue Feature-Gruppen oder explizite Ebene-B-Entscheidungen:
 - `template-creator`: erneut prüfen, wenn der Template-Store
   (`src/apps/business-os/template-store/`) im Port stabil ist
 
-## Handoff an den Office-Port-Agenten
+## Offene Integrationspunkte
 
-Direkte Bitten des Skills-/Ops-Strangs an den Strang, der `office_engine.rs`,
-`business_os/server.rs` und `features.json` besitzt. Die Batch-Ops in
-`src/core/office-engine/src/ops.rs` sind zustandslose reine Funktionen über
-Paket-Bytes und vollständig getestet — sie warten nur auf deine Flächen.
+Die Batch-Ops in `src/core/office-engine/src/ops.rs` sind zustandslose reine
+Funktionen über Paket-Bytes und vollständig getestet. Folgende Punkte bleiben
+für den globalen Skill-Rollout offen:
 
-1. **`business_commands`-Registrierung der Batch-Ops** (bitte in deiner
-   nächsten Server-Welle): Vorschlag Command-Familie `business_os.office.*`
+1. **`business_commands`-Registrierung der Batch-Ops:** Vorschlag
+   Command-Familie `business_os.office.*`
    mit 1:1-Mapping auf die `ops.rs`-Funktionen, z. B.
    `office.comments_extract`, `office.tracked_changes_accept`,
    `office.privacy_scrub`, `office.redact`, `office.a11y_audit`,
@@ -279,22 +282,21 @@ Paket-Bytes und vollständig getestet — sie warten nur auf deine Flächen.
 2. **`features.json`-Disziplin:** Nach jedem Statuswechsel bitte
    `node src/scripts/check-office-skill-gating.mjs` laufen lassen (läuft
    jetzt auch als eigener CI-Workflow `office-skill-gating`). Der Guard
-   erwartet, dass die Gating-Tabellen der Skills jedem Statuswechsel folgen —
-   bei deiner Re-Baseline heute hat er korrekt angeschlagen. Wenn du Gruppen
-   umbenennst oder ergänzt, schlagen unreferenzierte Gruppen ebenfalls auf.
+   erwartet, dass die Gating-Tabellen der Skills jedem Statuswechsel folgen.
+   Wenn Gruppen umbenannt oder ergänzt werden, schlagen unreferenzierte
+   Gruppen ebenfalls auf; dasselbe gilt für CLI-Operationsdrift.
 3. **Feature-Matrix-Lücken, Entscheidung bei dir:** Content Controls (SDTs)
    und Fußnoten/Endnoten fehlen als Editor-Feature-Gruppen. Protection,
    Merge, Wasserzeichen und A11y sind inzwischen auf Paket-Ebene abgedeckt
    und brauchen m. E. keine eigenen Editor-Gruppen mehr.
-4. **Phase-2-Bedarf der Skills (Render-Evidenz):** Die Render-Verify-Schleife
-   der doc/spreadsheet-Skills braucht eine headless aufrufbare
+4. **Release-Bedarf der Skills (Render-Evidenz):** Die Render-Verify-Schleife
+   der doc/spreadsheet-Skills nutzt eine browserautomatisierbare
    Render-Fläche (Seiten/Ranges → PNG) auf demselben Codepfad wie
    `document.open-render-zoom` / `spreadsheet.open-render-sheets`, plus einen
    Weg, die finalen Renders als Prozess-Evidenz zu persistieren. Die
-   Oracle-Flow-Infrastruktur (`fake-runtime.mjs`, `oracle/flows/*`) scheint
-   dafür der richtige Generalisierungspunkt. Sobald das existiert, schalten
-   die Skills ihr Render-Gate von "Fallback: strukturell prüfen und
-   Limitation nennen" auf verpflichtend.
+   Oracle-Flow-Infrastruktur (`oracle/flows/*`) liefert dafür die
+   Differential-Evidenz. Vor `shipped` fehlt noch die verbindliche Persistenz
+   der finalen Renderbilder als Prozess-Evidenz in jedem Skill-Run.
 5. **Stabilitätszusage erbeten:** Die CLI-Verben von `ctox-office-engine`
    (inspect|export|…|table-import) sind in den Skill-Texten referenziert.
    Bitte nicht umbenennen ohne die beiden `execution-surfaces.md` und die

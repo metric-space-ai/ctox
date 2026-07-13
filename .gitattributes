@@ -1,0 +1,5 @@
+src/apps/business-os/vendor/ctox-office/** -diff
+src/apps/business-os/office-engine/src/adapters/*.patch -diff
+tests/fixtures/office/**/*.docx -diff
+tests/fixtures/office/**/*.xlsx -diff
+tests/fixtures/office/**/*.bin -diff

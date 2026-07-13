@@ -1,0 +1,98 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.sort-filter-tables",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/sort-filter-tables.xlsx",
+    "bytes": 5764,
+    "package_parts": 14,
+    "sha256": "a6473987a7e8013ffd74716960da8f388f3548284798e45ee95a7a8f71245fee",
+    "escrow_marker": "SPREADSHEET_TABLE_ESCROW_8B47",
+    "table": { "name": "RevenueTable", "ref": "A1:C6", "style": "TableStyleMedium4" }
+  },
+  "expected_semantics": {
+    "sort": { "column": "Revenue", "descending": true, "values": [420, 310, 240, 180, 120] },
+    "filter": { "column": "Region", "values": ["North"], "visible_rows": [2, 3], "hidden_rows": [4, 5, 6] },
+    "table_preserved": true
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "runtime": "original-documentserver-spreadsheeteditor",
+    "saved_path": "runtime/office-oracle/spreadsheet.sort-filter-tables/oracle-saved.xlsx",
+    "saved_bytes": 11782,
+    "saved_sha256": "6a195f381de4b5d5e33ff25bd6cd218af9311bad24e04e143a9ff75c1765fcb2",
+    "saved_package_parts": 15,
+    "sort_filter_table_xml_verified": true,
+    "callback_statuses": [6, 2],
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "protocol": "euro-office-cell-binary-v10",
+    "protocol_version": 10,
+    "rust_generated": true,
+    "initial_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.sort-filter-tables/ctox-rust.Editor.bin",
+      "bytes": 2300,
+      "sha256": "196768c0c63da348a6992197e4cab2c8c946250ad1faf21c8ffbcb24a047ae2c"
+    },
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.sort-filter-tables/ctox-editor.xlsx",
+      "bytes": 5399,
+      "sha256": "9d3142f7beeb46bc91ec4cc4293fe762fa6252a971d70d39160bbbf4b3a1d40d",
+      "table": "RevenueTable",
+      "filters": [{ "column_id": 0, "values": ["North"] }],
+      "sort": { "reference": "A2:C6", "condition_reference": "C1:C6", "descending": true },
+      "hidden_rows": [4, 5, 6]
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.sort-filter-tables/ctox-canonical.xlsx",
+      "bytes": 5837,
+      "sha256": "0176e62baaee9cb4f31ebe2d2d8c1f150acbc664450928615dac817ae5a640bf",
+      "package_parts": 14,
+      "changed_parts": ["xl/tables/table1.xml", "xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 12,
+      "missing_original_parts": [],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    },
+    "reprepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.sort-filter-tables/ctox-export.Editor.bin",
+      "bytes": 2393,
+      "sha256": "01a10e1472c908b9dae58f27aa6cd37270e4b14d6ff469cbfaf63e33824ff043"
+    },
+    "business_os_mount": {
+      "wrapper": "modules/spreadsheets.mount(ctx)",
+      "command": "office.spreadsheet.commit",
+      "base_version_id": "sheet_business_os_oracle_v1",
+      "transport": "rxdb-webrtc",
+      "until": "terminal",
+      "editor_blob_bytes": 5399,
+      "badge": "Gespeichert"
+    }
+  },
+  "browser_health": {
+    "same_iframe_geometry": { "width": 799.5, "height": 813 },
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.sort-filter-tables/differential-terminal-before-save.png", "sha256": "ad53576ea130105c1b86616e42b9dde9b2b4f3627ba6d69d0122f2719d592432" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.sort-filter-tables/side-by-side-reopen.png", "sha256": "e6c05db19cf972505e5cf0b1dd516a98935b1a3e991cf67dab08e1c1964ac6a5" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.sort-filter-tables/business-os-mount-sort-filter.png", "sha256": "6d7008ec89e3d0452d7e2148f5c76ba782f1575a22da76349ce1d411bfcd71f6" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/Toolbar.js",
+    "web-apps/apps/spreadsheeteditor/main/app/view/DocumentHolderExt.js",
+    "sdkjs/cell/model/Serialize.js:582-680,2187-2640,7938-8465",
+    "sdkjs/cell/model/autofilters.js",
+    "sdkjs/cell/model/Workbook.js",
+    "sdkjs/cell/view/WorkbookView.js"
+  ]
+}

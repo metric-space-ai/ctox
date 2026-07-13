@@ -1,0 +1,22 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.open-render-zoom",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-open-render-zoom.html",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Browser viewport is 1200x759 CSS pixels at device scale factor 2"
+  ],
+  "steps": [
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "dismiss", "role": "button", "name": "Abbrechen", "when_present": true },
+    { "action": "assert_text", "value": "Seite 1 von 3" },
+    { "action": "assert_text", "value": "Zoom 100%" },
+    { "action": "click", "role": "button", "name": "Vergrößern (⌘+=)", "repeat": 2 },
+    { "action": "assert_text", "value": "Zoom 120%" },
+    { "action": "press", "key": "PageDown", "repeat": 3 },
+    { "action": "assert_text", "value": "Seite 2 von 3" },
+    { "action": "press", "key": "PageDown", "repeat": 3 },
+    { "action": "assert_text", "value": "Seite 3 von 3" }
+  ]
+}

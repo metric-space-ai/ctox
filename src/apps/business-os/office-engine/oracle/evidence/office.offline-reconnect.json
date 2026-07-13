@@ -1,0 +1,18 @@
+{
+  "feature_id": "office.offline-reconnect",
+  "status": "browser_bridge_passed",
+  "captured_at": "2026-07-13",
+  "browser": "Chromium headed via Playwright CLI",
+  "cases": [
+    { "kind": "document", "commands_while_offline": 0, "staged_chunks_while_offline": 3, "commands_after_reconnect": 1, "transport": "rxdb-webrtc", "result": "passed" },
+    { "kind": "spreadsheet", "commands_while_offline": 0, "staged_chunks_while_offline": 3, "commands_after_reconnect": 1, "transport": "rxdb-webrtc", "result": "passed" }
+  ],
+  "invariants": [
+    "editor blob is staged locally before native sync",
+    "native office command is not dispatched while replicationUp is false",
+    "online event releases awaitInSync and dispatches exactly one terminal command",
+    "no HTTP business-data fallback is used"
+  ],
+  "browser_health": { "console_errors": 0, "console_warnings": 0 },
+  "native_daemon_restart_covered": false
+}

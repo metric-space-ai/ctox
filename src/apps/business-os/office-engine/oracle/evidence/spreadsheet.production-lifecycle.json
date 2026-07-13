@@ -1,0 +1,25 @@
+{
+  "feature_id": "spreadsheet.production-lifecycle",
+  "status": "passed",
+  "captured_at": "2026-07-13",
+  "wrapper": "modules/spreadsheets.mount(ctx)",
+  "runtime": "ctox-spreadsheets-fork",
+  "browser": "Chromium headed via Playwright CLI",
+  "lifecycle": {
+    "initial_ctox_iframes": 1,
+    "after_legacy_iframes": 0,
+    "after_ctox_remount_iframes": 1,
+    "after_browser_reload_iframes": 1,
+    "typed_setting": "office.spreadsheets_engine",
+    "environment_toggle_used": false
+  },
+  "matrix": [
+    { "locale": "en", "shell_style": "macos", "vendored_esm_ui_tab": "File", "result": "passed" },
+    { "locale": "de", "shell_style": "windows", "vendored_esm_ui_tab": "Datei", "result": "passed" }
+  ],
+  "browser_health": { "console_errors": 0, "console_warnings": 0, "failed_document_requests": 0 },
+  "artifacts": [
+    { "path": "output/playwright/ctox-office/rollout/spreadsheet-lifecycle/en-macos.png", "sha256": "5af5818011ef883851b9ddb94c74b11ee0ce0d8b52cdf7cb99aaf586dbfd284e" },
+    { "path": "output/playwright/ctox-office/rollout/spreadsheet-lifecycle/de-windows.png", "sha256": "b7418cb0e575d7167debc767f03ea00652a73ecef9d2fb1b6eb54023c152991f" }
+  ]
+}

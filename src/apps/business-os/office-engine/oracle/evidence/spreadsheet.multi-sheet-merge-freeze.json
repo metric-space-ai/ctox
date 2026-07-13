@@ -1,0 +1,101 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.multi-sheet-merge-freeze",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/multi-sheet-merge-freeze.xlsx",
+    "bytes": 4904,
+    "package_parts": 12,
+    "sha256": "a102eccae07ee12397836b9636b4defbd6f31738ceb6628616974fef4eb4b69d",
+    "escrow_marker": "SPREADSHEET_MERGE_FREEZE_ESCROW_D52B",
+    "sheets": [{ "name": "Overview", "state": "visible" }, { "name": "Details", "state": "visible" }, { "name": "Archive", "state": "hidden" }],
+    "initial_merge": "B2:C2",
+    "initial_freeze": { "x_split": 1, "y_split": 1, "top_left_cell": "B2", "active_pane": "bottomRight" }
+  },
+  "expected_semantics": {
+    "visible_sheet_navigation": ["Overview", "Details"],
+    "hidden_sheet_preserved": "Archive",
+    "removed_merge": "B2:C2",
+    "added_merge": "B3:C3",
+    "final_freeze": { "x_split": 1, "y_split": 2, "top_left_cell": "B3", "active_pane": "bottomRight", "state": "frozen" }
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "runtime": "original-documentserver-spreadsheeteditor",
+    "saved_path": "runtime/office-oracle/spreadsheet.multi-sheet-merge-freeze/oracle-saved.xlsx",
+    "saved_bytes": 10678,
+    "saved_sha256": "2b85a1614f69c04a7a2d8f1eb8d3db2f4ed25b138d36ddf45636fe4e9d2f8f35",
+    "saved_package_parts": 13,
+    "merge_and_freeze_xml_verified": true,
+    "callback_statuses": [6, 2],
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "protocol": "euro-office-cell-binary-v10",
+    "protocol_version": 10,
+    "rust_generated": true,
+    "initial_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.multi-sheet-merge-freeze/ctox-rust.Editor.bin",
+      "bytes": 1704,
+      "sha256": "87b8c75bc143c514e8018503b7591e2e720642ca5579e4f54d9ecdb620039714"
+    },
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.multi-sheet-merge-freeze/ctox-editor.xlsx",
+      "bytes": 4786,
+      "sha256": "6eabb5db3d2caa3983d1c1f53ce3cbd5cb2bd9b5547459f5b76679e4006e0709",
+      "sheets": ["Overview", "Details", "Archive"],
+      "hidden_sheet": "Archive",
+      "merged_cells": ["B3:C3"],
+      "frozen_pane": { "x_split": 1, "y_split": 2, "top_left_cell": "B3", "active_pane": "bottomRight" }
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.multi-sheet-merge-freeze/ctox-canonical.xlsx",
+      "bytes": 4906,
+      "sha256": "cd90242eeb9c7a3422ae446c61ecf38385cd1118e8f90f6c186bc784d462b38b",
+      "package_parts": 12,
+      "changed_parts": ["xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 11,
+      "missing_original_parts": [],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    },
+    "reprepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.multi-sheet-merge-freeze/ctox-export.Editor.bin",
+      "bytes": 1716,
+      "sha256": "752ec75e7ad543457ce13c760f7b181233677f1aef94f7f1c847a73d550b2601"
+    },
+    "business_os_mount": {
+      "wrapper": "modules/spreadsheets.mount(ctx)",
+      "command": "office.spreadsheet.commit",
+      "base_version_id": "sheet_business_os_oracle_v1",
+      "transport": "rxdb-webrtc",
+      "until": "terminal",
+      "editor_blob_bytes": 4786,
+      "badge": "Gespeichert"
+    }
+  },
+  "browser_health": {
+    "same_iframe_geometry": { "width": 799.5, "height": 813 },
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.multi-sheet-merge-freeze/differential-terminal-before-save.png", "sha256": "5c406d6cf2c2ced92e2e449784fcee6ea4f3bd1a9292efc8d15e216bdfbb3194" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.multi-sheet-merge-freeze/side-by-side-reopen.png", "sha256": "5f24a3cbde752a5fb43baf9f66f52aa581a4fdfe573f02ecd0e3b2fd5941a5a8" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.multi-sheet-merge-freeze/business-os-mount-multi-sheet.png", "sha256": "d3fb87442980387f673a73cb8d5e06389a4892308fee7de5296aeb087bc3a314" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/ViewTab.js",
+    "web-apps/apps/spreadsheeteditor/main/app/view/DocumentHolderExt.js",
+    "sdkjs/cell/model/Serialize.js:350-430,5898-5952,6345-6351,12214-12226,13040-13113",
+    "sdkjs/cell/api.js:6110",
+    "sdkjs/cell/model/Workbook.js"
+  ]
+}

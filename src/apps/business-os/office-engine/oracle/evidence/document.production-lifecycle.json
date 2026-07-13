@@ -1,0 +1,38 @@
+{
+  "feature_id": "document.production-lifecycle",
+  "status": "passed",
+  "captured_at": "2026-07-13",
+  "wrapper": "modules/documents.mount(ctx)",
+  "runtime": "ctox-documents-fork",
+  "browser": "Chromium headed via Playwright CLI",
+  "lifecycle": {
+    "initial_ctox_iframes": 1,
+    "after_legacy_iframes": 0,
+    "after_ctox_remount_iframes": 1,
+    "after_browser_reload_iframes": 1,
+    "typed_setting": "office.documents_engine",
+    "environment_toggle_used": false
+  },
+  "matrix": [
+    { "locale": "en", "shell_style": "macos", "vendored_esm_ui_tab": "File", "result": "passed" },
+    { "locale": "de", "shell_style": "windows", "vendored_esm_ui_tab": "Datei", "result": "passed" }
+  ],
+  "ctox_documents_permissions": {
+    "comments_button_enabled": true,
+    "add_comment_button_enabled": true,
+    "track_changes_button_enabled": true,
+    "review_mode_entered": true
+  },
+  "closure_regression": {
+    "missing_asset_found": "web-apps/apps/common/main/resources/img/header/icon-document.svg",
+    "build_source": "web-apps/theme/euro-office/assets/img/header/icon-document.svg",
+    "sha256": "5b091e7211cfd3d67a98c9149da623574e84adf1beb1d500d7ac9c4cc4a417e6",
+    "fixed_in_reproducible_build": true
+  },
+  "browser_health": { "console_errors": 0, "console_warnings": 0, "failed_document_requests": 0 },
+  "artifacts": [
+    { "path": "output/playwright/ctox-office/rollout/document-lifecycle/en-macos.png", "sha256": "9b5f7ae9842c0d581a9f3d054573ac152c58b89e39aa1c21bd1ce5d7a0649d1c" },
+    { "path": "output/playwright/ctox-office/rollout/document-lifecycle/de-windows.png", "sha256": "93321dc3101997708e3b00675da6595552a156a84d20a6b5b073e17ed731c617" },
+    { "path": "output/playwright/ctox-office/rollout/document-lifecycle/comments-review-business-os.png", "sha256": "ff664f4e8114490be5058822317995d4df1f6bf404023e2e585f79fcefcc827e" }
+  ]
+}

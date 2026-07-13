@@ -1,0 +1,101 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.edit-save",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/edit-save.xlsx",
+    "bytes": 4962,
+    "package_parts": 12,
+    "sha256": "58a12bbecfc82fa256915a0d65de35999f44170eddf39ef00cc3bfc7d8a9a640",
+    "target_cell": "A2",
+    "target_before": "CTOX_EDIT_CELL_ALPHA",
+    "target_after": "CTOX_EDIT_CELL_BRAVO_42",
+    "preservation_marker": "PRESERVE_XLSX_UNRELATED_6D2A",
+    "escrow_part": "customXml/ctox-spreadsheet-preserve.xml",
+    "escrow_marker": "SPREADSHEET_EDIT_ESCROW_81F4"
+  },
+  "side_by_side": {
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.edit-save",
+    "browser_flow": "src/apps/business-os/office-engine/oracle/flows/spreadsheet.edit-save.playwright.js",
+    "browser_flow_sha256": "d1177cdd7917b6f67420d2e790061347db2215c84c9c7a158d85951b22d71559",
+    "oracle_iframe_css_pixels": { "width": 799.5, "height": 813 },
+    "ctox_iframe_css_pixels": { "width": 799.5, "height": 813 },
+    "configuration_gate": "passed",
+    "runtime_provenance_gate": "passed",
+    "interaction": "original SpreadsheetEditor name box and formula bar edit followed by the real toolbar save button on both panes",
+    "initial_semantic_parity": { "cell": "A2", "value": "CTOX_EDIT_CELL_ALPHA", "modified": false },
+    "terminal_semantic_parity": { "cell": "A2", "value": "CTOX_EDIT_CELL_BRAVO_42", "can_save": false },
+    "ctox_export_reopen": { "oracle": "passed", "ctox": "passed", "cell": "A2", "value": "CTOX_EDIT_CELL_BRAVO_42" }
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "force_save_callback_status": 6,
+    "saved_path": "runtime/office-oracle/spreadsheet.edit-save/oracle-saved.xlsx",
+    "saved_bytes": 10758,
+    "saved_sha256": "a8b5a4b0e7e5e8739167b4da3a1ac3bbc04d9f2c3d90d37540c8ec24dead0e33",
+    "target_after_present": true,
+    "preservation_marker_present": true
+  },
+  "ctox_frontend_port": {
+    "runtime": "ctox-spreadsheets-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-cell-binary-v10",
+    "editor_protocol_version": 10,
+    "saved_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.edit-save/ctox-saved.Editor.bin",
+      "bytes": 5081,
+      "sha256": "1b85914157aed444a1813461d8efe460ed3c16067083be826e5b65d91ad9d0a4",
+      "sdk_transport_offsets_transcoded": "v2 body-relative to v10 absolute"
+    },
+    "public_api_dirty_after_commit": false
+  },
+  "rust_export": {
+    "operation": "ctox-office-engine export spreadsheet",
+    "canonical_path": "output/playwright/ctox-office/ctox/spreadsheet.edit-save/ctox-canonical.xlsx",
+    "bytes": 4966,
+    "sha256": "de4466940c2f9ff32aed62a757a5c93b741da82196bda3bc40af413be22fa4c8",
+    "package_parts": 12,
+    "changed_parts": ["xl/sharedStrings.xml"],
+    "unchanged_original_parts": 11,
+    "missing_original_parts": [],
+    "unintended_added_parts": [],
+    "escrow_part_byte_identical": true,
+    "target_after_present": true,
+    "ctox_reopen": "passed",
+    "oracle_reopen": "passed"
+  },
+  "business_os_wrapper": {
+    "module": "src/apps/business-os/modules/spreadsheets/index.js#mount(ctx)",
+    "typed_runtime_setting": "office.spreadsheets_engine = ctox_spreadsheets",
+    "source_collections": ["spreadsheets", "spreadsheet_versions", "spreadsheet_blob_chunks"],
+    "command": "office.spreadsheet.commit",
+    "command_wait": "terminal",
+    "transport": "rxdb-webrtc",
+    "base_version_id": "sheet_business_os_oracle_v1",
+    "editor_blob_bytes": 5081,
+    "saved_badge": "Gespeichert",
+    "legacy_csv_autosave_suppressed_for_ctox_spreadsheets": true,
+    "console_errors": 0
+  },
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/controller/CellEditor.js:291-322",
+    "sdkjs/cell/api.js:1689-1699",
+    "sdkjs/cell/model/Serialize.js:11973-11994",
+    "sdkjs/cell/model/Serialize.js:13733-13870",
+    "src/apps/business-os/modules/spreadsheets/index.js:1020-1060",
+    "src/apps/business-os/office-engine/src/business-os-bridge.mjs"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.edit-save/differential-after-cell-edit.png", "sha256": "02c488712d8c214b25f5e036fc236ff435d19ef2841139db6551088f2b4fef3e" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.edit-save/differential-after-edit-save.png", "sha256": "629cfbc6810572a1d66f30a22caea4ed46e5e1baf4b57e8509006a66b4b73bb2" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.edit-save/differential-ctox-export-reopen.png", "sha256": "8a143b6d403104e067bb4e1adc77404cc9afa4f0183d56beb4f5262924040d54" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.edit-save/business-os-mount-edit-save.png", "sha256": "91fa565ded6b1f4f35ee4466f0ab2b4f05e1ef39fc369dad5e0e3f1d1bbdb6a8" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "http_business_data_routes": false
+  }
+}

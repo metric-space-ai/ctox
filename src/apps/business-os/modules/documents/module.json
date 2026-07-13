@@ -1,7 +1,7 @@
 {
   "id": "documents",
-  "title": "Documents",
-  "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+  "title": "CTOX Documents",
+  "description": "Native DOCX workspace with the CTOX Documents fork, explorer, versions, and CTOX runbooks.",
   "entry": "modules/documents/index.html",
   "collections": [
     "business_commands",
@@ -14,6 +14,7 @@
     "knowledge_tables"
   ],
   "layout": {
+    "shell": "windowed",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-documents\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-documents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z\" fill=\"url(#grad-documents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 2v4a2 2 0 0 0 2 2h4\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"16\" x2=\"16\" y2=\"16\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"8\" x2=\"10\" y2=\"8\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line></svg>",
     "left": "document navigation and explorer",
     "center": "DOCX viewer/editor workbench",
@@ -35,7 +36,7 @@
     "runbooks"
   ],
   "store": {
-    "summary": "DOCX and Markdown document workspace with document versions, blob chunks, and automation runbooks.",
+    "summary": "DOCX and Markdown workspace with the CTOX Documents ESM fork, native Rust roundtrip, versions, blob chunks, and automation runbooks.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/documents",
     "installable": false,
@@ -43,5 +44,7 @@
     "distribution": "starter-module"
   },
   "install_scope": "starter",
-  "default_installed": true
+  "default_installed": true,
+  "launch_kind": "desktop-app",
+  "presentation": { "default_mode": "window", "supported_modes": ["window", "maximized", "focus"], "initial_size": { "width": 1180, "height": 800 }, "minimum_size": { "width": 640, "height": 480 }, "multi_instance": false, "auto_restore": false }
 }

@@ -1,0 +1,16 @@
+{
+  "schema_version": "ctox-office-spreadsheet-corpus-v1",
+  "entries": [
+    { "feature_id": "spreadsheet.open-render-sheets", "file": "open-render-sheets.xlsx", "bytes": 4951, "sha256": "e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043", "parts": 12 },
+    { "feature_id": "spreadsheet.edit-save", "file": "edit-save.xlsx", "bytes": 4962, "sha256": "58a12bbecfc82fa256915a0d65de35999f44170eddf39ef00cc3bfc7d8a9a640", "parts": 12 },
+    { "feature_id": "spreadsheet.undo-clipboard-fill", "file": "undo-clipboard-fill.xlsx", "bytes": 4986, "sha256": "9054513a351e442b6547623b2aa20dd55a45b117ec3035888b789621c76fdf37", "parts": 12 },
+    { "feature_id": "spreadsheet.cell-format-rows-columns", "file": "cell-format-rows-columns.xlsx", "bytes": 5003, "sha256": "8ff876530c695d8749430416f3f45039cc5f84be77ca037736fdfa1bfac1392b", "parts": 12 },
+    { "feature_id": "spreadsheet.formulas-references", "file": "formulas-references.xlsx", "bytes": 5130, "sha256": "abf848ef71b350c3b3745e41aea413fb710f5248f4be30acd62aa3fe67cb9995", "parts": 12 },
+    { "feature_id": "spreadsheet.multi-sheet-merge-freeze", "file": "multi-sheet-merge-freeze.xlsx", "bytes": 4904, "sha256": "a102eccae07ee12397836b9636b4defbd6f31738ceb6628616974fef4eb4b69d", "parts": 12 },
+    { "feature_id": "spreadsheet.sort-filter-tables", "file": "sort-filter-tables.xlsx", "bytes": 5764, "sha256": "a6473987a7e8013ffd74716960da8f388f3548284798e45ee95a7a8f71245fee", "parts": 14 },
+    { "feature_id": "spreadsheet.validation-conditional-formatting", "file": "validation-conditional-formatting.xlsx", "bytes": 5435, "sha256": "a12ab5f3008eff788c14d174643f6e63dcec1625e35dedcbfe710b96549080f7", "parts": 12 },
+    { "feature_id": "spreadsheet.comments-names-protection", "file": "comments-names-protection.xlsx", "bytes": 6604, "sha256": "c5a7053c0d2a469b80fc27c15bf56409fe412bea250eb20189eb9af2c58f7421", "parts": 15 },
+    { "feature_id": "spreadsheet.charts", "file": "charts.xlsx", "bytes": 7236, "sha256": "468cad588bce5229ed7865b69e82ab5451b2299ecc6634fb9da6372382c64fe0", "parts": 16 },
+    { "feature_id": "spreadsheet.pivot-print-layout", "file": "pivot-print-layout.xlsx", "bytes": 8212, "sha256": "c1f6d5b9952a659ba8884647f6958b995822403a2484dcc84427c4b0511a8532", "parts": 18 }
+  ]
+}

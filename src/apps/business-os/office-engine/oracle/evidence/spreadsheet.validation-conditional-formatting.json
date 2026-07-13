@@ -1,0 +1,99 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.validation-conditional-formatting",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/validation-conditional-formatting.xlsx",
+    "bytes": 5435,
+    "package_parts": 12,
+    "sha256": "a12ab5f3008eff788c14d174643f6e63dcec1625e35dedcbfe710b96549080f7",
+    "escrow_marker": "SPREADSHEET_VALIDATION_ESCROW_C19E",
+    "validations": ["list:B2", "whole-between:C2"],
+    "conditional_formats": ["colorScale:D2:D6", "cellIs-greaterThan:E2:E6"]
+  },
+  "expected_semantics": {
+    "list_source": "Draft;Review;Final;Approved",
+    "approved_value": "Approved",
+    "whole_number_value": 8,
+    "conditional_threshold_value": 80,
+    "color_scale_colors": ["FFF8696B", "FFFFEB84", "FF63BE7B"],
+    "cell_is_style": { "fill_rgb": "FFC6EFCE", "font_rgb": "FF006100" }
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "runtime": "original-documentserver-spreadsheeteditor",
+    "saved_path": "runtime/office-oracle/spreadsheet.validation-conditional-formatting/oracle-saved.xlsx",
+    "saved_bytes": 11533,
+    "saved_sha256": "cb8e09a97dc534cb620ab8a10a86cbd3b86c6ecdd54915ebdb088e94f77f323c",
+    "callback_statuses": [6, 2],
+    "validation_conditional_xml_verified": true,
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "protocol": "euro-office-cell-binary-v10",
+    "protocol_version": 10,
+    "rust_generated": true,
+    "initial_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.validation-conditional-formatting/ctox-rust.Editor.bin",
+      "bytes": 2840,
+      "sha256": "6ace5556f0e272364be6aa43cbda2dda28b2f991fe8ca77bbda76a6fe0651d25"
+    },
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.validation-conditional-formatting/ctox-editor.xlsx",
+      "bytes": 6022,
+      "sha256": "f798af4f819da0fe4f022e93aad01f2c00385fb8277f93f1e0db1f90faf75407",
+      "values": { "B2": "Approved", "C2": "8", "E2": "80" },
+      "validation_formula1": "\"Draft,Review,Final,Approved\"",
+      "conditional_rules": 2
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.validation-conditional-formatting/ctox-canonical.xlsx",
+      "bytes": 5446,
+      "sha256": "0829a157bf2fe4673dab58f4d928def5a7080d9c7bcc8e309d0de2579f243351",
+      "package_parts": 12,
+      "changed_parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 10,
+      "missing_original_parts": [],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    },
+    "reprepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.validation-conditional-formatting/ctox-export.Editor.bin",
+      "bytes": 2867,
+      "sha256": "907d2e29749518ff1d94e6e630d202b62f3e2d264bf3c1c0c243d3d8754c8cd3"
+    },
+    "business_os_mount": {
+      "wrapper": "modules/spreadsheets.mount(ctx)",
+      "command": "office.spreadsheet.commit",
+      "base_version_id": "sheet_business_os_oracle_v1",
+      "transport": "rxdb-webrtc",
+      "until": "terminal",
+      "editor_blob_bytes": 6013,
+      "badge": "Gespeichert"
+    }
+  },
+  "browser_health": {
+    "same_iframe_geometry": { "width": 799.5, "height": 813 },
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.validation-conditional-formatting/differential-terminal-before-save.png", "sha256": "ebf7288c945490383cec441755b0e84bb6272d1965f1ce32045f1caa1dd3cdbd" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.validation-conditional-formatting/side-by-side-reopen.png", "sha256": "8c7bc5cac735da2665e95280a90ad118859b992040a4a1b1cf0910b031bbb07f" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.validation-conditional-formatting/business-os-mount-validation.png", "sha256": "286ecbad29651039db2c273b974c834cbae97f1adb600c4aa96d8a996af1dc5d" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/Toolbar.js",
+    "web-apps/apps/spreadsheeteditor/main/app/view/DataValidationDialog.js",
+    "sdkjs/cell/model/Serialize.js:877-962,1690-1871,5388-5598,7104-7271,11621-11691,12803-13010",
+    "sdkjs/cell/model/ConditionalFormatting.js",
+    "sdkjs/cell/model/DataValidation.js"
+  ]
+}

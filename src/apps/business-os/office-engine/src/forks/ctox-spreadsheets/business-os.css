@@ -1,0 +1,10 @@
+body[data-ctox-product="ctox-spreadsheets"] #statusbar .sheet-tab.active,
+body[data-ctox-product="ctox-spreadsheets"] .worksheet-tab.active {
+  color: var(--ctox-fork-accent) !important;
+  box-shadow: inset 0 -2px 0 var(--ctox-fork-accent) !important;
+}
+
+body[data-ctox-product="ctox-spreadsheets"] #ws-v-scrollbar,
+body[data-ctox-product="ctox-spreadsheets"] #ws-h-scrollbar {
+  background: var(--ctox-fork-surface-2) !important;
+}

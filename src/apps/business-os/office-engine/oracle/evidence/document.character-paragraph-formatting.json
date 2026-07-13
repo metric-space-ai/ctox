@@ -1,0 +1,130 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.character-paragraph-formatting",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/character-paragraph-formatting.docx",
+    "bytes": 37005,
+    "sha256": "a6e41f0d3839e77a7a5ec86d6c1c33dbb82b0248ebb75bf8e29d281f3258e3ff",
+    "character_targets": ["CHAR_BOLD_TARGET", "CHAR_ITALIC_TARGET", "CHAR_UNDERLINE_TARGET", "CHAR_SIZE_TARGET", "CHAR_COLOR_TARGET"],
+    "paragraph_targets": ["PARA_ALIGN_CENTER_TARGET", "PARA_INDENT_TARGET", "PARA_LINE_SPACING_TARGET"],
+    "preservation_marker": "PRESERVE_FORMATTING_UNRELATED_91D7"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "locale": "de-DE"
+  },
+  "differential_browser": {
+    "viewport_css_px": { "width": 1600, "height": 900 },
+    "equal_editor_canvas_css_px": { "width": 687, "height": 617 },
+    "side_by_side_gate": "passed",
+    "coordinate_source": "measured #id_viewer_overlay rectangle",
+    "interaction_order": "bottom-up to keep targets stable across layout reflow"
+  },
+  "expected_semantic_state": {
+    "CHAR_BOLD_TARGET": { "bold": true },
+    "CHAR_ITALIC_TARGET": { "italic": true },
+    "CHAR_UNDERLINE_TARGET": { "underline": "single" },
+    "CHAR_SIZE_TARGET": { "size_half_points": 36, "size_points": 18 },
+    "CHAR_COLOR_TARGET": { "rgb": "953735" },
+    "PARA_ALIGN_CENTER_TARGET": { "alignment": "center" },
+    "PARA_INDENT_TARGET": { "left_twips": 709, "left_millimetres": 12.5 },
+    "PARA_LINE_SPACING_TARGET": { "line_twips": 360, "line_rule": "auto", "multiple": 1.5 },
+    "PRESERVE_FORMATTING_UNRELATED_91D7": { "space_before_twips": 240 }
+  },
+  "expected_ooxml": {
+    "ctox_changed_parts": ["word/document.xml"],
+    "ctox_unchanged_parts": 16,
+    "ctox_total_original_parts": 17,
+    "missing_original_parts": [],
+    "added_parts": [],
+    "preserve_unrelated_parts": true
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1311-1337",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1371-1389",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1461-1513",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1782",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:2873-2891",
+    "sdkjs/word/api.js:3496-3541",
+    "sdkjs/word/api.js:3849-3863",
+    "sdkjs/word/api.js:4820-4841",
+    "sdkjs/word/api.js:5023-5029",
+    "sdkjs/word/Editor/Document.js:6919-6922",
+    "sdkjs/word/Editor/Document.js:16862-16884"
+  ],
+  "oracle_export": {
+    "bytes": 40377,
+    "sha256": "948ec59b7189205ae24fe0674597a92edb5a4a0c87fa2b22020207c10c5ebd90",
+    "callback_statuses": [1, 6],
+    "reopen_in_oracle": "passed"
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.character-paragraph-formatting/oracle-initial.png", "sha256": "54e659eac422f61e10ff8950c375132c807444fd4608b97d3b39711627edaf2f" },
+    { "path": "output/playwright/ctox-office/oracle/document.character-paragraph-formatting/oracle-terminal.png", "sha256": "377b4c3657c1a46a371394e937608a24fc0a1a0b353dbc27b4638fae66806bf5" },
+    { "path": "output/playwright/ctox-office/oracle/document.character-paragraph-formatting/oracle-reopen.png", "sha256": "7ca16b536f184fc7ccc3e3afbab76181059d280ec64babe76571b7e0953c6f32" },
+    { "path": "output/playwright/ctox-office/comparison/document.character-paragraph-formatting/split-initial-spacing-fixed.png", "sha256": "3dead77c4b9f92558b2163b3eb83613d1ba523f3855485b0074666cd06b86fb1" },
+    { "path": "output/playwright/ctox-office/comparison/document.character-paragraph-formatting/differential-terminal-formatting.png", "sha256": "277f3aac6ea452e4897fd7af1ed856ecfac46043fc72151343e4fa1a8e20418a" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "runtime": "ctox-documents-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-word-binary-v10",
+    "editor_protocol_version": 10,
+    "implemented_features": ["document.open-render-zoom", "document.edit-save", "document.undo-clipboard-keyboard", "document.character-paragraph-formatting"],
+    "exact_semantic_comparison": "passed",
+    "editor_export": {
+      "prepared_bytes": 2088,
+      "prepared_sha256": "7abd6339f8e7a1ba5eb29a885516ff4bd9a835211cbe02245fe0d7fc1e9d7b5a",
+      "saved_bytes": 245515,
+      "saved_sha256": "5f50c0d26a9e91faf6ab2a2afb5034ef9e38527de0ae0b6067ec486c3ce94d42"
+    },
+    "canonical_export": {
+      "bytes": 35581,
+      "sha256": "c378aabc16b7769d0ba957310b6fa7af123176679c4627dbe27159d2e09bd40c",
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 16,
+      "missing_original_parts": [],
+      "added_parts": [],
+      "reopen_in_ctox": "passed",
+      "reopen_in_oracle": "passed"
+    },
+    "browser_health": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0,
+      "clean_profile_flow_passed": true,
+      "http_business_data_routes": false
+    },
+    "screenshots": [
+      { "path": "output/playwright/ctox-office/ctox/document.character-paragraph-formatting/ctox-v4-terminal-final.png", "sha256": "9b3a6de25aee69773ac823a4db466fbbdfa0b04724cd3a42e02d193e325d18be" },
+      { "path": "output/playwright/ctox-office/ctox/document.character-paragraph-formatting/ctox-v4-reopen.png", "sha256": "66748a3c0a1dad427d3e775999d2c03f35d6b302d3a7fefd45165ad89b0c4d98" },
+      { "path": "output/playwright/ctox-office/oracle/document.character-paragraph-formatting/ctox-export-reopen-oracle.png", "sha256": "7e95c106bf66a48d5d7f095e850a8304bf32b46f4d6da1d48918f0c943e00090" },
+      { "path": "output/playwright/ctox-office/comparison/document.character-paragraph-formatting/ctox-saved-docy-reopen.png", "sha256": "8aab5ea77c91574f1a6a3c651da8bf55a423add7a0192006084bbcc4a66838dc" },
+      { "path": "output/playwright/ctox-office/comparison/document.character-paragraph-formatting/ctox-canonical-oracle-reopen.png", "sha256": "7e95c106bf66a48d5d7f095e850a8304bf32b46f4d6da1d48918f0c943e00090" }
+    ],
+    "rust_formatting_decoder": {
+      "run_properties": ["bold", "italic", "underline", "font_size_half_points", "rgb_color"],
+      "paragraph_properties": ["alignment", "left_indent_twips", "line_spacing_twips", "line_spacing_rule"],
+      "preserves_existing_spacing_attributes": true
+    },
+    "differential_flow": "oracle/flows/document.character-paragraph-formatting.playwright.js"
+  }
+}

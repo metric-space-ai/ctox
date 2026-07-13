@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>CTOX Forks · Euro Office Oracle Side-by-Side</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; background: #17211f; color: #f4f7f6; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; overflow: hidden; }
+      body { display: grid; grid-template-rows: 52px minmax(0, 1fr); gap: 1px; background: #3d4946; }
+      header { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: #17211f; }
+      header strong { font-size: 14px; letter-spacing: .01em; }
+      header code { color: #a8e2cc; font-size: 12px; }
+      header button { margin-left: auto; border: 1px solid #687773; border-radius: 5px; padding: 6px 10px; background: #24312e; color: inherit; cursor: pointer; }
+      #gate { color: #ffcf70; font: 12px ui-monospace, monospace; }
+      #comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; min-height: 0; }
+      section { display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; background: #e7ebea; }
+      section > header { padding: 0 12px; background: #25312f; font-size: 12px; }
+      section > header span:last-child { margin-left: auto; color: #b9c8c4; font-family: ui-monospace, monospace; }
+      iframe { width: 100%; height: 100%; border: 0; background: white; }
+      [data-state="ready"] { color: #75d5af !important; }
+      [data-state="error"] { color: #ff9f92 !important; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Euro Office Oracle ↔ CTOX Fork</strong>
+      <code id="feature"></code>
+      <span>gleiche iframe-Geometrie · same-origin Testharness</span>
+      <output id="gate">Gate: wartet</output>
+      <button id="reload" type="button">Beide neu laden</button>
+    </header>
+    <main id="comparison">
+      <section aria-label="Euro-Office Original">
+        <header><strong>Euro Office Oracle v9.3.1</strong><span id="oracle-state">lädt</span></header>
+        <iframe id="oracle" title="Euro Office Oracle"></iframe>
+      </section>
+      <section aria-label="CTOX Port">
+        <header><strong id="ctox-product-name">CTOX Documents</strong><span id="ctox-state">lädt</span></header>
+        <iframe id="ctox" title="CTOX Documents"></iframe>
+      </section>
+    </main>
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      const feature = params.get('feature') || 'document.open-render-zoom';
+      const supported = /^(document|spreadsheet)\.[a-z0-9-]+$/.test(feature);
+      if (!supported) throw new Error(`Unsupported comparison feature: ${feature}`);
+      const [kind, slug] = feature.split('.', 2);
+      const productName = kind === 'document' ? 'CTOX Documents' : 'CTOX Spreadsheets';
+      document.querySelector('#ctox-product-name').textContent = productName;
+      document.querySelector('#ctox').title = productName;
+      const frames = {
+        oracle: document.querySelector('#oracle'),
+        ctox: document.querySelector('#ctox'),
+      };
+      const states = {
+        oracle: document.querySelector('#oracle-state'),
+        ctox: document.querySelector('#ctox-state'),
+      };
+      const gate = document.querySelector('#gate');
+      document.querySelector('#feature').textContent = feature;
+
+      function statusFor(frame) {
+        try {
+          return frame.contentDocument?.querySelector('[role="status"], #status')?.textContent?.trim() || 'geladen';
+        } catch {
+          return 'cross-origin';
+        }
+      }
+
+      function load() {
+        gate.textContent = 'Gate: wartet';
+        gate.dataset.state = 'loading';
+        for (const state of Object.values(states)) {
+          state.textContent = 'lädt';
+          state.dataset.state = 'loading';
+        }
+        const childParams = new URLSearchParams({ comparison: '1', run: String(Date.now()) });
+        if (params.get('source')) childParams.set('source', params.get('source'));
+        frames.oracle.src = `./${kind}-${slug}.html?${childParams}`;
+        frames.ctox.src = `./ctox-${kind}-${slug}.html?${childParams}`;
+      }
+
+      for (const [name, frame] of Object.entries(frames)) {
+        frame.addEventListener('load', () => {
+          const update = () => {
+            const value = statusFor(frame);
+            states[name].textContent = value;
+            states[name].dataset.state = value === 'document-ready' ? 'ready' : /^error/i.test(value) ? 'error' : 'loaded';
+            return value;
+          };
+          update();
+          const deadline = Date.now() + 60000;
+          const poll = setInterval(async () => {
+            const value = update();
+            if (value === 'document-ready' || /^error/i.test(value) || Date.now() >= deadline) {
+              clearInterval(poll);
+              await validateComparison();
+            }
+          }, 500);
+        });
+      }
+
+      function normalizedConfig(value) {
+        if (Array.isArray(value)) return `[${value.map(normalizedConfig).join(',')}]`;
+        if (value && typeof value === 'object') {
+          return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${normalizedConfig(value[key])}`).join(',')}}`;
+        }
+        return JSON.stringify(value);
+      }
+
+      async function validateComparison() {
+        const oracleEvidence = frames.oracle.contentWindow?.oracleEvidence;
+        const ctoxEvidence = frames.ctox.contentWindow?.ctoxOfficeEvidence;
+        const oracleRect = frames.oracle.getBoundingClientRect();
+        const ctoxRect = frames.ctox.getBoundingClientRect();
+        const failures = [];
+        if (statusFor(frames.oracle) !== 'document-ready') failures.push('oracle-not-ready');
+        if (statusFor(frames.ctox) !== 'document-ready') failures.push('ctox-not-ready');
+        if (!oracleEvidence?.comparison_config || !ctoxEvidence?.comparison_config) failures.push('comparison-config-missing');
+        if (normalizedConfig(oracleEvidence?.comparison_config) !== normalizedConfig(ctoxEvidence?.comparison_config)) failures.push('configuration-mismatch');
+        if (Math.abs(oracleRect.width - ctoxRect.width) > 0.01 || Math.abs(oracleRect.height - ctoxRect.height) > 0.01) failures.push('geometry-mismatch');
+        let inspection = ctoxEvidence?.inspection;
+        if (!inspection && ctoxEvidence?.editor?.inspect) inspection = await ctoxEvidence.editor.inspect();
+        const expectedProduct = feature.startsWith('document.') ? 'ctox-documents' : 'ctox-spreadsheets';
+        if (inspection?.runtime !== `${expectedProduct}-fork` || inspection?.product_id !== expectedProduct) failures.push('ctox-runtime-not-fork');
+        if (inspection?.source?.fork !== expectedProduct || inspection?.source?.web_apps !== true || inspection?.source?.sdkjs !== true) failures.push('ctox-fork-closure-unproven');
+        if (/^(document\.(open-render-zoom|edit-save|undo-clipboard-keyboard|character-paragraph-formatting|styles-lists-numbering)|spreadsheet\.(open-render-sheets|cell-format-rows-columns|formulas-references|multi-sheet-merge-freeze|sort-filter-tables|validation-conditional-formatting|comments-names-protection|charts|pivot-print-layout))$/.test(feature) && ctoxEvidence?.rust_generated !== true) failures.push('ctox-editor-payload-not-rust-generated');
+        if (ctoxEvidence?.visual_review_passed !== true) failures.push('visual-review-not-passed');
+        const result = {
+          valid: failures.length === 0,
+          failures,
+          feature,
+          geometry: { oracle: { width: oracleRect.width, height: oracleRect.height }, ctox: { width: ctoxRect.width, height: ctoxRect.height } },
+          config: ctoxEvidence?.comparison_config || null,
+          runtime: inspection || null,
+        };
+        gate.textContent = result.valid ? 'Gate: Lauf gültig' : `Gate: ungültig (${failures.join(', ')})`;
+        gate.dataset.state = result.valid ? 'ready' : 'error';
+        window.ctoxOfficeComparison.lastValidation = result;
+        return result;
+      }
+      document.querySelector('#reload').addEventListener('click', load);
+      window.ctoxOfficeComparison = { feature, frames, reload: load, validate: validateComparison, lastValidation: null };
+      load();
+    </script>
+  </body>
+</html>

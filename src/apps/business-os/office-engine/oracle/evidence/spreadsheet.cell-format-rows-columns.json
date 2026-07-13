@@ -1,0 +1,63 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.cell-format-rows-columns",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/cell-format-rows-columns.xlsx",
+    "bytes": 5003,
+    "package_parts": 12,
+    "sha256": "8ff876530c695d8749430416f3f45039cc5f84be77ca037736fdfa1bfac1392b",
+    "escrow_marker": "SPREADSHEET_FORMAT_ESCROW_4C72"
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "cell_format": { "cell": "A2", "bold": true, "italic": true },
+    "number_format": { "cell": "B4", "kind": "Euro accounting", "num_fmt_id": 164 },
+    "row_height": { "row": 4, "points": 27.75 },
+    "column_width": { "column": "B", "characters": 32.625 },
+    "row_visibility_sequence": ["hide row 5", "show row 5"],
+    "saved_path": "runtime/office-oracle/spreadsheet.cell-format-rows-columns/oracle-saved.xlsx",
+    "saved_bytes": 10908,
+    "saved_sha256": "9662f96f0cc3fa50bc82eab9c48fa8bb4937a2843da23afb2a6cb3610beba0ba",
+    "saved_package_parts": 13,
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "cell_format": { "cell": "A2", "bold": true, "italic": true, "unrelated_A1_unchanged": true },
+    "number_format": { "cell": "B4", "kind": "Euro accounting", "reopen_alignment": "right" },
+    "row_height": { "row": 4, "points": 27.75, "reopen_css_pixels": 37 },
+    "column_width": { "column": "B", "characters": 32.625, "reopen_css_pixels": 285.8359375 },
+    "row_visibility_sequence": ["hide row 5", "show row 5"],
+    "commit_base_version_id": "sheet_format_v1",
+    "commit_result_version_id": "sheet_format_v2",
+    "implemented_features": ["spreadsheet.open-render-sheets", "spreadsheet.edit-save", "spreadsheet.undo-clipboard-fill", "spreadsheet.cell-format-rows-columns"],
+    "editor_export": { "path": "output/playwright/ctox-office/ctox/spreadsheet.cell-format-rows-columns/ctox-editor.xlsx", "bytes": 5408, "sha256": "ca4567595ed400f8ca609f2fa4b56973fd4a46710dfbe1b99d57c1d0e4a311c6" },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.cell-format-rows-columns/ctox-canonical.xlsx",
+      "bytes": 5132,
+      "sha256": "bc2b6e9928482a50d050fed870799a9ef98a01a26d5340bab2da7ac0709b2668",
+      "package_parts": 12,
+      "changed_parts": ["xl/styles.xml", "xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 10,
+      "missing_original_parts": [],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    }
+  },
+  "browser_health": { "console_errors": 0, "console_warnings": 0, "failed_document_requests": 0, "clean_profile_flow_passed": true, "http_business_data_routes": false },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.cell-format-rows-columns/differential-terminal-before-save.png", "sha256": "be21f5c25bfd35b01f96bbd1da5eb9ddaf35cd69c736011e8c7778ee5aa9275e" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.cell-format-rows-columns/side-by-side-reopen.png", "sha256": "0a2bc2f8864258522f4bbaa59d268cc50fa620c462d3e200a61159010d3f8eff" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.cell-format-rows-columns/business-os-mount-cell-format.png", "sha256": "1dcf4466a5bb121c4a111b10b8f748b6fbc6613b76739162e204408f81a1e114" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/controller/Toolbar.js",
+    "sdkjs/cell/view/WorkbookView.js",
+    "sdkjs/cell/model/Worksheet.js",
+    "sdkjs/cell/model/Cell.js"
+  ]
+}

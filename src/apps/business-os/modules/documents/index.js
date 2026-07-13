@@ -1,5 +1,6 @@
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs';
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MARKDOWN_MIME = 'text/markdown';
@@ -128,6 +129,8 @@ export async function mount(ctx) {
     formatModule: null,
     formatModuleLoadPromise: null,
     superdocModule: null,
+    ctoxDocumentsModule: null,
+    officeEngine: 'ctox_documents',
     documents: [],
     runbooks: [],
     knowledgeItems: [],
@@ -150,25 +153,44 @@ export async function mount(ctx) {
     localSubscriptionCleanup: null,
     contextMenu: null,
     contextMenuCleanup: null,
+    disposed: false,
     t,
     lang: ctx.locale === 'en' ? 'en' : 'de',
   };
 
   wireModule(state);
-  state.contextMenuCleanup = initDocumentsContextMenu(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
-  await ensureSeedRunbooks(ctx);
-  await Promise.all([refreshRunbooks(state), refreshKnowledge(state), refreshDocuments(state)]);
+  // Mount the workbench immediately. Seed/query work can legitimately wait
+  // for WebRTC catch-up and must not leave the window-manager promise pending
+  // after the visible app is already usable.
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
+  Promise.resolve()
+    .then(() => ensureSeedRunbooks(ctx))
+    .then(() => Promise.all([
+      refreshRunbooks(state),
+      refreshKnowledge(state),
+      refreshDocuments(state),
+      refreshOfficeEngineSettings(state),
+    ]))
+    .then(() => {
+      if (state.disposed) return;
+      renderLeft(state);
+      renderRight(state);
+      renderCenter(state);
+    })
+    .catch((error) => {
+      if (!state.disposed) renderError(state, error?.message || String(error));
+    });
   return () => {
+    state.disposed = true;
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
     state.contextMenuCleanup?.();
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
-    flushActiveSuperDocDraft(state).catch((error) => console.error('[documents] final SuperDoc draft save failed', error));
+    flushActiveEditorDraft(state).catch((error) => console.error('[documents] final editor draft save failed', error));
     state.editorHandle?.destroy?.();
   };
 }
@@ -193,6 +215,26 @@ async function loadSuperDocModule(state) {
   ensureSuperDocStyles();
   state.superdocModule = await import('../../vendor/superdoc.mjs');
   return state.superdocModule;
+}
+
+async function loadCtoxDocumentsModule(state) {
+  if (!state.ctoxDocumentsModule) {
+    state.ctoxDocumentsModule = await import('../../vendor/ctox-office/ctox-office-document.mjs');
+  }
+  return state.ctoxDocumentsModule;
+}
+
+async function refreshOfficeEngineSettings(state) {
+  const collection = state.ctx.db?.collection?.('ctox_runtime_settings');
+  if (!collection) return state.officeEngine;
+  const settings = await collection.findOne('runtime-settings').exec();
+  const projected = settings?.toJSON?.() || settings;
+  state.officeEngine = officeEngineFromSettings(projected);
+  return state.officeEngine;
+}
+
+function officeEngineFromSettings(settings) {
+  return settings?.office?.documents_engine === 'legacy' ? 'legacy' : 'ctox_documents';
 }
 
 function wireModule(state) {
@@ -222,16 +264,10 @@ function initDocumentsContextMenu(state) {
     if (event.key === 'Escape') hideDocumentsContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
-  state.ctx.left?.addEventListener?.('contextmenu', handleContextMenu);
-  state.ctx.right?.addEventListener?.('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
-    state.ctx.left?.removeEventListener?.('contextmenu', handleContextMenu);
-    state.ctx.right?.removeEventListener?.('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideDocumentsContextMenu(state);
@@ -753,7 +789,7 @@ async function switchSelectedDocument(state, documentId) {
   const previousRecord = selectedRecord(state);
   try {
     await withTimeout(
-      flushActiveSuperDocDraft(state, previousRecord, { allowFailure: true }),
+      flushActiveEditorDraft(state, previousRecord, { allowFailure: true }),
       2500,
       state.t('draftSaveTimeout', 'Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.'),
     );
@@ -876,7 +912,7 @@ async function deleteDocument(state, documentId) {
   if (!target) return;
 
   if (state.selectedId === documentId) {
-    await flushActiveSuperDocDraft(state, target, { allowFailure: true }).catch((error) => {
+    await flushActiveEditorDraft(state, target, { allowFailure: true }).catch((error) => {
       console.warn('[documents] continuing delete after draft save failed', error);
     });
   }
@@ -1899,10 +1935,12 @@ function renderCenter(state) {
     return;
   }
   if (record.document_type === 'word_document') {
-    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
-    mountSuperDocDocument(state, host, record, version, renderSerial).catch((error) => {
+    const useCtoxDocuments = state.officeEngine === 'ctox_documents';
+    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(useCtoxDocuments ? 'CTOX Documents wird initialisiert.' : state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
+    const mountEditor = useCtoxDocuments ? mountCtoxDocuments : mountSuperDocDocument;
+    mountEditor(state, host, record, version, renderSerial).catch((error) => {
       if (state.renderSerial !== renderSerial) return;
-      console.error('[documents] SuperDoc mount failed', error);
+      console.error(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
       renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
     });
     return;
@@ -2038,6 +2076,100 @@ function renderInlineMarkdown(value) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+
+async function mountCtoxDocuments(state, host, record, version, renderSerial) {
+  const { createCtoxDocumentsEditor } = await loadCtoxDocumentsModule(state);
+  if (state.renderSerial !== renderSerial) return;
+  host.replaceChildren();
+  const mount = document.createElement('div');
+  mount.className = 'documents-superdoc-frame documents-ctox-documents-frame';
+  host.append(mount);
+  const permissions = ctoxDocumentsPermissions(state.ctx);
+  const editor = await createCtoxDocumentsEditor({
+    host: mount,
+    bridge: createBusinessOsOfficeBridge(state.ctx, 'document'),
+    locale: state.lang,
+    theme: document.documentElement.dataset.theme || 'system',
+    permissions,
+  });
+  if (state.renderSerial !== renderSerial) {
+    await editor.destroy();
+    return;
+  }
+  const removeDirtyListener = editor.on('dirty', async () => {
+    state.dirty = true;
+    state.needsFinalSave = true;
+    await markRecordDraft(state, record);
+    scheduleCtoxDocumentsDraftSave(state, record);
+  });
+  const removeSavedListener = editor.on('saved', ({ versionId } = {}) => {
+    if (!versionId) return;
+    record.current_version_id = versionId;
+    state.dirty = false;
+  });
+  await editor.open({ recordId: record.id, versionId: version.id });
+  state.editorHandle = {
+    kind: 'ctox-documents',
+    editor,
+    async destroy() {
+      removeDirtyListener();
+      removeSavedListener();
+      await editor.destroy();
+      host.replaceChildren();
+    },
+    save: (options) => editor.save(options),
+    export: async () => (await editor.export({ format: 'docx' })).bytes,
+    focus: () => editor.focus(),
+    inspect: () => editor.inspect(),
+  };
+}
+
+function ctoxDocumentsPermissions(ctx) {
+  const canWrite = ctx.permissions?.canWriteCollection?.('documents') !== false
+    && ctx.permissions?.canWriteCollection?.('document_versions') !== false
+    && ctx.permissions?.canWriteCollection?.('document_blob_chunks') !== false;
+  return { read: true, write: canWrite, export: true, comment: canWrite, review: canWrite };
+}
+
+function scheduleCtoxDocumentsDraftSave(state, record) {
+  if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
+  state.superdocSaveTimer = setTimeout(() => {
+    state.superdocSaveTimer = null;
+    flushActiveCtoxDocumentsDraft(state, record).catch((error) => {
+      console.error('[documents] CTOX Documents draft save failed', error);
+    });
+  }, 900);
+}
+
+async function flushActiveCtoxDocumentsDraft(state, record = selectedRecord(state), options = {}) {
+  if (state.editorHandle?.kind !== 'ctox-documents' || !record || (!state.dirty && !options.force)) return null;
+  if (state.superdocSavePromise) return state.superdocSavePromise;
+  state.superdocSavePromise = state.editorHandle.save({ reason: options.final === false ? 'autosave' : 'final' });
+  try {
+    const result = await state.superdocSavePromise;
+    const versionId = result?.version_id || result?.versionId;
+    if (versionId) {
+      record.current_version_id = versionId;
+      state.selectedVersion = { ...state.selectedVersion, id: versionId, version_id: versionId, blob_id: result.blob_id };
+    }
+    state.dirty = false;
+    if (options.final !== false) state.needsFinalSave = false;
+    return result;
+  } catch (error) {
+    if (!options.allowFailure) throw error;
+    console.warn('[documents] ignored CTOX Documents draft save failure', error);
+    return null;
+  } finally {
+    state.superdocSavePromise = null;
+  }
+}
+
+function flushActiveEditorDraft(state, record = selectedRecord(state), options = {}) {
+  if (state.editorHandle?.kind === 'ctox-documents') {
+    return flushActiveCtoxDocumentsDraft(state, record, options);
+  }
+  return flushActiveSuperDocDraft(state, record, options);
 }
 
 async function mountSuperDocDocument(state, host, record, version, renderSerial) {
@@ -2281,10 +2413,10 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   let data;
   if (isMarkdown) {
     data = formatModule.exportMarkdown(state.selectedVersion.model_json);
-  } else if (state.editorHandle?.kind === 'superdoc') {
+  } else if (state.editorHandle?.kind === 'superdoc' || state.editorHandle?.kind === 'ctox-documents') {
     data = await state.editorHandle.export();
   } else {
-    renderError(state, state.t('docxExportSuperDocRequired', 'DOCX Export benötigt den aktiven SuperDoc Editor. Bitte das Dokument erneut öffnen und danach exportieren.'));
+    renderError(state, state.t('docxExportSuperDocRequired', 'DOCX Export benötigt einen aktiven Office Editor. Bitte das Dokument erneut öffnen und danach exportieren.'));
     return;
   }
   const blob = data instanceof Blob ? data : new Blob([data], { type: isMarkdown ? MARKDOWN_MIME : DOCX_MIME });
@@ -2580,6 +2712,8 @@ export const __documentsTestHooks = {
   validateNewDocumentInput,
   visibleDocuments,
   isReclaimableDraftBlob,
+  officeEngineFromSettings,
+  ctoxDocumentsPermissions,
   saveBlobChunks,
 };
 

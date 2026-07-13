@@ -1,0 +1,22 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.comments-names-protection",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.comments-names-protection",
+  "viewport": { "width": 1600, "height": 900 },
+  "preconditions": [
+    "Euro-Office Oracle v9.3.1 is running on 127.0.0.1:8088",
+    "CTOX uses the Rust-generated XLSY payload ctox-rust.Editor.bin",
+    "both frames expose the original SpreadsheetEditor comment, formula and protection surfaces"
+  ],
+  "steps": [
+    { "action": "wait_for", "semantic": "both status=document-ready and comparison gate valid" },
+    { "action": "verify_import", "comment": "B4:CTOX_EXISTING_CELL_COMMENT", "defined_names": ["CTOX_Amount", "CTOX_LocalInput"], "sheet_protected": true, "workbook_protected": true },
+    { "action": "unprotect", "surface": "original Schutz tab buttons", "targets": ["workbook", "worksheet"] },
+    { "action": "rename_defined_name", "surface": "original Name-Manager and Name bearbeiten dialog", "from": "CTOX_Amount", "to": "CTOX_Amount_Reviewed" },
+    { "action": "add_comment", "surface": "original comment sidebar", "cell": "C4", "text": "CTOX_ADDED_CELL_COMMENT" },
+    { "action": "save", "surface": "original Save toolbar button", "oracle_callback_statuses": [2, 6], "ctox_base_version_id": "sheet_comments_v1" },
+    { "action": "rust_canonical_export", "expected_changed_parts": ["xl/comments1.xml", "xl/drawings/vmlDrawing1.vml", "xl/workbook.xml", "xl/worksheets/sheet1.xml"], "expected_unchanged_parts": 11 },
+    { "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "source": "ctox-canonical.xlsx" },
+    { "action": "business_os_mount", "target": "modules/spreadsheets.mount(ctx)", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

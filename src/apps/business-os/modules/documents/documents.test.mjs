@@ -51,6 +51,25 @@ test('only superseded draft blobs are reclaimed, never the original or current b
   assert.equal(hooks.isReclaimableDraftBlob('', 'v1_draft_200'), false);
 });
 
+test('typed runtime settings select CTOX Documents by default and preserve explicit legacy rollback', () => {
+  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'ctox_office' } }), 'ctox_documents');
+  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'ctox_documents' } }), 'ctox_documents');
+  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'legacy' } }), 'legacy');
+  assert.equal(hooks.officeEngineFromSettings({}), 'ctox_documents');
+});
+
+test('CTOX Documents permissions expose comments and review only with full write access', () => {
+  const writable = hooks.ctoxDocumentsPermissions({
+    permissions: { canWriteCollection: () => true },
+  });
+  assert.deepEqual(writable, { read: true, write: true, export: true, comment: true, review: true });
+
+  const readOnly = hooks.ctoxDocumentsPermissions({
+    permissions: { canWriteCollection: (name) => name !== 'document_versions' },
+  });
+  assert.deepEqual(readOnly, { read: true, write: false, export: true, comment: false, review: false });
+});
+
 test('visibleDocuments filters active normalized rows by status, tag, search, and sort', () => {
   const state = {
     searchQuery: 'vertrag',

@@ -1,0 +1,36 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.character-paragraph-formatting",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-character-paragraph-formatting.html",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1200x759 CSS pixels"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.character-paragraph-formatting", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "select_line", "target": "CHAR_BOLD_TARGET", "keys": ["End", "Shift+Home"] },
+    { "action": "press", "key": "Meta+B", "expected_ooxml": "w:b" },
+    { "action": "select_line", "target": "CHAR_ITALIC_TARGET", "keys": ["End", "Shift+Home"] },
+    { "action": "press", "key": "Meta+I", "expected_ooxml": "w:i" },
+    { "action": "select_line", "target": "CHAR_UNDERLINE_TARGET", "keys": ["End", "Shift+Home"] },
+    { "action": "press", "key": "Meta+U", "expected_ooxml": "w:u[@w:val='single']" },
+    { "action": "select_line", "target": "CHAR_SIZE_TARGET", "keys": ["End", "Shift+Home"] },
+    { "action": "fill", "target": "Schriftgrad", "value": "18", "expected_ooxml": "w:sz[@w:val='36']" },
+    { "action": "select_line", "target": "CHAR_COLOR_TARGET", "keys": ["End", "Shift+Home"] },
+    { "action": "choose_color", "label": "Braun, Akzent 2, Dunkler 25%", "rgb": "953735" },
+    { "action": "place_cursor", "target": "PARA_ALIGN_CENTER_TARGET" },
+    { "action": "choose_alignment", "value": "center", "expected_ooxml": "w:jc[@w:val='center']" },
+    { "action": "place_cursor", "target": "PARA_INDENT_TARGET" },
+    { "action": "set_indent", "millimetres": 12.5, "expected_twips": 709 },
+    { "action": "place_cursor", "target": "PARA_LINE_SPACING_TARGET" },
+    { "action": "choose_line_spacing", "value": 1.5, "expected_twips": 360, "expected_rule": "auto" },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" },
+    { "action": "reopen", "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-character-paragraph-formatting-reopen.html" },
+    { "action": "assert_text", "value": "PRESERVE_FORMATTING_UNRELATED_91D7" },
+    { "action": "assert_semantic_formatting", "values": { "bold": true, "italic": true, "underline": "single", "size_half_points": 36, "color": "953735", "alignment": "center", "indent_twips": 709, "line_twips": 360, "line_rule": "auto" } }
+  ]
+}

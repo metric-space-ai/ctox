@@ -1,0 +1,26 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.open-render-sheets",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.open-render-sheets",
+  "viewport": { "width": 1600, "height": 900, "device_scale_factor": 1 },
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Both comparison iframes have equal CSS dimensions"
+  ],
+  "steps": [
+    { "action": "wait_for", "target": "oracle status", "value": "document-ready" },
+    { "action": "wait_for", "target": "ctox status", "value": "document-ready" },
+    { "action": "assert_visible", "frame": "oracle", "value": "CTOX OVERVIEW" },
+    { "action": "assert_visible", "frame": "ctox", "value": "ORACLE_SHEET_OVERVIEW_71C9" },
+    { "action": "click", "frame": "oracle", "worksheet": "Details" },
+    { "action": "click", "frame": "ctox", "role": "tab", "name": "Details" },
+    { "action": "assert_visible", "frame": "oracle", "value": "CTOX DETAILS" },
+    { "action": "assert_visible", "frame": "ctox", "value": "ORACLE_SHEET_DETAILS_24AF" },
+    { "action": "inspect", "frame": "ctox", "expected": { "sheet_count": 3, "visible_sheet_count": 2, "active_sheet": "Details", "dirty": false } },
+    { "action": "mount_business_os_wrapper", "runtime_setting": "office.spreadsheets_engine=ctox_spreadsheets", "expected_commands": ["office.spreadsheet.prepare", "office.spreadsheet.export"] },
+    { "action": "export", "frame": "business-os", "format": "xlsx", "expected_sha256": "e0553218296a0224945569b84bddfad70e9fdee60605333982c171cfe9891043" },
+    { "action": "reopen_clean_profile", "source": "canonical CTOX export", "targets": ["ctox", "euro-office"], "expected": "document-ready and Details sheet visible in both" },
+    { "action": "compare_package_parts", "expected": "12 of 12 parts byte-identical, no missing or added parts" }
+  ]
+}

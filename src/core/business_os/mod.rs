@@ -10,6 +10,7 @@ mod command_lifecycle_generated;
 mod importer;
 mod invoices;
 pub mod mcp_channel;
+pub mod office_engine;
 pub mod policy;
 mod rxdb_peer;
 pub mod server;

@@ -1,0 +1,196 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.open-render-zoom",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/open-render-zoom.docx",
+    "sha256": "3962efeaec4d1477a7b88b7cbbaad70b20ae26ff46085cf84a2b500e03a111fa",
+    "bytes": 37299,
+    "expected_pages": 3,
+    "page_breaks": 2,
+    "markers": [
+      "CTOX-01-176B5B",
+      "CTOX-02-1F5A92",
+      "CTOX-03-8B3A62"
+    ]
+  },
+  "browser": {
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "device_scale_factor": 2,
+    "locale": "de-DE"
+  },
+  "interaction": [
+    "Open the deterministic DOCX in desktop view mode.",
+    "Wait for onDocumentReady and verify Seite 1 von 3 at Zoom 100%.",
+    "Activate the Ansicht tab and press Vergrößern twice.",
+    "Verify Zoom 120% in both toolbar and status bar.",
+    "Press PageDown three times and verify Seite 2 von 3.",
+    "Press PageDown three more times and verify Seite 3 von 3."
+  ],
+  "expected_visible_state": {
+    "initial": { "page": 1, "pages": 3, "zoom_percent": 100, "marker": "CTOX-01-176B5B" },
+    "after_zoom": { "page": 1, "pages": 3, "zoom_percent": 120 },
+    "after_first_navigation": { "page": 2, "pages": 3, "marker": "CTOX-02-1F5A92" },
+    "terminal": { "page": 3, "pages": 3, "zoom_percent": 120, "marker": "CTOX-03-8B3A62" }
+  },
+  "expected_semantic_state": {
+    "editor_mode": "view",
+    "events": ["app-ready", "info", "document-ready"],
+    "document_ready": true,
+    "page_count": 3,
+    "current_page_zero_based": 2,
+    "zoom_percent": 120
+  },
+  "expected_ooxml": {
+    "required_parts": [
+      "[Content_Types].xml",
+      "_rels/.rels",
+      "word/document.xml",
+      "word/_rels/document.xml.rels",
+      "word/styles.xml",
+      "word/settings.xml"
+    ],
+    "page_break_count": 2,
+    "preserve_unrelated_parts": true
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/Statusbar.js:208-266",
+    "web-apps/apps/documenteditor/main/app/view/Statusbar.js:40-44",
+    "web-apps/apps/documenteditor/main/app/view/Statusbar.js:388-389",
+    "web-apps/apps/documenteditor/main/app/controller/ViewTab.js:62",
+    "sdkjs/word/api.js:7776-7856",
+    "sdkjs/word/Drawing/DrawingDocument.js:3897",
+    "sdkjs/word/Editor/Shortcuts.js:93-96"
+  ],
+  "upstream_esm_bootstrap": {
+    "runtime": "ctox-documents-fork",
+    "web_apps": true,
+    "sdkjs": true,
+    "editor_protocol": "euro-office-word-binary-v10",
+    "oracle_editor_payload": {
+      "path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle.Editor.bin",
+      "bytes": 152653,
+      "sha256": "fc9362802384e7dad9b95039c7eac14c9624e05e94832e2110edcb1008359aa6",
+      "table_count": 10,
+      "manifest_path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle.Editor.manifest.json"
+    },
+    "equal_geometry": { "width": 799.5, "height": 813 },
+    "document_ready_both_sides": true,
+    "console_errors": 0,
+    "console_warnings": 0,
+    "rust_generated": false,
+    "gate_result": "invalid:ctox-editor-payload-not-rust-generated",
+    "status_effect": "none; captured DOCY proves the original ESM UI closure only"
+  },
+  "native_rust_docy": {
+    "path": "output/playwright/ctox-office/rust/document.open-render-zoom/ctox-rust.Editor.bin",
+    "bytes": 4854,
+    "sha256": "6ab26b3acb31493a7d8da5f05b48fd28e6d6675ea8b5bcd37df877a9344e3d90",
+    "rust_generated": true,
+    "document_ready_both_sides": true,
+    "console_errors": 0,
+    "visual_review_passed": true,
+    "gate_result": "passed",
+    "ported_records": [
+      "document paragraphs and runs",
+      "direct run formatting",
+      "paragraph spacing and line metrics",
+      "flattened paragraph-style bottom border",
+      "table grid, cells, widths and shading",
+      "document-level page size and margins"
+    ],
+    "screenshots": [
+      {
+        "state": "page 1, zoom 100%",
+        "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/rust-docy-section-style-border-v2-stable-split.png",
+        "sha256": "bf927152d23e9c33105f73e2db94de4dfc30c50a64ebf3fc88c8113e9248eac4"
+      },
+      {
+        "state": "page 1, zoom 120%",
+        "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/rust-docy-zoom120-v2-stable-split.png",
+        "sha256": "ace7a665963be870d2945807e058318c8d2a7df9100e826715105d61bffcc267"
+      },
+      {
+        "state": "page 2, zoom 120%",
+        "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/rust-docy-page2-api-zoom120-split.png",
+        "sha256": "6ad1ac3da629dfff74e925fef85b330a546b4b0b27e5f2617c6d3224a75d9ea3"
+      },
+      {
+        "state": "page 3, zoom 120%",
+        "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/rust-docy-page3-api-zoom120-split.png",
+        "sha256": "2eb12fe84ce17a8ade0459a20d805fc9988bf44411477b190fe3eeb621dd4536"
+      }
+    ],
+    "differential_flow": {
+      "path": "src/apps/business-os/office-engine/oracle/flows/document.open-render-zoom.playwright.js",
+      "interaction": "real-toolbar-zoom-and-keyboard-page-down",
+      "initial": { "oracle": "Seite 1 von 3; 100%", "ctox": "Seite 1 von 3; 100%" },
+      "after_zoom": { "oracle": "Seite 1 von 3; 120%", "ctox": "Seite 1 von 3; 120%" },
+      "after_three_page_down": { "oracle": "Seite 2 von 3", "ctox": "Seite 2 von 3" },
+      "after_six_page_down": { "oracle": "Seite 3 von 3", "ctox": "Seite 3 von 3" },
+      "console_errors": 0,
+      "screenshots": [
+        { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/differential-page1-zoom100.png", "sha256": "5acf9da167031706a6029abdfd88b618cab7a6709102ba8b525a220279512e30" },
+        { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/differential-page1-zoom120.png", "sha256": "9c35ee3c654993a7a9fe5b52cb753c391fb4a7fd5929c04b5145d75cd51a9585" },
+        { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/differential-page2-zoom120.png", "sha256": "644dd00e7128b018fa04e8243b1a801634cc35a0832031d19e2a45b3ac59cb81" },
+        { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/differential-page3-zoom120.png", "sha256": "492150b0436910f67eefb833098b209a470e18ac22da69481b3712b7c3ba93e0" }
+      ]
+    }
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle-page1-zoom100.png", "sha256": "e6d9c9c79173e17df6d47200b19f91dbaff5e910fe769bf91013122e72dcb120" },
+    { "path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle-page1-zoom120.png", "sha256": "2b1d9dc56e1b1d7f3c471d249c05e65117cd64e0c3e76b25a0455e8218ec5e5d" },
+    { "path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle-page2-zoom120.png", "sha256": "d6c3fba6faaed27b4f399230ba8ed7576436c376763510683d1fb72c98e60af8" },
+    { "path": "output/playwright/ctox-office/oracle/document.open-render-zoom/oracle-page3-zoom120.png", "sha256": "d3d9bb35a1bec73a0702f24a7adb975eb3fc74c3208f401d4125d260bf7a1787" },
+    { "path": "output/playwright/ctox-office/comparison/document.open-render-zoom/upstream-esm-captured-docy-split-1600x900.png", "sha256": "d981955bcc7ff11f1502bab59e52ae320ba4891dc3136d36862005ececd41b5b" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "runtime": "superdoc-bootstrap",
+    "target_runtime": "euro-office-sdkjs",
+    "implemented_feature": "document.open-render-zoom",
+    "inspection": {
+      "open": true,
+      "dirty": false,
+      "read_only": true,
+      "page_count": 3,
+      "current_page": 3,
+      "zoom_percent": 120
+    },
+    "export": {
+      "bytes": 37299,
+      "sha256": "3962efeaec4d1477a7b88b7cbbaad70b20ae26ff46085cf84a2b500e03a111fa",
+      "byte_identical_to_fixture": true,
+      "reopen_in_oracle": "passed"
+    },
+    "browser_health": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0,
+      "clean_profile_flow_passed": true,
+      "http_business_data_routes": false
+    },
+    "screenshots": [
+      { "path": "output/playwright/ctox-office/ctox/document.open-render-zoom/ctox-page1-zoom100.png", "sha256": "964201051d2273e69781088251ad5d422976b657a6ecd79740080c1011b34cde" },
+      { "path": "output/playwright/ctox-office/ctox/document.open-render-zoom/ctox-page1-zoom120.png", "sha256": "70ce128725e22e0eed9f41ff713af33d8172b4eea2ca8b7c3ff69b207fa997ff" },
+      { "path": "output/playwright/ctox-office/ctox/document.open-render-zoom/ctox-page2-zoom120.png", "sha256": "71bd2f34bae03a72d92dfd38108104fa34bfbe3a7e3b1796777d5703b346ae36" },
+      { "path": "output/playwright/ctox-office/ctox/document.open-render-zoom/ctox-page3-zoom120.png", "sha256": "9a759ad039f8c8604cf84b1003ad77831bbfaa0adf0a6bc0ea5a9ed9d9e2b902" },
+      { "path": "output/playwright/ctox-office/ctox/document.open-render-zoom/ctox-clean-profile-reopen.png", "sha256": "c530a297c7f871a40b5db7630ca165ed3f53f53f4ae94e48928e05e2ace2e3bd" }
+    ]
+  }
+}

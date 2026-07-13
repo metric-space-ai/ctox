@@ -1,0 +1,97 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.undo-clipboard-fill",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/undo-clipboard-fill.xlsx",
+    "bytes": 4986,
+    "package_parts": 12,
+    "sha256": "9054513a351e442b6547623b2aa20dd55a45b117ec3035888b789621c76fdf37",
+    "escrow_marker": "SPREADSHEET_UNDO_ESCROW_9A31"
+  },
+  "side_by_side": {
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.undo-clipboard-fill",
+    "browser_flow": "src/apps/business-os/office-engine/oracle/flows/spreadsheet.undo-clipboard-fill.playwright.js",
+    "browser_flow_sha256": "5ab97e9b1eaa1af76f3229e267c4743108ee73bd2ceb0b6a47f24751d49e42ae",
+    "oracle_iframe_css_pixels": { "width": 799.5, "height": 813 },
+    "ctox_iframe_css_pixels": { "width": 799.5, "height": 813 },
+    "configuration_gate": "passed",
+    "runtime_provenance_gate": "passed",
+    "interaction": "original toolbar undo/redo, copy/paste and More > Fill > Down",
+    "terminal_semantic_parity": {
+      "A2": "UNDO_FILL_BASE_ONE",
+      "B3": "COPY_SOURCE_TEXT",
+      "B5": 125000
+    },
+    "ctox_export_reopen": { "oracle": "passed", "ctox": "passed" }
+  },
+  "oracle": {
+    "release": "v9.3.1",
+    "force_save_callback_status": 6,
+    "saved_path": "runtime/office-oracle/spreadsheet.undo-clipboard-fill/oracle-saved.xlsx",
+    "saved_bytes": 10783,
+    "saved_sha256": "9014fba1da4084be337c5e9b77da6edd2c8dc93b2ec39a0ff0a15dd59aec4c83"
+  },
+  "ctox_frontend_port": {
+    "runtime": "ctox-spreadsheets-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-cell-binary-v10",
+    "editor_protocol_version": 10,
+    "native_initial_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.undo-clipboard-fill/ctox-rust.Editor.bin",
+      "bytes": 2075,
+      "sha256": "4fe7ac930802907f3fddc14e50bf3ccf30c40d9038505ca4b9aa87323459cf4c"
+    },
+    "saved_payload": {
+      "path": "output/playwright/ctox-office/rust/spreadsheet.undo-clipboard-fill/ctox-saved.Editor.bin",
+      "bytes": 5118,
+      "sha256": "71978fb2ad877418604f57278c844e35095ec7b3875a4738509efc72b5250e1e"
+    }
+  },
+  "rust_export": {
+    "canonical_path": "output/playwright/ctox-office/ctox/spreadsheet.undo-clipboard-fill/ctox-canonical.xlsx",
+    "bytes": 4981,
+    "sha256": "0f6cdc86331e2b904c95834eea2677c9a4c758a24492153ff37b3d573717f3bf",
+    "package_parts": 12,
+    "changed_parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"],
+    "unchanged_original_parts": 10,
+    "missing_original_parts": [],
+    "unintended_added_parts": [],
+    "stable_shared_string_indices": true,
+    "unrelated_worksheets_byte_identical": true,
+    "escrow_marker_present": true,
+    "ctox_reopen": "passed",
+    "oracle_reopen": "passed"
+  },
+  "business_os_wrapper": {
+    "module": "src/apps/business-os/modules/spreadsheets/index.js#mount(ctx)",
+    "browser_flow": "src/apps/business-os/office-engine/oracle/flows/spreadsheet.undo-clipboard-fill.business-os.playwright.js",
+    "browser_flow_sha256": "3084dd0ccb46e481679b27c8c6c3097375c4e906afa06c8a227b583c11c590c7",
+    "typed_runtime_setting": "office.spreadsheets_engine = ctox_spreadsheets",
+    "command": "office.spreadsheet.commit",
+    "command_wait": "terminal",
+    "transport": "rxdb-webrtc",
+    "editor_blob_bytes": 5118,
+    "saved_badge": "Gespeichert",
+    "console_errors": 0
+  },
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/view/Toolbar.js:1825-1842",
+    "web-apps/apps/spreadsheeteditor/main/app/controller/Toolbar.js:5664-5668",
+    "sdkjs/cell/model/Shortcuts.js:148",
+    "sdkjs/cell/view/WorksheetView.js:27451-27674",
+    "src/apps/business-os/modules/spreadsheets/index.js"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.undo-clipboard-fill/differential-terminal-before-save.png", "sha256": "894c056ed93ccf6bc1be95e5455ae5996a34ed7716b19c393aca94242630d228" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.undo-clipboard-fill/differential-ctox-export-reopen.png", "sha256": "6bfabc0730e2c3278e8ac91c2a121926a93a7b8a30c43307cef503c2786a8df9" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.undo-clipboard-fill/business-os-mount-undo-clipboard-fill.png", "sha256": "3e38174e23b683911ba558f6079319b95f2415f02bd9238fcdf354f70d5c237d" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "http_business_data_routes": false
+  }
+}

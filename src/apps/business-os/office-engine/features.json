@@ -1,0 +1,48 @@
+{
+  "schema_version": "ctox-office-feature-matrix-v1",
+  "oracle_pin": "upstream/euro-office-v9.3.1.json",
+  "status_order": [
+    "discovered",
+    "oracle_captured",
+    "frontend_ported",
+    "rust_ported",
+    "differential_passed",
+    "shipped"
+  ],
+  "editors": {
+    "document": {
+      "sequence": 1,
+      "features": [
+        { "id": "document.open-render-zoom", "depends_on": [], "status": "differential_passed", "evidence": "oracle/evidence/document.open-render-zoom.json", "flow": "oracle/flows/document.open-render-zoom.json" },
+        { "id": "document.edit-save", "depends_on": ["document.open-render-zoom"], "status": "differential_passed", "evidence": "oracle/evidence/document.edit-save.json", "flow": "oracle/flows/document.edit-save.json" },
+        { "id": "document.undo-clipboard-keyboard", "depends_on": ["document.edit-save"], "status": "differential_passed", "evidence": "oracle/evidence/document.undo-clipboard-keyboard.json", "flow": "oracle/flows/document.undo-clipboard-keyboard.json" },
+        { "id": "document.character-paragraph-formatting", "depends_on": ["document.undo-clipboard-keyboard"], "status": "differential_passed", "evidence": "oracle/evidence/document.character-paragraph-formatting.json", "flow": "oracle/flows/document.character-paragraph-formatting.json" },
+        { "id": "document.styles-lists-numbering", "depends_on": ["document.character-paragraph-formatting"], "status": "differential_passed", "evidence": "oracle/evidence/document.styles-lists-numbering.json", "flow": "oracle/flows/document.styles-lists-numbering.json" },
+        { "id": "document.tables", "depends_on": ["document.styles-lists-numbering"], "status": "differential_passed", "evidence": "oracle/evidence/document.tables.json", "flow": "oracle/flows/document.tables.json" },
+        { "id": "document.images-positioning", "depends_on": ["document.tables"], "status": "differential_passed", "evidence": "oracle/evidence/document.images-positioning.json", "flow": "oracle/flows/document.images-positioning.json" },
+        { "id": "document.sections-headers-footers", "depends_on": ["document.images-positioning"], "status": "differential_passed", "evidence": "oracle/evidence/document.sections-headers-footers.json", "flow": "oracle/flows/document.sections-headers-footers.json" },
+        { "id": "document.links-bookmarks-fields", "depends_on": ["document.sections-headers-footers"], "status": "differential_passed", "evidence": "oracle/evidence/document.links-bookmarks-fields.json", "flow": "oracle/flows/document.links-bookmarks-fields.json" },
+        { "id": "document.comments-track-changes", "depends_on": ["document.links-bookmarks-fields"], "status": "differential_passed", "evidence": "oracle/evidence/document.comments-track-changes.json", "flow": "oracle/flows/document.comments-track-changes.json" },
+        { "id": "document.drawings-charts", "depends_on": ["document.comments-track-changes"], "status": "differential_passed", "evidence": "oracle/evidence/document.drawings-charts.json", "flow": "oracle/flows/document.drawings-charts.json" },
+        { "id": "document.docx-roundtrip-corpus", "depends_on": ["document.drawings-charts"], "status": "differential_passed", "evidence": "oracle/evidence/document.docx-roundtrip-corpus.json", "flow": "oracle/flows/document.docx-roundtrip-corpus.json" }
+      ]
+    },
+    "spreadsheet": {
+      "sequence": 2,
+      "features": [
+        { "id": "spreadsheet.open-render-sheets", "depends_on": ["document.docx-roundtrip-corpus"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.open-render-sheets.json", "flow": "oracle/flows/spreadsheet.open-render-sheets.json" },
+        { "id": "spreadsheet.edit-save", "depends_on": ["spreadsheet.open-render-sheets"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.edit-save.json", "flow": "oracle/flows/spreadsheet.edit-save.json" },
+        { "id": "spreadsheet.undo-clipboard-fill", "depends_on": ["spreadsheet.edit-save"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.undo-clipboard-fill.json", "flow": "oracle/flows/spreadsheet.undo-clipboard-fill.json" },
+        { "id": "spreadsheet.cell-format-rows-columns", "depends_on": ["spreadsheet.undo-clipboard-fill"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.cell-format-rows-columns.json", "flow": "oracle/flows/spreadsheet.cell-format-rows-columns.json" },
+        { "id": "spreadsheet.formulas-references", "depends_on": ["spreadsheet.cell-format-rows-columns"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.formulas-references.json", "flow": "oracle/flows/spreadsheet.formulas-references.json" },
+        { "id": "spreadsheet.multi-sheet-merge-freeze", "depends_on": ["spreadsheet.formulas-references"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.multi-sheet-merge-freeze.json", "flow": "oracle/flows/spreadsheet.multi-sheet-merge-freeze.json" },
+        { "id": "spreadsheet.sort-filter-tables", "depends_on": ["spreadsheet.multi-sheet-merge-freeze"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.sort-filter-tables.json", "flow": "oracle/flows/spreadsheet.sort-filter-tables.json" },
+        { "id": "spreadsheet.validation-conditional-formatting", "depends_on": ["spreadsheet.sort-filter-tables"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.validation-conditional-formatting.json", "flow": "oracle/flows/spreadsheet.validation-conditional-formatting.json" },
+        { "id": "spreadsheet.comments-names-protection", "depends_on": ["spreadsheet.validation-conditional-formatting"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.comments-names-protection.json", "flow": "oracle/flows/spreadsheet.comments-names-protection.json" },
+        { "id": "spreadsheet.charts", "depends_on": ["spreadsheet.comments-names-protection"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.charts.json", "flow": "oracle/flows/spreadsheet.charts.json" },
+        { "id": "spreadsheet.pivot-print-layout", "depends_on": ["spreadsheet.charts"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.pivot-print-layout.json", "flow": "oracle/flows/spreadsheet.pivot-print-layout.json" },
+        { "id": "spreadsheet.xlsx-roundtrip-corpus", "depends_on": ["spreadsheet.pivot-print-layout"], "status": "differential_passed", "evidence": "oracle/evidence/spreadsheet.xlsx-roundtrip-corpus.json", "flow": "oracle/flows/spreadsheet.xlsx-roundtrip-corpus.json" }
+      ]
+    }
+  }
+}

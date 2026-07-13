@@ -1,0 +1,174 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.links-bookmarks-fields",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/links-bookmarks-fields.docx",
+    "bytes": 37450,
+    "sha256": "33412f5c2ca2a616f33d7ef15c0e2088a363a4fa7c0693f8404f26dd69733ebb",
+    "package_parts": 18,
+    "existing_external_link": "https://ctox.dev/preserve-link",
+    "existing_bookmark": "ctox_existing_bookmark",
+    "field_instruction": "NUMPAGES",
+    "field_cached_value": "99",
+    "preservation_part": "customXml/ctox-links-preserve.xml"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1600, "height": 900 },
+    "locale": "de-DE"
+  },
+  "expected_semantic_state": {
+    "external_links": [
+      { "text": "CTOX_EXTERNAL_LINK", "href": "https://ctox.dev/office-oracle" },
+      { "text": "CTOX_EXISTING_LINK", "href": "https://ctox.dev/preserve-link" }
+    ],
+    "bookmarks": ["ctox_oracle_bookmark", "ctox_existing_bookmark"],
+    "field": { "instruction": "NUMPAGES", "result": "1" },
+    "preserved_text": ["PRESERVE_LINKS_BOOKMARKS_FIELDS_UNRELATED_B73A"]
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1997-2001",
+    "web-apps/apps/documenteditor/main/app/view/BookmarksDialog.js:405-407",
+    "web-apps/apps/documenteditor/main/app/controller/DocumentHolderExt.js:2674-2686",
+    "sdkjs/word/api.js:6911-6988",
+    "sdkjs/word/api.js:12563-12570",
+    "sdkjs/word/api.js:12623-12635"
+  ],
+  "oracle_export": {
+    "path": "runtime/office-oracle/document.links-bookmarks-fields/oracle-saved.docx",
+    "bytes": 40547,
+    "sha256": "d97c4f138b03a2d0ebccba676a3db83cfc203d45e99ace75a061c16ae6eabf32",
+    "callback_statuses": [6, 2],
+    "reopen_in_oracle": "passed",
+    "notes": [
+      "The Oracle export contains the new and pre-existing hyperlink relationships, both bookmarks, and NUMPAGES result 1.",
+      "The Oracle omits the deliberately unreferenced customXml control; CTOX escrow preservation is asserted against the original fixture."
+    ]
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/fixtures/document.links-bookmarks-fields-render/page-1.png", "sha256": "b40068039ac4b3ced02d80df4f5db170b22e6f9a3686c3dda01ce424582bac46" },
+    { "path": "output/playwright/ctox-office/oracle/document.links-bookmarks-fields/01-initial.png", "sha256": "63b298a4c2d44aa2002dd70e287b6cbbb703b2dae0ab483090db20b8cc334c16" },
+    { "path": "output/playwright/ctox-office/oracle/document.links-bookmarks-fields/02-link-created.png", "sha256": "6e7736e381001d9276760af3e1be56343b73ac657aff936289409995472a8cc1" },
+    { "path": "output/playwright/ctox-office/oracle/document.links-bookmarks-fields/03-bookmark-created.png", "sha256": "d3c46a5bfa3df876f2fa6b4a9e7c6c8519bbb780fd8a7975d2f6324cefc4be13" },
+    { "path": "output/playwright/ctox-office/oracle/document.links-bookmarks-fields/04-field-updated.png", "sha256": "e466f5f12b85066a2661fce7f442e0b9efc0d01d2bba75265d56b05cf84c9e3c" },
+    { "path": "output/playwright/ctox-office/oracle/document.links-bookmarks-fields/05-saved.png", "sha256": "315e46342a6dc40fd506e34759513f2a878d45141d624ada1f775550055c479a" },
+    { "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/ctox-terminal.png", "sha256": "d55fa7a6646a7dbe6e76223ca9ab47a41bb7b01a4bd6a889c119e1fb4d468c21" },
+    { "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/ctox-reopen.png", "sha256": "84432c27629753ddce44f6854f91a5c56b7616354c038c74b49035dd7ea1e48f" },
+    { "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/ctox-clean-profile.png", "sha256": "cdbb58503e8a66cba0bc8d8212075399504af0ff3ad6ef2542700b3e692314a6" },
+    { "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/oracle-reopen.png", "sha256": "a816ff32bbb8bf547544a6cff7c6cd7b6b4d4898c96e84d897b6ed6a3fe185c9" },
+    { "path": "output/playwright/ctox-office/comparison/document.links-bookmarks-fields/differential-initial.png", "sha256": "faed0c8f60e42d3caf1f4479ec447187b6135a6a041a14bbebf214d41385bd30" },
+    { "path": "output/playwright/ctox-office/comparison/document.links-bookmarks-fields/differential-terminal-before-save.png", "sha256": "9434932dcd35213c505092a94fe13b0c5c3c4d0afc110635cf16bd808652a0fa" },
+    { "path": "output/playwright/ctox-office/comparison/document.links-bookmarks-fields/ctox-reopen-saved.png", "sha256": "118cb1b216fb3f16c608d5f98154041ee44aca68021c49fcbb2fed5f8fd717da" },
+    { "path": "output/playwright/ctox-office/comparison/document.links-bookmarks-fields/oracle-reopen-ctox-export.png", "sha256": "0cd41eeb74169723dfb5b38caa6489f20da0b84ff0b7afe518103cc80d8cb6e5" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/ctox-editor.docx",
+      "bytes": 364980,
+      "sha256": "6f99b134fd5af0a7d52ede187059d87b45e0b1df3a49c6163a1cb4be5f2a6973"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.links-bookmarks-fields/ctox-canonical.docx",
+      "bytes": 36017,
+      "sha256": "ad352ab948857358cfc5989940fea992633a39b8b1448d6acd981abbfefbe800",
+      "package_parts": 18,
+      "unchanged_original_parts": 16,
+      "changed_understood_parts": ["word/_rels/document.xml.rels", "word/document.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "oracle_reopen": "passed"
+    },
+    "semantic_verification": {
+      "save_reopen_in_ctox": "passed",
+      "external_link_href": "https://ctox.dev/office-oracle",
+      "bookmarks": ["ctox_oracle_bookmark", "ctox_existing_bookmark"],
+      "field_result": "1",
+      "clean_profile_reopen": "passed"
+    },
+    "required_preservation": {
+      "understood_parts": ["word/document.xml", "word/_rels/document.xml.rels", "[Content_Types].xml"],
+      "unrelated_original_parts_unchanged": true,
+      "must_preserve_parts": ["customXml/ctox-links-preserve.xml"],
+      "preservation_sha256": "934e1b0c1e6f33f0f9dcc8b11b9b3618873db47636506c254364758e319ab5cd",
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    }
+  },
+  "latest_side_by_side_attempt": {
+    "status": "differential_passed",
+    "date": "2026-07-12",
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.links-bookmarks-fields",
+    "gate": "passed for exact document-ready readiness, equal iframe geometry, matching configuration, original Euro-Office DocumentEditor panes, and Rust-generated DOCY input",
+    "rust_prepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.links-bookmarks-fields/ctox-rust.Editor.bin",
+      "bytes": 37152,
+      "sha256": "e9968fe95a10d484e3d88dacd6d98c43ed39ca59ae683b0c5a7686305306fc91",
+      "protocol": "euro-office-word-binary-v10"
+    },
+    "result": {
+      "path": "output/playwright/ctox-office/comparison/document.links-bookmarks-fields/links-flow-clean-run.txt",
+      "sha256": "77feaff888cd44dfe9fb418465448e21e5e57e0bbf79909907f039d3c3fb7a9c"
+    },
+    "differential_flow": {
+      "path": "src/apps/business-os/office-engine/oracle/flows/document.links-bookmarks-fields.playwright.js",
+      "status": "passed",
+      "interaction": "real-documenteditor-hyperlink-bookmark-field-save-capture",
+      "api": ["Search", "Select", "CHyperlinkProperty", "add_Hyperlink", "asc_GetBookmarksManager", "asc_AddBookmark", "UpdateAllFields"],
+      "initial": {
+        "oracle_bookmarks": ["ctox_existing_bookmark"],
+        "ctox_bookmarks": ["ctox_existing_bookmark"],
+        "field_result": "99"
+      },
+      "terminal": {
+        "external_link_text": "CTOX_EXTERNAL_LINK",
+        "external_link_href": "https://ctox.dev/office-oracle",
+        "oracle_bookmarks": ["ctox_oracle_bookmark", "ctox_existing_bookmark"],
+        "ctox_bookmarks": ["ctox_oracle_bookmark", "ctox_existing_bookmark"],
+        "field_result": "1",
+        "ctox_capsule_dirty": false
+      },
+      "ctox_capture": {
+        "bytes": 364980,
+        "sha256": "6f99b134fd5af0a7d52ede187059d87b45e0b1df3a49c6163a1cb4be5f2a6973"
+      },
+      "ctox_export": {
+        "bytes": 36017,
+        "sha256": "ad352ab948857358cfc5989940fea992633a39b8b1448d6acd981abbfefbe800",
+        "package_parts": 18,
+        "unchanged_original_parts": 16,
+        "changed_parts": ["word/_rels/document.xml.rels", "word/document.xml"],
+        "missing_original_parts": [],
+        "added_parts": [],
+        "new_external_relationship": "https://ctox.dev/office-oracle",
+        "existing_external_relationship_preserved": "https://ctox.dev/preserve-link",
+        "custom_xml_escrow_preserved": true
+      },
+      "ctox_reopen": { "status": "document-ready", "semantic_state": "passed" },
+      "oracle_reopen": { "status": "document-ready", "semantic_state": "passed" },
+      "console_errors": 0,
+      "failed_document_requests": 0
+    },
+    "implemented_slice": "Native DOCX to DOCY and DOCY to DOCX support now covers Euro-Office hyperlink, bookmark, field-character and instruction-text records plus external hyperlink relationship materialization.",
+    "finding": "The same original DocumentEditor UI in both panes produces the same visible link, bookmark list and NUMPAGES result; saved CTOX DOCY reopens in CTOX and its native DOCX export reopens in the Euro-Office oracle.",
+    "remaining_gate": "none for document.links-bookmarks-fields",
+    "required_next_work": "None for document.links-bookmarks-fields; proceed to document.comments-track-changes."
+  }
+}

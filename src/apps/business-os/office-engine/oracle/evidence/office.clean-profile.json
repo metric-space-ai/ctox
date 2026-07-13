@@ -1,0 +1,32 @@
+{
+  "feature_id": "office.clean-profile",
+  "status": "passed",
+  "captured_at": "2026-07-13",
+  "browser": "Chromium headed via two isolated Playwright CLI named profiles",
+  "cases": [
+    {
+      "kind": "document",
+      "wrapper": "modules/documents.mount(ctx)",
+      "initial_local_storage_keys": [],
+      "initial_session_storage_keys": [],
+      "vendored_ui_entrypoint": "documenteditor/main/index.html",
+      "console_errors": 0,
+      "console_warnings": 0,
+      "screenshot": "output/playwright/ctox-office/rollout/clean-profile/document.png",
+      "screenshot_sha256": "93321dc3101997708e3b00675da6595552a156a84d20a6b5b073e17ed731c617"
+    },
+    {
+      "kind": "spreadsheet",
+      "wrapper": "modules/spreadsheets.mount(ctx)",
+      "initial_local_storage_keys": [],
+      "initial_session_storage_keys": [],
+      "vendored_ui_entrypoint": "spreadsheeteditor/main/index.html",
+      "console_errors": 0,
+      "console_warnings": 0,
+      "screenshot": "output/playwright/ctox-office/rollout/clean-profile/spreadsheet.png",
+      "screenshot_sha256": "462bd71427fe4ad90a59b5b8f3ba839e001da9dd8f2e6ea868d15cdbf4e261a9"
+    }
+  ],
+  "profiles_closed": true,
+  "http_business_data_routes": false
+}

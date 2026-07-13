@@ -1,0 +1,65 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.charts",
+  "status": "differential_passed",
+  "oracle": { "version": "v9.3.1", "role": "development-only-reference" },
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/charts.xlsx",
+    "bytes": 7236,
+    "sha256": "468cad588bce5229ed7865b69e82ab5451b2299ecc6634fb9da6372382c64fe0",
+    "parts": 16,
+    "chart_parts": ["xl/drawings/drawing1.xml", "xl/drawings/_rels/drawing1.xml.rels", "xl/charts/chart1.xml"]
+  },
+  "oracle_capture": {
+    "document_ready": true,
+    "visible_chart": true,
+    "chart_title": "CTOX Revenue 2026",
+    "chart_type": "clustered-column",
+    "categories": ["January", "February", "March", "April"],
+    "values": [120, 185, 160, 240],
+    "series_fill": "176B5B",
+    "selection_name": "CTOX Revenue Chart",
+    "selection_exposes_original_ui": ["Diagrammeinstellungen", "Diagrammelemente", "Form-Einstellungen", "TextArt-Einstellungen"],
+    "saved": { "path": "runtime/office-oracle/spreadsheet.charts/oracle-saved.xlsx", "bytes": 16257, "sha256": "5ec4b0740392ea8fa727a8ce8affff1c6f5f3993f1b4e20f4de6b60b689c0089" }
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "initial_editor_payload": { "path": "output/playwright/ctox-office/rust/spreadsheet.charts/ctox-rust.Editor.bin", "bytes": 3379, "sha256": "6cae1a059381e704c3ddfff42f926d59ba3dba81d63f8a5e3f6c6cd767e5a48d" },
+    "saved_editor_payload": { "path": "output/playwright/ctox-office/ctox/spreadsheet.charts/ctox-editor.xlsx", "bytes": 17621, "sha256": "9de5e959c141e404e85fbfeafc412a697d927dba9c63ad794c83b8bd2a4b46ec" },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.charts/ctox-canonical.xlsx",
+      "bytes": 7257,
+      "sha256": "1c61b9b64a3020a3acaa629d130314d2f4a5909e91525ff9c14b14f628d6002f",
+      "parts": 16,
+      "changed_parts": ["xl/charts/chart1.xml", "xl/drawings/drawing1.xml"],
+      "unchanged_parts": 14,
+      "missing_parts": [],
+      "added_parts": [],
+      "chart_style": 2,
+      "width_cm": 14,
+      "height_cm": 8
+    },
+    "reprepared_payload": { "path": "output/playwright/ctox-office/rust/spreadsheet.charts/ctox-export.Editor.bin", "bytes": 3379, "sha256": "edddd63173010f68449980fcaa76633a89a253de41a37ce8a9e17dde7d66e63a" },
+    "reopen": { "ctox": "document-ready", "oracle": "document-ready", "visual_gate": true },
+    "business_os_mount": { "wrapper": "modules/spreadsheets.mount(ctx)", "command": "office.spreadsheet.commit", "base_version_id": "sheet_business_os_oracle_v1", "transport": "rxdb-webrtc", "until": "terminal", "editor_blob_bytes": 17631, "badge": "Gespeichert" }
+  },
+  "geometry": {
+    "viewport": { "width": 1200, "height": 800 },
+    "oracle_iframe": { "width": 599.5, "height": 670 },
+    "ctox_iframe": { "width": 599.5, "height": 670 },
+    "selection_point": { "x_fraction": 0.78, "y_fraction": 0.48 }
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/spreadsheet.charts/oracle-initial.png", "sha256": "c91b9f28fc295157dcc4edd3d1afe7f5d419b7116e3388a46ffcff7d9fa1dd47" },
+    { "path": "output/playwright/ctox-office/oracle/spreadsheet.charts/oracle-captured-port-gap.png", "sha256": "b58eca4985840a0702fd091f057895a14d373d166970792fee9451e455108d65" },
+    { "path": "output/playwright/ctox-office/oracle/spreadsheet.charts/native-chart-initial-parity.png", "sha256": "e1b0add34bae4ccd6527a3614e81485281b4974ea3a850f902aab3b6e1b5e05b" },
+    { "path": "output/playwright/ctox-office/oracle/spreadsheet.charts/native-export-reopen.png", "sha256": "1f616eca7ff1cd5af325b787f056b944bdfcc58ec725b21864e6479db84f751f" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.charts/business-os-mount-validation.png", "sha256": "64321cbcd61989aa31768c2370a1af13519088d1d7cf1cd25abba23062bb3f93" }
+  ],
+  "source_anchors": [
+    "sdkjs/cell/model/Serialize.js:6609-6731,12446-12610",
+    "sdkjs/common/Shapes/SerializeWriter.js:3840-3945,4338-4376,4557-4596",
+    "sdkjs/common/SerializeChart.js:1451-1558,4511-4575,5882-5965",
+    "web-apps/apps/spreadsheeteditor/main/app/view/ChartSettings.js"
+  ]
+}

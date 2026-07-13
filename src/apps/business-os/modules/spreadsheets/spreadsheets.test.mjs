@@ -72,7 +72,15 @@ test('import validation requires a supported spreadsheet file', () => {
   assert.equal(hooks.validateImportInput({ file: null }).valid, false);
   assert.equal(hooks.validateImportInput({ file: new File(['a,b'], 'budget.csv', { type: 'text/csv' }) }).valid, true);
   assert.equal(hooks.validateImportInput({ file: new File(['[]'], 'budget.json', { type: 'application/json' }) }).valid, true);
+  assert.equal(hooks.validateImportInput({ file: new File(['PK'], 'budget.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) }).valid, true);
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, false);
+});
+
+test('spreadsheet engine selection defaults to CTOX Spreadsheets and preserves explicit legacy rollback', () => {
+  assert.equal(hooks.officeEngineFromSettings({}), 'ctox_spreadsheets');
+  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'legacy' } }), 'legacy');
+  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'ctox_office' } }), 'ctox_spreadsheets');
+  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'ctox_spreadsheets' } }), 'ctox_spreadsheets');
 });
 
 test('malformed spreadsheet models normalize to a renderable grid', () => {

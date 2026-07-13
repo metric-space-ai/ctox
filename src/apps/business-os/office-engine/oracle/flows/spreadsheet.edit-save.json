@@ -1,0 +1,22 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.edit-save",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/spreadsheet-edit-save.html",
+  "viewport": { "width": 1600, "height": 900 },
+  "steps": [
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "fill", "selector": "#ce-cell-name", "value": "A2" },
+    { "action": "press", "selector": "#ce-cell-name", "key": "Enter" },
+    { "action": "fill", "selector": "#ce-cell-content", "value": "CTOX_EDIT_CELL_BRAVO_42" },
+    { "action": "press", "selector": "#ce-cell-content", "key": "Enter" },
+    { "action": "assert_value", "selector": "#ce-cell-content", "cell": "A2", "value": "CTOX_EDIT_CELL_BRAVO_42" },
+    { "action": "click", "role": "button", "name": "Speichern (⌘+S)" },
+    { "action": "wait_for_callback", "status": 6 },
+    { "action": "assert_export_xml", "part": "xl/sharedStrings.xml", "values": ["CTOX_EDIT_CELL_BRAVO_42", "PRESERVE_XLSX_UNRELATED_6D2A"] }
+    ,{ "action": "repeat_in_ctox", "cell": "A2", "value": "CTOX_EDIT_CELL_BRAVO_42", "expected": "dirty=true before save and dirty=false after save" }
+    ,{ "action": "assert_commit", "command": "office.spreadsheet.commit", "base_version_id": "sheet_edit_v1", "result_version_id": "sheet_edit_v2" }
+    ,{ "action": "rust_canonical_export", "expected_changed_parts": ["xl/sharedStrings.xml"], "expected_unchanged_original_parts": 11 }
+    ,{ "action": "reopen_clean_profile", "targets": ["ctox", "euro-office"], "cell": "A2", "expected_value": "CTOX_EDIT_CELL_BRAVO_42" }
+    ,{ "action": "mount_business_os_wrapper", "module": "spreadsheets", "runtime_setting": "office.spreadsheets_engine=ctox_spreadsheets", "expected_command": "office.spreadsheet.commit", "transport": "rxdb-webrtc" }
+  ]
+}

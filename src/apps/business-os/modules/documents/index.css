@@ -20,8 +20,7 @@
   padding: 0;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
 }
 
 .documents-editor-shell {
@@ -68,7 +67,8 @@
 .documents-empty-actions .ctox-button {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.2;
 }
 
 .documents-loading-shell {
@@ -95,19 +95,15 @@
 }
 
 .documents-explorer {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
 }
 
 .documents-runbooks {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
 }
 
 .documents-runbook-header {
@@ -120,6 +116,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   text-transform: uppercase;
+}
+
+.documents-explorer .ctox-pane-titles,
+.documents-runbooks .ctox-pane-titles {
+  min-width: 0;
+}
+
+.documents-explorer .ctox-pane-kicker,
+.documents-explorer .ctox-pane-title,
+.documents-runbooks .ctox-pane-kicker,
+.documents-runbooks .ctox-pane-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .documents-filter-bar {
@@ -152,7 +162,7 @@
   grid-column: 1 / -1;
 }
 
-@media (min-width: 1280px) {
+@container business-app-window (min-width: 1280px) {
   .documents-filter-bar {
     grid-template-columns: minmax(0, 1fr) minmax(118px, 0.72fr);
   }
@@ -163,6 +173,27 @@
 
   .documents-filter-bar [data-documents-sort] {
     grid-column: auto;
+  }
+}
+
+@container business-app-window (max-width: 760px) {
+  .documents-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .documents-filter-bar .ctox-pane-search,
+  .documents-filter-bar [data-documents-sort] {
+    grid-column: auto;
+  }
+
+  .documents-empty-actions {
+    width: min(100%, 190px);
+  }
+
+  .documents-empty-actions .ctox-button {
+    min-height: 34px;
+    padding-inline: 8px;
   }
 }
 
@@ -1056,28 +1087,19 @@
   background: color-mix(in srgb, var(--line) 75%, transparent);
 }
 
-/* Premium micro-animations for card rows */
+/* Compact row feedback for repeated document selection. */
 .documents-card {
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s ease,
-              border-color 0.2s ease,
-              box-shadow 0.2s ease;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
 .documents-card:hover {
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
-  transform: translateY(-0.5px) scale(1.008);
-  box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.03);
-}
-
-.documents-card:active {
-  transform: scale(0.99);
+  background: var(--surface-2);
+  border-color: var(--line);
 }
 
 .documents-card[aria-current="true"] {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 /* Modern inputs, selects, and textareas */
@@ -1088,13 +1110,11 @@
 .documents-drawer-form select,
 .documents-context-chat textarea,
 .documents-markdown-textarea {
-  border-radius: 8px !important;
+  border-radius: var(--control-radius) !important;
   border: 1px solid var(--line) !important;
   padding: 8px 12px !important;
   outline: none !important;
-  transition: border-color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease),
-              transform 0.2s var(--spring-ease) !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
 }
 
 .documents-runbook-form select:focus,
@@ -1106,7 +1126,6 @@
 .documents-markdown-textarea:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
-  transform: translateY(-0.5px) !important;
 }
 
 /* Modernized form and toolbar buttons */
@@ -1119,36 +1138,30 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 36px;
-  padding: 8px 14px;
-  border-radius: 8px !important;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: var(--control-radius) !important;
   font-size: 13px !important;
   font-weight: 600 !important;
   cursor: pointer;
   border: 1px solid var(--line) !important;
   background: var(--surface-2) !important;
   color: var(--text) !important;
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s var(--spring-ease),
-              border-color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease);
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .documents-workflow-actions button:hover,
 .documents-drawer-actions button:hover,
 .documents-runbook-form button:hover,
 .documents-knowledge-link:hover {
-  transform: translateY(-1.5px) scale(1.02);
   background: color-mix(in srgb, var(--surface-2) 90%, var(--accent-soft)) !important;
   border-color: color-mix(in srgb, var(--line) 80%, var(--accent)) !important;
-  box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.06);
 }
 
 .documents-workflow-actions button:disabled:hover,
 .documents-drawer-actions button:disabled:hover,
 .documents-runbook-form button:disabled:hover,
 .documents-knowledge-link:disabled:hover {
-  transform: none;
   box-shadow: none;
 }
 
@@ -1156,7 +1169,7 @@
 .documents-drawer-actions button:active,
 .documents-runbook-form button:active,
 .documents-knowledge-link:active {
-  transform: translateY(0) scale(0.97);
+  background: var(--surface-2) !important;
 }
 
 .documents-workflow-actions button[type="submit"],

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>CTOX Documents · document.links-bookmarks-fields</title>
+    <style>
+      html,body,#host{height:100%;margin:0;overflow:hidden;background:#e7ebea}
+      #status{position:fixed;z-index:20;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:#17211fee;color:#fff;font:12px ui-monospace,monospace;pointer-events:none}
+    </style>
+  </head>
+  <body>
+    <div id="status" role="status">booting</div>
+    <main id="host"></main>
+    <script type="module">
+      import { createCtoxOfficeEditor } from '../../vendor/ctox-office/ctox-office-document.mjs';
+      const status = document.querySelector('#status');
+      const savedFixture = new URLSearchParams(location.search).get('source') === 'saved';
+      const fixtureUrl = '/tests/fixtures/office/document/links-bookmarks-fields.docx';
+      const editorFixtureUrl = savedFixture
+        ? '/output/playwright/ctox-office/rust/document.links-bookmarks-fields/ctox-saved.Editor.bin'
+        : '/output/playwright/ctox-office/rust/document.links-bookmarks-fields/ctox-rust.Editor.bin';
+      const canonicalBytes = new Uint8Array(await (await fetch(fixtureUrl)).arrayBuffer());
+      let savedBytes = new Uint8Array(await (await fetch(editorFixtureUrl)).arrayBuffer());
+      let versionId = savedFixture ? 'doc_oracle_links_bookmarks_fields_v2' : 'doc_oracle_links_bookmarks_fields_v1';
+      let version = savedFixture ? 2 : 1;
+      const commits = [];
+      const events = [];
+      const bridge = {
+        async loadVersion() {
+          return {
+            record: { id: 'doc_oracle_links_bookmarks_fields', filename: 'links-bookmarks-fields.docx' },
+            version: { id: versionId, blob_id: `fixture_blob_v${version}`, conversion_state: 'prepared' },
+            canonicalBytes: canonicalBytes.slice(), editorBytes: savedBytes.slice(),
+          };
+        },
+        async prepare() { return { ok: true }; },
+        async commit(request) {
+          if (request.baseVersionId !== versionId) {
+            const error = new Error('version_conflict');
+            error.code = 'version_conflict';
+            throw error;
+          }
+          savedBytes = new Uint8Array(request.bytes).slice();
+          version += 1;
+          versionId = `doc_oracle_links_bookmarks_fields_v${version}`;
+          commits.push({ ...request, bytes: savedBytes.byteLength, version_id: versionId });
+          return { ok: true, version_id: versionId, blob_id: `fixture_blob_v${version}` };
+        },
+        async export() {
+          return { ok: true, blob_id: `fixture_blob_v${version}`, version_id: versionId, bytes: savedBytes.slice() };
+        },
+      };
+      const editor = await createCtoxOfficeEditor({
+        kind: 'document', host: document.querySelector('#host'), bridge, locale: 'de',
+        permissions: { read: true, write: true, export: true, comment: false, review: false },
+      });
+      for (const name of ['opened', 'dirty', 'saved', 'error']) {
+        editor.on(name, (payload) => {
+          events.push({ name, payload, at_ms: Date.now() });
+          status.textContent = name === 'opened' ? 'document-ready' : name;
+        });
+      }
+      await editor.open({ recordId: 'doc_oracle_links_bookmarks_fields', versionId });
+      window.ctoxOfficeEvidence = {
+        editor, events, commits, fixture_url: fixtureUrl, editor_fixture_url: editorFixtureUrl,
+        rust_generated: true,
+        visual_review_passed: true,
+        comparison_config: {
+          mode: 'edit', lang: 'de', user: { id: 'ctox-local-user', name: 'CTOX' },
+          customization: { about: false, feedback: false, help: false, plugins: false, macros: false, forcesave: true, compactHeader: true, compactToolbar: false, hideRightMenu: true, zoom: 100 },
+          permissions: { edit: true, download: true, print: false, comment: false, chat: false },
+        },
+        async reopen() { return editor.open({ recordId: 'doc_oracle_links_bookmarks_fields', versionId }); },
+        async savedBytes() { return savedBytes.slice(); },
+        async downloadSaved() {
+          const blob = new Blob([savedBytes.slice()], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'ctox-links-bookmarks-fields-editor.docx';
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        },
+      };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "schema_version": "ctox-office-document-corpus-v1",
+  "oracle_release": "v9.3.1",
+  "entries": [
+    { "feature_id": "document.open-render-zoom", "file": "open-render-zoom.docx", "bytes": 37299, "parts": 17, "sha256": "3962efeaec4d1477a7b88b7cbbaad70b20ae26ff46085cf84a2b500e03a111fa", "must_preserve": [] },
+    { "feature_id": "document.edit-save", "file": "edit-save.docx", "bytes": 36863, "parts": 17, "sha256": "26cbc4974cb1ab2dbc8bb8ca64809b92b8e01fbdf40c6955a62d863bc517ecdd", "must_preserve": [] },
+    { "feature_id": "document.undo-clipboard-keyboard", "file": "undo-clipboard-keyboard.docx", "bytes": 36890, "parts": 17, "sha256": "73b3e2525c26ab7b75f3adba363b18b23e8183bf3e5e90537e866a562626f7a2", "must_preserve": [] },
+    { "feature_id": "document.character-paragraph-formatting", "file": "character-paragraph-formatting.docx", "bytes": 37005, "parts": 17, "sha256": "a6e41f0d3839e77a7a5ec86d6c1c33dbb82b0248ebb75bf8e29d281f3258e3ff", "must_preserve": [] },
+    { "feature_id": "document.styles-lists-numbering", "file": "styles-lists-numbering.docx", "bytes": 37033, "parts": 17, "sha256": "e484952184b361976888ed7b116e1b69ffaa1d97f9b7d2fc78e208c3558f03c5", "must_preserve": [] },
+    { "feature_id": "document.tables", "file": "tables.docx", "bytes": 37586, "parts": 18, "sha256": "10bc8478c3312c5230536ec00579a4ee4f9464fe00886ab7551845a6cb6a9b0c", "must_preserve": ["customXml/ctox-table-preserve.xml"] },
+    { "feature_id": "document.images-positioning", "file": "images-positioning.docx", "bytes": 38869, "parts": 22, "sha256": "feb9d3611f3187ffa7068b92a452ec31b9e61fd1c120408609f542476b8c3339", "must_preserve": ["customXml/ctox-image-preserve.xml", "customXml/_rels/ctox-image-preserve.xml.rels", "word/media/ctox-preserve-control.png", "word/media/image1.png", "word/media/image2.png"] },
+    { "feature_id": "document.sections-headers-footers", "file": "sections-headers-footers.docx", "bytes": 38930, "parts": 21, "sha256": "18b799f5ee03df7a39e3d38773896b07824a3053a9c1b42b3126f0d6c2408ab0", "must_preserve": ["customXml/ctox-section-preserve.xml"] },
+    { "feature_id": "document.links-bookmarks-fields", "file": "links-bookmarks-fields.docx", "bytes": 37450, "parts": 18, "sha256": "33412f5c2ca2a616f33d7ef15c0e2088a363a4fa7c0693f8404f26dd69733ebb", "must_preserve": ["customXml/ctox-links-preserve.xml"] },
+    { "feature_id": "document.comments-track-changes", "file": "comments-track-changes.docx", "bytes": 37784, "parts": 19, "sha256": "2784f50e51b7f90bc8768fca72bd49b029e437c3d5dc5636e5f47e4835084497", "must_preserve": ["customXml/ctox-comments-preserve.xml"] },
+    { "feature_id": "document.drawings-charts", "file": "drawings-charts.docx", "bytes": 44004, "parts": 21, "sha256": "8adf729d96daa34f10f11a538b84ac6e84769ad5fd29f9f113fa590c21c98a0a", "must_preserve": ["customXml/ctox-drawings-charts-preserve.xml", "word/embeddings/ctox-chart-data.xlsx"] }
+  ]
+}

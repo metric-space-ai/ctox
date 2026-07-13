@@ -1,0 +1,16 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.xlsx-roundtrip-corpus",
+  "status": "differential_passed",
+  "kind": "aggregate-corpus-gate",
+  "oracle_release": "v9.3.1",
+  "manifest": "tests/fixtures/office/spreadsheet/corpus.json",
+  "steps": [
+    { "action": "validate_dependencies", "expected": "Spreadsheet features 1 through 11 are differential_passed" },
+    { "action": "verify_fixture_manifest", "expected": "All byte counts, SHA-256 hashes and package-part counts match" },
+    { "action": "native_xlsy_roundtrip", "runtime": "ctox-office-engine-rust", "expected": "Every fixture prepares to XLSY and exports to a valid XLSX without changing any part for an identity edit" },
+    { "action": "verify_feature_exports", "expected": "Every feature has original-runtime, CTOX/Oracle reopen and Business OS RxDB/WebRTC evidence" },
+    { "action": "reject_invalid_packages", "expected": "Non-ZIP, incomplete and corrupt XLSX packages are rejected" }
+  ],
+  "automation": ["node src/apps/business-os/office-engine/oracle/validate-spreadsheet-corpus.mjs", "cargo test --manifest-path src/core/office-engine/Cargo.toml spreadsheet_roundtrip_corpus"]
+}

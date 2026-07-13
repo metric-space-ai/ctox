@@ -8,14 +8,20 @@ on:
     branches: [main]
     paths:
       - "src/apps/business-os/office-engine/features.json"
+      - "src/core/office-engine/src/main.rs"
+      - "src/skills/packs/content/doc/SKILL.md"
       - "src/skills/packs/content/doc/references/execution-surfaces.md"
+      - "src/skills/packs/content/spreadsheet/SKILL.md"
       - "src/skills/packs/content/spreadsheet/references/execution-surfaces.md"
       - "src/scripts/check-office-skill-gating.mjs"
       - ".github/workflows/office-skill-gating.yml"
   pull_request:
     paths:
       - "src/apps/business-os/office-engine/features.json"
+      - "src/core/office-engine/src/main.rs"
+      - "src/skills/packs/content/doc/SKILL.md"
       - "src/skills/packs/content/doc/references/execution-surfaces.md"
+      - "src/skills/packs/content/spreadsheet/SKILL.md"
       - "src/skills/packs/content/spreadsheet/references/execution-surfaces.md"
       - "src/scripts/check-office-skill-gating.mjs"
       - ".github/workflows/office-skill-gating.yml"

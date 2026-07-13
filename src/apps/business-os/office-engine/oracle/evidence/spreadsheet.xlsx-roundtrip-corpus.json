@@ -1,0 +1,25 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.xlsx-roundtrip-corpus",
+  "status": "differential_passed",
+  "oracle": { "version": "v9.3.1", "role": "aggregate of eleven differential feature reopens" },
+  "fixture": { "path": "tests/fixtures/office/spreadsheet/corpus.json", "entries": 11, "package_parts": 147 },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "native_identity_roundtrip": { "operation": "XLSX to XLSY to XLSX", "fixtures": 11, "all_original_parts_byte_identical": true },
+    "dependency_gate": { "differential_passed": 11, "ctox_reopen": 11, "oracle_reopen": 11, "business_os_mount": 11 },
+    "invalid_packages": { "non_zip_rejected": true, "incomplete_package_rejected": true, "unsafe_relationship_rejected": true }
+  },
+  "automation": [
+    "node src/apps/business-os/office-engine/oracle/validate-spreadsheet-corpus.mjs",
+    "cargo test --manifest-path src/core/office-engine/Cargo.toml spreadsheet_roundtrip_corpus_preserves_every_identity_package_part"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.pivot-print-layout/native-export-reopen.png", "sha256": "6cdacc503fed6edb010fc312aad06323ddeaaddf093745d2b802e853585919f3", "role": "final dependency CTOX and Oracle reopen; remaining ten dependency screenshots are referenced by their feature evidence" }
+  ],
+  "source_anchors": [
+    "src/core/business_os/office_engine.rs: spreadsheet_roundtrip_corpus_preserves_every_identity_package_part",
+    "sdkjs/cell/model/Serialize.js:13733-13870",
+    "src/apps/business-os/office-engine/oracle/validate-spreadsheet-corpus.mjs"
+  ]
+}

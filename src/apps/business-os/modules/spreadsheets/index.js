@@ -1,12 +1,14 @@
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs';
 import { HyperFormula } from '../../vendor/hyperformula.mjs';
 
 const CSV_MIME = 'text/csv';
 const JSON_MIME = 'application/json';
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
-const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.json'];
+const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.json', '.xlsx'];
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -81,6 +83,8 @@ export async function mount(ctx) {
     jspreadsheetModule: null,
     jSuitesModule: null,
     jspreadsheetLoadPromise: null,
+    ctoxSpreadsheetsModule: null,
+    officeEngine: 'ctox_spreadsheets',
     spreadsheets: [],
     runbooks: [],
     selectedId: '',
@@ -106,47 +110,69 @@ export async function mount(ctx) {
 
   // Wire event handlers and load libs
   wireModule(state);
-  state.contextMenuCleanup = initSpreadsheetsContextMenu(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
-
-  try {
-    await ensureSeedRunbooks(ctx);
-  } catch (error) {
-    console.warn('[spreadsheets] ensureSeedRunbooks failed', error);
-  }
-  try {
-    await refreshRunbooks(state);
-  } catch (error) {
-    console.warn('[spreadsheets] refreshRunbooks failed', error);
-  }
-  try {
-    await refreshSpreadsheets(state);
-  } catch (error) {
-    console.warn('[spreadsheets] refreshSpreadsheets failed', error);
-  }
-  if (state.selectedId) {
-    await loadSelectedVersion(state).catch((error) => {
-      console.warn('[spreadsheets] initial selected version load failed', error);
-    });
-  }
-
+  let disposed = false;
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
+  Promise.resolve()
+    .then(async () => {
+      await ensureSeedRunbooks(ctx).catch((error) => console.warn('[spreadsheets] ensureSeedRunbooks failed', error));
+      if (disposed) return;
+      await refreshRunbooks(state).catch((error) => console.warn('[spreadsheets] refreshRunbooks failed', error));
+      if (disposed) return;
+      await Promise.all([
+        refreshSpreadsheets(state).catch((error) => console.warn('[spreadsheets] refreshSpreadsheets failed', error)),
+        refreshOfficeEngineSettings(state).catch((error) => console.warn('[spreadsheets] office engine settings failed', error)),
+      ]);
+      if (disposed) return;
+      if (state.selectedId) {
+        await loadSelectedVersion(state).catch((error) => {
+          console.warn('[spreadsheets] initial selected version load failed', error);
+        });
+      }
+      if (disposed) return;
+      renderLeft(state);
+      renderRight(state);
+      renderCenter(state);
+    });
 
   return () => {
+    disposed = true;
     if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
     state.contextMenuCleanup?.();
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
     flushActiveSpreadsheetDraft(state).catch((error) => console.error('[spreadsheets] final draft save failed', error));
-    if (state.spreadsheetContainer && state.jspreadsheetModule) {
+    if (state.editorHandle?.kind === 'ctox-spreadsheets') {
+      state.editorHandle.destroy?.();
+    } else if (state.spreadsheetContainer && state.jspreadsheetModule) {
       try { state.jspreadsheetModule.destroy(state.spreadsheetContainer); } catch {}
       state.spreadsheetContainer = null;
     }
     state.editorHandle = null;
   };
+}
+
+async function loadCtoxSpreadsheetsModule(state) {
+  if (!state.ctoxSpreadsheetsModule) {
+    state.ctoxSpreadsheetsModule = await import('../../vendor/ctox-office/ctox-office-spreadsheet.mjs');
+  }
+  return state.ctoxSpreadsheetsModule;
+}
+
+async function refreshOfficeEngineSettings(state) {
+  const collection = state.ctx.db?.collection?.('ctox_runtime_settings');
+  if (!collection) return state.officeEngine;
+  const settings = await collection.findOne('runtime-settings').exec();
+  const projected = settings?.toJSON?.() || settings;
+  state.officeEngine = officeEngineFromSettings(projected);
+  return state.officeEngine;
+}
+
+function officeEngineFromSettings(settings) {
+  return settings?.office?.spreadsheets_engine === 'legacy' ? 'legacy' : 'ctox_spreadsheets';
 }
 
 async function loadJSpreadsheetLib(state) {
@@ -335,8 +361,9 @@ async function importSpreadsheetFile(state, file, tags = []) {
     throw new Error(state.t(validation.key, validation.message));
   }
   const isJson = file.name.endsWith('.json') || file.type === JSON_MIME;
+  const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.type === XLSX_MIME;
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const fileText = new TextDecoder().decode(bytes);
+  const fileText = isXlsx ? '' : new TextDecoder().decode(bytes);
 
   const documentId = `sheet_${crypto.randomUUID()}`;
   const versionId = `${documentId}_v1`;
@@ -345,7 +372,14 @@ async function importSpreadsheetFile(state, file, tags = []) {
 
   let modelJson = { data: DEFAULT_GRID_DATA, columns: DEFAULT_GRID_COLUMNS };
 
-  if (isJson) {
+  if (isXlsx) {
+    modelJson = {
+      format: 'xlsx',
+      summary: { filename: file.name, bytes: bytes.byteLength },
+      data: [],
+      columns: [],
+    };
+  } else if (isJson) {
     try {
       const parsed = JSON.parse(fileText);
       if (Array.isArray(parsed)) {
@@ -382,7 +416,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
       throw err;
     }
   }
-  if (!Array.isArray(modelJson.data) || modelJson.data.length === 0) {
+  if (!isXlsx && (!Array.isArray(modelJson.data) || modelJson.data.length === 0)) {
     throw new Error(state.t('validationEmptySpreadsheet', 'Die Datei enthält keine Tabellenzeilen.'));
   }
   modelJson = normalizeSpreadsheetModel(modelJson);
@@ -391,7 +425,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     blobId,
     spreadsheetId: documentId,
     versionId,
-    mimeType: isJson ? JSON_MIME : CSV_MIME,
+    mimeType: isXlsx ? XLSX_MIME : isJson ? JSON_MIME : CSV_MIME,
     bytes
   });
 
@@ -399,7 +433,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
-    source_kind: isJson ? 'imported_json' : 'imported_csv',
+    source_kind: isXlsx ? 'imported_xlsx' : isJson ? 'imported_json' : 'imported_csv',
     blob_id: blobId,
     model_json: modelJson,
     diagnostics: [],
@@ -411,19 +445,19 @@ async function importSpreadsheetFile(state, file, tags = []) {
     id: documentId,
     title: titleFromFilename(file.name),
     filename: file.name,
-    mime_type: isJson ? JSON_MIME : CSV_MIME,
+    mime_type: isXlsx ? XLSX_MIME : isJson ? JSON_MIME : CSV_MIME,
     status: 'Imported',
-    spreadsheet_type: 'jspreadsheet',
+    spreadsheet_type: isXlsx ? 'xlsx' : 'jspreadsheet',
     owner_id: '',
     current_version_id: versionId,
     source_sha256: await sha256Hex(bytes),
-    row_count: modelJson.data.length,
-    col_count: modelJson.columns.length,
+    row_count: isXlsx ? 0 : modelJson.data.length,
+    col_count: isXlsx ? 0 : modelJson.columns.length,
     diagnostics_count: 0,
     linked_records: [],
     tags: normalizeTags(tags),
     display_cache: {},
-    index_text: titleFromFilename(file.name) + '\n' + modelJson.data.slice(0, 10).map(r => r.join(' ')).join('\n'),
+    index_text: titleFromFilename(file.name) + (isXlsx ? '' : '\n' + modelJson.data.slice(0, 10).map(r => r.join(' ')).join('\n')),
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
@@ -694,14 +728,15 @@ function tagFilterOptions(state) {
 function normalizeSpreadsheetRecord(record = {}) {
   const title = sanitizeTitle(record.title || record.filename || record.id || '');
   const filename = String(record.filename || ensureExtension(slugFilename(title || record.id || 'spreadsheet'), '.csv')).trim();
+  const isXlsx = filename.toLowerCase().endsWith('.xlsx');
   return {
     ...record,
     id: String(record.id || '').trim(),
     title: title || stateLessSpreadsheetTitleFallback(record),
     filename: filename || 'spreadsheet.csv',
-    mime_type: record.mime_type || (filename.toLowerCase().endsWith('.json') ? JSON_MIME : CSV_MIME),
+    mime_type: record.mime_type || (isXlsx ? XLSX_MIME : filename.toLowerCase().endsWith('.json') ? JSON_MIME : CSV_MIME),
     status: normalizeSpreadsheetStatus(record.status || 'Draft'),
-    spreadsheet_type: record.spreadsheet_type || 'jspreadsheet',
+    spreadsheet_type: record.spreadsheet_type || (isXlsx ? 'xlsx' : 'jspreadsheet'),
     current_version_id: String(record.current_version_id || ''),
     row_count: Number(record.row_count || 0),
     col_count: Number(record.col_count || 0),
@@ -861,6 +896,28 @@ async function renderCenter(state) {
   });
 
   const canvas = shell.querySelector('[data-spreadsheets-canvas]');
+  const isXlsx = record.spreadsheet_type === 'xlsx'
+    || record.mime_type === XLSX_MIME
+    || String(record.filename || '').toLowerCase().endsWith('.xlsx');
+
+  if (isXlsx) {
+    shell.querySelector('[data-spreadsheets-add-row]').hidden = true;
+    shell.querySelector('[data-spreadsheets-add-col]').hidden = true;
+    if (!state.selectedVersion) {
+      canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
+      return;
+    }
+    if (state.officeEngine !== 'ctox_spreadsheets') {
+      canvas.innerHTML = `<div class="spreadsheets-error"><strong>Legacy-Engine unterstützt XLSX nicht.</strong><span>Die typisierte Runtime-Einstellung <code>office.spreadsheets_engine = ctox_spreadsheets</code> aktiviert CTOX Spreadsheets.</span></div>`;
+      return;
+    }
+    try {
+      await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
+    } catch (error) {
+      canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+    }
+    return;
+  }
 
   try {
     const jspread = await loadJSpreadsheetLib(state);
@@ -956,6 +1013,49 @@ async function renderCenter(state) {
       </div>
     `;
   }
+}
+
+async function mountCtoxSpreadsheets(state, host, record, version) {
+  if (state.editorHandle?.kind === 'ctox-spreadsheets') await state.editorHandle.destroy();
+  else if (state.spreadsheetContainer && state.jspreadsheetModule) {
+    try { state.jspreadsheetModule.destroy(state.spreadsheetContainer); } catch {}
+  }
+  state.editorHandle = null;
+  state.spreadsheetContainer = null;
+  const { createCtoxSpreadsheetsEditor } = await loadCtoxSpreadsheetsModule(state);
+  host.replaceChildren();
+  const mount = document.createElement('div');
+  mount.className = 'spreadsheets-ctox-spreadsheets-frame';
+  mount.style.cssText = 'width:100%;height:100%;min-height:0';
+  host.append(mount);
+  const canWrite = state.ctx.permissions?.canWriteCollection?.('spreadsheets') !== false
+    && state.ctx.permissions?.canWriteCollection?.('spreadsheet_versions') !== false
+    && state.ctx.permissions?.canWriteCollection?.('spreadsheet_blob_chunks') !== false;
+  const editor = await createCtoxSpreadsheetsEditor({
+    host: mount,
+    bridge: createBusinessOsOfficeBridge(state.ctx, 'spreadsheet'),
+    locale: state.lang,
+    theme: document.documentElement.dataset.theme || 'system',
+    permissions: { read: true, write: canWrite, export: true, comment: canWrite, review: false },
+  });
+  const removeDirtyListener = editor.on('dirty', () => markSpreadsheetAsDirty(state));
+  const removeSavedListener = editor.on('saved', () => markSpreadsheetAsSaved(state));
+  await editor.open({ recordId: record.id, versionId: version.id });
+  state.spreadsheetContainer = mount;
+  state.editorHandle = {
+    kind: 'ctox-spreadsheets',
+    editor,
+    async destroy() {
+      removeDirtyListener();
+      removeSavedListener();
+      await editor.destroy();
+      host.replaceChildren();
+    },
+    save: (options) => editor.save(options),
+    export: async () => (await editor.export({ format: 'xlsx' })).bytes,
+    focus: () => editor.focus(),
+    inspect: () => editor.inspect(),
+  };
 }
 
 function recalculateSpreadsheet(state) {
@@ -1096,10 +1196,25 @@ function markSpreadsheetAsDirty(state) {
     badge.querySelector('span').textContent = state.t('unsavedChanges', 'Ungespeicherte Änderungen');
   }
 
+  // CTOX Spreadsheets owns its XLSY commit lifecycle. The legacy grid
+  // autosave serializes getData()/CSV and must never run against that editor.
+  if (state.editorHandle?.kind === 'ctox-spreadsheets') return;
   if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
   state.autosaveTimer = setTimeout(() => {
     saveActiveSpreadsheetDraft(state).catch(err => console.error('Auto-save failed:', err));
   }, 900);
+}
+
+function markSpreadsheetAsSaved(state) {
+  state.dirty = false;
+  state.saving = false;
+  if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
+  state.autosaveTimer = null;
+  const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
+  if (badge) {
+    badge.className = 'ctox-badge spreadsheets-dirty-badge';
+    badge.querySelector('span').textContent = state.t('saved', 'Gespeichert');
+  }
 }
 
 async function saveActiveSpreadsheetDraft(state) {
@@ -1204,7 +1319,7 @@ async function saveActiveSpreadsheetDraft(state) {
 }
 
 async function flushActiveSpreadsheetDraft(state) {
-  if (state.dirty) {
+  if (state.dirty && state.editorHandle?.kind !== 'ctox-spreadsheets') {
     await saveActiveSpreadsheetDraft(state);
   }
 }
@@ -1305,10 +1420,10 @@ function renderRight(state) {
 
         // Show success visual response
         promptBox.value = '';
-        state.ctx.notifications?.success('Spreadsheet Runbook erfolgreich in CTOX Queue eingereiht.');
+        state.ctx.notifications?.success?.('Spreadsheet Runbook erfolgreich in CTOX Queue eingereiht.');
       } catch (err) {
         console.error(err);
-        state.ctx.notifications?.error(`Fehler beim Ausführen des Runbooks: ${err.message}`);
+        state.ctx.notifications?.error?.(`Fehler beim Ausführen des Runbooks: ${err.message}`);
       } finally {
         sendBtn.disabled = false;
         sendBtn.innerHTML = initialLabel;
@@ -1386,7 +1501,7 @@ function validateImportInput(input = {}) {
     return { valid: false, key: 'validationFileRequired', message: 'Datei erforderlich.' };
   }
   if (!isSupportedSpreadsheetFile(file)) {
-    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur CSV oder JSON.' };
+    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur XLSX, CSV oder JSON.' };
   }
   return { valid: true, message: '' };
 }
@@ -1421,7 +1536,8 @@ function isSupportedSpreadsheetFile(file) {
   const name = file.name.toLowerCase();
   return SUPPORTED_IMPORT_EXTENSIONS.some((ext) => name.endsWith(ext))
     || file.type === CSV_MIME
-    || file.type === JSON_MIME;
+    || file.type === JSON_MIME
+    || file.type === XLSX_MIME;
 }
 
 function focusFirstDrawerControl(wrapper) {
@@ -1474,10 +1590,10 @@ function openNewSpreadsheetDrawer(state) {
       }
       state.ctx.closeDrawers();
       await createNewSpreadsheet(state, input);
-      state.ctx.notifications?.success(state.t('draftCreated', 'Tabellenentwurf erstellt.'));
+      state.ctx.notifications?.success?.(state.t('draftCreated', 'Tabellenentwurf erstellt.'));
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.error(`Fehler beim Erstellen: ${err.message}`);
+      state.ctx.notifications?.error?.(`Fehler beim Erstellen: ${err.message}`);
     }
   });
 
@@ -1491,8 +1607,8 @@ function openImportModal(state) {
   wrapper.innerHTML = `
     <form data-spreadsheets-import-form novalidate>
       <label>
-        <span>${escapeHtml(state.t('file', 'Datei auswählen (CSV oder JSON)'))}</span>
-        <input type="file" accept=".csv,.json" required data-import-file>
+        <span>${escapeHtml(state.t('file', 'Datei auswählen (XLSX, CSV oder JSON)'))}</span>
+        <input type="file" accept=".xlsx,.csv,.json" required data-import-file>
       </label>
       <label style="margin-top: 8px;">
         <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
@@ -1527,10 +1643,10 @@ function openImportModal(state) {
     state.ctx.closeDrawers();
     try {
       await importSpreadsheetFile(state, file, tags);
-      state.ctx.notifications?.success(`Datei ${file.name} erfolgreich importiert.`);
+      state.ctx.notifications?.success?.(`Datei ${file.name} erfolgreich importiert.`);
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.error(`Fehler beim Importieren: ${err.message}`);
+      state.ctx.notifications?.error?.(`Fehler beim Importieren: ${err.message}`);
     }
   });
 
@@ -1550,8 +1666,9 @@ function openExportModal(state) {
       <label>
         <span>${escapeHtml(state.t('documentType', 'Exportformat'))}</span>
         <select data-export-format>
-          <option value="csv">CSV (Kommagetrennt)</option>
-          <option value="json">JSON (JSpreadsheet Struktur)</option>
+          ${state.editorHandle?.kind === 'ctox-spreadsheets'
+            ? '<option value="xlsx">XLSX (Office Open XML)</option>'
+            : '<option value="csv">CSV (Kommagetrennt)</option><option value="json">JSON (JSpreadsheet Struktur)</option>'}
         </select>
       </label>
       <div class="spreadsheets-drawer-actions" style="margin-top: 12px;">
@@ -1572,6 +1689,13 @@ function openExportModal(state) {
 
     try {
       if (!state.editorHandle) throw new Error('Editor nicht initialisiert.');
+      if (state.editorHandle.kind === 'ctox-spreadsheets') {
+        const bytes = await state.editorHandle.export();
+        const downloadName = ensureExtension(slugFilename(record.title || 'export'), '.xlsx');
+        downloadBlob(bytes, XLSX_MIME, downloadName);
+        state.ctx.notifications?.success?.(`Export abgeschlossen: ${downloadName}`);
+        return;
+      }
       await flushActiveSpreadsheetDraft(state);
 
       const rawData = state.editorHandle.getData();
@@ -1610,24 +1734,28 @@ function openExportModal(state) {
       }
 
       const downloadName = ensureExtension(slugFilename(record.title || 'export'), fileExt);
-      const blob = new Blob([content], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = downloadName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      downloadBlob(content, mime, downloadName);
 
-      state.ctx.notifications?.success(`Export abgeschlossen: ${downloadName}`);
+      state.ctx.notifications?.success?.(`Export abgeschlossen: ${downloadName}`);
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.error(`Fehler beim Exportieren: ${err.message}`);
+      state.ctx.notifications?.error?.(`Fehler beim Exportieren: ${err.message}`);
     }
   });
 
   state.ctx.openLeftDrawer(wrapper);
+}
+
+function downloadBlob(content, mime, downloadName) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = downloadName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function openManageDrawer(state, id) {
@@ -1678,7 +1806,7 @@ async function openManageDrawer(state, id) {
         updated_at_ms: Date.now()
       });
       state.ctx.closeDrawers();
-      state.ctx.notifications?.success('Änderungen erfolgreich gespeichert.');
+      state.ctx.notifications?.success?.('Änderungen erfolgreich gespeichert.');
       await refreshSpreadsheets(state);
       renderLeft(state);
       if (state.selectedId === id) {
@@ -1686,7 +1814,7 @@ async function openManageDrawer(state, id) {
       }
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.error(`Fehler beim Speichern: ${err.message}`);
+      state.ctx.notifications?.error?.(`Fehler beim Speichern: ${err.message}`);
     }
   });
 
@@ -1701,7 +1829,7 @@ async function openManageDrawer(state, id) {
     try {
       await doc.incrementalPatch({ is_deleted: true, updated_at_ms: Date.now() });
       state.ctx.closeDrawers();
-      state.ctx.notifications?.success('Tabelle erfolgreich gelöscht.');
+      state.ctx.notifications?.success?.('Tabelle erfolgreich gelöscht.');
 
       if (state.selectedId === id) {
         state.selectedId = '';
@@ -1718,7 +1846,7 @@ async function openManageDrawer(state, id) {
       renderCenter(state);
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.error(`Fehler beim Löschen: ${err.message}`);
+      state.ctx.notifications?.error?.(`Fehler beim Löschen: ${err.message}`);
     }
   });
 
@@ -1748,12 +1876,10 @@ function initSpreadsheetsContextMenu(state) {
     if (event.key === 'Escape') hideSpreadsheetsContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideSpreadsheetsContextMenu(state);
@@ -2045,6 +2171,7 @@ export const __spreadsheetsTestHooks = {
   isActiveSpreadsheetRecord,
   normalizeSpreadsheetRecord,
   normalizeSpreadsheetModel,
+  officeEngineFromSettings,
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,

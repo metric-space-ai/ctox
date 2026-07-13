@@ -82,6 +82,8 @@ const defaultModes = [
   'command-reload-browser-to-rust',
   'command-restart-browser-to-rust',
   'command-midflight-restart-browser-to-rust',
+  'office-document-midflight-restart-browser-to-rust',
+  'office-spreadsheet-midflight-restart-browser-to-rust',
   'restart-browser-to-rust',
   'restart-signaling-browser-to-rust',
   'rollover-native-peer-browser-to-rust',
@@ -447,6 +449,16 @@ const modeEvidenceRequirements = {
   },
   'command-midflight-restart-browser-to-rust': {
     keys: ['command_id', 'task_id', 'task_count_for_command', 'status', 'task_status'],
+  },
+  'office-document-midflight-restart-browser-to-rust': {
+    keys: ['command_id', 'task_count_for_command', 'status', 'task_status', 'office_kind', 'office_record_id', 'office_base_version_id', 'office_committed_version_id', 'office_canonical_blob_id', 'office_canonical_blob_chunk_count'],
+    values: { status: 'completed', task_status: 'completed', task_count_for_command: 0, office_kind: 'document' },
+    minimums: { office_canonical_blob_chunk_count: 1 },
+  },
+  'office-spreadsheet-midflight-restart-browser-to-rust': {
+    keys: ['command_id', 'task_count_for_command', 'status', 'task_status', 'office_kind', 'office_record_id', 'office_base_version_id', 'office_committed_version_id', 'office_canonical_blob_id', 'office_canonical_blob_chunk_count'],
+    values: { status: 'completed', task_status: 'completed', task_count_for_command: 0, office_kind: 'spreadsheet' },
+    minimums: { office_canonical_blob_chunk_count: 1 },
   },
   'restart-browser-to-rust': {
     keys: ['advanced_status', 'checkpoint_restarted_collections', 'checkpoint_epoch_count', 'readiness_payload', 'replicated_id'],

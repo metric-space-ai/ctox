@@ -1,0 +1,35 @@
+{
+  "schema_version": "ctox-office-product-ui-evidence-v1",
+  "status": "passed",
+  "captured_at": "2026-07-13",
+  "browser": "Chromium 146",
+  "products": ["ctox-documents", "ctox-spreadsheets"],
+  "required_locales": ["de", "en"],
+  "required_themes": ["light", "dark"],
+  "required_widths": [360, 640, 1600],
+  "business_os_mounts": [
+    "modules/documents.mount(ctx)",
+    "modules/spreadsheets.mount(ctx)"
+  ],
+  "assertions": {
+    "own_product_identity": true,
+    "own_document_title": true,
+    "business_os_fork_css_loaded": true,
+    "inherited_brand_hidden": true,
+    "inherited_about_hidden": true,
+    "inherited_tips_hidden": true,
+    "visible_foreign_brand": false,
+    "live_theme_switch": true,
+    "browser_errors": 0
+  },
+  "results": [
+    { "product": "ctox-documents", "locale": "de", "theme": "dark", "width": 360, "status": "passed" },
+    { "product": "ctox-documents", "locale": "en", "theme": "light", "width": 640, "status": "passed" },
+    { "product": "ctox-documents", "locale": "de", "theme": "light", "width": 1600, "status": "passed" },
+    { "product": "ctox-documents", "locale": "en", "theme": "dark", "width": 1600, "status": "passed" },
+    { "product": "ctox-spreadsheets", "locale": "de", "theme": "dark", "width": 360, "status": "passed" },
+    { "product": "ctox-spreadsheets", "locale": "en", "theme": "light", "width": 640, "status": "passed" },
+    { "product": "ctox-spreadsheets", "locale": "de", "theme": "light", "width": 1600, "status": "passed" },
+    { "product": "ctox-spreadsheets", "locale": "en", "theme": "dark", "width": 1600, "status": "passed" }
+  ]
+}

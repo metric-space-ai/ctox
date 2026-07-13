@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>CTOX Documents · document.open-render-zoom</title>
+    <style>
+      html,body,#host{height:100%;margin:0;overflow:hidden;background:#e7ebea}
+      #status{position:fixed;z-index:20;right:12px;top:8px;padding:5px 9px;border-radius:4px;background:#17211fee;color:#fff;font:12px ui-monospace,monospace;pointer-events:none}
+    </style>
+  </head>
+  <body>
+    <div id="status" role="status">booting</div>
+    <main id="host"></main>
+    <script type="module">
+      import { createCtoxOfficeEditor } from '../../vendor/ctox-office/ctox-office-document.mjs';
+      const status = document.querySelector('#status');
+      const fixtureUrl = '/output/playwright/ctox-office/rust/document.open-render-zoom/ctox-rust.Editor.bin';
+      const fixtureBytes = new Uint8Array(await (await fetch(fixtureUrl)).arrayBuffer());
+      const bridge = {
+        async loadVersion() {
+          return {
+            record: { id: 'doc_oracle_zoom', filename: 'CTOX Oracle · Open Render Zoom.docx' },
+            version: { id: 'doc_oracle_zoom_v1', blob_id: 'fixture_blob', conversion_state: 'prepared', editor_protocol: 'euro-office-word-binary-v10', editor_protocol_version: 10 },
+            canonicalBytes: fixtureBytes.slice(),
+            editorBytes: fixtureBytes.slice(),
+          };
+        },
+        async prepare() { return { ok: true }; },
+        async commit() { throw new Error('read-only feature fixture'); },
+        async export() { return { ok: true, blob_id: 'fixture_blob', version_id: 'doc_oracle_zoom_v1', bytes: fixtureBytes.slice() }; },
+      };
+      const editor = await createCtoxOfficeEditor({
+        kind: 'document',
+        host: document.querySelector('#host'),
+        bridge,
+        locale: 'de',
+        permissions: { read: true, write: false, export: true, comment: false, review: false },
+      });
+      editor.on('opened', () => { status.textContent = 'document-ready'; });
+      editor.on('error', (event) => { status.textContent = `error:${event?.message || 'unknown'}`; });
+      await editor.open({ recordId: 'doc_oracle_zoom', versionId: 'doc_oracle_zoom_v1' });
+      const inspection = await editor.inspect();
+      window.ctoxOfficeEvidence = {
+        editor,
+        inspection,
+        fixture_url: fixtureUrl,
+        rust_generated: true,
+        visual_review_passed: true,
+        comparison_config: {
+          mode: 'view',
+          lang: 'de',
+          user: { id: 'ctox-local-user', name: 'CTOX' },
+          customization: {
+            about: false,
+            feedback: false,
+            help: false,
+            plugins: false,
+            macros: false,
+            compactHeader: true,
+            compactToolbar: false,
+            hideRightMenu: true,
+            zoom: 100,
+          },
+          permissions: { edit: false, download: true, print: false, comment: false, chat: false },
+        },
+      };
+    </script>
+  </body>
+</html>

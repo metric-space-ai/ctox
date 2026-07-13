@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>CTOX Fork Capsule Harness</title>
+    <style>
+      html,body{height:100%;margin:0;font-family:system-ui;background:#e8eceb;color:#17211f}
+      body{display:grid;grid-template-rows:auto 1fr;gap:12px;padding:12px;box-sizing:border-box}
+      header{display:flex;gap:8px;align-items:center}button{padding:7px 12px}#host{min-height:0;background:white;border:1px solid #b8c6c2}output{margin-left:auto;font:12px ui-monospace,monospace}
+    </style>
+  </head>
+  <body>
+    <header>
+      <button data-open>Open</button>
+      <button data-save>Save</button>
+      <button data-inspect>Inspect</button>
+      <output data-status>booting</output>
+    </header>
+    <main id="host"></main>
+    <script type="module">
+      import { createCtoxOfficeEditor } from '../../vendor/ctox-office/ctox-office-document.mjs';
+      const status = document.querySelector('[data-status]');
+      let version = 'doc_test_v1';
+      const bridge = {
+        async loadVersion() { return { record: { id: 'doc_test', filename: 'test.docx' }, version: { id: version }, canonicalBytes: new TextEncoder().encode('Hello Oracle') }; },
+        async prepare() { return { status: 'completed' }; },
+        async commit({ bytes }) { version = 'doc_test_v2'; status.value = `committed:${new TextDecoder().decode(bytes)}`; return { version_id: version }; },
+        async export() { return { blob_id: 'blob_export', version_id: version }; },
+      };
+      const editor = await createCtoxOfficeEditor({
+        host: document.querySelector('#host'),
+        bridge,
+        locale: 'de',
+        permissions: { read: true, write: true, export: true },
+        launchArgs: { runtimeModule: new URL('./fake-runtime.mjs', import.meta.url).href, testMode: true },
+      });
+      editor.on('dirty', () => { status.value = 'dirty'; });
+      document.querySelector('[data-open]').addEventListener('click', async () => { await editor.open({ recordId: 'doc_test', versionId: version }); status.value = 'opened'; });
+      document.querySelector('[data-save]').addEventListener('click', async () => { await editor.save({ reason: 'harness' }); });
+      document.querySelector('[data-inspect]').addEventListener('click', async () => { status.value = JSON.stringify(await editor.inspect()); });
+      status.value = 'ready';
+      window.officeHarness = { editor, status };
+    </script>
+  </body>
+</html>

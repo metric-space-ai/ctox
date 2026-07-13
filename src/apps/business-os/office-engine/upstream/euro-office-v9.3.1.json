@@ -1,0 +1,30 @@
+{
+  "schema_version": "ctox-euro-office-upstream-pin-v1",
+  "product": "Euro-Office DocumentServer",
+  "release": "v9.3.1",
+  "release_url": "https://github.com/Euro-Office/DocumentServer/releases/tag/v9.3.1",
+  "tag_object_sha": "ec4956e7ea51d75dc3603dadb449bade7197a504",
+  "commit_sha": "2092d87fcbad478a78d591334e1b26e52b4d9d4e",
+  "license": "AGPL-3.0",
+  "oracle_image": {
+    "reference": "ghcr.io/euro-office/documentserver:v9.3.1",
+    "index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "linux_amd64_digest": "sha256:68a2659691ba233765e08eb4f8a0439992a8df213bb5c0999efb7db16c7b4c13",
+    "linux_arm64_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035"
+  },
+  "submodules": {
+    "core": "740b5f5d6e09a79fec420ecb60b7317693c82116",
+    "core-fonts": "2de90688e07e2442a5fffc434fdf0a3d212c1f42",
+    "dictionaries": "08d46f8631b82af00f83b28657c54ed1aaf9e3fc",
+    "document-formats": "46995828084d4460112efec579499809f418ca6e",
+    "document-server-integration": "3c01ddb5d05e2a6de2cbb41b568fb3fd525c2c0a",
+    "document-server-package": "147b0ceb61a930b4ccffde76c45da8b1c6178718",
+    "document-templates": "d697ab3d75dbec104e4a99f47852398752cb2ace",
+    "sdkjs": "9c3608b801f4fa810b80ba97a56690449daca468",
+    "sdkjs-forms": "e7859d1d421f14848a3114d7a22e55608d9c98f7",
+    "server": "7f1cfe4fab1fef31bcc7479db6b5f646eece9a6a",
+    "web-apps": "7c69898ce8b6a8533bd3dbfb441fb8dd79800cc6"
+  },
+  "production_runtime_allowed": false,
+  "automatic_fetch_allowed": false
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "spreadsheet.formulas-references",
+  "status": "differential_passed",
+  "captured_at": "2026-07-12",
+  "fixture": {
+    "path": "tests/fixtures/office/spreadsheet/formulas-references.xlsx",
+    "bytes": 5130,
+    "package_parts": 12,
+    "sha256": "abf848ef71b350c3b3745e41aea413fb710f5248f4be30acd62aa3fe67cb9995",
+    "escrow_marker": "SPREADSHEET_FORMULA_ESCROW_73D1"
+  },
+  "semantic_cases": [
+    { "kind": "relative", "cell": "B3", "formula": "=B2*2", "cached_value": "20" },
+    { "kind": "absolute", "cell": "B4", "formula": "=$B$2+5", "cached_value": "15" },
+    { "kind": "range", "cell": "B5", "formula": "=SUM(B2:B4)", "cached_value": "45" },
+    { "kind": "sheet", "cell": "B6", "formula": "='Details'!B4+1", "cached_value": "43" },
+    { "kind": "manual_edit", "cell": "D3", "formula": "=D2*3", "cached_value": "15" },
+    { "kind": "copy_shift", "cell": "C7", "formula": "=C2+1", "cached_value": "21" },
+    { "kind": "error", "cell": "B8", "formula": "=1/0", "cached_value": "#DIV/0!" }
+  ],
+  "oracle": {
+    "release": "v9.3.1",
+    "saved_path": "runtime/office-oracle/spreadsheet.formulas-references/oracle-saved.xlsx",
+    "saved_bytes": 10951,
+    "saved_sha256": "b16db766b19b8282e08b2d5579947e93613b2d8c44cdfcefd89eb2b61467125e",
+    "saved_package_parts": 13,
+    "formula_text_and_cache_verified": true,
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "ctox": {
+    "runtime": "ctox-spreadsheets-fork",
+    "native_initial_payload": { "path": "output/playwright/ctox-office/rust/spreadsheet.formulas-references/ctox-rust.Editor.bin", "bytes": 2667, "sha256": "5537d3619e9babb36501a320fe51689cdd87f1207a5c5d274d6af9ff80982590" },
+    "formula_text_and_cache_verified": true,
+    "relative_copy_shift_verified": true,
+    "commit_base_version_id": "sheet_formula_v1",
+    "commit_result_version_id": "sheet_formula_v2",
+    "implemented_features": ["spreadsheet.open-render-sheets", "spreadsheet.edit-save", "spreadsheet.undo-clipboard-fill", "spreadsheet.cell-format-rows-columns", "spreadsheet.formulas-references"],
+    "editor_export": { "path": "output/playwright/ctox-office/ctox/spreadsheet.formulas-references/ctox-editor.xlsx", "bytes": 5711, "sha256": "b82e95d47b0126319b95a28866a4f68d5b89b607065f5213442ebe6e8ed36d2f" },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/spreadsheet.formulas-references/ctox-canonical.xlsx",
+      "bytes": 5132,
+      "sha256": "eecbfbe9eef8f7a3dad7194ebde489006bb05520ad33643b86debd1107035722",
+      "package_parts": 12,
+      "changed_parts": ["xl/worksheets/sheet1.xml"],
+      "unchanged_original_parts": 11,
+      "missing_original_parts": [],
+      "ctox_clean_profile_reopen": "passed",
+      "oracle_clean_profile_reopen": "passed",
+      "escrow_marker_present": true
+    }
+  },
+  "browser_health": { "console_errors": 0, "console_warnings": 0, "failed_document_requests": 0, "clean_profile_flow_passed": true, "http_business_data_routes": false },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.formulas-references/differential-terminal-before-save.png", "sha256": "c386832a2e26aa9d51f5f2ecbe59a9d8d6cdcca22eef9998c7da5b5ee49d41ac" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.formulas-references/side-by-side-reopen.png", "sha256": "91f34e8450054ec768ef3cebbd067ee82791d2f25e906182ad9abbf3c8051efd" },
+    { "path": "output/playwright/ctox-office/comparison/spreadsheet.formulas-references/business-os-mount-formulas.png", "sha256": "cd1b52d16f916026c919632fc0cc87c2912815b0f80d81973e30ad8947126b24" }
+  ],
+  "source_anchors": [
+    "web-apps/apps/spreadsheeteditor/main/app/controller/CellEditor.js",
+    "sdkjs/cell/model/FormulaObjects",
+    "sdkjs/cell/model/Workbook.js",
+    "sdkjs/cell/view/WorkbookView.js"
+  ]
+}

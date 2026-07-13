@@ -1,0 +1,29 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.styles-lists-numbering",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-styles-lists-numbering.html",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1200x759 CSS pixels"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.styles-lists-numbering", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "place_cursor", "target": "STYLE_HEADING1_TARGET" },
+    { "action": "choose_style", "label": "Überschrift 1", "expected_ooxml": "w:pStyle[@w:val='693']" },
+    { "action": "place_cursor", "target": "STYLE_QUOTE_TARGET" },
+    { "action": "choose_style", "label": "Zitat", "expected_ooxml": "w:pStyle[@w:val='734']" },
+    { "action": "place_cursor", "target": "BULLET_NEST_TARGET" },
+    { "action": "click", "role": "button", "name": "Einzug vergrößern", "expected_ooxml": "w:numPr/w:ilvl[@w:val='1'] and w:numPr/w:numId[@w:val='1']" },
+    { "action": "place_cursor", "target": "NUMBER_CONTINUE_TARGET" },
+    { "action": "choose_numbering", "value": "decimal" },
+    { "action": "open_context_menu", "target": "NUMBER_CONTINUE_TARGET" },
+    { "action": "click", "role": "menuitem", "name": "Nummerierung fortführen", "expected_visible_number": 4 },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" },
+    { "action": "assert_semantic_styles", "values": { "heading_style": "Heading 1", "quote_style": "Quote", "bullet_level": 1, "continued_number": 4 } },
+    { "action": "assert_text", "value": "PRESERVE_STYLES_LISTS_UNRELATED_E52A" }
+  ]
+}

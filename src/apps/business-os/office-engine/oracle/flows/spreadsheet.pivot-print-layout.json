@@ -1,0 +1,16 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "spreadsheet.pivot-print-layout",
+  "status": "differential_passed",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/side-by-side.html?feature=spreadsheet.pivot-print-layout",
+  "preconditions": ["Euro-Office v9.3.1 oracle runs on port 8088", "both frames use the exact original SpreadsheetEditor runtime", "fixture and native XLSY hashes match evidence"],
+  "captured_steps": [
+    { "action": "open_fixture", "expected": "Oracle displays CTOXRevenuePivot in E3:F7 and the page-break preview" },
+    { "action": "compare_initial_native_import", "expected": "CTOX displays the same PivotStyle, filter control, A4 landscape two-page geometry and manual row break" },
+    { "action": "rename_pivot_through_original_ui", "value": "CTOXRevenuePivot2026", "expected": "Both original editors accept the same advanced Pivot Table dialog action" },
+    { "action": "set_different_first_page", "expected": "Both original Header and Footer dialogs enable Erste Seite anders" },
+    { "action": "native_export_and_reopen", "expected": "Only pivotTable1.xml and sheet1.xml change; CTOX and Oracle both reopen document-ready" },
+    { "action": "business_os_commit", "expected": "modules/spreadsheets.mount(ctx) commits through office.spreadsheet.commit over rxdb-webrtc until terminal" }
+  ],
+  "implementation_flow": ["Port pivot cache and pivot table XML records into the original XLSY protocol", "Port SheetPr, SheetView, PageMargins, PageSetup, PrintOptions, HeaderFooter and row/column break records", "Decode changed records and map Euro-Office internal pivot cache numbering back to the escrow OOXML relationship", "Export only understood changed parts and preserve 16 of 18 parts byte-identically", "Reopen in CTOX and Oracle, then repeat through the real Business OS wrapper"]
+}

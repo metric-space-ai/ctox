@@ -1,0 +1,38 @@
+{
+  "schema_version": "ctox-office-oracle-flow-v1",
+  "feature_id": "document.tables",
+  "url": "http://127.0.0.1:4179/src/apps/business-os/office-engine/oracle/document-tables.html",
+  "preconditions": [
+    "Pinned Euro-Office v9.3.1 oracle is healthy on http://127.0.0.1:8088/healthcheck",
+    "Repository static server is listening on port 4179",
+    "Development-only callback server is listening on port 4180",
+    "Browser viewport is 1200x759 CSS pixels",
+    "Document page bounds are measured as x=194..1010 and y=169..728 before coordinate-derived canvas actions"
+  ],
+  "steps": [
+    { "action": "reset", "url": "http://127.0.0.1:4180/reset/document.tables", "method": "POST" },
+    { "action": "wait_for", "semantic": "status=document-ready" },
+    { "action": "dismiss_transient", "label": "Multipage view", "button": "OK" },
+    { "action": "place_cursor", "target": "TABLE_ROW_ANCHOR", "derived_canvas_point": { "x": 515, "y": 345 } },
+    { "action": "open_context_menu", "target": "TABLE_ROW_ANCHOR" },
+    { "action": "hover", "label": "Einfügen" },
+    { "action": "click", "label": "Zeile unterhalb", "expected": "main table row count 3 -> 4" },
+    { "action": "place_cursor", "target": "TABLE_COLUMN_ANCHOR", "derived_canvas_point": { "x": 750, "y": 345 } },
+    { "action": "open_context_menu", "target": "TABLE_COLUMN_ANCHOR" },
+    { "action": "hover", "label": "Einfügen" },
+    { "action": "click", "label": "Spalte nach rechts", "expected": "main table column count 3 -> 4" },
+    { "action": "type", "target": "new bottom-right main-table cell", "value": "TABLE_EDITED_VALUE" },
+    { "action": "select_cells", "targets": ["TABLE_MERGE_LEFT", "TABLE_MERGE_RIGHT"], "derived_canvas_drag": { "from": { "x": 300, "y": 445 }, "to": { "x": 760, "y": 445 } } },
+    { "action": "open_context_menu", "target": "selected merge range" },
+    { "action": "click", "label": "Zellen verbinden", "expected": "two source texts in one cell" },
+    { "action": "open_context_menu", "target": "merged cell" },
+    { "action": "click", "label": "Zelle teilen..." },
+    { "action": "set", "label": "Anzahl von Spalten", "value": 2 },
+    { "action": "set", "label": "Anzahl von Zeilen", "value": 2 },
+    { "action": "click", "role": "button", "name": "OK" },
+    { "action": "assert_semantic_tables", "values": { "top_level_tables": 3, "all_tables": 4, "main_shape": [4, 4], "merge_split_shape": [3, 2], "nested_shape": [2, 2] } },
+    { "action": "assert_text", "values": ["TABLE_EDITED_VALUE", "NESTED_A1", "NESTED_B1", "NESTED_A2", "NESTED_B2", "PRESERVE_TABLES_UNRELATED_6F3C"] },
+    { "action": "click", "role": "button", "name": "Speichern" },
+    { "action": "wait_for", "semantic": "callback status=6 and saved=true" }
+  ]
+}

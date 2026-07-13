@@ -1,0 +1,246 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.sections-headers-footers",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/sections-headers-footers.docx",
+    "bytes": 38930,
+    "sha256": "18b799f5ee03df7a39e3d38773896b07824a3053a9c1b42b3126f0d6c2408ab0",
+    "sections": 2,
+    "pages": 2,
+    "header_parts": ["word/header1.xml", "word/header2.xml"],
+    "footer_parts": ["word/footer1.xml"],
+    "preservation_part": "customXml/ctox-section-preserve.xml"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1280, "height": 759 },
+    "locale": "de-DE"
+  },
+  "expected_semantic_state": {
+    "sections": 3,
+    "pages": 3,
+    "section_1": { "orientation": "portrait", "break_type": "nextPage", "title_page": true },
+    "section_2": {
+      "orientation": "landscape",
+      "page_size_twips": [15840, 12240],
+      "page_margins_twips": { "top": 1296, "right": 1152, "bottom": 1296, "left": 1152 },
+      "header_twips": 709,
+      "footer_twips": 709,
+      "title_page": true,
+      "first_header_explicit": true
+    },
+    "section_3": {
+      "orientation": "landscape",
+      "page_size_twips": [15840, 12240],
+      "header_twips": 850,
+      "footer_twips": 648,
+      "title_page": true,
+      "break_type": "nextPage"
+    },
+    "preserved_text": ["HEADER_SECTION1_FIRST", "HEADER_SECTION1_DEFAULT", "FOOTER_SECTION1_DEFAULT", "SECTION2_PAGE_SETUP_TARGET", "PRESERVE_SECTIONS_UNRELATED_4D72"]
+  },
+  "source_anchors": [
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1878-1894",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:2064-2074",
+    "web-apps/apps/documenteditor/main/app/controller/HeaderFooterTab.js:171-190",
+    "web-apps/apps/documenteditor/main/app/controller/HeaderFooterTab.js:255-264",
+    "sdkjs/word/api.js:5280-5300",
+    "sdkjs/word/api.js:5538-5580",
+    "sdkjs/word/api.js:9258-9266"
+  ],
+  "oracle_export": {
+    "path": "runtime/office-oracle/document.sections-headers-footers/oracle-saved.docx",
+    "bytes": 44197,
+    "sha256": "d9d747fab1a25f2faa6a6fbc292ad9de9e5a0a0653a5b661f1a1407b9eb0eb27",
+    "callback_statuses": [6],
+    "reopen_in_oracle": "passed",
+    "notes": [
+      "The Oracle omits the deliberately unreferenced customXml section control; CTOX escrow preservation is asserted against the original fixture."
+    ]
+  },
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/fixtures/document.sections-headers-footers-render/page-1.png", "sha256": "3e77a633fe4f15e0c016ee94032f1ce7c6b184dd71fdcc5268c93bc3be394f46" },
+    { "path": "output/playwright/ctox-office/fixtures/document.sections-headers-footers-render/page-2.png", "sha256": "9183c987869f350e8365c795d6a4ca0cb11bc29f7c716ceae223d66adba1d8a2" },
+    { "path": "output/playwright/ctox-office/oracle/document.sections-headers-footers/oracle-after-landscape.png", "sha256": "e9024cca6e6fc78d6f20d3edee6f97df2bc910b11e9dff452907e9b23bcace1c" },
+    { "path": "output/playwright/ctox-office/oracle/document.sections-headers-footers/oracle-after-header-options.png", "sha256": "de2ffeeaf9a4ef6b49d51adaba0bf47bb186069d978e8149062c5cdd24257e5b" },
+    { "path": "output/playwright/ctox-office/oracle/document.sections-headers-footers/oracle-terminal.png", "sha256": "2366b8c4e444646a3b02e1a60412cf9a1062e90d7d64d84ed891e2486b42c5ff" },
+    { "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/ctox-terminal.png", "sha256": "e506ad6a30f5c7aca82a0a6721a674c4330bacba4ad2d8490b7e3fe57a9aa1cf" },
+    { "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/oracle-reopen.png", "sha256": "314d75fa0c26895873727b798e43ec45f39833c48223dbb41f377fb3da459757" }
+  ],
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_document_requests": 0,
+    "document_load_requests_ok": true,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "status": "differential_passed",
+    "editor_export": {
+      "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/ctox-editor.docx",
+      "bytes": 365179,
+      "sha256": "6f643a61b41e999b3d99226dc3d9944d9a40b1c9638509d332fe358517af9a71"
+    },
+    "canonical_export": {
+      "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/ctox-canonical.docx",
+      "bytes": 37361,
+      "sha256": "4250111a41f9cddbad967f65594f1fc6f196cd3d75a6454d0cbe37f20c343abf",
+      "package_parts": 22,
+      "unchanged_original_parts": 15,
+      "changed_understood_parts": ["[Content_Types].xml", "word/_rels/document.xml.rels", "word/document.xml", "word/footer1.xml", "word/header1.xml", "word/header2.xml"],
+      "intentional_added_parts": ["word/header3.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": [],
+      "oracle_reopen": "passed"
+    },
+    "semantic_verification": {
+      "save_reopen_in_ctox": "passed",
+      "sections": 3,
+      "pages": 3,
+      "section_2_orientation": "landscape",
+      "section_2_page_size_inches": [11, 8.5],
+      "section_2_first_header_explicit": true,
+      "section_break_inserted": true,
+      "clean_profile_reopen": "passed"
+    },
+    "required_preservation": {
+      "understood_parts": ["word/document.xml", "word/_rels/document.xml.rels", "word/header*.xml", "word/footer*.xml", "[Content_Types].xml"],
+      "unrelated_original_parts_unchanged": true,
+      "must_preserve_parts": ["customXml/ctox-section-preserve.xml"],
+      "missing_original_parts": [],
+      "unintended_added_parts": []
+    }
+  },
+  "latest_side_by_side_attempt": {
+    "status": "differential_passed",
+    "date": "2026-07-12",
+    "harness": "src/apps/business-os/office-engine/oracle/side-by-side.html?feature=document.sections-headers-footers",
+    "gate": "passed for exact document-ready readiness, same-origin geometry, upstream ESM capsule, matching Oracle/CTOX config, and Rust-generated DOCY editor payload after starting the local Oracle with JWT disabled and private host fetches allowed for the development harness",
+    "rust_prepared_editor_payload": {
+      "path": "output/playwright/ctox-office/rust/document.sections-headers-footers/ctox-rust.Editor.bin",
+      "bytes": 37172,
+      "sha256": "b73192d78d36a01a5b538663cb561b9480da6a8dafad6b3832e9ef52fe069e8c",
+      "protocol": "euro-office-word-binary-v10"
+    },
+    "result": {
+      "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/sections-flow-clean-run.txt",
+      "sha256": "042e5458a91fbe7a931b67d1d64c8b3053160d1519bad233e14f703c97b5a444"
+    },
+    "screenshot": {
+      "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/differential-page-2-footer-check.png",
+      "sha256": "bed3827e072383926e33c217023e6f62dbd830a8bf65c7e219d1bc0c26516f30"
+    },
+    "additional_screenshots": [
+      {
+        "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/sections-after-hdrftr-table.png",
+        "sha256": "7ccd7a22da1a4f6469efe3b66d1c88c4f3510701e0a602935535a5424009c035"
+      },
+      {
+        "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/ctox-reopen-saved.png",
+        "sha256": "4338f82cacc45a250e3340b4e8030f4c6f49dc245e01e3044be343b772b9f7e5"
+      },
+      {
+        "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/oracle-reopen-ctox-export.png",
+        "sha256": "245ac680eddc07838fd09fab0ecfba8a82ee4b1d7d3b0e3a955649a3111d7840"
+      }
+    ],
+    "differential_flow": {
+      "path": "src/apps/business-os/office-engine/oracle/flows/document.sections-headers-footers.playwright.js",
+      "status": "passed",
+      "interaction": "real-documenteditor-header-footer-render-save-capture",
+      "initial_pages": { "oracle": "Seite 1 von 2", "ctox": "Seite 1 von 2" },
+      "terminal_pages": { "oracle": "Seite 3 von 3", "ctox": "Seite 3 von 3" },
+      "header_markers": ["HEADER_SECTION1_FIRST", "HEADER_SECTION1_DEFAULT"],
+      "footer_markers": ["FOOTER_SECTION1_DEFAULT"],
+      "section_edit": {
+        "api": ["SetPageSize", "SetPageMargins", "SetHeaderDistance", "SetFooterDistance", "SetTitlePage", "SetType"],
+        "oracle": {
+          "type": "nextPage",
+          "width_twips": 15840,
+          "height_twips": 12240,
+          "header_distance_twips": 850,
+          "footer_distance_twips": 648
+        },
+        "ctox": {
+          "type": "nextPage",
+          "width_twips": 15840,
+          "height_twips": 12240,
+          "header_distance_twips": 850,
+          "footer_distance_twips": 648
+        }
+      },
+      "section_break": {
+        "api": ["Search", "Select", "GetCurrentParagraph", "add_SectionBreak"],
+        "target": "SECTION2_PAGE_SETUP_TARGET",
+        "oracle": {
+          "before_sections": 2,
+          "sections_count": 3,
+          "inserted_type": "nextPage",
+          "section_types": ["nextPage", "nextPage", "nextPage"]
+        },
+        "ctox": {
+          "before_sections": 2,
+          "sections_count": 3,
+          "inserted_type": "nextPage",
+          "section_types": ["nextPage", "nextPage", "nextPage"]
+        }
+      },
+      "save_marker": "SECTION_HDRFTR_SAVE_MARKER",
+      "ctox_capture": {
+        "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/ctox-editor.docx",
+        "bytes": 365179,
+        "sha256": "6f643a61b41e999b3d99226dc3d9944d9a40b1c9638509d332fe358517af9a71"
+      },
+      "oracle_save": {
+        "path": "runtime/office-oracle/document.sections-headers-footers/oracle-saved.docx",
+        "bytes": 44197,
+        "sha256": "d9d747fab1a25f2faa6a6fbc292ad9de9e5a0a0653a5b661f1a1407b9eb0eb27",
+        "callback_statuses": [6]
+      },
+      "ctox_export": {
+        "path": "output/playwright/ctox-office/ctox/document.sections-headers-footers/ctox-canonical.docx",
+        "bytes": 37361,
+        "sha256": "4250111a41f9cddbad967f65594f1fc6f196cd3d75a6454d0cbe37f20c343abf",
+        "package_parts": 22,
+        "unchanged_original_parts": 15,
+        "changed_parts": ["[Content_Types].xml", "word/_rels/document.xml.rels", "word/document.xml", "word/footer1.xml", "word/header1.xml", "word/header2.xml"],
+        "missing_original_parts": [],
+        "added_parts": ["word/header3.xml"],
+        "section_assertions": {
+          "sectPr_count": 3,
+          "paragraph_section_pgSz": "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>",
+          "paragraph_section_pgMar_contains": ["w:header=\"850\"", "w:footer=\"648\""],
+          "paragraph_section_type": "nextPage",
+          "inserted_section_break_type": "nextPage",
+          "header_footer_refs_preserved": true,
+          "link_to_previous_false_header_materialized": true,
+          "section_2_default_header_ref": "rId12",
+          "section_2_default_header_part": "word/header3.xml"
+        }
+      },
+      "ctox_reopen": {
+        "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/ctox-reopen-saved.result.txt",
+        "sha256": "3277c213038228e878cc10147d3e5fed2f5ab23a33de89469e170bdc1a84ea85",
+        "status": "document-ready"
+      },
+      "oracle_reopen": {
+        "path": "output/playwright/ctox-office/comparison/document.sections-headers-footers/oracle-reopen-ctox-export.result.txt",
+        "sha256": "0e6e7294024bdf8cdc886c94d3ec47c17f02edcccdee7846f8fe54b0af2a2f40",
+        "status": "document-ready"
+      }
+    },
+    "finding": "The CTOX pane runs the real Euro-Office DocumentEditor from the pinned ESM capsule and opens the Rust-generated DOCY payload as document-ready. The executable Playwright flow uses a clean DocumentServer key, drives the real Euro-Office add_SectionBreak path for the inserted next-page section break, and drives the real Euro-Office HeadersAndFooters_LinkToPrevious(false) runtime call on both panes. Oracle and CTOX both end at Seite 3 von 3 with three next-page sections and matching section-2 default-header semantics. The captured CTOX DOCY carries a third header payload for section 2. The native exporter materializes that payload as word/header3.xml, appends the matching document.xml.rels relationship and [Content_Types].xml override, and writes the section-2 default headerReference to the new relationship id. No original package parts are missing, no Browser console errors were captured, the saved CTOX payload reopens in CTOX as document-ready, and the native CTOX export reopens in the pinned Oracle as document-ready.",
+    "implemented_slice": "DOCX paragraph sectPr parsing, DOCY pPr.SectPr serialization, DOCX header/footer part loading, DOCY HdrFtr table serialization, section default/first/even header/footer reference serialization, DOCY paragraph SectPr decoding, DOCX paragraph sectPr export for page size, margins, titlePg and section type, additional next-page section-break insertion through the real Euro-Office add_SectionBreak API, real Euro-Office link-to-previous toggle capture, and native materialization of newly unlinked header parts plus relationship/content-type updates.",
+    "required_next_work": "None for document.sections-headers-footers; proceed to document.links-bookmarks-fields."
+  }
+}

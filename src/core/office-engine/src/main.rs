@@ -1,5 +1,8 @@
 use anyhow::{bail, Context};
-use ctox_office_engine::{export, inspect, OfficeKind};
+use ctox_office_engine::{
+    export, inspect, inspect_editor_payload, transcode_document_to_editor_payload,
+    transcode_spreadsheet_to_editor_payload, OfficeKind,
+};
 use std::fs;
 use std::path::Path;
 
@@ -8,7 +11,7 @@ mod ops;
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let operation = args.next().context(
-        "operation is required: inspect|export|comments-extract|comments-strip|\
+        "operation is required: inspect|inspect-editor|prepare-editor|export|comments-extract|comments-strip|\
          comments-resolve|comments-add|a11y-audit|a11y-fix|privacy-scrub|redact|\
          tracked-changes-accept|tracked-changes-reject|tracked-changes-replace|\
          protection-set|table-export|fields-report|fields-materialize|\
@@ -17,6 +20,42 @@ fn main() -> anyhow::Result<()> {
     )?;
     // Batch document operations (Ebene B) take the input package directly.
     match operation.as_str() {
+        "inspect-editor" => {
+            let kind = parse_kind(
+                &args
+                    .next()
+                    .context("kind is required: document|spreadsheet")?,
+            )?;
+            let input = args.next().context("editor payload path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&inspect_editor_payload(kind, &bytes)?)?
+            );
+            return Ok(());
+        }
+        "prepare-editor" => {
+            let kind = parse_kind(
+                &args
+                    .next()
+                    .context("kind is required: document|spreadsheet")?,
+            )?;
+            let input = args.next().context("source package path is required")?;
+            let output = args.next().context("editor payload path is required")?;
+            ensure_no_more(args)?;
+            let bytes = fs::read(&input).with_context(|| format!("read {input}"))?;
+            let editor = match kind {
+                OfficeKind::Spreadsheet => transcode_spreadsheet_to_editor_payload(&bytes)?,
+                OfficeKind::Document => transcode_document_to_editor_payload(&bytes)?,
+            };
+            write_output(&output, &editor)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&inspect_editor_payload(kind, &editor)?)?
+            );
+            return Ok(());
+        }
         "comments-extract" => {
             let input = args.next().context("input package path is required")?;
             ensure_no_more(args)?;

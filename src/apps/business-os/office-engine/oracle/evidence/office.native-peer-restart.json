@@ -1,0 +1,54 @@
+{
+  "feature_id": "office.native-peer-restart",
+  "status": "passed",
+  "captured_at": "2026-07-13",
+  "modes": [
+    "office-document-midflight-restart-browser-to-rust",
+    "office-spreadsheet-midflight-restart-browser-to-rust"
+  ],
+  "transport": "rxdb-webrtc",
+  "collections_on_native_peer": 175,
+  "cases": [
+    {
+      "kind": "document",
+      "command_type": "office.document.commit",
+      "status": "completed",
+      "queue_tasks": 0,
+      "base_version": "v1",
+      "committed_version": "v2",
+      "canonical_blob_chunks": 1,
+      "browser_errors_during_expected_server_outage": 13
+    },
+    {
+      "kind": "spreadsheet",
+      "command_type": "office.spreadsheet.commit",
+      "status": "completed",
+      "queue_tasks": 0,
+      "base_version": "v1",
+      "committed_version": "v2",
+      "canonical_blob_chunks": 1,
+      "browser_errors_during_expected_server_outage": 12
+    }
+  ],
+  "restart": {
+    "ctox_process_restarted": true,
+    "browser_remained_open": true,
+    "lifecycle_events": 23,
+    "unknown_signals": 0
+  },
+  "browser_health": {
+    "warnings": 0,
+    "websocket_warnings": 0,
+    "maximum_errors_during_expected_server_outage": 13,
+    "resource_404s": 0
+  },
+  "invariants": [
+    "fixture bytes enter the test browser as harness input, not through a CTOX HTTP business-data endpoint",
+    "both document and spreadsheet Office commits are dispatched through the real Business OS CommandBus",
+    "the CTOX daemon and native RxDB peer restart while the browser remains open",
+    "the terminal command is idempotent and creates no generic queue task",
+    "the browser receives the advanced document pointer and committed version over RxDB/WebRTC",
+    "Rust verifies the complete canonical blob before returning terminal success",
+    "document and spreadsheet commits also survive a complete native store reopen in the targeted Rust regression test"
+  ]
+}

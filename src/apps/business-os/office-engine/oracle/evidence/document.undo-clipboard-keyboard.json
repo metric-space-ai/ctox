@@ -1,0 +1,157 @@
+{
+  "schema_version": "ctox-office-oracle-evidence-v1",
+  "feature_id": "document.undo-clipboard-keyboard",
+  "status": "differential_passed",
+  "oracle": {
+    "release": "v9.3.1",
+    "image_index_digest": "sha256:bb7ba0a9609f395c7848f48f86c3219f187d804a28239ec949bc5e97e1e778a5",
+    "platform": "linux/arm64",
+    "platform_digest": "sha256:18703d2e72088b4df56caaa683dc17c67088e78c157f461d45ac41128fd66035",
+    "reported_version": "9.3.1",
+    "reported_build": 37
+  },
+  "fixture": {
+    "path": "tests/fixtures/office/document/undo-clipboard-keyboard.docx",
+    "bytes": 36890,
+    "sha256": "73b3e2525c26ab7b75f3adba363b18b23e8183bf3e5e90537e866a562626f7a2",
+    "source_marker": "UNDO_CLIPBOARD_BASE",
+    "destination_marker": "PASTE_DESTINATION",
+    "terminal_marker": "UNDO_CLIPBOARD_BASE_ONE",
+    "preservation_marker": "PRESERVE_UNDO_CLIPBOARD_UNRELATED_4C19"
+  },
+  "browser": {
+    "browser": "Chrome 150",
+    "viewport_css_px": { "width": 1200, "height": 759 },
+    "locale": "de-DE"
+  },
+  "differential_browser": {
+    "viewport_css_px": { "width": 1600, "height": 900 },
+    "equal_editor_canvas_css_px": { "width": 687, "height": 617 },
+    "side_by_side_gate": "passed",
+    "coordinate_source": "measured #id_viewer_overlay rectangle"
+  },
+  "interaction": [
+    "Append _ONE to the source marker and verify Meta+Z and Meta+Shift+Z restore the expected states.",
+    "Select the complete source line with End and Shift+Home, copy it, and replace the destination line.",
+    "Cut and paste the destination line once more to exercise both clipboard mutations.",
+    "Save, reopen in CTOX, export through the Rust escrow writer, and reopen that package in Euro-Office."
+  ],
+  "expected_visible_state": {
+    "after_input": "UNDO_CLIPBOARD_BASE_ONE",
+    "after_undo": "UNDO_CLIPBOARD_BASE",
+    "after_redo": "UNDO_CLIPBOARD_BASE_ONE",
+    "terminal_marker_count": 2,
+    "destination_marker_absent": true,
+    "preservation_marker_visible": true
+  },
+  "expected_semantic_state": {
+    "dirty_after_input": true,
+    "can_undo_after_input": true,
+    "can_redo_after_undo": true,
+    "dirty_after_save": false,
+    "version_advanced": true,
+    "save_callback_status": 6,
+    "reopen_in_ctox": true,
+    "reopen_in_oracle": true
+  },
+  "expected_ooxml": {
+    "ctox_changed_parts": ["word/document.xml"],
+    "ctox_unchanged_parts": 16,
+    "ctox_total_original_parts": 17,
+    "missing_original_parts": [],
+    "added_parts": [],
+    "terminal_marker_count": 2,
+    "preserve_unrelated_parts": true
+  },
+  "source_anchors": [
+    "sdkjs/word/Editor/Document.js:8559-8561",
+    "sdkjs/word/Editor/Document.js:9785-9800",
+    "sdkjs/word/api.js:2257-2288",
+    "sdkjs/word/api.js:2388-2623",
+    "sdkjs/common/clipboard_base.js:223-333",
+    "web-apps/apps/documenteditor/main/app/controller/Toolbar.js:1246-1270"
+  ],
+  "screenshots": [
+    { "path": "output/playwright/ctox-office/oracle/document.undo-clipboard-keyboard/oracle-v2-initial.png", "sha256": "3cf0d15f680078a6ce297c7d627080563da3b19aaaa28ff6bb78a31074a82ead" },
+    { "path": "output/playwright/ctox-office/oracle/document.undo-clipboard-keyboard/oracle-v2-after-undo.png", "sha256": "1aa45d6ed483fa43c12b5f0ff9a12e679f06b27533f9e56fde8033db5203f61c" },
+    { "path": "output/playwright/ctox-office/oracle/document.undo-clipboard-keyboard/oracle-v2-after-cut-paste.png", "sha256": "783167243f73359f86fd0b068b0d6da443df2c9d9beac0ff563d7ec2a00e7300" },
+    { "path": "output/playwright/ctox-office/oracle/document.undo-clipboard-keyboard/oracle-v2-reopen.png", "sha256": "0ce82e80de98985dc78e3772f70eb3e3d3c8f02863c62f87d257cc59c77dc073" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/split-initial.png", "sha256": "919f120929da5c7f2eed1e39e08a79e357e0873ddaaa76c497d56e88c8eda8e0" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/differential-after-input.png", "sha256": "4b6727878ab0f0873ef1f41eceedfc0f91d2dfe7649105ca4c44802c3f6657c6" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/differential-after-keyboard-undo.png", "sha256": "2df19cfad0859696cd62d21c073abd34d1f688de5b69c98b5980939483b24492" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/differential-after-keyboard-redo.png", "sha256": "4b6727878ab0f0873ef1f41eceedfc0f91d2dfe7649105ca4c44802c3f6657c6" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/differential-after-toolbar-undo.png", "sha256": "fb60f49a4c26b28fdf832e528c89d7048d969cfd4861e643f7dd0366e5e7aeaa" },
+    { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/differential-after-copy-cut-paste.png", "sha256": "4f740788821d059a1ff16e28a3ce1cb4bdbc2a07991170f136197aafc69e7b28" }
+  ],
+  "oracle_export": {
+    "bytes": 40165,
+    "sha256": "dd23cec67b160db9ffc52f2b7cee9ee6abf559c947fd06f87f5c4a81f893164e",
+    "callback_statuses_for_valid_key": [1, 6],
+    "reopen_in_oracle": "passed"
+  },
+  "browser_health": {
+    "console_errors": 0,
+    "console_warnings": 0,
+    "failed_requests": 0,
+    "clean_profile_flow_passed": true,
+    "http_business_data_routes": false
+  },
+  "ctox": {
+    "runtime": "ctox-documents-fork",
+    "source_closure": { "web_apps": true, "sdkjs": true },
+    "editor_protocol": "euro-office-word-binary-v10",
+    "editor_protocol_version": 10,
+    "implemented_features": [
+      "document.open-render-zoom",
+      "document.edit-save",
+      "document.undo-clipboard-keyboard"
+    ],
+    "history_controls": {
+      "localized_toolbar_buttons": true,
+      "can_undo_after_input": true,
+      "can_redo_after_undo": true,
+      "toolbar_undo_redo_passed": true,
+      "keyboard_undo_redo_passed": true
+    },
+    "inspection_after_save": {
+      "open": true,
+      "dirty": false,
+      "version_id": "doc_oracle_undo_v2"
+    },
+    "editor_export": {
+      "prepared_bytes": 941,
+      "prepared_sha256": "5983e7753f8d9a85fdc2d3943a9903672dcc21cc145af685dcbdcf3dfcff37e6",
+      "saved_bytes": 244313,
+      "saved_sha256": "adce388b4a0a2106156142b0dd841c2d89c681c4ccdc28b0e9d7325929cf28a3"
+    },
+    "canonical_export": {
+      "bytes": 35379,
+      "sha256": "0a079216050651df2426e8cfe8d5cb93c48bff0d46e17120e39a0487f5060521",
+      "changed_parts": ["word/document.xml"],
+      "unchanged_original_parts": 16,
+      "missing_original_parts": [],
+      "added_parts": [],
+      "reopen_in_ctox": "passed",
+      "reopen_in_oracle": "passed"
+    },
+    "browser_health": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0,
+      "clean_profile_flow_passed": true,
+      "http_business_data_routes": false
+    },
+    "screenshots": [
+      { "path": "output/playwright/ctox-office/ctox/document.undo-clipboard-keyboard/ctox-v5-terminal.png", "sha256": "157887b06f13efc97d6528965f1b5ffce515971c5e85a9f27c99a93d62f73d80" },
+      { "path": "output/playwright/ctox-office/ctox/document.undo-clipboard-keyboard/ctox-v5-reopen.png", "sha256": "a2b32206d98e6662b17e7d49ac5f35e1a2e8d1d00e1a35f6d8018ce0af9b012d" },
+      { "path": "output/playwright/ctox-office/oracle/document.undo-clipboard-keyboard/ctox-export-reopen-oracle.png", "sha256": "0c78d3cb904a7690ad8d8bba92a3aadd9886e528fd312313e4441ddd4ec92139" },
+      { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/ctox-saved-docy-reopen.png", "sha256": "2dcffb67cd013acc1356cca07f1c26060f5a75b3772387fe165945fd9bfd05df" },
+      { "path": "output/playwright/ctox-office/comparison/document.undo-clipboard-keyboard/ctox-canonical-oracle-reopen-clean.png", "sha256": "336b67027789af281f75bb8b2614585c63c699af9253ffd5277c395ab5151c6c" }
+    ],
+    "required_runtime_assets": [
+      { "path": "upstream/fonts/104", "sha256": "1ccd17b3a3a63bb8ac4dd49fd3dd45fc549bcc9cec08d02e6af59c8e3ab82fba" },
+      { "path": "upstream/fonts/105", "sha256": "0e051194266362ea5280e62f98a05c31e63dd7a19cc3940c61b358757c0d388e" }
+    ],
+    "differential_flow": "oracle/flows/document.undo-clipboard-keyboard.playwright.js"
+  }
+}
