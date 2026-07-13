@@ -33,8 +33,10 @@ Aktueller Stand:
   (90 % des Gesamtplans). Offen bleibt A10 nur fuer das reale Switch-Release,
   eine nachfolgende stabile Release-Periode und die danach erst erlaubte
   Entfernung der Legacy-Engines.
-- Release-Kandidat `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal
-  vollstaendig reproduziert: 44 Rust-Engine-, 25 native Operations-, 47
+- Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
+  Office-Integrations-Snapshot
+  `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig
+  reproduziert: 44 Rust-Engine-, 25 native Operations-, 47
   CTOX-Office-Integrations-, 44 Browser-Office-, 11 Documents-Wrapper- und 10
   Spreadsheets-Wrapper-Tests sind gruen. Die beiden echten
   Browser-zu-Rust-Restart-Smokes fuer Documents und Spreadsheets bestanden
