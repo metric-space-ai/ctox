@@ -961,6 +961,10 @@ function runSmokeMatrixSelfTest() {
   if (ensureBinaryIndex < 0 || refreshSourceIndex < ensureBinaryIndex) {
     throw new Error('Smoke matrix source evidence is not refreshed after building the smoke binary');
   }
+  const expectedMatrixSourceSha256 = crypto.createHash('sha256').update(matrixSource).digest('hex');
+  if (sha256File(__filename) !== expectedMatrixSourceSha256) {
+    throw new Error('Smoke matrix chunked SHA-256 helper does not match the in-memory digest');
+  }
   assertBusinessOsProductionSmokeRegistry({
     runnerModes: businessOsProductionSmokeModes,
     matrixModes: knownModes,
@@ -1142,10 +1146,21 @@ function readGitStatusPorcelain() {
 }
 
 function sha256File(filePath) {
+  let descriptor;
   try {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    descriptor = fs.openSync(filePath, 'r');
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+    while (true) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return hash.digest('hex');
   } catch {
     return null;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
