@@ -272,6 +272,12 @@ inside that transaction. A caller therefore cannot receive an error after the
 lease has already committed and accidentally leave a durable task without an
 active or buffered worker.
 
+Post-review writeback uses the inverse ordering. Chat/artifact data may be
+staged while the command is `validating`, but active Business OS command/queue
+compatibility projections are published only after the terminal owner commits
+`validating -> terminal` and `queue=handled`. A native peer can therefore not
+replay a stale leased projection as an illegal `validating -> leased` edge.
+
 The router's one-hour unchanged-source idle gate has a separate, cheap durable
 queue safety poll every 30 seconds. This uncached count is the WAL-safe wakeup
 backstop: a pending queue row cannot wait for a main-database file stamp or for

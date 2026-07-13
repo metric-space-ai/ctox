@@ -17550,19 +17550,10 @@ pub fn complete_business_command_from_queue_reply(
         None,
         "command-specific writeback completed after review and validation",
     )?;
-    if let Some(terminal_task) = channels::load_queue_task(root, task_id)? {
-        let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
-        if let Err(error) = refresh_queue_task_projection(
-            root,
-            &conn,
-            Some(&mut rxdb_writers),
-            &command_id,
-            &command,
-            Some(&terminal_task),
-            now_ms() as i64,
-        ) {
+    if channels::load_queue_task(root, task_id)?.is_some() {
+        if let Err(error) = refresh_business_command_queue_task_projection(root, task_id) {
             eprintln!(
-                "[business-os] terminal queue compatibility projection remains queued for reconciliation: {error:#}"
+                "[business-os] terminal command/queue compatibility projection remains queued for reconciliation: {error:#}"
             );
         }
     }
@@ -18025,25 +18016,15 @@ fn process_business_chat_reply(
         "business_commands",
         command_id,
         completed_at_ms,
-        command_payload.clone(),
-    )?;
-    upsert_rxdb_collection_record_cached(
-        root,
-        Some(&mut rxdb_writers),
-        "business_commands",
-        command_id,
-        completed_at_ms,
         command_payload,
     )?;
-    refresh_queue_task_projection(
-        root,
-        conn,
-        Some(&mut rxdb_writers),
-        command_id,
-        command,
-        terminal_queue_task.as_ref(),
-        completed_at_ms,
-    )?;
+    // Do not publish the compatibility command/queue projection while the
+    // canonical aggregate is still `validating`. The native peer treats an
+    // active queue projection as an execution signal; publishing the stale
+    // leased task here can race the terminal owner and attempt the illegal
+    // `validating -> leased` transition. `complete_business_command_from_queue_reply`
+    // commits the canonical terminal transition first and only then refreshes
+    // these projections from the handled queue state.
 
     Ok(CommandAccepted {
         ok: true,
@@ -48662,6 +48643,18 @@ mod tests {
             "passed",
             &serde_json::json!({"test": true}),
         )?;
+        let rxdb_conn = Connection::open(rxdb_store_path(root))?;
+        rxdb_conn.execute_batch(
+            r#"
+            CREATE TRIGGER reject_preterminal_command_projection
+            BEFORE UPDATE ON ctox_business_os__business_commands__v1
+            WHEN json_extract(NEW.data, '$.status') != 'completed'
+            BEGIN
+                SELECT RAISE(ABORT, 'preterminal command projection published after validation');
+            END;
+            "#,
+        )?;
+        drop(rxdb_conn);
         let projected = complete_business_command_from_queue_reply(
             root,
             &task_id,

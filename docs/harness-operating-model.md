@@ -162,6 +162,13 @@ projection refresh happens before the lease transaction, and the returned task
 view is materialized before commit. Thus an acquisition error leaves the queue
 row pending; a committed lease is always returned to the dispatcher.
 
+Post-review writeback publishes compatibility projections only after the
+canonical terminal transition. While the aggregate is `validating`, the
+writeback may stage chat/artifact records, but it must not publish an active
+command or leased queue projection that the native peer could replay as
+`validating -> leased`. Terminal command and handled queue state are projected
+together after the terminal owner commits.
+
 Boot lease recovery preserves the same command/queue invariant. A linked
 Business Command in `leased`, `running`, `awaiting_review`, `validating`, or
 `retry_wait` is transitioned through the typed command state machine while the
