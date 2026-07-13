@@ -33335,6 +33335,11 @@ fn maybe_writeback_documents_chat_markdown_edit(
     if matches!(mode.as_str(), "ask" | "app") {
         return Ok(Value::Null);
     }
+    let Some(markdown_to_append) = markdown_append_section_from_instruction(user_text)
+        .or_else(|| markdown_append_section_from_instruction(reply_text))
+    else {
+        return Ok(Value::Null);
+    };
     let Some(document_id) = command
         .record_id
         .as_deref()
@@ -33370,11 +33375,6 @@ fn maybe_writeback_documents_chat_markdown_edit(
         return Ok(Value::Null);
     }
 
-    let Some(markdown_to_append) = markdown_append_section_from_instruction(user_text)
-        .or_else(|| markdown_append_section_from_instruction(reply_text))
-    else {
-        return Ok(Value::Null);
-    };
     let current_version_id = document_payload
         .get("current_version_id")
         .and_then(Value::as_str)
@@ -48638,19 +48638,20 @@ mod tests {
             serde_json::json!({
                 "id": "cmd_completed_queue_chat",
                 "command_id": "cmd_completed_queue_chat",
-                "module": "ctox",
+                "module": "documents",
                 "command_type": "business_os.chat.task",
-                "record_id": "ctox",
+                "record_id": "harness-bench/missing-read-only-document",
                 "status": "pending_sync",
                 "payload": {
                     "title": "CTOX Aufgabe",
-                    "instruction": "teste Erfolgspfad",
-                    "prompt": "teste Erfolgspfad",
+                    "instruction": "Nenne Referenz und Status ohne etwas zu ändern.",
+                    "prompt": "Nenne Referenz und Status ohne etwas zu ändern.",
+                    "mode": "data",
                     "message_id": "chatmsg_success"
                 },
                 "client_context": {
                     "source": "business-os-chat",
-                    "module": "ctox",
+                    "module": "documents",
                     "owner_user_id": "tester"
                 }
             }),
@@ -48756,6 +48757,11 @@ mod tests {
                 .pointer("/result/outbound_text")
                 .and_then(Value::as_str),
             Some("Chat-Antwort wurde gespeichert.")
+        );
+        assert_eq!(
+            projected.pointer("/result/document_writeback"),
+            Some(&Value::Null),
+            "answer-only documents chat must not require or mutate the target document"
         );
         let command_status: String = open_store(root)?.query_row(
             "SELECT status FROM business_commands WHERE command_id='cmd_completed_queue_chat'",
