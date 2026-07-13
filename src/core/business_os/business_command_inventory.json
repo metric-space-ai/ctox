@@ -39,6 +39,7 @@
     "ctox.module.save",
     "ctox.module.set_visible",
     "ctox.module.update",
+    "ctox.office.settings.save",
     "ctox.runtime_settings.save",
     "ctox.secret.delete",
     "ctox.secret.list",
