@@ -448,7 +448,7 @@ function wireUi(host) {
       const row = document.createElement('div');
       row.className = 'collection-row';
       row.innerHTML = `
-        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${coll}</span>
+        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(coll)}</span>
         <button type="button" class="ctox-icon-button is-danger" data-remove-idx="${idx}" aria-label="Datentabelle ${coll} entfernen" title="Datentabelle entfernen">
           ${creatorActionIcon('close')}
         </button>
