@@ -41,7 +41,16 @@ try {
           globalThis.renderDesignLabLocale(locale);
           document.querySelector('[data-lab-frame]').style.width = `${width}px`;
         }, { width, theme, locale });
-        await page.waitForTimeout(50);
+        // Theme tokens affect inherited colours across the complete design
+        // frame.  Sample only after two paints and after the longest regular
+        // colour transition (150 ms) has settled.  On a busy CI runner the
+        // former fixed 50 ms delay could inspect a Dark -> Light interpolation
+        // frame and report a contrast value that was gone in the immediately
+        // following locale cell.
+        await page.evaluate(() => new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        }));
+        await page.waitForTimeout(180);
         const contract = await page.locator('[data-lab-frame]').evaluate((root) => {
           const visible = (node) => {
             const style = getComputedStyle(node);
@@ -128,7 +137,9 @@ try {
           };
 
           function describe(node) {
-            return `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.classList.length ? `.${[...node.classList].slice(0, 3).join('.')}` : ''}`;
+            const selector = `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.classList.length ? `.${[...node.classList].slice(0, 3).join('.')}` : ''}`;
+            const text = String(node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+            return text ? `${selector} (${JSON.stringify(text)})` : selector;
           }
           function focusAppearance(node) {
             const style = getComputedStyle(node);
