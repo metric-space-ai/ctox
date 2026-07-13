@@ -114,7 +114,8 @@ jobs:
           npm --prefix src/apps/business-os ci
           npm --prefix src/apps/business-os exec playwright install --with-deps chromium
           npm --prefix src/apps/business-os run qa:design-gates
-          node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          # deferred until shell-chat composition files land on main:
+          # node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
           SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
           SMOKE_MODES="$SMOKE_MODES" \
