@@ -65,6 +65,16 @@ Aktueller Stand:
   Die menschliche Checkliste benennt jetzt dieselben elf maschinenpflichtigen
   Control-IDs; der Validator lehnt kuenftigen Drift zwischen Checkliste und
   JSON-Gate fail-closed ab.
+- Der Production-Readiness-Lauf `29282605997` deckte im kalten
+  App-Release-Szenario eine inkonsistente Deadline auf: Der schwere Modus
+  erlaubte dem Shell-Startup 240 Sekunden, wartete danach aber nur 60 Sekunden
+  auf den nativen Command-Peer, der unmittelbar nach Ablauf hochkam. Der
+  Release-Modus verwendet nun fuer Startup und nativen Peer dieselbe
+  240-Sekunden-Grenze, weiterhin mit genau einem Versuch und unveraenderten
+  Nullbudgets fuer Browserwarnungen, Browserfehler und Request-Fehler. Ein
+  lokaler realer Zero-Retry-Lauf bestand danach Publish, Team-Sichtbarkeit,
+  Versionsbadge, Data Review, Rollback, redigierte Audits, Reload und
+  Storage-Boundary in 106 Sekunden bei jeweils null Browser- und Requestfehlern.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig

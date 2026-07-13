@@ -958,6 +958,10 @@ function runSmokeMatrixSelfTest() {
   if (!runnerSource.includes("&& smokeMode !== 'business-os-app-audience-ui'")) {
     throw new Error('App audience policy smoke must remain independent of deferred file replication');
   }
+  if (!runnerSource.includes('const nativePeerOpenTimeoutMs = businessOsAppReleaseUiSmokeMode ? 240000 : 60000;')
+      || !runnerSource.includes("waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs)")) {
+    throw new Error('App release smoke must retain its cold-start native-peer deadline without retries');
+  }
   const matrixSource = fs.readFileSync(__filename, 'utf8');
   const ensureBinaryIndex = matrixSource.indexOf('\nensureCtoxSmokeBinary();\n');
   const refreshSourceIndex = matrixSource.indexOf('\nsummary.source = sourceEvidence();\n', ensureBinaryIndex);

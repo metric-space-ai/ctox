@@ -6481,6 +6481,11 @@ function ensureCtoxSmokeBinary() {
       const invoicesActiveUiSmokeMode = smokeMode === 'invoices-active-ui';
       const buchhaltungActiveUiSmokeMode = smokeMode === 'buchhaltung-active-ui';
       const businessOsAppReleaseUiSmokeMode = smokeMode === 'business-os-app-release-ui';
+      // A cold release-policy fixture registers the full Business OS catalog
+      // before command replication. Keep its native-peer deadline aligned
+      // with the mode's 240 s startup deadline; this remains one attempt and
+      // does not relax any warning, error or request-failure budget.
+      const nativePeerOpenTimeoutMs = businessOsAppReleaseUiSmokeMode ? 240000 : 60000;
       const businessOsThreadsRightClickUiSmokeMode = smokeMode === 'business-os-threads-rightclick-ui';
       const businessOsThreadsScaleUiSmokeMode = smokeMode === 'business-os-threads-scale-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
@@ -6663,8 +6668,8 @@ function ensureCtoxSmokeBinary() {
           await bounded(appQueueReplicationState?.awaitInitialReplication?.(), 15000);
           await bounded(appCommandReplicationState?.awaitInSync?.(), 15000);
           await bounded(appQueueReplicationState?.awaitInSync?.(), 15000);
-          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
-          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
+          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs);
+          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', nativePeerOpenTimeoutMs);
           setupPhaseTimings.commandCollectionsReadyMs = Date.now() - commandCollectionsStartedAt;
         }
         if (needsCodingAgentCollections) {
