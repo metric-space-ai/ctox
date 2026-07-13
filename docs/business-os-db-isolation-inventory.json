@@ -309,7 +309,7 @@
       "notes": "Scoped system exception: Desktop resolves business_commands, desktop_icons and desktop_layout through the scoped system facade. Browser/Rust dynamic-app smoke denies the registered foreign business_module_catalog collection through collection(), property, raw and collections access and checks the permission/capability facade contract."
     },
     "documents": {
-      "title": "Documents",
+      "title": "CTOX Documents",
       "manifest_path": "src/apps/business-os/modules/documents/module.json",
       "source_path": "src/apps/business-os/modules/documents",
       "install_scope": "starter",
@@ -607,7 +607,7 @@
       "notes": "Phase 13C plus P13G migrated Shiftflow to the guarded facade batch: startup mock seeding now requires exact collection write permission, realtime subscriptions use live collection helpers, global/DOM cached ctx.db handles were removed, and runtime UI/automation actions now resolve planning collections through ctx.db.collection(name) without guarded property fallback."
     },
     "spreadsheets": {
-      "title": "Spreadsheets",
+      "title": "CTOX Spreadsheets",
       "manifest_path": "src/apps/business-os/modules/spreadsheets/module.json",
       "source_path": "src/apps/business-os/modules/spreadsheets",
       "install_scope": "starter",

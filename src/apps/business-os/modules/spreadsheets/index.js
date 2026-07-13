@@ -560,7 +560,7 @@ function renderLeft(state) {
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Dateien</span>
-          <h2 class="ctox-pane-title">${escapeHtml(state.t('spreadsheetsTitle', 'Spreadsheets'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('spreadsheetsTitle', 'CTOX Spreadsheets'))}</h2>
         </div>
         <div class="ctox-pane-actions">
           <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Neue Tabelle erstellen'))}" data-spreadsheets-new>${actionIcon(state, 'add')}</button>
