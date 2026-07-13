@@ -20983,6 +20983,27 @@ fn service_performance_snapshot() -> Value {
         "status_requests": service_status_request_metrics_snapshot(),
         "channel_sync": channel_sync_runtime_metrics_snapshot(),
         "ticket_sync": ticket_sync_runtime_metrics_snapshot(),
+        "event_stream": service_event_stream_metrics_snapshot(),
+    })
+}
+
+/// Event-stream health counters from the in-process agent runtime
+/// (ctox#21 / P0-R1): dropped events, delivery-buffer activity, lost or
+/// wedged consumers, lag markers. All zeros in a healthy stream except
+/// `delivery_events_buffered/flushed`, which grow whenever a consumer
+/// pauses briefly and catches up.
+fn service_event_stream_metrics_snapshot() -> Value {
+    let counters = ctox_app_server_client::stream_counters::snapshot();
+    serde_json::json!({
+        "schema": "ctox.service.event_stream.v1",
+        "events_dropped": counters.events_dropped,
+        "delivery_events_buffered": counters.delivery_events_buffered,
+        "delivery_events_flushed": counters.delivery_events_flushed,
+        "consumers_gone": counters.consumers_gone,
+        "runaway_terminations": counters.runaway_terminations,
+        "facade_events_dropped": counters.facade_events_dropped,
+        "facade_consumers_gone": counters.facade_consumers_gone,
+        "facade_lag_markers": counters.facade_lag_markers,
     })
 }
 

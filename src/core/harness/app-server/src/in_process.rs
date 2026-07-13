@@ -93,6 +93,57 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
+/// Process-wide event-stream health counters (ctox#21 / P0-R1 metrics).
+/// Aggregated across every in-process runtime the host process starts;
+/// exposed so the daemon can surface event-stream health in `ctox status`.
+pub mod stream_counters {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
+    pub static DELIVERY_EVENTS_BUFFERED: AtomicU64 = AtomicU64::new(0);
+    pub static DELIVERY_EVENTS_FLUSHED: AtomicU64 = AtomicU64::new(0);
+    pub static CONSUMERS_GONE: AtomicU64 = AtomicU64::new(0);
+    pub static RUNAWAY_TERMINATIONS: AtomicU64 = AtomicU64::new(0);
+    // Facade-layer (ctox-app-server-client) counters; kept here so the
+    // daemon reads every event-stream counter through one module.
+    pub static FACADE_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
+    pub static FACADE_CONSUMERS_GONE: AtomicU64 = AtomicU64::new(0);
+    pub static FACADE_LAG_MARKERS: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StreamCountersSnapshot {
+        /// Droppable events discarded under backpressure.
+        pub events_dropped: u64,
+        /// Delivery-required events parked in the pending buffer.
+        pub delivery_events_buffered: u64,
+        /// Buffered delivery-required events later flushed to the consumer.
+        pub delivery_events_flushed: u64,
+        /// Event consumers that disappeared (receiver dropped).
+        pub consumers_gone: u64,
+        /// Sessions terminated because the delivery buffer ran away.
+        pub runaway_terminations: u64,
+        /// Facade-layer droppable events discarded under backpressure.
+        pub facade_events_dropped: u64,
+        /// Facade-layer consumers that disappeared or were wedged.
+        pub facade_consumers_gone: u64,
+        /// Lag markers surfaced to facade consumers.
+        pub facade_lag_markers: u64,
+    }
+
+    pub fn snapshot() -> StreamCountersSnapshot {
+        StreamCountersSnapshot {
+            events_dropped: EVENTS_DROPPED.load(Ordering::Relaxed),
+            delivery_events_buffered: DELIVERY_EVENTS_BUFFERED.load(Ordering::Relaxed),
+            delivery_events_flushed: DELIVERY_EVENTS_FLUSHED.load(Ordering::Relaxed),
+            consumers_gone: CONSUMERS_GONE.load(Ordering::Relaxed),
+            runaway_terminations: RUNAWAY_TERMINATIONS.load(Ordering::Relaxed),
+            facade_events_dropped: FACADE_EVENTS_DROPPED.load(Ordering::Relaxed),
+            facade_consumers_gone: FACADE_CONSUMERS_GONE.load(Ordering::Relaxed),
+            facade_lag_markers: FACADE_LAG_MARKERS.load(Ordering::Relaxed),
+        }
+    }
+}
+
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
@@ -141,10 +192,14 @@ fn enqueue_in_process_event(
                             event: InProcessServerEvent|
      -> bool {
         pending.push_back(event);
+        stream_counters::DELIVERY_EVENTS_BUFFERED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if pending.len() > max_pending {
             warn!(
                 "in-process delivery-required buffer exceeded {max_pending}; treating consumer as wedged"
             );
+            stream_counters::RUNAWAY_TERMINATIONS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *consumer_gone = true;
             pending.clear();
             true
@@ -157,6 +212,7 @@ fn enqueue_in_process_event(
             return buffer_and_check(pending, consumer_gone, event);
         }
         warn!("dropping in-process {kind} behind buffered delivery-required events");
+        stream_counters::EVENTS_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return false;
     }
     match event_tx.try_send(event) {
@@ -166,10 +222,12 @@ fn enqueue_in_process_event(
                 buffer_and_check(pending, consumer_gone, event)
             } else {
                 warn!("dropping in-process {kind} (queue full)");
+                stream_counters::EVENTS_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 false
             }
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
+            stream_counters::CONSUMERS_GONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *consumer_gone = true;
             true
         }
@@ -600,9 +658,13 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         Ok(permit) => {
                             if let Some(event) = pending_delivery_events.pop_front() {
                                 permit.send(event);
+                                stream_counters::DELIVERY_EVENTS_FLUSHED
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
                         Err(_) => {
+                            stream_counters::CONSUMERS_GONE
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             event_consumer_gone = true;
                             pending_delivery_events.clear();
                         }

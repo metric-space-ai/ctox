@@ -29,6 +29,7 @@ use std::time::Duration;
 pub use ctox_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use ctox_app_server::in_process::InProcessServerEvent;
 use ctox_app_server::in_process::InProcessStartArgs;
+pub use ctox_app_server::in_process::stream_counters;
 use ctox_app_server_protocol::ClientInfo;
 use ctox_app_server_protocol::ClientNotification;
 use ctox_app_server_protocol::ClientRequest;
@@ -458,6 +459,8 @@ impl InProcessAppServerClient {
                                 }
                             }
                             Err(_) => {
+                                ctox_app_server::in_process::stream_counters::FACADE_CONSUMERS_GONE
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 event_tx = None;
                                 pending_delivery_events.clear();
                             }
@@ -540,9 +543,13 @@ impl InProcessAppServerClient {
                             ) {
                                 ForwardOutcome::Forwarded => {
                                     skipped_events = 0;
+                                    ctox_app_server::in_process::stream_counters::FACADE_LAG_MARKERS
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 ForwardOutcome::Dropped(_) => {
                                     skipped_events = skipped_events.saturating_add(1);
+                                    ctox_app_server::in_process::stream_counters::FACADE_EVENTS_DROPPED
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     warn!(
                                         "dropping in-process app-server event because consumer queue is full"
                                     );
@@ -559,7 +566,9 @@ impl InProcessAppServerClient {
                                     continue;
                                 }
                                 ForwardOutcome::ConsumerGone => {
-                                    event_tx = None;
+                                    ctox_app_server::in_process::stream_counters::FACADE_CONSUMERS_GONE
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                event_tx = None;
                                     continue;
                                 }
                             }
@@ -575,6 +584,8 @@ impl InProcessAppServerClient {
                             ForwardOutcome::Forwarded => {}
                             ForwardOutcome::Dropped(event) => {
                                 skipped_events = skipped_events.saturating_add(1);
+                                ctox_app_server::in_process::stream_counters::FACADE_EVENTS_DROPPED
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 warn!("dropping in-process app-server event because consumer queue is full");
                                 if let InProcessServerEvent::ServerRequest(request) = event {
                                     let _ = request_sender.fail_server_request(
@@ -588,6 +599,8 @@ impl InProcessAppServerClient {
                                 }
                             }
                             ForwardOutcome::ConsumerGone => {
+                                ctox_app_server::in_process::stream_counters::FACADE_CONSUMERS_GONE
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 event_tx = None;
                             }
                         }
