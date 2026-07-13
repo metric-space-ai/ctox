@@ -3760,11 +3760,24 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             );
             loop {
                 let status = service::service_status_snapshot_with(root, &wait_probe)?;
-                if !status.running || !status.busy {
+                // A daemon that died between the reply row and its terminal
+                // handling did NOT finish the turn — that is a failure, not
+                // barrier completion.
+                if !status.running {
+                    anyhow::bail!(
+                        "CTOX service stopped before the chat turn reached its terminal handling"
+                    );
+                }
+                // A degraded probe defaults `busy` to false without asking
+                // the service; only trust `busy == false` from a real probe.
+                if !status.degraded_probe && !status.busy {
                     final_status = Some(status);
                     break;
                 }
                 if std::time::Instant::now() >= barrier_deadline {
+                    eprintln!(
+                        "ctox chat --wait: finalization barrier expired while the service was still busy; the reply below may precede terminal handling"
+                    );
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));

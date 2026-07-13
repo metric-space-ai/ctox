@@ -418,7 +418,14 @@ impl InProcessAppServerClient {
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
         let worker_handle = tokio::spawn(async move {
-            let mut event_stream_enabled = true;
+            // `Some` while the consumer stream is alive. Dropping the sender
+            // (setting `None`) closes the stream so a consumer blocked on
+            // `next_event()` sees end-of-stream instead of waiting forever on
+            // an open channel that will never receive another event
+            // (ctox#21 re-review). Wrapped in Option because tokio::select!
+            // evaluates (without polling) disabled-arm expressions, so the
+            // reserve future must stay constructible after the drop.
+            let mut event_tx = Some(event_tx);
             let mut skipped_events = 0usize;
             // Delivery-required events that did not fit into the consumer
             // queue. Flushed via the `reserve()` arm; `handle.next_event()`
@@ -428,9 +435,22 @@ impl InProcessAppServerClient {
             // `writer_rx`): it carries only events here, never responses.
             let mut pending_delivery_events: VecDeque<InProcessServerEvent> = VecDeque::new();
             const MAX_PENDING_DELIVERY_EVENTS: usize = 65_536;
+            async fn reserve_event_slot(
+                event_tx: &Option<mpsc::Sender<InProcessServerEvent>>,
+            ) -> Result<mpsc::Permit<'_, InProcessServerEvent>, mpsc::error::SendError<()>>
+            {
+                match event_tx {
+                    Some(event_tx) => event_tx.reserve().await,
+                    None => std::future::pending().await,
+                }
+            }
             loop {
+                // Per-iteration clone (cheap Arc bump) so the reserve future
+                // does not borrow `event_tx` across the select arms — the
+                // arms below drop `event_tx` when the consumer is gone.
+                let reserve_tx = event_tx.clone();
                 tokio::select! {
-                    permit = event_tx.reserve(), if !pending_delivery_events.is_empty() && event_stream_enabled => {
+                    permit = reserve_event_slot(&reserve_tx), if !pending_delivery_events.is_empty() && event_tx.is_some() => {
                         match permit {
                             Ok(permit) => {
                                 if let Some(event) = pending_delivery_events.pop_front() {
@@ -438,7 +458,7 @@ impl InProcessAppServerClient {
                                 }
                             }
                             Err(_) => {
-                                event_stream_enabled = false;
+                                event_tx = None;
                                 pending_delivery_events.clear();
                             }
                         }
@@ -490,9 +510,15 @@ impl InProcessAppServerClient {
                             }
                         }
                     }
-                    event = handle.next_event(), if event_stream_enabled && pending_delivery_events.len() < MAX_PENDING_DELIVERY_EVENTS => {
+                    event = handle.next_event(), if event_tx.is_some() && pending_delivery_events.len() < MAX_PENDING_DELIVERY_EVENTS => {
                         let Some(event) = event else {
                             break;
+                        };
+                        // Clone (cheap Arc bump) instead of borrowing so the
+                        // ConsumerGone arms below may drop `event_tx`; the
+                        // channel closes once this per-iteration clone drops.
+                        let Some(consumer_tx) = event_tx.clone() else {
+                            continue;
                         };
 
                         let requires_delivery = event_requires_delivery(&event);
@@ -506,7 +532,7 @@ impl InProcessAppServerClient {
                                 skipped: skipped_events,
                             };
                             match forward_event(
-                                &event_tx,
+                                &consumer_tx,
                                 &mut pending_delivery_events,
                                 lag_event,
                                 requires_delivery,
@@ -533,14 +559,14 @@ impl InProcessAppServerClient {
                                     continue;
                                 }
                                 ForwardOutcome::ConsumerGone => {
-                                    event_stream_enabled = false;
+                                    event_tx = None;
                                     continue;
                                 }
                             }
                         }
 
                         match forward_event(
-                            &event_tx,
+                            &consumer_tx,
                             &mut pending_delivery_events,
                             event,
                             requires_delivery,
@@ -562,7 +588,7 @@ impl InProcessAppServerClient {
                                 }
                             }
                             ForwardOutcome::ConsumerGone => {
-                                event_stream_enabled = false;
+                                event_tx = None;
                             }
                         }
                     }

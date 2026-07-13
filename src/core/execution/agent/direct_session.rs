@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ctox_app_server_client::{
-    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent,
+    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent, TypedRequestError,
     DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
 };
 use ctox_app_server_protocol::{
@@ -401,6 +401,20 @@ fn direct_session_deadline_capped_timeout(
 // PersistentSession — lives across normal worker turns and bounded helper turns
 // ---------------------------------------------------------------------------
 
+/// Marker error for ambiguous turn outcomes that must poison the session.
+/// Carried through anyhow so `run_turn_inner_with_context` can flip the
+/// session's `poisoned` flag on the way out.
+#[derive(Debug)]
+pub(crate) struct SessionPoisoned(pub(crate) String);
+
+impl std::fmt::Display for SessionPoisoned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for SessionPoisoned {}
+
 /// Holds a running InProcessAppServerClient + thread. Normal service work keeps
 /// one instance across slices and resumes its rollout after restart. Isolated
 /// reviewer/summarizer/special-profile callers still create bounded instances.
@@ -424,6 +438,12 @@ pub(crate) struct PersistentSession {
     read_only_sandbox: bool,
     persistent_worker: bool,
     reviewer_scratch_workspace: Option<PathBuf>,
+    /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
+    /// the request still detached server-side). A poisoned session refuses
+    /// further turns: reusing it could overlap or steer into the original
+    /// turn and duplicate side effects (ctox#21 re-review). Owners must
+    /// rebuild the session.
+    poisoned: bool,
 }
 
 impl PersistentSession {
@@ -676,6 +696,7 @@ impl PersistentSession {
             read_only_sandbox,
             persistent_worker,
             reviewer_scratch_workspace,
+            poisoned: false,
         })
     }
 
@@ -708,6 +729,10 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
+        anyhow::ensure!(
+            !self.poisoned,
+            "session is poisoned by an earlier ambiguous turn outcome; rebuild the session"
+        );
         let client = self
             .client
             .as_mut()
@@ -763,6 +788,13 @@ impl PersistentSession {
         // Adopt a rotated thread id so follow-up turns in this session keep
         // using the live thread.
         self.thread_id = thread_id;
+        // Latch ambiguous outcomes: callers that swallow turn errors
+        // (continuity refresh, summarizer) must not reuse this session.
+        if let Err(err) = &result {
+            if err.downcast_ref::<SessionPoisoned>().is_some() {
+                self.poisoned = true;
+            }
+        }
 
         result
     }
@@ -1314,13 +1346,25 @@ impl PersistentSession {
         {
             Ok(Ok(resp)) => resp,
             Err(_) => {
-                anyhow::bail!(
+                return Err(anyhow::Error::new(SessionPoisoned(format!(
                     "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; the turn may have started server-side, so the session is poisoned instead of retried to avoid a duplicate turn"
-                );
+                ))));
             }
-            Ok(Err(err)) => {
+            // Transport and decode failures are as ambiguous as a timeout:
+            // the request may have reached the processor (transport) or the
+            // response arrived but could not be decoded (deserialize) — in
+            // both cases the turn may be running. Only a definitive server
+            // rejection proves the turn did not start.
+            Ok(Err(
+                err @ (TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. }),
+            )) => {
+                return Err(anyhow::Error::new(SessionPoisoned(format!(
+                    "turn/start ended ambiguously ({err}); session poisoned instead of retried to avoid a duplicate turn"
+                ))));
+            }
+            Ok(Err(err @ TypedRequestError::Server { .. })) => {
                 eprintln!(
-                    "[ctox direct-session] turn/start on session thread {thread_id} returned an error ({err}); rotating thread"
+                    "[ctox direct-session] turn/start on session thread {thread_id} was rejected by the server ({err}); rotating thread"
                 );
                 let rotated_thread_id = start_session_thread(
                     client,
@@ -1351,10 +1395,20 @@ impl PersistentSession {
                 )
                 .await
                 {
-                    Ok(result) => result.map_err(|err| anyhow::anyhow!("turn/start: {err}"))?,
-                    Err(_) => anyhow::bail!(
-                        "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; session poisoned instead of retried"
-                    ),
+                    Ok(Ok(resp)) => resp,
+                    Ok(Err(err @ TypedRequestError::Server { .. })) => {
+                        return Err(anyhow::anyhow!("turn/start: {err}"));
+                    }
+                    Ok(Err(err)) => {
+                        return Err(anyhow::Error::new(SessionPoisoned(format!(
+                            "turn/start on rotated thread ended ambiguously ({err}); session poisoned"
+                        ))));
+                    }
+                    Err(_) => {
+                        return Err(anyhow::Error::new(SessionPoisoned(format!(
+                            "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; session poisoned instead of retried"
+                        ))));
+                    }
                 }
             }
         };
@@ -1446,6 +1500,19 @@ impl PersistentSession {
                     }
                 }
                 InProcessServerEvent::LegacyNotification(notif) => {
+                    // Events from other threads on this connection must not
+                    // contaminate this turn (reply text, token accounting):
+                    // legacy notifications carry the conversation/thread id
+                    // at the params top level, so scope on it when present
+                    // (ctox#21 re-review).
+                    if let Some(foreign) = legacy_notification_thread_id(&notif)
+                        .filter(|event_thread| *event_thread != thread_id)
+                    {
+                        eprintln!(
+                            "[ctox direct-session] ignoring event for foreign thread {foreign} while waiting on {thread_id}"
+                        );
+                        continue;
+                    }
                     if let Some(msg) = try_extract_event_msg(&notif) {
                         ctx_log.observe(&msg);
                         if let (Some(provider), EventMsg::TokenCount(tc)) = (api_provider, &msg) {
@@ -2001,6 +2068,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_notification_thread_scoping_extracts_ids() {
+        let scoped = JSONRPCNotification {
+            method: "codex/event/agent_message".to_string(),
+            params: Some(serde_json::json!({
+                "conversationId": "thread-a",
+                "msg": {"type": "agent_message", "message": "hi"}
+            })),
+        };
+        assert_eq!(legacy_notification_thread_id(&scoped), Some("thread-a"));
+
+        let unscoped = JSONRPCNotification {
+            method: "codex/event/agent_message".to_string(),
+            params: Some(serde_json::json!({
+                "msg": {"type": "agent_message", "message": "hi"}
+            })),
+        };
+        assert_eq!(legacy_notification_thread_id(&unscoped), None);
+
+        let thread_id_key = JSONRPCNotification {
+            method: "codex/event/task_complete".to_string(),
+            params: Some(serde_json::json!({"threadId": "thread-b"})),
+        };
+        assert_eq!(
+            legacy_notification_thread_id(&thread_id_key),
+            Some("thread-b")
+        );
+    }
+
+    #[test]
     fn midtask_compact_timeout_uses_larger_budget() {
         assert_eq!(
             direct_session_midtask_compact_timeout(None),
@@ -2202,6 +2298,17 @@ async fn start_session_thread(
     }
     eprintln!("[ctox direct-session] thread started: {thread_id}");
     Ok(thread_id)
+}
+
+/// Conversation/thread id a legacy notification is scoped to, when present.
+/// Legacy `codex/event/*` notifications place it at the params top level as
+/// `conversationId` (some producers use `threadId`).
+fn legacy_notification_thread_id(notif: &JSONRPCNotification) -> Option<&str> {
+    let obj = notif.params.as_ref()?.as_object()?;
+    obj.get("conversationId")
+        .or_else(|| obj.get("threadId"))
+        .or_else(|| obj.get("thread_id"))
+        .and_then(|value| value.as_str())
 }
 
 fn try_extract_event_msg(notif: &JSONRPCNotification) -> Option<EventMsg> {
