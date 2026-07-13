@@ -1,5 +1,6 @@
 import * as Lexical from '../../vendor/lexical.mjs';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { sanitizeRichHtml } from '../../shared/sanitize-rich-html.js';
 
 const ElementNode = Object.getPrototypeOf(Lexical.HeadingNode);
 
@@ -14,7 +15,7 @@ class CustomHTMLNode extends ElementNode {
 
   constructor(html = '', tagName = 'div', className = '', key) {
     super(key);
-    this.__html = html;
+    this.__html = sanitizeRichHtml(html);
     this.__tagName = tagName;
     this.__className = className;
   }
@@ -1278,6 +1279,7 @@ function processContentInput(newHtml) {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
 
+  newHtml = sanitizeRichHtml(newHtml);
   const plainText = getPlainText(newHtml);
 
   let newTitle;
