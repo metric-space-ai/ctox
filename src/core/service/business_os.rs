@@ -2864,6 +2864,68 @@ fn run_business_os_web_stack_auth_assist_login(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
+    run_business_os_web_stack_auth_assist_login_with_continuation(root, args, None)
+}
+
+pub(crate) fn run_business_os_web_stack_authenticated_automation(
+    root: &Path,
+    args: &[String],
+    continuation_source: &str,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(
+        !continuation_source.trim().is_empty(),
+        "authenticated-automation requires a non-empty browser automation source"
+    );
+    let combined = run_business_os_web_stack_auth_assist_login_with_continuation(
+        root,
+        args,
+        Some(continuation_source),
+    )?;
+    anyhow::ensure!(
+        combined.get("ok").and_then(serde_json::Value::as_bool) == Some(true),
+        "authenticated-automation login gate did not complete successfully"
+    );
+    let mut result = combined
+        .pointer("/automation/result/post_auth_result")
+        .cloned()
+        .context("authenticated-automation did not produce post_auth_result")?;
+    let result_ok = result
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if let Some(object) = result.as_object_mut() {
+        object.insert("ok".to_string(), serde_json::Value::Bool(result_ok));
+        object.entry("status".to_string()).or_insert_with(|| {
+            serde_json::Value::String(if result_ok { "completed" } else { "failed" }.to_string())
+        });
+        object.insert(
+            "session_id".to_string(),
+            combined
+                .get("session_id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        object.insert(
+            "authenticated_login".to_string(),
+            serde_json::json!({
+                "status": combined.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "login_state": combined.get("login_state").cloned().unwrap_or(serde_json::Value::Null),
+                "verify_selector_found": combined
+                    .pointer("/login_result/verify_selector_found")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "redacted": true,
+            }),
+        );
+    }
+    Ok(result)
+}
+
+fn run_business_os_web_stack_auth_assist_login_with_continuation(
+    root: &Path,
+    args: &[String],
+    continuation_source: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
     let source_id = flag_value(args, "--source-id")
         .context("usage: ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]")?;
     let target_url_override = flag_value(args, "--target-url");
@@ -2938,7 +3000,7 @@ fn run_business_os_web_stack_auth_assist_login(
         !secret_value.trim().is_empty(),
         "credential_ref {credential_ref} resolved to an empty secret"
     );
-    let automation_source = build_web_stack_auth_assist_login_source(
+    let automation_source = build_web_stack_auth_assist_login_source_with_continuation(
         &target_url,
         &source_id,
         login_hint.as_deref(),
@@ -2946,6 +3008,7 @@ fn run_business_os_web_stack_auth_assist_login(
         &secret_value,
         credential_selector.trim(),
         verify_selector.trim(),
+        continuation_source,
     )?;
     let mut automation = crate::business_os::run_browser_session_automation(
         root,
@@ -3331,6 +3394,13 @@ pub(crate) fn run_business_os_web_stack_cli_json(
         Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
         Some("auth-assist-signup") => run_business_os_web_stack_auth_assist_signup(root, args),
         Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
+        Some("authenticated-automation") => {
+            let mut source = String::new();
+            std::io::stdin()
+                .read_to_string(&mut source)
+                .context("failed to read authenticated-automation source from stdin")?;
+            run_business_os_web_stack_authenticated_automation(root, args, &source)
+        }
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
                 "usage: ctox business-os web-stack auth-assist-status --session-id <id>",
@@ -3475,6 +3545,14 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
         Some("auth-assist-login") => {
             let login = run_business_os_web_stack_auth_assist_login(root, args)?;
             print_json(&login)
+        }
+        Some("authenticated-automation") => {
+            let mut source = String::new();
+            std::io::stdin()
+                .read_to_string(&mut source)
+                .context("failed to read authenticated-automation source from stdin")?;
+            let output = run_business_os_web_stack_authenticated_automation(root, args, &source)?;
+            print_json(&output)
         }
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
@@ -4596,7 +4674,8 @@ fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef
     })
 }
 
-fn build_web_stack_auth_assist_login_source(
+#[allow(clippy::too_many_arguments)]
+fn build_web_stack_auth_assist_login_source_with_continuation(
     target_url: &str,
     source_id: &str,
     login_hint: Option<&str>,
@@ -4604,6 +4683,7 @@ fn build_web_stack_auth_assist_login_source(
     secret_value: &str,
     credential_selector: &str,
     verify_selector: &str,
+    continuation_source: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut source = format!(
         "// ctox-browser: timeout_ms=45000\nconst targetUrl = {};\nconst sourceId = {};\nconst loginHint = {};\nconst credentialRef = {};\nconst credentialValue = {};\nconst configuredCredentialSelector = {};\nconst configuredVerifySelector = {};\n",
@@ -4981,7 +5061,7 @@ const reason = ok
       : verifySelectorMissing
         ? "verify-selector-not-found"
         : "login-signals-insufficient";
-return {
+const loginOutcome = {
   ok,
   reason,
   login_state: loginState,
@@ -5010,6 +5090,15 @@ return {
 };
 "#,
     );
+    if let Some(continuation_source) = continuation_source {
+        source.push_str(
+            "\nif (!loginOutcome.ok) return loginOutcome;\nconst postAuthResult = await (async () => {\n",
+        );
+        source.push_str(continuation_source);
+        source.push_str("\n})();\nreturn { ...loginOutcome, post_auth_result: postAuthResult };\n");
+    } else {
+        source.push_str("\nreturn loginOutcome;\n");
+    }
     Ok(source)
 }
 
@@ -5701,7 +5790,7 @@ mod tests {
 
     #[test]
     fn web_stack_auth_assist_login_source_classifies_login_states() -> anyhow::Result<()> {
-        let source = build_web_stack_auth_assist_login_source(
+        let source = build_web_stack_auth_assist_login_source_with_continuation(
             "https://example.test/login",
             "example-source",
             Some("user@example.test"),
@@ -5709,6 +5798,7 @@ mod tests {
             "secret-value",
             "input[name='password']",
             "[data-testid='account-home']",
+            None,
         )?;
 
         assert!(source.contains("login_state"));
@@ -5725,6 +5815,29 @@ mod tests {
         assert!(source.contains("credential_url_changed"));
         assert!(source.contains("verifyLocator.waitFor({ state: \"visible\", timeout: 10000 })"));
         assert!(source.contains("afterSignals = await pageSignals()"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_authenticated_automation_runs_continuation_after_login_gate() -> anyhow::Result<()>
+    {
+        let source = build_web_stack_auth_assist_login_source_with_continuation(
+            "https://example.test/login",
+            "example-source",
+            Some("user@example.test"),
+            "ctox-secret://appsec/user-a",
+            "secret-value",
+            "input[name='password']",
+            "[data-testid='account-home']",
+            Some("return { ok: true, task_type: 'same-origin-api-map' };"),
+        )?;
+
+        assert!(source.contains("const loginOutcome ="));
+        assert!(source.contains("if (!loginOutcome.ok) return loginOutcome"));
+        assert!(source.contains("const postAuthResult = await (async () =>"));
+        assert!(source.contains("task_type: 'same-origin-api-map'"));
+        assert!(source.contains("post_auth_result: postAuthResult"));
 
         Ok(())
     }

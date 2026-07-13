@@ -2601,7 +2601,9 @@ fn execute_appsec_ctox_cli_command(
             run_projected_appsec_command(root, &appsec_args)
         }
         Some("web") => execute_appsec_web_cli_command(root, state_dir, command, &argv[2..]),
-        Some("business-os") => execute_appsec_business_os_cli_command(root, &argv[2..]),
+        Some("business-os") => {
+            execute_appsec_business_os_cli_command(root, state_dir, command, &argv[2..])
+        }
         Some(other) => anyhow::bail!("unsupported CTOX CLI domain `{other}` for AppSec worker"),
         None => anyhow::bail!("missing CTOX CLI domain"),
     }
@@ -2880,9 +2882,22 @@ fn appsec_authz_string_array(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn execute_appsec_business_os_cli_command(root: &Path, args: &[String]) -> anyhow::Result<Value> {
+fn execute_appsec_business_os_cli_command(
+    root: &Path,
+    state_dir: &Path,
+    command: &Value,
+    args: &[String],
+) -> anyhow::Result<Value> {
     if args.first().map(String::as_str) != Some("web-stack") {
         anyhow::bail!("AppSec worker only allows ctox business-os web-stack commands");
+    }
+    if args.get(1).map(String::as_str) == Some("authenticated-automation") {
+        let source = browser_automation_source_from_stage_command(state_dir, command)?;
+        return crate::service::business_os::run_business_os_web_stack_authenticated_automation(
+            root,
+            &args[1..],
+            &source,
+        );
     }
     crate::service::business_os::run_business_os_web_stack_cli_json(root, &args[1..])
 }
@@ -3060,6 +3075,9 @@ fn appsec_redacted_command_artifact(
     output: &Value,
     artifact_path: &Path,
 ) -> Value {
+    let ok = appsec_artifact_bool(output, "ok").unwrap_or(true);
+    let status = appsec_artifact_string(output, "status")
+        .unwrap_or_else(|| if ok { "completed" } else { "failed" }.to_string());
     let result = output
         .get("result")
         .cloned()
@@ -3073,6 +3091,8 @@ fn appsec_redacted_command_artifact(
         "owner_subject": command.get("owner_subject").cloned().unwrap_or(Value::Null),
         "actor_subject": command.get("actor_subject").cloned().unwrap_or(Value::Null),
         "artifact": artifact_path.to_string_lossy(),
+        "ok": ok,
+        "status": status,
         "result": result,
         "secret_policy": "redacted: no cookies, tokens, passwords, screenshots, raw browser streams, or storage state",
     });
