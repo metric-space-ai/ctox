@@ -527,6 +527,14 @@ const DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS: u64 = 3600;
 const CONTINUITY_REFRESH_FAULT_FILE_ENV_KEY: &str = "CTOX_CONTINUITY_REFRESH_FAULT_FILE";
 const CONTINUITY_REFRESH_TIMEOUT_ENV_KEY: &str = "CTOX_CONTINUITY_REFRESH_TIMEOUT_SECS";
 
+fn default_chat_turn_timeout_secs(source_is_local: bool, api_provider_resolved: bool) -> u64 {
+    if !source_is_local || api_provider_resolved {
+        DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
+    } else {
+        DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalModelProviderSpec {
     pub(crate) provider_id: &'static str,
@@ -748,11 +756,16 @@ where
         }
     }
     emit("session-ready");
-    let default_turn_timeout_secs = if runtime.state.source.is_local() {
-        DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS
-    } else {
-        DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
-    };
+    let selected_model = runtime.state.active_or_selected_model().unwrap_or_default();
+    let api_provider_resolved =
+        resolve_api_model_provider_spec(selected_model, &operator_settings, Some(&runtime))
+            .is_some();
+    // A local gateway/process can still proxy a remote provider (for example
+    // Pi driving MiniMax). Timeout semantics follow the resolved provider
+    // boundary, not merely the process location, so a hung remote API call
+    // cannot inherit the one-hour local-inference budget.
+    let default_turn_timeout_secs =
+        default_chat_turn_timeout_secs(runtime.state.source.is_local(), api_provider_resolved);
     let configured_turn_timeout_secs = read_usize_setting(
         &operator_settings,
         "CTOX_CHAT_TURN_TIMEOUT_SECS",
@@ -2034,6 +2047,22 @@ mod tests {
         assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
         assert_eq!(spec.wire_api, "responses");
         assert!(!spec.requires_full_responses_history);
+    }
+
+    #[test]
+    fn remote_api_provider_uses_remote_timeout_even_behind_local_process() {
+        assert_eq!(
+            default_chat_turn_timeout_secs(true, true),
+            DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
+        );
+        assert_eq!(
+            default_chat_turn_timeout_secs(true, false),
+            DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS
+        );
+        assert_eq!(
+            default_chat_turn_timeout_secs(false, false),
+            DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
+        );
     }
 
     #[test]

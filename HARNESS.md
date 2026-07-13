@@ -143,6 +143,12 @@ Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
 client and resumes the durable thread with the new contract.
 
+Turn timeout defaults follow the resolved provider boundary. Native local
+inference keeps the long local budget; a local proxy/process that resolves to
+a remote API provider (for example Pi driving MiniMax) uses the 180-second
+remote budget. Process locality alone must not grant a remote API call the
+one-hour local-inference timeout.
+
 ## Inner Agent Turn
 
 `run_chat_turn_with_events_extended_guarded(...)` owns the inner turn:
