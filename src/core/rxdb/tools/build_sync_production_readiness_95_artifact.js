@@ -349,7 +349,19 @@ function gitDirty() {
 }
 
 function sha256File(filePath) {
-  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  const descriptor = fs.openSync(filePath, 'r');
+  try {
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+    while (true) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return hash.digest('hex');
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function flagValue(flag) {

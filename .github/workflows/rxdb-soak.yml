@@ -75,7 +75,7 @@ jobs:
           npm --prefix /tmp/ctox-pw-smoke exec playwright install --with-deps chromium
 
       - name: Build CTOX smoke binary
-        run: cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+        run: cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
 
       - name: Run CTOX Documents restart gate
         env:

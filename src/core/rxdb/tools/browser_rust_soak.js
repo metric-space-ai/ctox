@@ -102,7 +102,7 @@ if (requiredModeList.length && !failOnRetry) {
   failConfiguration('SOAK_FAIL_ON_RETRY=1 is required when SOAK_REQUIRED_MODES is set');
 }
 if (requiredModeList.length && runSummary.source.dirty) {
-  failConfiguration('a dirty working tree cannot qualify a release soak');
+  failConfiguration(`a dirty working tree cannot qualify a release soak: ${runSummary.source.dirtyPaths.join(', ')}`);
 }
 const maxPortOffset = (cycles - 1) * portStride;
 if (businessPortBase + maxPortOffset > 65535) {
@@ -365,6 +365,7 @@ function sourceEvidence() {
   return {
     commit: git(['rev-parse', 'HEAD'], 'unknown'),
     dirty: Boolean(status),
+    dirtyPaths: status ? status.split(/\r?\n/).filter(Boolean) : [],
     artifactHashes: {
       browserBundleSha256: sha256File(path.join(root, 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs')),
       smokeBinaryPath,
@@ -374,6 +375,20 @@ function sourceEvidence() {
 }
 
 function sha256File(filePath) {
-  try { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'); }
-  catch { return null; }
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, 'r');
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+    while (true) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return hash.digest('hex');
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
 }
