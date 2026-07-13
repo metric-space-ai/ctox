@@ -17592,6 +17592,10 @@ fn persist_terminal_business_chat_command_projection(
     accepted: &Value,
 ) -> anyhow::Result<()> {
     let completed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status='completed', observed_at_ms=?2 WHERE command_id=?1",
+        params![command_id, completed_at_ms],
+    )?;
     let result = accepted.get("result").cloned().unwrap_or(Value::Null);
     let reply_text = accepted
         .get("outbound_text")
@@ -17982,10 +17986,6 @@ fn process_business_chat_reply(
     reply_text: &str,
 ) -> anyhow::Result<CommandAccepted> {
     let completed_at_ms = now_ms() as i64;
-    conn.execute(
-        "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
-        params![command_id, completed_at_ms],
-    )?;
 
     let mut terminal_queue_task = queue_task.cloned();
     if let Some(task) = queue_task {
@@ -48757,6 +48757,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Chat-Antwort wurde gespeichert.")
         );
+        let command_status: String = open_store(root)?.query_row(
+            "SELECT status FROM business_commands WHERE command_id='cmd_completed_queue_chat'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(command_status, "completed");
 
         let rxdb_command =
             load_rxdb_collection_record(root, "business_commands", "cmd_completed_queue_chat")?
