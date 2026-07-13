@@ -792,6 +792,14 @@ function prepareBusinessOsDynamicOpenModuleFixture(fixture) {
 
   const moduleRoot = path.join(installedModulesRoot, id);
   fs.mkdirSync(moduleRoot, { recursive: true });
+  // Keep the reload fixture server-authoritative. The native Business OS
+  // catalog projection discovers runtime apps from module.json; assets alone
+  // only make a transient browser-side catalog insertion appear to work until
+  // the next native projection or daemon restart replaces it.
+  fs.writeFileSync(path.join(moduleRoot, 'module.json'), `${JSON.stringify({
+    ...module,
+    entry: `installed-modules/${id}/index.js`,
+  }, null, 2)}\n`);
   fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-phase13-open-module-template>Phase 13 openModule guarded DB fixture</section>\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');

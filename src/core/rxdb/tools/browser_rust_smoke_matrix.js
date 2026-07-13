@@ -958,6 +958,10 @@ function runSmokeMatrixSelfTest() {
   if (!runnerSource.includes("&& !['business-os-app-audience-ui', 'business-os-dynamic-apps-ui'].includes(smokeMode)")) {
     throw new Error('App audience and dynamic-app policy smokes must remain independent of deferred file replication');
   }
+  if (!runnerSource.includes("fs.writeFileSync(path.join(moduleRoot, 'module.json')")
+      || !runnerSource.includes('Keep the reload fixture server-authoritative')) {
+    throw new Error('Dynamic-app reload fixture must remain a native module-catalog source, not a browser-only insert');
+  }
   if (!runnerSource.includes('const nativePeerOpenTimeoutMs = businessOsAppReleaseUiSmokeMode ? 240000 : 60000;')
       || !runnerSource.includes("waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs)")) {
     throw new Error('App release smoke must retain its cold-start native-peer deadline without retries');

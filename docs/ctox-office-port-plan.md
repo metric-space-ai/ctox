@@ -1,6 +1,6 @@
 # CTOX Documents + CTOX Spreadsheets: Portplan und Fortschritt
 
-Stand: 2026-07-13
+Stand: 2026-07-14
 
 Dieses Dokument ist das zentrale, menschenlesbare Arbeits- und
 Fortschrittsprotokoll fuer die beiden CTOX-Forks **CTOX Documents** und
@@ -88,6 +88,23 @@ Aktueller Stand:
   Der reale Zero-Retry-Dynamic-Apps-Lauf bestand danach in 69 Sekunden mit
   null Browserwarnungen, null Browserfehlern, null 404s und null
   fehlgeschlagenen Requests.
+- Der nachfolgende Production-Readiness-Lauf `29289992464` bestaetigte sowohl
+  die entkoppelte Peer-Collection als auch die vollstaendigen Fixture-Assets
+  und fand danach eine echte Persistenz-Race im selben Dynamic-Apps-Gate:
+  `phase13-open-module-guard` besass zwar Runtime-Assets, aber kein
+  `module.json` und war deshalb nur durch einen zeitkritischen Browser-Upsert,
+  nicht durch die native CTOX-Katalogprojektion bekannt. Der Fixture-Port
+  schreibt jetzt vor dem Daemonstart ein vollstaendiges installiertes
+  Runtime-Manifest. Damit ist das Modul eine serverautoritative Quelle der
+  nativen `business_module_catalog`-Projektion und ueberlebt Schema-Neuaufbau,
+  Reload und Daemon-Neustart unabhaengig von Browser-Replication-Timing. Der
+  Matrix-Self-Test blockiert eine Rueckkehr zu einem rein browserseitigen
+  Fixture. Der reale lokale Zero-Retry-Lauf bestand danach den vollstaendigen
+  Dynamic-App-Flow inklusive Schema-Neuaufbau, Reload, OpenModule-Guard und
+  nativer Replikation in 69 Sekunden bei null Browserwarnungen, null
+  Browserfehlern, null 404s und null fehlgeschlagenen Requests. Die terminale
+  Remote-Evidenz wird nach dem neuen Kandidatenlauf eingetragen; A10 und der
+  Gesamtstand bleiben bis dahin unveraendert offen.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig
