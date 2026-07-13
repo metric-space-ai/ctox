@@ -414,8 +414,18 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 fn validate_xml(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let text = std::str::from_utf8(bytes)
         .with_context(|| format!("OOXML XML part is not UTF-8: {path}"))?;
+    ensure!(
+        !contains_doctype_declaration(text),
+        "OOXML XML part contains a forbidden DOCTYPE declaration: {path}"
+    );
     roxmltree::Document::parse(text).with_context(|| format!("parse OOXML XML part {path}"))?;
     Ok(())
+}
+
+fn contains_doctype_declaration(text: &str) -> bool {
+    text.as_bytes()
+        .windows(b"<!DOCTYPE".len())
+        .any(|window| window.eq_ignore_ascii_case(b"<!DOCTYPE"))
 }
 
 fn primary_text_for(kind: OfficeKind, bytes: &[u8]) -> anyhow::Result<String> {
@@ -509,6 +519,22 @@ mod tests {
         .unwrap();
         assert_eq!(exported.bytes, source);
         assert_eq!(exported.sha256, sha256_hex(&source));
+    }
+
+    #[test]
+    fn inspect_rejects_external_entity_declarations() {
+        let payload = br#"<?xml version="1.0"?>
+<!DOCTYPE w:document [<!ENTITY xxe SYSTEM "file:///tmp/ctox-xxe-sentinel">]>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>&xxe;</w:t></w:r></w:p></w:body>
+</w:document>"#;
+        let package = docx(Some(("customXml/item1.xml", payload)));
+
+        let error = inspect(OfficeKind::Document, &package).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("forbidden DOCTYPE declaration: customXml/item1.xml"));
     }
 
     #[test]
