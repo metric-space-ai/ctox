@@ -394,10 +394,7 @@ pub(crate) async fn run_compaction_controller(
 
     let output_result = if deterministic_fallback {
         fallback_output_stage(&task_hint, &blocks)
-    } else if story_blocks.is_empty()
-        && anchor_blocks.is_empty()
-        && focus_blocks.is_empty()
-    {
+    } else if story_blocks.is_empty() && anchor_blocks.is_empty() && focus_blocks.is_empty() {
         OutputStageResponse {
             _story_title: "Continuity Narrative".to_string(),
             story_draft: String::new(),

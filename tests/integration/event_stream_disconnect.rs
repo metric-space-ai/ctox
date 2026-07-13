@@ -52,8 +52,8 @@ impl MockLocalRuntime {
             .expect("create sockets dir");
         let log_path = root.path("mock.log");
         let delay_path = root.path("mock-delay");
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/mock_local_responses.py");
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_local_responses.py");
         let log = std::fs::File::create(&log_path).expect("create mock log");
         let child = std::process::Command::new("python3")
             .arg(fixture)
