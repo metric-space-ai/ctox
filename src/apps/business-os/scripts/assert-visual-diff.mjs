@@ -7,7 +7,17 @@ import { chromium } from 'playwright';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../..');
 const args = parseArgs(process.argv.slice(2));
-const baselineDir = path.resolve(args.baseline || path.join(repoRoot, 'src/apps/business-os/qa/design-matrix-baseline'));
+const baselinePlatform = String(
+  args.platform || process.env.BUSINESS_OS_VISUAL_BASELINE_PLATFORM || process.platform,
+).trim();
+if (!/^[a-z0-9_-]+$/i.test(baselinePlatform)) {
+  throw new Error(`Invalid visual baseline platform: ${JSON.stringify(baselinePlatform)}`);
+}
+const baselineDir = path.resolve(args.baseline || path.join(
+  repoRoot,
+  'src/apps/business-os/qa/design-matrix-baseline',
+  baselinePlatform,
+));
 const actualDir = path.resolve(args.actual || path.join(repoRoot, 'output/playwright/business-os-design-matrix'));
 const outputDir = path.resolve(args.output || path.join(repoRoot, 'output/playwright/business-os-design-diff'));
 const pixelThreshold = parseRatio(args['pixel-threshold'] || '0.08', '--pixel-threshold');
@@ -126,6 +136,7 @@ try {
 const result = {
   schema: 'ctox.business_os.visual_diff.v1',
   ok: comparisons.every((entry) => entry.ok),
+  baselinePlatform,
   baselineDir,
   actualDir,
   outputDir,
