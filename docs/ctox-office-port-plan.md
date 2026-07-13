@@ -102,9 +102,19 @@ Aktueller Stand:
   Fixture. Der reale lokale Zero-Retry-Lauf bestand danach den vollstaendigen
   Dynamic-App-Flow inklusive Schema-Neuaufbau, Reload, OpenModule-Guard und
   nativer Replikation in 69 Sekunden bei null Browserwarnungen, null
-  Browserfehlern, null 404s und null fehlgeschlagenen Requests. Die terminale
-  Remote-Evidenz wird nach dem neuen Kandidatenlauf eingetragen; A10 und der
-  Gesamtstand bleiben bis dahin unveraendert offen.
+  Browserfehlern, null 404s und null fehlgeschlagenen Requests. Der erste
+  Remote-Folgelauf `29291397896` zeigte jedoch, dass dieser lokale Erfolg noch
+  vom schnelleren Push-Timing profitierte: Das Manifest war vorhanden, der
+  Browser-Katalog-Upsert beim sofortigen Schema-Neuaufbau aber noch nicht im
+  nativen SQLite-Authority-Store lesbar. Der Gate-Flow besitzt deshalb jetzt
+  eine explizite native Commit-Barriere vor dem Reload und prueft denselben
+  Katalogeintrag nach dem Reload erneut. Erst wenn die neu aufgebaute
+  Browser-Datenbank den nativ bestaetigten Datensatz wieder gepullt hat, darf
+  die Fachpruefung ihren Modulzustand erfassen. Die Matrix-Selbstpruefung
+  verlangt Manifest, beide Authority-Barrieren und diese abschliessende
+  Browser-Pull-Barriere gemeinsam. Die terminale
+  Remote-Evidenz wird nach dem korrigierten Kandidatenlauf eingetragen; A10 und
+  der Gesamtstand bleiben bis dahin unveraendert offen.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig

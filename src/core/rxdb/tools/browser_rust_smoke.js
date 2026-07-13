@@ -2280,6 +2280,28 @@ function pollSqliteJson(tableName, id, ms = 30000) {
   throw new Error(`sqlite row not replicated for ${tableName}.${id}`);
 }
 
+function waitForNativeModuleCatalogEntry(moduleId, ms = 30000) {
+  const tableName = 'ctox_business_os__business_module_catalog__v0';
+  const deadline = Date.now() + ms;
+  let lastModules = [];
+  while (Date.now() < deadline) {
+    try {
+      const row = sqlite(`SELECT data FROM ${quoteSqlIdentifier(tableName)} WHERE id='module-catalog' LIMIT 1;`).trim();
+      if (row) {
+        const catalog = JSON.parse(row);
+        lastModules = Array.isArray(catalog.modules)
+          ? catalog.modules.map((module) => module?.id).filter(Boolean)
+          : [];
+        if (lastModules.includes(moduleId)) return catalog;
+      }
+    } catch {
+      // Native startup/reprojection may hold the SQLite write lock briefly.
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  throw new Error(`native module catalog entry missing for ${moduleId}: ${JSON.stringify(lastModules)}`);
+}
+
 function sqliteTableExists(tableName) {
   return sqlite(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='${sqlString(tableName)}';`).trim() === '1';
 }
@@ -6335,6 +6357,10 @@ function ensureCtoxSmokeBinary() {
             await collection.insert(nextCatalog);
           }
         }, dynamicOpenModuleFixture.module);
+        // Do not race the intentional browser database rebuild against the
+        // RxDB/WebRTC push. Reload only after native SQLite can read the exact
+        // catalog entry; this is the commit barrier for the server authority.
+        waitForNativeModuleCatalogEntry(dynamicOpenModuleFixture.module.id, 30000);
       } else if (smokeMode === 'business-os-app-release-ui') {
         await page.evaluate(async () => {
           const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -6357,6 +6383,14 @@ function ensureCtoxSmokeBinary() {
           && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
           && globalThis.CTOX_BUSINESS_OS_STATUS
       ), null, { timeout: smokeHookWaitTimeoutMs });
+      if (smokeMode === 'business-os-dynamic-apps-ui') {
+        waitForNativeModuleCatalogEntry(dynamicOpenModuleFixture.module.id, 30000);
+        await page.waitForFunction((moduleId) => {
+          const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+          return Array.isArray(state?.modules)
+            && state.modules.some((module) => module?.id === moduleId);
+        }, dynamicOpenModuleFixture.module.id, { timeout: smokeHookWaitTimeoutMs });
+      }
       const reloadMs = Date.now() - appShellReloadStartedAt;
       if (smokeMode === 'business-os-roles-permissions-ui') {
         outerPhaseTimings.rolesPermissionsReloadMs = reloadMs;
