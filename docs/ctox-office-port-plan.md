@@ -75,6 +75,19 @@ Aktueller Stand:
   lokaler realer Zero-Retry-Lauf bestand danach Publish, Team-Sichtbarkeit,
   Versionsbadge, Data Review, Rollback, redigierte Audits, Reload und
   Storage-Boundary in 106 Sekunden bei jeweils null Browser- und Requestfehlern.
+- Der Production-Readiness-Lauf `29288387363` bestaetigte den korrigierten
+  App-Release-Pfad, fand danach aber dieselbe sachfremde Kopplung im
+  `business-os-dynamic-apps-ui`-Gate: Nach dem absichtlichen Runtime-Schema-
+  Neustart wartete der reine Modul-/Command-Policy-Test auf `desktop_files`,
+  obwohl er keine Datei liest oder schreibt. Dynamic-Apps- und Audience-
+  Policy-Gates starten deshalb keine Desktop-File-Replikation mehr; die
+  eigentlichen Datei-, Chunk-, Documents- und Spreadsheets-Gates bleiben
+  unveraendert verpflichtend. Der Matrix-Self-Test sichert diese Trennung.
+  Vollstaendige lokale Phase-8-Fixture-Assets verhindern zusaetzlich, dass
+  der Lifecycle-Reload synthetische App-Imports oder Icons mit 404 beantwortet.
+  Der reale Zero-Retry-Dynamic-Apps-Lauf bestand danach in 69 Sekunden mit
+  null Browserwarnungen, null Browserfehlern, null 404s und null
+  fehlgeschlagenen Requests.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig

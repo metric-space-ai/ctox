@@ -955,8 +955,8 @@ function runSmokeMatrixSelfTest() {
   if (!runnerUsesSharedModeList || !runnerBlocksUnimplementedModes) {
     throw new Error('Business OS production smoke modes are not wired into browser_rust_smoke.js');
   }
-  if (!runnerSource.includes("&& smokeMode !== 'business-os-app-audience-ui'")) {
-    throw new Error('App audience policy smoke must remain independent of deferred file replication');
+  if (!runnerSource.includes("&& !['business-os-app-audience-ui', 'business-os-dynamic-apps-ui'].includes(smokeMode)")) {
+    throw new Error('App audience and dynamic-app policy smokes must remain independent of deferred file replication');
   }
   if (!runnerSource.includes('const nativePeerOpenTimeoutMs = businessOsAppReleaseUiSmokeMode ? 240000 : 60000;')
       || !runnerSource.includes("waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs)")) {

@@ -104,7 +104,7 @@
     "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "31033e2c7b574e3aadcc9bb07bf11bf6206f17d897bc4d9c9a4db943572b2e0a",
     "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "ab08666e006f89ac70a1e2ad0ef1aa81608f3698b64538c15a581d79533096c7",
     "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "15635199f05ea4b494a2b1e0088f567cda036cbd686ce96364667511b63073fa",
-    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "4d7405913816e160607959097fa10d9f0cea86163baf4fc0375f9c4eea1f59a0",
+    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "fb4bf67d7ed743ad95888518bc33758f7d9ba62b20bd8b220a093556112008da",
     "src/core/rxdb/tools/business_os_production_smoke_registry.js": "ae944b995a6c0505d6f55ac8b7b269394bf60f719c9bbb5878ece9199d83978d",
     "src/core/rxdb/tools/print_sync_production_readiness_95_report.js": "b869981b857b2d7cfd9c13bbdaeab593e8c0727f838a0404befc060152d7bd14",
     "src/core/rxdb/tools/print_sync_production_readiness_95_templates.js": "08cd1bc5ae6b40b067858264503c688ac4b6400964a65d49a65ccd4b12cf4ec2",

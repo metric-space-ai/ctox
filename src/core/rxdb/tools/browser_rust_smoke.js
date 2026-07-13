@@ -866,6 +866,30 @@ function prepareBusinessOsDynamicOpenModuleFixture(fixture) {
   };
 }
 `);
+
+  // The lifecycle portion of this smoke makes these synthetic modules
+  // visible after a shell reload. Give each one complete local assets so the
+  // zero-error browser gate verifies lifecycle behavior without expected
+  // 404s or aborted dynamic imports.
+  for (const phase8Id of [
+    'phase8-private-app',
+    'phase8-team-app',
+    'phase8-invalid-app',
+    'phase8-restricted-app',
+  ]) {
+    const phase8Root = path.join(installedModulesRoot, phase8Id);
+    fs.mkdirSync(phase8Root, { recursive: true });
+    fs.writeFileSync(path.join(phase8Root, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#23665f"/><circle cx="12" cy="12" r="4" fill="#fff"/></svg>\n');
+    fs.writeFileSync(path.join(phase8Root, 'index.js'), `export async function mount(ctx) {
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.phase8LifecycleFixture = ctx.module?.id || '';
+  marker.textContent = 'Phase 8 lifecycle fixture';
+  host.replaceChildren(marker);
+  return () => marker.remove();
+}
+`);
+  }
 }
 
 function prepareBusinessOsAgentScopeModuleFixture(fixture) {
@@ -6519,11 +6543,12 @@ function ensureCtoxSmokeBinary() {
         || materializeSmokeMode
       )
         && !deferInitialFileCollections
-        // Audience policy is evaluated from the module catalog, runtime
-        // status and shell state. Requiring late file-collection negotiation
-        // after its intentional page reload couples this policy gate to an
-        // unrelated data plane and made the zero-retry release matrix flaky.
-        && smokeMode !== 'business-os-app-audience-ui';
+        // Audience and dynamic-app policy are evaluated from the module
+        // catalog, command plane, runtime status and shell state. Neither
+        // flow reads or writes desktop file content. Requiring late file
+        // negotiation after their intentional runtime/page rebuild couples
+        // these policy gates to an unrelated data plane.
+        && !['business-os-app-audience-ui', 'business-os-dynamic-apps-ui'].includes(smokeMode);
       const setupPhaseTimings = {};
 
       let appState = null;
