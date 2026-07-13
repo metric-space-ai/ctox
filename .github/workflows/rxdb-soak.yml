@@ -70,9 +70,10 @@ jobs:
       - name: Install Playwright runtime
         run: |
           mkdir -p /tmp/ctox-pw-smoke
-          npm --prefix /tmp/ctox-pw-smoke init -y
-          npm --prefix /tmp/ctox-pw-smoke install playwright@1.57.0
-          npm --prefix /tmp/ctox-pw-smoke exec playwright install --with-deps chromium
+          cd /tmp/ctox-pw-smoke
+          npm init -y
+          npm install playwright@1.57.0
+          npm exec playwright install --with-deps chromium
 
       - name: Build CTOX smoke binary
         run: cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target

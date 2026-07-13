@@ -8,9 +8,11 @@ const path = require('path');
 const root = path.resolve(__dirname, '../../../..');
 const runnerPath = path.join(__dirname, 'browser_rust_soak.js');
 const workflowPath = path.join(root, '.github/workflows/rxdb-soak.yml');
+const readinessWorkflowPath = path.join(root, '.github/workflows/rxdb-production-readiness.yml');
 
 const runner = fs.readFileSync(runnerPath, 'utf8');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
+const readinessWorkflow = fs.readFileSync(readinessWorkflowPath, 'utf8');
 const {
   businessOsProductionSmokeModes,
 } = require('./business_os_production_smoke_registry');
@@ -54,6 +56,8 @@ assertIncludes(
   'cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target',
   'release soak must build against the committed Cargo.lock',
 );
+assertPlaywrightInstallIsOutsideRepository(workflow, 'soak workflow');
+assertPlaywrightInstallIsOutsideRepository(readinessWorkflow, 'production-readiness workflow');
 assertIncludes(runner, 'dirtyPaths:', 'release soak must report dirty paths when the clean-tree gate fails');
 assertIncludes(runner, 'fs.readSync(', 'release soak must hash large smoke binaries incrementally');
 assertIncludes(workflow, "github.event_name == 'schedule' && '9'", 'nightly soak must run nine cycles');
@@ -173,6 +177,17 @@ function assertAtLeast(label, values, minimum) {
 
 function assertIncludes(haystack, needle, message) {
   if (!haystack.includes(needle)) fail(message);
+}
+
+function assertPlaywrightInstallIsOutsideRepository(source, label) {
+  assertIncludes(
+    source,
+    'mkdir -p /tmp/ctox-pw-smoke\n          cd /tmp/ctox-pw-smoke\n          npm init -y',
+    `${label} must initialize its smoke-only npm project from /tmp`,
+  );
+  if (source.includes('npm --prefix /tmp/ctox-pw-smoke init')) {
+    fail(`${label} must not use npm init --prefix because npm can write package.json in the repository`);
+  }
 }
 
 function fail(message) {
