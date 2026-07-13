@@ -662,9 +662,10 @@ pub struct ServiceStatus {
     pub work_hours: crate::service::working_hours::WorkHoursSnapshot,
     #[serde(default)]
     pub performance: Value,
-    /// True when this snapshot came from the pid/systemd fallback because
-    /// the daemon missed the status-IPC budget: the daemon is alive but
-    /// too busy to answer, and the busy/queue fields are NOT fresh truth.
+    /// True when this snapshot reports `running = true` without a fresh
+    /// status-IPC response — the daemon missed the reply budget, or the
+    /// pid/systemd/launchd fallback inferred liveness after a socket
+    /// failure. Either way the busy/queue fields are NOT fresh truth.
     /// Local-only; never crosses the wire.
     #[serde(skip)]
     pub degraded_probe: bool,

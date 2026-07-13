@@ -2321,7 +2321,9 @@ impl App {
             degraded_probe: false,
         });
         if next.degraded_probe {
-            // The daemon is alive but missed the IPC budget; the fallback's
+            // The daemon looks alive but there is no fresh IPC response
+            // (missed reply budget, or liveness inferred after a socket
+            // failure); the fallback's
             // empty dynamic fields are not fresh truth. Carrying the last
             // observed state forward keeps the completion edge (busy →
             // !busy) from misfiring mid-turn — which would print a false
