@@ -33,6 +33,23 @@ Aktueller Stand:
   (90 % des Gesamtplans). Offen bleibt A10 nur fuer das reale Switch-Release,
   eine nachfolgende stabile Release-Periode und die danach erst erlaubte
   Entfernung der Legacy-Engines.
+- Release-Kandidat `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal
+  vollstaendig reproduziert: 44 Rust-Engine-, 25 native Operations-, 47
+  CTOX-Office-Integrations-, 44 Browser-Office-, 11 Documents-Wrapper- und 10
+  Spreadsheets-Wrapper-Tests sind gruen. Die beiden echten
+  Browser-zu-Rust-Restart-Smokes fuer Documents und Spreadsheets bestanden
+  jeweils in exakt einem Versuch bei sauberem Checkout und ohne Browserfehler.
+- Der erneut gestartete, exakt gepinnte Euro-Office-v9.3.1-Oracle bestaetigte
+  am 2026-07-13 fuer `document.edit-save` und
+  `spreadsheet.sort-filter-tables` den harten Side-by-Side-Gate: beide Seiten
+  `document-ready`, identische iframe-Geometrie und Konfiguration,
+  `web-apps`-/`sdkjs`-Fork-Provenienz sowie Rust-erzeugtes DOCY/XLSY. Der
+  Spreadsheet-Lauf hatte null Consolefehler und null Warnungen. Die lokalen
+  Test-Tabs, Server, der Oracle-Container und die Colima-VM wurden danach
+  beendet.
+- Die vollstaendigen Roundtrip-Aggregatoren wurden am selben Kandidaten erneut
+  ausgefuehrt: DOCX 11 Fixtures/204 Package-Parts und XLSX 11 Fixtures/147
+  Package-Parts sind gruen.
 - Architektur, ESM-Closures, Bridge, native Rust-Engine, Persistenz und Oracle-
   Harness sind fuer die festgelegte DOCX-/XLSX-Business-Paritaetsstufe
   implementiert und durch die unten verlinkten Differential-/Rollout-Gates
