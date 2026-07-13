@@ -4941,10 +4941,13 @@ if (!credentialField) {
 }
 const submit = await clickSubmit(credentialField);
 const credentialSubmitBaseSignals = await pageSignals();
-const afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
+let afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
 let verifyFound = null;
 if (configuredVerifySelector) {
-  verifyFound = await page.locator(configuredVerifySelector).first().isVisible({ timeout: 2500 }).catch(() => false);
+  const verifyLocator = page.locator(configuredVerifySelector).first();
+  await verifyLocator.waitFor({ state: "visible", timeout: 10000 }).catch(() => null);
+  verifyFound = await verifyLocator.isVisible().catch(() => false);
+  afterSignals = await pageSignals();
 }
 const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
 const urlChanged = afterSignals.url !== beforeSignals.url;
@@ -5720,6 +5723,8 @@ mod tests {
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));
+        assert!(source.contains("verifyLocator.waitFor({ state: \"visible\", timeout: 10000 })"));
+        assert!(source.contains("afterSignals = await pageSignals()"));
 
         Ok(())
     }
