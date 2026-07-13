@@ -192,7 +192,9 @@ There are three context-protection mechanisms in the current code:
   structured model output; provider-only schema/format failures fall back to a
   bounded recent narrative plus the unchanged active task. They do not fail or
   replay the Business task. Transport and context-window failures keep their
-  normal retry/terminal behavior.
+  normal retry/terminal behavior. Compaction cannot change the configured
+  provider/model contract; model-tier candidates in its envelope are
+  diagnostics only.
 
 Before every model request, history normalization keeps only the newest marked
 `<ctox_runtime_context ...>` developer section. It does not delete real user

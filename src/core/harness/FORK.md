@@ -41,6 +41,10 @@ bounded recent narrative, keep the durable task as active focus, and decline
 reprioritization. Transport, context-window, and interruption errors remain
 fatal/retryable under their existing policies.
 
+Compaction model tiers are diagnostic only. They never switch the model of an
+already negotiated session: the global model catalog is not evidence that a
+candidate is reachable through the active provider contract.
+
 ## Backport Notes
 
 ### 2026-04 Subagents Backport

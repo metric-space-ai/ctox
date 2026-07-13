@@ -935,7 +935,7 @@ fn progress_score_label(score: u8) -> &'static str {
 fn select_model_routing(
     current_model: &str,
     progress_score: u8,
-    available_models: Vec<String>,
+    _available_models: Vec<String>,
 ) -> ModelRoutingDecision {
     let (tier, candidates): (&'static str, Vec<String>) = match progress_score {
         1 | 2 => (
@@ -964,41 +964,21 @@ fn select_model_routing(
         ),
     };
 
-    let requested_model = if candidates
-        .iter()
-        .any(|candidate| model_slug_matches(current_model, candidate))
-    {
-        current_model.to_string()
-    } else if let Some(available) = candidates.iter().find_map(|candidate| {
-        available_models
-            .iter()
-            .find(|available| model_slug_matches(available, candidate))
-            .cloned()
-    }) {
-        available
-    } else {
-        candidates
-            .first()
-            .cloned()
-            .unwrap_or_else(|| current_model.to_string())
-    };
+    // Compaction is a context operation inside an already negotiated session
+    // contract. The global model catalog does not prove that another model is
+    // reachable through this session's provider (for example, a Pi/MiniMax
+    // session can still see locally installed GPT-OSS presets). Keep tier and
+    // candidates as diagnostics, but never rewrite the live provider/model
+    // contract from compaction.
+    let requested_model = current_model.to_string();
 
     ModelRoutingDecision {
         tier,
         current_model: current_model.to_string(),
         candidate_models: candidates,
-        switch_planned: !model_slug_matches(current_model, &requested_model),
+        switch_planned: false,
         requested_model,
     }
-}
-
-fn model_slug_matches(left: &str, right: &str) -> bool {
-    let left_lower = left.to_ascii_lowercase();
-    let right_lower = right.to_ascii_lowercase();
-    left_lower == right_lower
-        || left_lower.ends_with(&format!("/{right_lower}"))
-        || left_lower.ends_with(&format!(">{right_lower}"))
-        || left_lower.ends_with(&format!(":{right_lower}"))
 }
 
 fn parse_sections(raw_text: &str) -> Vec<(String, String)> {
@@ -1939,12 +1919,15 @@ mod tests {
     }
 
     #[test]
-    fn model_slug_matches_handles_namespaced_suffixes() {
-        assert!(model_slug_matches(
-            "custom_openai>Qwen/Qwen3.5-35B-A3B",
-            "Qwen3.5-35B-A3B"
-        ));
-        assert!(model_slug_matches("openai/gpt-oss-120b", "gpt-oss-120b"));
+    fn select_model_routing_never_crosses_the_session_provider_contract() {
+        let routing = select_model_routing(
+            "MiniMax-M3",
+            2,
+            vec!["gpt-oss-120b".to_string(), "gpt-5.4".to_string()],
+        );
+
+        assert_eq!(routing.requested_model, "MiniMax-M3");
+        assert!(!routing.switch_planned);
     }
 
     #[test]
