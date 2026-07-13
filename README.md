@@ -114,6 +114,9 @@ operation is available at
 - [HARNESS.md](HARNESS.md) — worker lifecycle, persistent session, context,
   review, recovery, subagents, and liveness proof
   model
+- [SECURITY.md](SECURITY.md) — vulnerability reporting, supported versions,
+  security model
+- [CHANGELOG.md](CHANGELOG.md) — release history and versioning policy
 
 ## Development
 
