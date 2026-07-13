@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260713-peer-protocol-status-v1';
+const APP_BUILD = '20260713-data-plane-mount-abort-v1';
 
 ensureShellStylesheets();
 
@@ -3397,6 +3397,11 @@ async function openDesktopApp(appId, options = {}) {
       setTitle: win.setTitle,
     });
   } catch (error) {
+    if (isRecoverableDataPlaneAbort(error)) {
+      console.debug(`[desktop-app:${appId}] mount cancelled during data-plane rebuild:`, error?.message || error);
+      try { win.close?.(); } catch {}
+      return null;
+    }
     console.error(`[desktop-app:${appId}] mount failed:`, error);
     win.container.innerHTML = `<p style="padding:16px;color:var(--danger);font-size:12px;">App-Start fehlgeschlagen: ${escapeHtml(String(error?.message || error))}</p>`;
   }
@@ -3459,6 +3464,11 @@ async function openWindowedModule(mod, options = {}) {
       resizers: windowResizers,
     });
   } catch (error) {
+    if (isRecoverableDataPlaneAbort(error)) {
+      console.debug(`[module-window:${mod.id}] mount cancelled during data-plane rebuild:`, error?.message || error);
+      try { win.close?.(); } catch {}
+      return null;
+    }
     console.error(`[module-window:${mod.id}] mount failed:`, error);
     content.innerHTML = `<p style="padding:16px;color:var(--danger);font-size:12px;">App-Start fehlgeschlagen: ${escapeHtml(String(error?.message || error))}</p>`;
   }

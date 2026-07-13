@@ -33,6 +33,35 @@ Aktueller Stand:
   (90 % des Gesamtplans). Offen bleibt A10 nur fuer das reale Switch-Release,
   eine nachfolgende stabile Release-Periode und die danach erst erlaubte
   Entfernung der Legacy-Engines.
+- Die Release-Kandidatenbasis `4e0b2b43` schloss den zuvor reproduzierbaren
+  `business-os-app-audience-ui`-Fehler: Der reine
+  Audience-/Policy-Smoke ist nicht mehr an die fachfremde spaete
+  Datei-Collection-Renegotiation gekoppelt. Ein realer lokaler Zero-Retry-
+  Browserlauf bestand Reload, Private-/Preview-/Restricted-Sichtbarkeit,
+  Deep-Link-Sperre, Clean Profile und manipulierte Browser-Storage-Werte bei
+  null Browserwarnungen, null Browserfehlern und null fehlgeschlagenen
+  Requests. Main CI [Run 29277806719](https://github.com/metric-space-ai/ctox/actions/runs/29277806719)
+  blieb beim letzten Evidenz-Checkpoint aktiv. Der dreizyklische Release-Soak
+  [Run 29277829908](https://github.com/metric-space-ai/ctox/actions/runs/29277829908)
+  bestaetigte außerdem beide echten CTOX-Documents-/CTOX-Spreadsheets-
+  Restart-Gates ohne Retry und passierten den Clean-Tree-Guard. Production
+  Readiness [Run 29277831739](https://github.com/metric-space-ai/ctox/actions/runs/29277831739)
+  lief ueber den Audience-Gate hinaus und fand danach im
+  `browser-lifecycle-ui`-Modus einen separaten Shell-Fehler: Ein waehrend des
+  absichtlichen Datenbank-Neuaufbaus gestarteter Modul-Mount meldete den
+  erwartbaren `IDBDatabase ... closing`-Abbruch als Browserfehler. Der
+  Produktpfad behandelt einen solchen Desktop-/Modul-Mount jetzt als
+  recoverable Data-Plane-Abbruch und schliesst das unvollstaendige Fenster.
+  Ein realer lokaler Zero-Retry-Lifecycle-Lauf akzeptierte danach alle sieben
+  Browserbefehle, endete fuer Session, Runtime und Tab auf `stopped` und hatte
+  null Browserwarnungen, null Browserfehler, null 404s sowie null
+  fehlgeschlagene Requests. Terminale CI-/Soak-/Readiness-Evidenz fuer den
+  daraus entstehenden Folgekandidaten wird erst nach dessen Abschluss
+  eingetragen.
+- Die automatisierbare Security-/Privacy-Provenienz ist gegen den aktuellen
+  Readiness-/Release-Quellstand neu gehasht und validiert. Alle elf
+  menschlichen Kontrollpunkte, Reviewer und Datum bleiben bewusst
+  `pending-signoff`; die Aktualisierung ist keine vorweggenommene Freigabe.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig
