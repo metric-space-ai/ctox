@@ -226,6 +226,17 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         respond_options(request)?;
         return Ok(());
     }
+    if rejects_cross_origin_browser_mutation(
+        &method,
+        path,
+        business_os_session_cookie_value(&request).as_deref(),
+        header_value(&request, "Origin").as_deref(),
+        header_value(&request, "Host").as_deref(),
+        header_value(&request, "X-Forwarded-Proto").as_deref(),
+    ) {
+        respond_status(request, 403, "cross-origin session mutation rejected")?;
+        return Ok(());
+    }
     // RxDB/WebRTC-only data plane: Business OS HTTP data APIs stay hard-disabled
     // except for explicit control-plane endpoints such as ChatGPT subscription
     // auth, which cannot depend on a healthy browser-to-native peer before the
@@ -1703,6 +1714,47 @@ fn business_os_session_cookie_value(request: &Request) -> Option<String> {
     })
 }
 
+fn rejects_cross_origin_browser_mutation(
+    method: &Method,
+    path: &str,
+    session_cookie: Option<&str>,
+    origin: Option<&str>,
+    host: Option<&str>,
+    forwarded_proto: Option<&str>,
+) -> bool {
+    let mutation = matches!(
+        method,
+        &Method::Post | &Method::Put | &Method::Patch | &Method::Delete
+    );
+    if !mutation || (path != "/login" && session_cookie.is_none()) {
+        return false;
+    }
+    let Some(origin) = origin.map(str::trim) else {
+        return false;
+    };
+    if origin.eq_ignore_ascii_case("null") {
+        return true;
+    }
+    let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let scheme = forwarded_proto
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| value.eq_ignore_ascii_case("http") || value.eq_ignore_ascii_case("https"))
+        .unwrap_or("http");
+    let Ok(target) = Url::parse(&format!("{scheme}://{host}")) else {
+        return true;
+    };
+    let Ok(source) = Url::parse(origin) else {
+        return true;
+    };
+    !(source.scheme().eq_ignore_ascii_case(target.scheme())
+        && source.host_str().map(str::to_ascii_lowercase)
+            == target.host_str().map(str::to_ascii_lowercase)
+        && source.port_or_known_default() == target.port_or_known_default())
+}
+
 /// Decide whether the session cookie must carry the `Secure` attribute. It is
 /// set whenever the request is not plain loopback HTTP — i.e. it arrived over
 /// HTTPS (directly or via a terminating proxy that sets `X-Forwarded-Proto`) or
@@ -3129,6 +3181,76 @@ mod tests {
         assert!(!host_header_allows_local_dev_session("192.168.1.10:8765"));
         assert!(!host_header_allows_local_dev_session("[2001:db8::1]:8765"));
         assert!(!host_header_allows_local_dev_session(""));
+    }
+
+    #[test]
+    fn cookie_authenticated_mutations_require_same_origin() {
+        let cookie = Some("opaque-session");
+        assert!(!rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/api/business-os/users",
+            cookie,
+            Some("http://127.0.0.1:8765"),
+            Some("127.0.0.1:8765"),
+            None,
+        ));
+        assert!(rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/api/business-os/users",
+            cookie,
+            Some("http://127.0.0.1:18765"),
+            Some("127.0.0.1:8765"),
+            None,
+        ));
+        assert!(rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/api/business-os/users",
+            cookie,
+            Some("https://attacker.ctox.dev"),
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
+        assert!(rejects_cross_origin_browser_mutation(
+            &Method::Delete,
+            "/api/business-os/modules/delete",
+            cookie,
+            Some("null"),
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
+
+        assert!(!rejects_cross_origin_browser_mutation(
+            &Method::Get,
+            "/api/business-os/users",
+            cookie,
+            Some("https://attacker.ctox.dev"),
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
+        assert!(!rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/api/business-os/users",
+            None,
+            Some("https://attacker.ctox.dev"),
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
+        assert!(rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/login",
+            None,
+            Some("https://attacker.ctox.dev"),
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
+        assert!(!rejects_cross_origin_browser_mutation(
+            &Method::Post,
+            "/login",
+            None,
+            None,
+            Some("tenant.ctox.dev"),
+            Some("https"),
+        ));
     }
 
     #[test]
