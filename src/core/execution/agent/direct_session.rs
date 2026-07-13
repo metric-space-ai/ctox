@@ -58,7 +58,18 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS: u64 = 5;
 const DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS: u64 = 90;
-const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
+// Interrupt delivery is load-bearing for session health: if the interrupt
+// never lands, the server-side turn keeps running after the caller bailed
+// and the durable thread accumulates a dangling active turn (ctox#21). The
+// previous 2s cap regularly expired while the event pipeline was catching
+// up; the drain-while-interrupting loop below plus this larger cap make the
+// interrupt reliable.
+const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 10;
+// turn/start loads the durable thread rollout before submitting input, so it
+// gets a more generous bound than ordinary control requests — but it must be
+// bounded: an unbounded await here hangs the whole prompt worker when the
+// session runtime is wedged (ctox#21).
+const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 30;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
@@ -1285,13 +1296,21 @@ impl PersistentSession {
             output_schema: None,
             collaboration_mode: None,
         };
-        let turn_resp: TurnStartResponse = match client
-            .request_typed(ClientRequest::TurnStart {
+        let turn_start_result: Result<TurnStartResponse> = match tokio::time::timeout(
+            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+            client.request_typed(ClientRequest::TurnStart {
                 request_id: seq.next(),
                 params: turn_start_params(&thread_id),
-            })
-            .await
+            }),
+        )
+        .await
         {
+            Ok(result) => result.map_err(|err| anyhow::anyhow!("{err}")),
+            Err(_) => Err(anyhow::anyhow!(
+                "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
+            )),
+        };
+        let turn_resp: TurnStartResponse = match turn_start_result {
             Ok(resp) => resp,
             Err(err) => {
                 eprintln!(
@@ -1315,13 +1334,20 @@ impl PersistentSession {
                 .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
                 eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
                 *session_thread_id = rotated_thread_id.clone();
-                client
-                    .request_typed(ClientRequest::TurnStart {
+                match tokio::time::timeout(
+                    Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+                    client.request_typed(ClientRequest::TurnStart {
                         request_id: seq.next(),
                         params: turn_start_params(&rotated_thread_id),
-                    })
-                    .await
-                    .map_err(|err| anyhow::anyhow!("turn/start: {err}"))?
+                    }),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(|err| anyhow::anyhow!("turn/start: {err}"))?,
+                    Err(_) => anyhow::bail!(
+                        "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
+                    ),
+                }
             }
         };
         let thread_id = session_thread_id.clone();
@@ -1340,6 +1366,12 @@ impl PersistentSession {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
+                        // Interrupt the server-side turn before bailing, and
+                        // KEEP DRAINING events while the interrupt request is
+                        // in flight. A paused consumer is exactly what lets
+                        // the event pipeline back up until control requests
+                        // can no longer be processed; awaiting the interrupt
+                        // without draining reintroduces that wedge (ctox#21).
                         let interrupt_req = ClientRequest::TurnInterrupt {
                             request_id: seq.next(),
                             params: TurnInterruptParams {
@@ -1347,10 +1379,35 @@ impl PersistentSession {
                                 turn_id: turn_id.to_string(),
                             },
                         };
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS),
-                            client.request_typed::<TurnInterruptResponse>(interrupt_req),
-                        ).await;
+                        let request_handle = client.request_handle();
+                        let interrupt = request_handle
+                            .request_typed::<TurnInterruptResponse>(interrupt_req);
+                        tokio::pin!(interrupt);
+                        let interrupt_deadline = tokio::time::Instant::now()
+                            + Duration::from_secs(DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS);
+                        loop {
+                            tokio::select! {
+                                ev = client.next_event() => {
+                                    if ev.is_none() {
+                                        break;
+                                    }
+                                }
+                                result = &mut interrupt => {
+                                    if let Err(err) = result {
+                                        eprintln!(
+                                            "[ctox direct-session] turn/interrupt failed after timeout: {err}"
+                                        );
+                                    }
+                                    break;
+                                }
+                                _ = tokio::time::sleep_until(interrupt_deadline) => {
+                                    eprintln!(
+                                        "[ctox direct-session] turn/interrupt not acknowledged within {DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS}s"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
                         anyhow::bail!("direct session timeout after {:?}", timeout.unwrap());
                     }
                 },
@@ -1471,6 +1528,26 @@ impl PersistentSession {
                                                 &reason,
                                                 policy,
                                             );
+                                            // Interrupt the still-active turn before bailing.
+                                            // Bailing without an interrupt leaves the turn
+                                            // running on the durable thread, which the next
+                                            // slice resumes by name (ctox#21).
+                                            let interrupt_req = ClientRequest::TurnInterrupt {
+                                                request_id: seq.next(),
+                                                params: TurnInterruptParams {
+                                                    thread_id: thread_id.to_string(),
+                                                    turn_id: turn_id.to_string(),
+                                                },
+                                            };
+                                            let _ = tokio::time::timeout(
+                                                Duration::from_secs(
+                                                    DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS,
+                                                ),
+                                                client.request_typed::<TurnInterruptResponse>(
+                                                    interrupt_req,
+                                                ),
+                                            )
+                                            .await;
                                             anyhow::bail!("mid-task compaction failed: {err}");
                                         }
                                         Err(_) => {
@@ -1518,7 +1595,33 @@ impl PersistentSession {
                             EventMsg::AgentMessage(am) => {
                                 final_message = Some(am.message.clone());
                             }
-                            EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => break,
+                            EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => {
+                                // The completion event's own last message is
+                                // authoritative: `AgentMessage` events carry
+                                // no turn id, so `final_message` could hold a
+                                // reply from a different turn on this thread.
+                                if let Some(last) = tc
+                                    .last_agent_message
+                                    .as_ref()
+                                    .filter(|last| !last.trim().is_empty())
+                                {
+                                    final_message = Some(last.clone());
+                                }
+                                break;
+                            }
+                            EventMsg::TurnComplete(tc) => {
+                                // A completion for a different turn while we
+                                // wait for ours. With one consumer per session
+                                // this points at a steered/merged or leftover
+                                // turn on the reused thread — log it loudly
+                                // instead of silently discarding it, so a
+                                // wedged wait is diagnosable from the service
+                                // log (ctox#21).
+                                eprintln!(
+                                    "[ctox direct-session] ignoring completion for foreign turn {} while waiting for {}",
+                                    tc.turn_id, turn_id
+                                );
+                            }
                             EventMsg::Error(ref err) => {
                                 let msg_str = format!("{:?}", err);
                                 let structured_compaction_parse_error = msg_str
@@ -1934,8 +2037,26 @@ impl PersistentSession {
             if let Some(client) = self.client.take() {
                 let tid = self.thread_id.clone();
                 eprintln!("[ctox direct-session] {action} persistent session thread_id={tid}");
-                client.abort_now();
-                eprintln!("[ctox direct-session] persistent session aborted thread_id={tid}");
+                // Try a bounded graceful shutdown first. `abort_now` skips
+                // the processor teardown (`clear_all_thread_listeners`,
+                // `shutdown_threads`), which leaves the durable thread's
+                // rollout with a dangling active turn that the next session
+                // resumes by name (ctox#21). If graceful shutdown exceeds
+                // its budget the runtime kill below still bounds teardown.
+                let graceful = runtime.block_on(async {
+                    tokio::time::timeout(Duration::from_secs(8), client.shutdown()).await
+                });
+                match graceful {
+                    Ok(Ok(())) => eprintln!(
+                        "[ctox direct-session] persistent session shut down thread_id={tid}"
+                    ),
+                    Ok(Err(err)) => eprintln!(
+                        "[ctox direct-session] persistent session shutdown error thread_id={tid}: {err}"
+                    ),
+                    Err(_) => eprintln!(
+                        "[ctox direct-session] persistent session shutdown timed out thread_id={tid}; forcing runtime teardown"
+                    ),
+                }
             }
             runtime.shutdown_timeout(Duration::from_secs(2));
         }

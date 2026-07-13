@@ -17,6 +17,7 @@
 
 mod remote;
 
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io::Error as IoError;
@@ -89,6 +90,49 @@ impl From<InProcessServerEvent> for AppServerEvent {
             }
             InProcessServerEvent::ServerRequest(request) => Self::ServerRequest(request),
         }
+    }
+}
+
+/// Result of a non-blocking forward attempt toward the facade consumer.
+enum ForwardOutcome {
+    /// Event reached the consumer queue (or the pending buffer).
+    Forwarded,
+    /// Droppable event did not fit; the caller owns the returned event.
+    Dropped(InProcessServerEvent),
+    /// The consumer's receiver is gone; stop forwarding events entirely.
+    ConsumerGone,
+}
+
+/// Forward one event without ever blocking the facade worker loop.
+/// Delivery-required events buffer in `pending` (flushed by the loop's
+/// `reserve()` arm) instead of a blocking `send().await`: a paused consumer
+/// must never stall command processing, otherwise `turn/interrupt` and other
+/// control requests can never land once the event queue fills (ctox#21).
+/// Droppable events never overtake buffered delivery-required events.
+fn forward_event(
+    event_tx: &mpsc::Sender<InProcessServerEvent>,
+    pending: &mut VecDeque<InProcessServerEvent>,
+    event: InProcessServerEvent,
+    requires_delivery: bool,
+) -> ForwardOutcome {
+    if !pending.is_empty() {
+        if requires_delivery {
+            pending.push_back(event);
+            return ForwardOutcome::Forwarded;
+        }
+        return ForwardOutcome::Dropped(event);
+    }
+    match event_tx.try_send(event) {
+        Ok(()) => ForwardOutcome::Forwarded,
+        Err(mpsc::error::TrySendError::Full(event)) => {
+            if requires_delivery {
+                pending.push_back(event);
+                ForwardOutcome::Forwarded
+            } else {
+                ForwardOutcome::Dropped(event)
+            }
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => ForwardOutcome::ConsumerGone,
     }
 }
 
@@ -356,8 +400,27 @@ impl InProcessAppServerClient {
         let worker_handle = tokio::spawn(async move {
             let mut event_stream_enabled = true;
             let mut skipped_events = 0usize;
+            // Delivery-required events that did not fit into the consumer
+            // queue. Flushed via the `reserve()` arm; `handle.next_event()`
+            // is gated on the buffer bound so upstream backpressure applies
+            // while command processing keeps running (ctox#21).
+            let mut pending_delivery_events: VecDeque<InProcessServerEvent> = VecDeque::new();
+            const MAX_PENDING_DELIVERY_EVENTS: usize = 1024;
             loop {
                 tokio::select! {
+                    permit = event_tx.reserve(), if !pending_delivery_events.is_empty() && event_stream_enabled => {
+                        match permit {
+                            Ok(permit) => {
+                                if let Some(event) = pending_delivery_events.pop_front() {
+                                    permit.send(event);
+                                }
+                            }
+                            Err(_) => {
+                                event_stream_enabled = false;
+                                pending_delivery_events.clear();
+                            }
+                        }
+                    }
                     command = command_rx.recv() => {
                         match command {
                             Some(ClientCommand::Request { request, response_tx }) => {
@@ -405,74 +468,62 @@ impl InProcessAppServerClient {
                             }
                         }
                     }
-                    event = handle.next_event(), if event_stream_enabled => {
+                    event = handle.next_event(), if event_stream_enabled && pending_delivery_events.len() < MAX_PENDING_DELIVERY_EVENTS => {
                         let Some(event) = event else {
                             break;
                         };
 
+                        let requires_delivery = event_requires_delivery(&event);
                         if skipped_events > 0 {
-                            if event_requires_delivery(&event) {
-                                // Surface lag before the terminal event, but
-                                // do not let the lag marker itself cause us to
-                                // drop the completion/abort notification that
-                                // the caller is blocked on.
-                                if event_tx
-                                    .send(InProcessServerEvent::Lagged {
-                                        skipped: skipped_events,
-                                    })
-                                    .await
-                                    .is_err()
-                                {
+                            // Surface lag before a terminal event so the
+                            // consumer knows droppable events were lost. The
+                            // lag marker for a droppable event is itself
+                            // droppable; for a delivery-required event it
+                            // rides the pending buffer with it.
+                            let lag_event = InProcessServerEvent::Lagged {
+                                skipped: skipped_events,
+                            };
+                            match forward_event(
+                                &event_tx,
+                                &mut pending_delivery_events,
+                                lag_event,
+                                requires_delivery,
+                            ) {
+                                ForwardOutcome::Forwarded => {
+                                    skipped_events = 0;
+                                }
+                                ForwardOutcome::Dropped(_) => {
+                                    skipped_events = skipped_events.saturating_add(1);
+                                    warn!(
+                                        "dropping in-process app-server event because consumer queue is full"
+                                    );
+                                    if let InProcessServerEvent::ServerRequest(request) = event {
+                                        let _ = request_sender.fail_server_request(
+                                            request.id().clone(),
+                                            JSONRPCErrorError {
+                                                code: -32001,
+                                                message: "in-process app-server event queue is full".to_string(),
+                                                data: None,
+                                            },
+                                        );
+                                    }
+                                    continue;
+                                }
+                                ForwardOutcome::ConsumerGone => {
                                     event_stream_enabled = false;
                                     continue;
                                 }
-                                skipped_events = 0;
-                            } else {
-                                match event_tx.try_send(InProcessServerEvent::Lagged {
-                                    skipped: skipped_events,
-                                }) {
-                                    Ok(()) => {
-                                        skipped_events = 0;
-                                    }
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        skipped_events = skipped_events.saturating_add(1);
-                                        warn!(
-                                            "dropping in-process app-server event because consumer queue is full"
-                                        );
-                                        if let InProcessServerEvent::ServerRequest(request) = event {
-                                            let _ = request_sender.fail_server_request(
-                                                request.id().clone(),
-                                                JSONRPCErrorError {
-                                                    code: -32001,
-                                                    message: "in-process app-server event queue is full".to_string(),
-                                                    data: None,
-                                                },
-                                            );
-                                        }
-                                        continue;
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        event_stream_enabled = false;
-                                        continue;
-                                    }
-                                }
                             }
                         }
 
-                        if event_requires_delivery(&event) {
-                            // Block until the consumer catches up for
-                            // terminal notifications; this preserves the
-                            // completion signal even when the queue is
-                            // otherwise saturated.
-                            if event_tx.send(event).await.is_err() {
-                                event_stream_enabled = false;
-                            }
-                            continue;
-                        }
-
-                        match event_tx.try_send(event) {
-                            Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(event)) => {
+                        match forward_event(
+                            &event_tx,
+                            &mut pending_delivery_events,
+                            event,
+                            requires_delivery,
+                        ) {
+                            ForwardOutcome::Forwarded => {}
+                            ForwardOutcome::Dropped(event) => {
                                 skipped_events = skipped_events.saturating_add(1);
                                 warn!("dropping in-process app-server event because consumer queue is full");
                                 if let InProcessServerEvent::ServerRequest(request) = event {
@@ -486,7 +537,7 @@ impl InProcessAppServerClient {
                                     );
                                 }
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                            ForwardOutcome::ConsumerGone => {
                                 event_stream_enabled = false;
                             }
                         }

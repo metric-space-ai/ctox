@@ -1206,6 +1206,38 @@ impl LcmEngine {
             .and_then(|token| AgentOutcome::from_token(&token)))
     }
 
+    /// Read the most recent assistant message row for a conversation.
+    ///
+    /// `ctox chat --wait` polls this to detect that *its* turn produced a
+    /// durable terminal outcome. Completion must be judged per conversation
+    /// against the messages table — the service-global `last_completed_at`
+    /// advances for unrelated jobs and reported false "completed" exits for
+    /// turns that never delivered anything (ctox#21).
+    pub fn latest_assistant_message(&self, conversation_id: i64) -> Result<Option<MessageRecord>> {
+        self.conn
+            .query_row(
+                "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
+                 FROM messages
+                 WHERE conversation_id = ?1 AND role = 'assistant'
+                 ORDER BY seq DESC LIMIT 1",
+                [conversation_id],
+                |row| {
+                    Ok(MessageRecord {
+                        message_id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        seq: row.get(2)?,
+                        role: row.get(3)?,
+                        content: row.get(4)?,
+                        token_count: row.get(5)?,
+                        created_at: row.get(6)?,
+                        agent_outcome: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .context("failed to load latest assistant message")
+    }
+
     pub fn evaluate_compaction(
         &self,
         conversation_id: i64,

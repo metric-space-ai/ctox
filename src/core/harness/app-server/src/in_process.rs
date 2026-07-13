@@ -40,6 +40,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
@@ -106,6 +107,48 @@ fn legacy_notification_requires_delivery(notification: &JSONRPCNotification) -> 
             .unwrap_or(&notification.method),
         "task_complete" | "turn_aborted" | "shutdown_complete"
     )
+}
+
+/// Forward one event toward the client without ever blocking the runtime
+/// select loop. Delivery-required events that do not fit into the client
+/// queue are buffered in `pending` and flushed by the loop's `reserve()`
+/// arm; droppable events behind a non-empty buffer are discarded so buffered
+/// completion events are never overtaken. Returns `true` when the loop
+/// should exit because the event consumer is gone.
+fn enqueue_in_process_event(
+    event_tx: &mpsc::Sender<InProcessServerEvent>,
+    pending: &mut VecDeque<InProcessServerEvent>,
+    consumer_gone: &mut bool,
+    event: InProcessServerEvent,
+    requires_delivery: bool,
+    kind: &'static str,
+) -> bool {
+    if *consumer_gone {
+        return true;
+    }
+    if !pending.is_empty() {
+        if requires_delivery {
+            pending.push_back(event);
+        } else {
+            warn!("dropping in-process {kind} behind buffered delivery-required events");
+        }
+        return false;
+    }
+    match event_tx.try_send(event) {
+        Ok(()) => false,
+        Err(mpsc::error::TrySendError::Full(event)) => {
+            if requires_delivery {
+                pending.push_back(event);
+            } else {
+                warn!("dropping in-process {kind} (queue full)");
+            }
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            *consumer_gone = true;
+            true
+        }
+    }
 }
 
 /// Input needed to start an in-process app-server runtime.
@@ -505,9 +548,33 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
+        // Delivery-required events (turn completion class) that could not be
+        // flushed to the client queue immediately. They drain through the
+        // `event_tx.reserve()` select arm below instead of a blocking
+        // `send().await` inside this loop: a paused or slow event consumer
+        // must never stall the request path, otherwise `turn/interrupt` can
+        // never land once the event queue is full and the whole session
+        // wedges (ctox#21). `writer_rx` is gated on the buffer bound so
+        // upstream backpressure still applies without unbounded memory.
+        let mut pending_delivery_events: VecDeque<InProcessServerEvent> = VecDeque::new();
+        let mut event_consumer_gone = false;
+        let max_pending_delivery_events = channel_capacity.max(1024);
 
         loop {
             tokio::select! {
+                permit = event_tx.reserve(), if !pending_delivery_events.is_empty() && !event_consumer_gone => {
+                    match permit {
+                        Ok(permit) => {
+                            if let Some(event) = pending_delivery_events.pop_front() {
+                                permit.send(event);
+                            }
+                        }
+                        Err(_) => {
+                            event_consumer_gone = true;
+                            pending_delivery_events.clear();
+                        }
+                    }
+                }
                 message = client_rx.recv() => {
                     match message {
                         Some(InProcessClientMessage::Request { request, response_tx }) => {
@@ -587,7 +654,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         }
                     }
                 }
-                outgoing_message = writer_rx.recv() => {
+                outgoing_message = writer_rx.recv(), if pending_delivery_events.len() < max_pending_delivery_events => {
                     let Some(outgoing_message) = outgoing_message else {
                         break;
                     };
@@ -647,25 +714,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                             }
                         }
                         OutgoingMessage::AppServerNotification(notification) => {
-                            if server_notification_requires_delivery(&notification) {
-                                if event_tx
-                                    .send(InProcessServerEvent::ServerNotification(notification))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::ServerNotification(notification))
-                            {
-                                match send_error {
-                                    mpsc::error::TrySendError::Full(_) => {
-                                        warn!("dropping in-process server notification (queue full)");
-                                    }
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        break;
-                                    }
-                                }
+                            let requires_delivery =
+                                server_notification_requires_delivery(&notification);
+                            let event = InProcessServerEvent::ServerNotification(notification);
+                            if enqueue_in_process_event(
+                                &event_tx,
+                                &mut pending_delivery_events,
+                                &mut event_consumer_gone,
+                                event,
+                                requires_delivery,
+                                "server notification",
+                            ) {
+                                break;
                             }
                         }
                         OutgoingMessage::Notification(notification) => {
@@ -673,25 +733,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 method: notification.method,
                                 params: notification.params,
                             };
-                            if legacy_notification_requires_delivery(&notification) {
-                                if event_tx
-                                    .send(InProcessServerEvent::LegacyNotification(notification))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::LegacyNotification(notification))
-                            {
-                                match send_error {
-                                    mpsc::error::TrySendError::Full(_) => {
-                                        warn!("dropping in-process legacy notification (queue full)");
-                                    }
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        break;
-                                    }
-                                }
+                            let requires_delivery =
+                                legacy_notification_requires_delivery(&notification);
+                            let event = InProcessServerEvent::LegacyNotification(notification);
+                            if enqueue_in_process_event(
+                                &event_tx,
+                                &mut pending_delivery_events,
+                                &mut event_consumer_gone,
+                                event,
+                                requires_delivery,
+                                "legacy notification",
+                            ) {
+                                break;
                             }
                         }
                     }
@@ -908,5 +961,277 @@ mod tests {
                 params: None,
             }
         ));
+    }
+
+    #[test]
+    fn enqueue_event_buffers_delivery_required_and_never_blocks() {
+        let (event_tx, mut event_rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let mut consumer_gone = false;
+        let delivery_event = || {
+            InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: "codex/event/task_complete".to_string(),
+                params: None,
+            })
+        };
+        let droppable_event = || {
+            InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: "codex/event/item_started".to_string(),
+                params: None,
+            })
+        };
+
+        // First event fits the queue directly.
+        assert!(!enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            delivery_event(),
+            true,
+            "test",
+        ));
+        assert!(pending.is_empty());
+
+        // Queue is now full: a delivery-required event buffers instead of
+        // blocking; a droppable event is discarded.
+        assert!(!enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            delivery_event(),
+            true,
+            "test",
+        ));
+        assert_eq!(pending.len(), 1);
+        assert!(!enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            droppable_event(),
+            false,
+            "test",
+        ));
+        assert_eq!(pending.len(), 1);
+
+        // Ordering: with a non-empty buffer, further delivery-required
+        // events append behind it even if the queue has room again.
+        assert!(event_rx.try_recv().is_ok());
+        assert!(!enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            delivery_event(),
+            true,
+            "test",
+        ));
+        assert_eq!(pending.len(), 2);
+
+        // A dropped receiver reports consumer-gone.
+        drop(event_rx);
+        pending.clear();
+        assert!(enqueue_in_process_event(
+            &event_tx,
+            &mut pending,
+            &mut consumer_gone,
+            delivery_event(),
+            true,
+            "test",
+        ));
+        assert!(consumer_gone);
+    }
+
+    /// Regression test for ctox#21: a paused event consumer must never stall
+    /// the request path. Before the fix, a delivery-required notification
+    /// that did not fit the (capacity-1) event queue blocked the runtime
+    /// select loop with `event_tx.send().await`, so no further client
+    /// request — including `turn/interrupt` — was ever processed and the
+    /// session wedged permanently.
+    #[tokio::test]
+    async fn paused_event_consumer_does_not_block_request_path() {
+        use app_test_support::create_mock_responses_server_repeating_assistant;
+        use app_test_support::write_mock_responses_config_toml;
+        use ctox_app_server_protocol::ThreadStartParams;
+        use ctox_app_server_protocol::ThreadStartResponse;
+        use ctox_app_server_protocol::TurnStartParams;
+        use ctox_app_server_protocol::TurnStartResponse;
+        use ctox_app_server_protocol::UserInput;
+        use std::collections::BTreeMap;
+
+        let server = create_mock_responses_server_repeating_assistant("done").await;
+        let codex_home = tempfile::TempDir::new().expect("tempdir");
+        write_mock_responses_config_toml(
+            codex_home.path(),
+            &server.uri(),
+            &BTreeMap::new(),
+            8_192,
+            Some(false),
+            "mock_provider",
+            "compact",
+        )
+        .expect("mock config should write");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("test config should build");
+
+        let args = InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            auth_manager: None,
+            thread_manager: None,
+            feedback: CodexFeedback::new(),
+            // Emitted right after initialize as droppable notifications:
+            // the first one occupies the single event-queue slot, so the
+            // turn's delivery-required completion event can never fit
+            // directly and MUST take the pending buffer instead of the old
+            // blocking send.
+            config_warnings: vec![ConfigWarningNotification {
+                summary: "ctox#21 regression: pre-fill event queue".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            }],
+            session_source: SessionSource::Exec,
+            enable_ctox_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "ctox-21-regression".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            // Smallest legal queue: a single unread event saturates it.
+            channel_capacity: 1,
+        };
+        let mut client = start(args).await.expect("in-process runtime should start");
+
+        // The capacity-1 client command queue can transiently reject with
+        // WouldBlock (same as the zero-capacity clamp test); retry those.
+        // A WEDGED loop never returns at all — that case is caught by the
+        // liveness timeout below, not by this retry.
+        async fn request_with_retry(
+            client: &InProcessClientHandle,
+            request: ClientRequest,
+        ) -> Result {
+            loop {
+                match client.request(request.clone()).await {
+                    Ok(response) => return response.expect("request should succeed"),
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(err) => panic!("request transport should work: {err}"),
+                }
+            }
+        }
+
+        let thread_response = request_with_retry(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(1),
+                params: ThreadStartParams {
+                    ephemeral: Some(true),
+                    ..ThreadStartParams::default()
+                },
+            },
+        )
+        .await;
+        let thread: ThreadStartResponse =
+            serde_json::from_value(thread_response).expect("thread/start response");
+
+        let turn_response = request_with_retry(
+            &client,
+            ClientRequest::TurnStart {
+                request_id: RequestId::Integer(2),
+                params: TurnStartParams {
+                    thread_id: thread.thread.id,
+                    input: vec![UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    developer_instructions: None,
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    approvals_reviewer: None,
+                    model: None,
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    personality: None,
+                    output_schema: None,
+                    collaboration_mode: None,
+                },
+            },
+        )
+        .await;
+        let _turn: TurnStartResponse =
+            serde_json::from_value(turn_response).expect("turn/start response");
+
+        // Nobody reads a single event during this phase, and the config
+        // warning above keeps the capacity-1 queue occupied the whole time.
+        // The turn reaches its terminal state within a few seconds
+        // (regardless of whether the mock round trip succeeds — a failed
+        // turn also emits a delivery-required terminal event), so its
+        // completion event hits the full queue while these requests run.
+        // Before the fix that blocked the runtime loop and the next request
+        // hung forever.
+        let liveness_deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        let mut request_id = 3;
+        while tokio::time::Instant::now() < liveness_deadline {
+            let response = tokio::time::timeout(
+                Duration::from_secs(10),
+                request_with_retry(
+                    &client,
+                    ClientRequest::ConfigRequirementsRead {
+                        request_id: RequestId::Integer(request_id),
+                        params: None,
+                    },
+                ),
+            )
+            .await
+            .expect("request path must stay live while events are unread");
+            assert!(response.is_object());
+            request_id += 1;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // The buffered terminal event must still be delivered once the
+        // consumer resumes — buffering must not become event loss.
+        let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let mut saw_turn_terminal_event = false;
+        while tokio::time::Instant::now() < drain_deadline {
+            let event =
+                match tokio::time::timeout(Duration::from_secs(10), client.next_event()).await {
+                    Ok(Some(event)) => event,
+                    Ok(None) | Err(_) => break,
+                };
+            match &event {
+                InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => {
+                    saw_turn_terminal_event = true;
+                    break;
+                }
+                InProcessServerEvent::LegacyNotification(notification)
+                    if legacy_notification_requires_delivery(notification) =>
+                {
+                    saw_turn_terminal_event = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_turn_terminal_event,
+            "delivery-required turn terminal event must survive the pending buffer"
+        );
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
     }
 }

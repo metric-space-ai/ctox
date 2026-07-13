@@ -1582,6 +1582,7 @@ dependencies = [
  "ctox-feedback",
  "ctox-protocol",
  "futures",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",

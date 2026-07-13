@@ -3665,13 +3665,25 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             channels::terminal_founder_outbound_artifact_count(root, &action)
         })
         .transpose()?;
-    let last_completed_before_submit = status.last_completed_at.clone();
+    let conversation_id =
+        inference::turn_loop::conversation_id_for_thread_key(thread_key.as_deref());
+    let chat_db_path = root.join("runtime/ctox.sqlite3");
+    // Baseline BEFORE submit: the newest assistant row already persisted for
+    // this conversation. The wait loop completes only when a NEWER assistant
+    // row appears. Judging completion by the service-global
+    // `last_completed_at` reported false rc=0 "completed" exits whenever an
+    // unrelated job finished while this turn was still running or wedged
+    // (ctox#21).
+    let assistant_seq_before_submit = if wait {
+        chat_wait_latest_assistant_seq(&chat_db_path, conversation_id)
+    } else {
+        None
+    };
 
     service::submit_chat_prompt_with_intent(root, &prompt, thread_key.as_deref(), outbound_email)?;
 
-    let conversation_id =
-        inference::turn_loop::conversation_id_for_thread_key(thread_key.as_deref());
     let mut final_status = None;
+    let mut completed_assistant: Option<lcm::MessageRecord> = None;
     if wait {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         let wait_probe = service::StatusProbeOptions {
@@ -3687,10 +3699,15 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             if !status.running {
                 anyhow::bail!("CTOX service stopped before the chat request completed");
             }
-            let completed_after_submit = chat_status_has_completed_since(
-                status.last_completed_at.as_ref(),
-                last_completed_before_submit.as_ref(),
-            );
+            if let Some(record) = chat_wait_new_assistant_message(
+                &chat_db_path,
+                conversation_id,
+                assistant_seq_before_submit,
+            ) {
+                final_status = Some(status);
+                completed_assistant = Some(record);
+                break;
+            }
             let outbound_completed = outbound_email_for_wait
                 .as_ref()
                 .zip(outbound_terminal_count_before)
@@ -3701,40 +3718,18 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 })
                 .transpose()?
                 .unwrap_or(false);
-            if completed_after_submit || outbound_completed {
+            if outbound_completed {
                 final_status = Some(status);
                 break;
             }
             if std::time::Instant::now() >= deadline {
                 anyhow::bail!(
-                    "timed out waiting for CTOX to finish the chat request after {}s",
+                    "timed out waiting for a durable assistant reply in conversation {} after {}s; the turn did not reach a terminal outcome",
+                    conversation_id,
                     timeout_secs
                 );
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-        let completed_after_submit = final_status
-            .as_ref()
-            .and_then(|status| status.last_completed_at.as_ref())
-            .is_some_and(|completed| {
-                chat_status_has_completed_since(
-                    Some(completed),
-                    last_completed_before_submit.as_ref(),
-                )
-            });
-        let outbound_completed_after = if let (Some(intent), Some(before_count)) = (
-            outbound_email_for_wait.as_ref(),
-            outbound_terminal_count_before,
-        ) {
-            let action = channels::FounderOutboundAction::from(intent.clone());
-            channels::terminal_founder_outbound_artifact_count(root, &action)? > before_count
-        } else {
-            false
-        };
-        if !completed_after_submit && !outbound_completed_after {
-            anyhow::bail!(
-                "CTOX service became idle before this chat request reported a completed turn"
-            );
         }
         if let (Some(intent), Some(before_count)) = (
             outbound_email_for_wait.as_ref(),
@@ -3748,6 +3743,24 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     action.subject,
                     action.to
                 );
+            }
+        }
+        // Enforce the typed terminal outcome: exit code 0 requires a real
+        // assistant reply. A structured failure outcome or an empty reply
+        // body is a non-zero exit, never silent success.
+        if let Some(record) = completed_assistant.as_ref() {
+            let outcome = record
+                .agent_outcome
+                .as_deref()
+                .and_then(lcm::AgentOutcome::from_token);
+            if outcome.is_some_and(lcm::AgentOutcome::is_agent_failure) {
+                anyhow::bail!(
+                    "CTOX chat turn ended with outcome {} instead of a successful reply",
+                    outcome.map(lcm::AgentOutcome::as_str).unwrap_or("unknown")
+                );
+            }
+            if record.content.trim().is_empty() {
+                anyhow::bail!("CTOX chat turn completed but persisted an empty assistant reply");
             }
         }
     }
@@ -3791,8 +3804,14 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }))?
     );
 
-    if let Some(err) = last_error {
-        anyhow::bail!(err);
+    // `last_error` is service-global state. When THIS turn verifiably
+    // succeeded (typed per-conversation assistant outcome above), an error
+    // left behind by an unrelated job must not fail this invocation; it is
+    // still reported in the JSON payload.
+    if completed_assistant.is_none() {
+        if let Some(err) = last_error {
+            anyhow::bail!(err);
+        }
     }
     Ok(())
 }
@@ -4155,8 +4174,43 @@ fn collect_flag_values(args: &[String], flag: &str) -> Vec<String> {
     values
 }
 
-fn chat_status_has_completed_since(completed: Option<&String>, before: Option<&String>) -> bool {
-    completed.is_some_and(|completed| Some(completed) != before)
+/// Newest assistant `seq` already persisted for the conversation, read
+/// before submit so the wait loop only accepts strictly newer rows. Errors
+/// (missing database on a fresh root, transient SQLITE_BUSY) degrade to
+/// `None`: with no baseline, any assistant row counts as completion.
+fn chat_wait_latest_assistant_seq(db_path: &Path, conversation_id: i64) -> Option<i64> {
+    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default()).ok()?;
+    engine
+        .latest_assistant_message(conversation_id)
+        .ok()
+        .flatten()
+        .map(|record| record.seq)
+}
+
+/// One wait-loop poll: the newest assistant row for the conversation, if it
+/// is newer than the pre-submit baseline. Transient read errors return
+/// `None` (retry on the next poll) instead of aborting the wait.
+fn chat_wait_new_assistant_message(
+    db_path: &Path,
+    conversation_id: i64,
+    baseline_seq: Option<i64>,
+) -> Option<lcm::MessageRecord> {
+    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default()).ok()?;
+    let record = engine
+        .latest_assistant_message(conversation_id)
+        .ok()
+        .flatten()?;
+    chat_wait_assistant_completion(Some(record), baseline_seq)
+}
+
+/// Pure completion decision: a wait completes only on an assistant row that
+/// is strictly newer than the pre-submit baseline for the same conversation.
+/// Service-global progress (other jobs completing) can never satisfy it.
+fn chat_wait_assistant_completion(
+    latest: Option<lcm::MessageRecord>,
+    baseline_seq: Option<i64>,
+) -> Option<lcm::MessageRecord> {
+    latest.filter(|record| record.seq > baseline_seq.unwrap_or(0))
 }
 
 fn resolve_chat_attachment_paths(args: &[String]) -> anyhow::Result<Vec<String>> {
@@ -4501,12 +4555,13 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    use super::lcm;
     use super::{
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
         appsec_command_unresolved_placeholders, browser_automation_source_from_stage_command,
-        build_appsec_forwarded_args, chat_status_has_completed_since,
-        execute_appsec_stage_commands, find_ctox_root_from_ancestors, handle_appsec_pipeline_work,
-        handle_continuity_update, looks_like_ctox_root, openrouter_tool_smoke_summary,
+        build_appsec_forwarded_args, chat_wait_assistant_completion, execute_appsec_stage_commands,
+        find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
+        looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
         record_appsec_stage_artifact_bindings, resolve_appsec_stage_command_placeholders,
         resolve_chat_attachment_paths, resolve_runtime_ctox_root, run_projected_appsec_command,
@@ -4831,19 +4886,50 @@ mod tests {
             .contains("failed to resolve --attach-file path"));
     }
 
-    #[test]
-    fn chat_wait_completion_ignores_unrelated_pending_queue() {
-        let before = Some("2026-05-06T23:50:00Z".to_string());
-        let completed = Some("2026-05-06T23:51:00Z".to_string());
+    fn wait_test_message(seq: i64, content: &str, outcome: Option<&str>) -> lcm::MessageRecord {
+        lcm::MessageRecord {
+            message_id: seq,
+            conversation_id: 7,
+            seq,
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            token_count: 1,
+            created_at: "2026-07-13T00:00:00Z".to_string(),
+            agent_outcome: outcome.map(str::to_string),
+        }
+    }
 
-        assert!(chat_status_has_completed_since(
-            completed.as_ref(),
-            before.as_ref()
-        ));
-        assert!(!chat_status_has_completed_since(
-            before.as_ref(),
-            before.as_ref()
-        ));
+    #[test]
+    fn chat_wait_completion_requires_new_assistant_row_in_conversation() {
+        // No assistant row at all: unrelated service-global completions can
+        // never satisfy the wait (ctox#21 false rc=0 regression guard).
+        assert!(chat_wait_assistant_completion(None, None).is_none());
+        assert!(chat_wait_assistant_completion(None, Some(3)).is_none());
+
+        // A stale row from before submit does not complete the wait.
+        let stale = wait_test_message(3, "old reply", Some("Success"));
+        assert!(chat_wait_assistant_completion(Some(stale), Some(3)).is_none());
+
+        // A strictly newer row completes it.
+        let fresh = wait_test_message(4, "new reply", Some("Success"));
+        let completed = chat_wait_assistant_completion(Some(fresh), Some(3))
+            .expect("newer assistant row should complete the wait");
+        assert_eq!(completed.seq, 4);
+
+        // With no baseline (fresh conversation), the first assistant row wins.
+        let first = wait_test_message(1, "first reply", None);
+        assert!(chat_wait_assistant_completion(Some(first), None).is_some());
+    }
+
+    #[test]
+    fn chat_wait_failure_outcomes_map_to_agent_failure() {
+        for token in ["TurnTimeout", "ExecutionError", "Aborted", "Cancelled"] {
+            let outcome = lcm::AgentOutcome::from_token(token).expect(token);
+            assert!(outcome.is_agent_failure(), "{token} should be a failure");
+        }
+        assert!(!lcm::AgentOutcome::from_token("Success")
+            .expect("Success token")
+            .is_agent_failure());
     }
 
     #[test]
