@@ -40,6 +40,8 @@ the Business task. It uses a deterministic conservative fallback: retain a
 bounded recent narrative, keep the durable task as active focus, and decline
 reprioritization. Transport, context-window, and interruption errors remain
 fatal/retryable under their existing policies.
+The first such format failure switches the remainder of that compaction run to
+the deterministic path; later semantic stages are not called redundantly.
 
 Compaction model tiers are diagnostic only. They never switch the model of an
 already negotiated session: the global model catalog is not evidence that a

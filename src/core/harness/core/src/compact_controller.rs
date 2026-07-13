@@ -258,6 +258,7 @@ pub(crate) async fn run_compaction_controller(
     let recent_user_messages = collect_recent_user_messages(history_items, 4);
     let mut blocks = segment_context(&context_text, DEFAULT_BLOCK_CHARS);
     let mut trimmed_blocks = 0usize;
+    let mut deterministic_fallback = false;
     let progress_review = if blocks.is_empty() {
         ProgressStageResponse {
             summary: "No usable context available.".to_string(),
@@ -285,6 +286,7 @@ pub(crate) async fn run_compaction_controller(
                     eprintln!(
                         "[ctox compact-controller] progress stage used deterministic fallback: {err}"
                     );
+                    deterministic_fallback = true;
                     break fallback_progress_review(&task_hint);
                 }
                 Err(err) => return Err(err),
@@ -297,7 +299,7 @@ pub(crate) async fn run_compaction_controller(
         available_models(sess),
     );
 
-    if !blocks.is_empty() {
+    if !blocks.is_empty() && !deterministic_fallback {
         loop {
             let prompt = build_screen_prompt(
                 &task_hint,
@@ -325,6 +327,7 @@ pub(crate) async fn run_compaction_controller(
                     eprintln!(
                         "[ctox compact-controller] screen stage used conservative fallback: {err}"
                     );
+                    deterministic_fallback = true;
                     break;
                 }
                 Err(err) => return Err(err),
@@ -333,6 +336,9 @@ pub(crate) async fn run_compaction_controller(
 
         let mut previous_chars = retained_chars(&blocks);
         for iteration_index in 1..=DEFAULT_ITERATIONS {
+            if deterministic_fallback {
+                break;
+            }
             let retained_before = retained_blocks(&blocks);
             if retained_before.is_empty() {
                 break;
@@ -362,6 +368,7 @@ pub(crate) async fn run_compaction_controller(
                     eprintln!(
                         "[ctox compact-controller] iteration stage stopped at deterministic fallback: {err}"
                     );
+                    deterministic_fallback = true;
                     break;
                 }
                 Err(err) => return Err(err),
@@ -385,7 +392,9 @@ pub(crate) async fn run_compaction_controller(
     let anchor_blocks = bucket_blocks(&blocks, "anchor");
     let focus_blocks = bucket_blocks(&blocks, "focus");
 
-    let output_result = if story_blocks.is_empty()
+    let output_result = if deterministic_fallback {
+        fallback_output_stage(&task_hint, &blocks)
+    } else if story_blocks.is_empty()
         && anchor_blocks.is_empty()
         && focus_blocks.is_empty()
     {
@@ -424,24 +433,32 @@ pub(crate) async fn run_compaction_controller(
         }
     };
 
-    let reprioritization_prompt =
-        build_reprioritization_prompt(&task_hint, trigger, &output_result, &recent_user_messages)?;
-    let reprioritization = match run_structured_prompt::<ReprioritizationStageResponse>(
-        sess,
-        turn_context,
-        reprioritization_prompt,
-        reprioritization_schema(),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(err) if is_structured_output_format_error(&err) => {
-            eprintln!(
-                "[ctox compact-controller] reprioritization stage used deterministic fallback: {err}"
-            );
-            fallback_reprioritization(&task_hint, trigger)
+    let reprioritization = if deterministic_fallback {
+        fallback_reprioritization(&task_hint, trigger)
+    } else {
+        let reprioritization_prompt = build_reprioritization_prompt(
+            &task_hint,
+            trigger,
+            &output_result,
+            &recent_user_messages,
+        )?;
+        match run_structured_prompt::<ReprioritizationStageResponse>(
+            sess,
+            turn_context,
+            reprioritization_prompt,
+            reprioritization_schema(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) if is_structured_output_format_error(&err) => {
+                eprintln!(
+                    "[ctox compact-controller] reprioritization stage used deterministic fallback: {err}"
+                );
+                fallback_reprioritization(&task_hint, trigger)
+            }
+            Err(err) => return Err(err),
         }
-        Err(err) => return Err(err),
     };
 
     let mode = if reprioritization.should_reprioritize
