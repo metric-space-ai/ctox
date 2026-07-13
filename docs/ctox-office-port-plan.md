@@ -62,6 +62,9 @@ Aktueller Stand:
   Readiness-/Release-Quellstand neu gehasht und validiert. Alle elf
   menschlichen Kontrollpunkte, Reviewer und Datum bleiben bewusst
   `pending-signoff`; die Aktualisierung ist keine vorweggenommene Freigabe.
+  Die menschliche Checkliste benennt jetzt dieselben elf maschinenpflichtigen
+  Control-IDs; der Validator lehnt kuenftigen Drift zwischen Checkliste und
+  JSON-Gate fail-closed ab.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig

@@ -17,27 +17,39 @@ checked and the linked evidence matches the release commit.
 
 ## Required Checklist
 
-- [ ] dynamic-app-runtime - same-origin runtime app boundary, forbidden
+- [ ] `dynamic_app_runtime_boundary` - same-origin runtime app boundary, forbidden
   network/import/storage/global/evaluator/worker bypasses and generated-app
   external-effect limits reviewed against current code and tests.
-- [ ] app-source-visibility - source view, source snapshot and source save
+- [ ] `source_visibility` - source view, source snapshot and source save
   paths reviewed for Owner/Admin, App-Verantwortliche:r, exact grants and
   Teammitglied denial.
-- [ ] data-review-locked-state - App Store publish review, evidence-only data
+- [ ] `data_review_locked_state` - App Store publish review, evidence-only data
   review, explicit data grants, locked data areas and rollback state reviewed
   against native catalog projection.
-- [ ] mcp-agent-scope - MCP app visibility, data access, submitted
+- [ ] `mcp_agent_scope` - MCP app visibility, data access, submitted
   `client_context`, Business Chat, App Store context chat and Coding Agents
   visible-scope surfaces reviewed for spoofing and over-sharing.
-- [ ] audit-support-export - Settings Activity, Why diagnostics and
+- [ ] `audit_support_redaction` - Settings Activity, Why diagnostics and
   Support-Paket export reviewed for redaction of prompts, selected text,
   record bodies, message bodies, tokens and secrets.
-- [ ] external-effects - MCP external-effect boundary and generated-app
+- [ ] `external_effect_boundary` - MCP external-effect boundary and generated-app
   command-bus limits reviewed; no external-effect path is enabled without a
   separate approval model.
-- [ ] artifact-integrity - production Browser/Rust smoke artifact, release
+- [ ] `release_artifact_integrity` - production Browser/Rust smoke artifact, release
   workflow gate, dependency bootstrap, uploaded evidence and release artifact
   dependency chain reviewed.
+- [ ] `sync_recovery_crypto_boundary` - recovery journals, encrypted off-host
+  backups, escrow separation, key revocation and restore evidence reviewed;
+  raw recovery keys are never included in the signoff evidence.
+- [ ] `webrtc_peer_identity_transport` - signaling/TURN credentials, peer
+  identity, workspace isolation, impersonation/replay resistance and the
+  no-HTTP business-data boundary reviewed.
+- [ ] `saga_idempotency_compensation` - command admission, immutable action
+  snapshots, crash replay, idempotency, compensation and durable manual
+  intervention evidence reviewed.
+- [ ] `production_evidence_runbook_integrity` - zero-retry production gates,
+  evidence hashes, failure-injection runbooks and the prohibition on silently
+  discarding journal, conflict or Saga state reviewed.
 
 ## Evidence To Review
 

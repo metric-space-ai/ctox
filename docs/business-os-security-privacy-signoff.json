@@ -100,7 +100,7 @@
     ".github/workflows/rxdb-production-readiness.yml": "d09d248885a4c577b13874be810a23a65f2216c70c4b832d6624e3efc665c9a0",
     "docs/ctox-sync-production-readiness-95.md": "f6faeeacec39982b2226fce04c4a16fe07b7d560799a4f223dd0e92da39f373d",
     "docs/ctox-sync-production-readiness-runbooks.md": "ee9c8ab96b93f50582c61cdc3dc8efb66802ae6f3d07970307da4943eb6c30b2",
-    "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "30d761ec41f4ae8f44b867fc9eb77f79c578e71ec96995a50a6d6cb445776bee",
+    "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "03c2703e3460d62a71a8dead859315bb0ddf8c8d6e98b1b31de4ab77d5dfdcdb",
     "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "31033e2c7b574e3aadcc9bb07bf11bf6206f17d897bc4d9c9a4db943572b2e0a",
     "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "ab08666e006f89ac70a1e2ad0ef1aa81608f3698b64538c15a581d79533096c7",
     "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "15635199f05ea4b494a2b1e0088f567cda036cbd686ce96364667511b63073fa",
@@ -119,7 +119,7 @@
     "Runtime-installed apps are same-origin trusted generated apps, not sandboxed iframes.",
     "MCP external effects remain blocked for the current rollout.",
     "Pending signoff intentionally blocks release tags.",
-    "9.5 sync readiness adds pending controls for recovery crypto, peer identity, Saga compensation, and runbook/evidence integrity.",
+    "9.5 sync readiness adds pending controls for recovery crypto, peer identity, Saga compensation, and runbook/evidence integrity; the human checklist names all eleven machine-required controls and the validator rejects future drift.",
     "Automated evidence hashes were refreshed for cab3b57859058fb9721cdb4fb5385b6b7e4f0463 on 2026-07-13; controls remain pending until an explicit release/security reviewer signs off."
   ]
 }

@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, '../../../..');
 const SIGNOFF_SCHEMA = 'ctox.business_os.security_privacy_signoff.v1';
 const VALIDATION_SCHEMA = 'ctox.business_os.security_privacy_signoff_validation.v1';
 const signoffPath = path.join(root, 'docs/business-os-security-privacy-signoff.json');
+const humanSignoffPath = path.join(root, 'docs/business-os-production-release-signoff.md');
 const workflowPath = path.join(root, '.github/workflows/release.yml');
 const validationPath = path.join(root, 'runtime/build/business-os-security-privacy-signoff-validation.json');
 const requireSignedOff = process.argv.includes('--require-signed-off');
@@ -118,6 +119,10 @@ function validateSecurityPrivacySignoff(candidate, options = {}) {
   }
 
   const workflow = readText(workflowPath);
+  const humanSignoff = readText(humanSignoffPath);
+  for (const control of requiredControls) {
+    require(humanSignoff.includes(`\`${control}\``), `human_signoff.control.${control}`);
+  }
   require(workflow.includes('node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --require-signed-off'), 'release.workflow.require_signoff');
   require(workflow.includes('business-os-security-privacy-signoff-validation'), 'release.workflow.upload_validation');
 
