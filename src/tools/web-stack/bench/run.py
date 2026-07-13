@@ -43,6 +43,10 @@ class BenchError(RuntimeError):
     pass
 
 
+def sqlite_quote_identifier(value: str) -> str:
+    return f'"{str(value).replace(chr(34), chr(34) * 2)}"'
+
+
 def seed_ctox_root_markers(root: Path) -> None:
     """Make `root` pass ctox's `looks_like_ctox_root` check so CTOX_ROOT is
     honored and the run is isolated to this temp dir. Without these markers
@@ -415,10 +419,11 @@ def execute_setup_step(
         try:
             for row in spec.get("rows", []):
                 cols = list(row.keys())
-                col_list = ", ".join(f'"{c}"' for c in cols)
+                col_list = ", ".join(sqlite_quote_identifier(c) for c in cols)
                 placeholders = ", ".join("?" for _ in cols)
                 conn.execute(
-                    f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})',
+                    f"INSERT OR REPLACE INTO {sqlite_quote_identifier(table)} "
+                    f"({col_list}) VALUES ({placeholders})",
                     [row[c] for c in cols],
                 )
             conn.commit()
