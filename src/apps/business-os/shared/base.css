@@ -34,10 +34,10 @@
    -------------------------------------------------------------------------- */
 :root {
   --line-strong: color-mix(in srgb, var(--text) 22%, var(--line));
-  --success: #047857;
-  --success-soft: color-mix(in srgb, #047857 14%, var(--surface));
-  --warning: #a16207;
-  --warning-soft: color-mix(in srgb, #a16207 14%, var(--surface));
+  --success: #036b4f;
+  --success-soft: color-mix(in srgb, var(--success) 14%, var(--surface));
+  --warning: #7a4900;
+  --warning-soft: color-mix(in srgb, var(--warning) 14%, var(--surface));
   --danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
   --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
@@ -105,9 +105,7 @@
 }
 
 .ctox-pane--glass {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--surface);
 }
 
 /* Stacked pane body: content view and empty state share the same grid cell,
@@ -159,7 +157,7 @@
   min-width: 0;
   min-height: 32px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
   padding: 0 10px;
@@ -192,7 +190,7 @@
   width: 100%;
   min-height: 32px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
   padding: 0 10px;
@@ -249,7 +247,7 @@
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
   color: var(--text);
   font: inherit;
@@ -393,7 +391,7 @@
    -------------------------------------------------------------------------- */
 .ctox-card {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--panel-radius);
   background: var(--surface);
   overflow: hidden;
 }
@@ -558,7 +556,7 @@
   flex: 0 0 auto;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--muted);
   cursor: pointer;
@@ -613,7 +611,7 @@
   min-height: 32px;
   flex: 0 1 auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
   padding: 0 8px;
@@ -639,7 +637,7 @@
   min-width: max-content;
   padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface-2);
 }
 
@@ -651,7 +649,7 @@
   height: 24px;
   padding: 0 9px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: max(2px, calc(var(--control-radius) - 1px));
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -894,6 +892,291 @@
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--hairline, var(--line));
+}
+
+/* ----------------------------------------------------------------------------
+   Operational action strip and signature Run Control.
+   Routine actions stay compact and neutral; the one app-specific automation
+   may use the high-contrast Run Control.
+   -------------------------------------------------------------------------- */
+.ctox-action-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.ctox-action-strip__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--line);
+}
+
+.ctox-action-strip__group:last-child {
+  padding-right: 0;
+  margin-left: auto;
+  margin-right: 0;
+  border-right: 0;
+}
+
+.ctox-run-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 78%, var(--text));
+  border-radius: var(--control-radius);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.ctox-run-control:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+.ctox-run-control:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ctox-run-control[aria-busy="true"],
+.ctox-run-control.is-running {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ctox-run-control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ----------------------------------------------------------------------------
+   Compact record workbench.
+
+   This is the canonical shell for small, form-led business modules. It keeps
+   routine CRUD dense and predictable (Ableton-style), while leaving
+   .ctox-run-control exclusively to a module's signature automation.
+
+     <section class="ctox-record-workbench">
+       <header class="ctox-record-workbench__header …">…</header>
+       <div class="ctox-record-workbench__body">
+         <form class="ctox-compact-form">
+           <div class="ctox-compact-form__fields">
+             <label class="ctox-compact-field">…</label>
+           </div>
+           <div class="ctox-compact-form__actions">…</div>
+         </form>
+         <div class="ctox-record-workbench__status">…</div>
+         <div class="ctox-record-list">…</div>
+       </div>
+     </section>
+   -------------------------------------------------------------------------- */
+.ctox-record-workbench {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.ctox-record-workbench__header {
+  min-height: 48px;
+  padding: 8px 10px;
+}
+
+.ctox-record-workbench__header .ctox-pane-kicker {
+  font-size: 9px;
+  letter-spacing: 0.09em;
+}
+
+.ctox-record-workbench__header .ctox-pane-title {
+  margin-top: 1px;
+  font-size: 13px;
+  line-height: 1.15;
+}
+
+.ctox-record-workbench__subtitle {
+  max-width: 72ch;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-record-workbench__subtitle:empty {
+  display: none;
+}
+
+.ctox-record-workbench__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.ctox-compact-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+}
+
+.ctox-compact-form__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.ctox-compact-form__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.ctox-compact-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.ctox-compact-field > .ctox-input,
+.ctox-compact-field > .ctox-select,
+.ctox-compact-field > .ctox-textarea {
+  min-width: 0;
+  min-height: 30px;
+  padding-inline: 8px;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.ctox-record-workbench__status {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ctox-record-workbench__status:empty {
+  display: none;
+}
+
+.ctox-record-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.ctox-record-list > .ctox-empty {
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+@container business-app-window (max-width: 760px) {
+  .ctox-workspace,
+  .ctox-workspace--two-pane {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 6px;
+  }
+
+  .ctox-column-resizer {
+    display: none;
+  }
+
+  .ctox-action-strip {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .ctox-record-workbench__header {
+    min-height: 44px;
+    padding: 7px 8px;
+  }
+
+  .ctox-record-workbench__subtitle {
+    display: none;
+  }
+
+  .ctox-record-workbench__body {
+    padding: 6px;
+  }
+
+  .ctox-compact-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ctox-compact-form__fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ctox-compact-form__actions {
+    min-width: 0;
+  }
+
+  .ctox-compact-form__actions > .ctox-button,
+  .ctox-compact-form__actions > .ctox-run-control {
+    min-height: 40px;
+    flex: 1 1 auto;
+  }
+}
+
+@container business-app-window (max-width: 430px) {
+  .ctox-compact-form__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctox-workspace *,
+  .ctox-modal *,
+  .ctox-run-control {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ----------------------------------------------------------------------------

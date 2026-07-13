@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Business app">
+  <rect x="8" y="8" width="48" height="48" rx="8" fill="#171a1d" stroke="#72b8aa" stroke-width="3"/>
+  <path d="M18 21h28M18 32h28M18 43h18" stroke="#72b8aa" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -11,6 +11,12 @@
     "test:module-bundles": "node modules/calendar/calendar.test.mjs && node modules/ctox/test.js && node modules/customers/customers.test.mjs && node modules/iot/iot.test.mjs && node modules/notes/notes.test.mjs && node modules/outbound/outbound.test.mjs && node modules/research/test.mjs",
     "check:release-docs": "node scripts/assert-production-release-docs.mjs",
     "check:security-signoff": "node scripts/assert-security-privacy-signoff.mjs --self-test && node scripts/assert-security-privacy-signoff.mjs",
+    "qa:design-matrix": "node scripts/capture-design-matrix.mjs",
+    "qa:visual-diff": "node scripts/assert-visual-diff.mjs",
+    "qa:visual-baseline": "node scripts/assert-visual-diff.mjs --update-baseline",
+    "qa:accessibility": "node scripts/assert-accessibility-contract.mjs",
+    "qa:app-starter-browser": "node scripts/assert-app-starter-browser.mjs",
+    "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
     "test": "npm run check:deps && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store"
   },
   "devDependencies": {

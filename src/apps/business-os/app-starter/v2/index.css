@@ -1,0 +1,118 @@
+.ctox-starter {
+  color: var(--text);
+  background: var(--surface);
+  grid-template-columns: minmax(190px, 24%) minmax(0, 1fr) minmax(210px, 26%);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ctox-starter__navigation,
+.ctox-starter__main,
+.ctox-starter__inspector {
+  min-width: 0;
+  min-height: 0;
+}
+
+.ctox-starter__navigation {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.ctox-starter__navigation > .ctox-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.ctox-starter .ctox-list-item strong,
+.ctox-starter .ctox-list-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-starter .ctox-list-item small {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.ctox-starter__workbench {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: auto;
+}
+
+.ctox-starter__states {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 6px;
+  padding: 8px 8px 0;
+  background: var(--surface);
+}
+
+.ctox-starter__states .ctox-callout {
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.ctox-starter__workbench > .ctox-empty,
+.ctox-starter__workbench > .ctox-starter__form {
+  min-height: 0;
+}
+
+.ctox-starter__form {
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ctox-starter__preview {
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  overflow: auto;
+}
+
+.ctox-starter__preview p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.ctox-starter__form-head,
+.ctox-starter__form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ctox-starter__form-actions {
+  justify-content: flex-end;
+}
+
+.ctox-starter [data-request-note]:empty {
+  display: none;
+}
+
+@container business-app-window (max-width: 759px) {
+  .ctox-starter {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(150px, 34%) minmax(0, 1fr);
+  }
+
+  .ctox-starter__inspector {
+    display: none;
+  }
+}
+
+@container business-app-window (min-width: 760px) and (max-width: 1199px) {
+  .ctox-starter {
+    grid-template-columns: minmax(190px, 30%) minmax(0, 1fr);
+  }
+
+  .ctox-starter__inspector {
+    display: none;
+  }
+}

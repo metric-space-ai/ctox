@@ -1,0 +1,51 @@
+{
+  "schema": "ctox.business_os.app_archetypes.v1",
+  "default": "record-workbench",
+  "archetypes": {
+    "record-workbench": {
+      "title": "Record Workbench",
+      "navigation": "Records",
+      "workbench": "Record details",
+      "inspector": "Properties",
+      "signature_action": "Process records",
+      "command_type": "business_os.chat.task",
+      "de": { "title": "Datensätze", "navigation": "Einträge", "workbench": "Details", "inspector": "Eigenschaften", "signature_action": "Einträge verarbeiten" }
+    },
+    "queue-workflow": {
+      "title": "Queue / Workflow",
+      "navigation": "Queues",
+      "workbench": "Work item",
+      "inspector": "Handoff",
+      "signature_action": "Run workflow",
+      "command_type": "business_os.chat.task",
+      "de": { "title": "Warteschlange / Workflow", "navigation": "Warteschlangen", "workbench": "Arbeitsvorgang", "inspector": "Übergabe", "signature_action": "Workflow starten" }
+    },
+    "editor-document": {
+      "title": "Editor / Document",
+      "navigation": "Documents",
+      "workbench": "Editor",
+      "inspector": "Document properties",
+      "signature_action": "Publish document",
+      "command_type": "business_os.chat.task",
+      "de": { "title": "Editor / Dokument", "navigation": "Dokumente", "workbench": "Editor", "inspector": "Dokumenteigenschaften", "signature_action": "Dokument veröffentlichen" }
+    },
+    "automation": {
+      "title": "Automation",
+      "navigation": "Inputs",
+      "workbench": "Configuration",
+      "inspector": "Run result",
+      "signature_action": "Start automation",
+      "command_type": "business_os.chat.task",
+      "de": { "title": "Automatisierung", "navigation": "Eingaben", "workbench": "Konfiguration", "inspector": "Laufergebnis", "signature_action": "Automatisierung starten" }
+    },
+    "timeline-thread": {
+      "title": "Timeline / Thread",
+      "navigation": "Threads",
+      "workbench": "Timeline",
+      "inspector": "Context",
+      "signature_action": "Delegate follow-up",
+      "command_type": "business_os.chat.task",
+      "de": { "title": "Verlauf / Thread", "navigation": "Threads", "workbench": "Verlauf", "inspector": "Kontext", "signature_action": "Folgeaufgabe delegieren" }
+    }
+  }
+}

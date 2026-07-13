@@ -1,0 +1,96 @@
+<section class="ctox-workspace ctox-starter" data-starter-root>
+  <aside class="ctox-pane ctox-starter__navigation" data-starter-navigation>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div>
+        <span class="ctox-pane-kicker" data-archetype-title>Business app</span>
+        <h2 class="ctox-pane-title" data-navigation-title>Records</h2>
+      </div>
+      <button class="ctox-pane-icon" type="button" data-action="create-record" aria-label="Create record">+</button>
+    </header>
+    <div class="ctox-toolbar">
+      <input class="ctox-pane-search" type="search" data-record-search aria-label="Search records" placeholder="Search…">
+      <select class="ctox-pane-filter" data-status-filter aria-label="Filter status">
+        <option value="" data-copy="filter_all">All</option>
+        <option value="open" data-copy="status_open">Open</option>
+        <option value="done" data-copy="status_done">Done</option>
+      </select>
+    </div>
+    <div class="ctox-list" data-record-list></div>
+  </aside>
+
+  <main class="ctox-pane ctox-starter__main" data-starter-main>
+    <header class="ctox-action-strip">
+      <span class="ctox-action-strip__group">
+        <button class="ctox-button ctox-button--sm" type="button" data-action="import" data-copy="import">Import</button>
+        <button class="ctox-button ctox-button--sm" type="button" data-action="sort" data-copy="sort">Sort</button>
+        <button class="ctox-button ctox-button--sm" type="button" data-action="edit" data-copy="edit">Edit</button>
+      </span>
+      <span class="ctox-action-strip__group">
+        <span class="ctox-badge" data-run-status aria-live="polite">Ready</span>
+        <button class="ctox-run-control" type="button" data-action="run-signature">Run</button>
+      </span>
+    </header>
+    <div class="ctox-pane-body ctox-starter__workbench">
+      <div class="ctox-starter__states" data-state-stack aria-live="polite" hidden>
+        <section class="ctox-callout" data-offline-state hidden>
+          <strong data-copy="offline_title">Offline</strong>
+          <span data-copy="offline_message">Changes will resume when the connection returns.</span>
+        </section>
+        <section class="ctox-callout" data-permission-state hidden>
+          <strong data-copy="permission_title">Read-only access</strong>
+          <span data-copy="permission_message">You can inspect records but cannot change them.</span>
+          <button class="ctox-button ctox-button--sm" type="button" data-action="request-permission" data-copy="request_permission">Request change</button>
+        </section>
+        <section class="ctox-callout is-danger" data-error-state hidden>
+          <strong data-copy="error_title">Action failed</strong>
+          <span data-error-message></span>
+        </section>
+      </div>
+      <div class="ctox-empty" data-empty-state>
+        <strong data-copy="no_selection">No record selected</strong>
+        <span data-copy="no_selection_hint">Create or select a record to begin.</span>
+      </div>
+      <article class="ctox-starter__preview" data-record-preview hidden>
+        <header class="ctox-starter__form-head">
+          <div>
+            <span class="ctox-pane-kicker" data-workbench-preview-title>Record details</span>
+            <h2 class="ctox-pane-title" data-preview-title></h2>
+          </div>
+          <span class="ctox-badge" data-preview-status></span>
+        </header>
+        <p data-preview-notes></p>
+        <small class="ctox-muted" data-preview-updated></small>
+      </article>
+      <form class="ctox-starter__form" data-record-form hidden>
+        <div class="ctox-starter__form-head">
+          <div>
+            <span class="ctox-pane-kicker" data-workbench-title>Record details</span>
+            <h2 class="ctox-pane-title" data-form-heading>New record</h2>
+          </div>
+          <span class="ctox-badge" data-save-state aria-live="polite">Saved</span>
+        </div>
+        <label class="ctox-field-label" for="starter-title" data-copy="field_title">Title</label>
+        <input class="ctox-input" id="starter-title" name="title" required autocomplete="off">
+        <label class="ctox-field-label" for="starter-notes" data-copy="field_notes">Notes</label>
+        <textarea class="ctox-textarea" id="starter-notes" name="notes" rows="8"></textarea>
+        <div class="ctox-starter__form-actions">
+          <button class="ctox-button" type="button" data-action="cancel-edit" data-copy="cancel">Cancel</button>
+          <button class="ctox-button is-primary" type="submit" data-copy="save">Save</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <aside class="ctox-pane ctox-starter__inspector" data-starter-inspector>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div>
+        <span class="ctox-pane-kicker" data-copy="inspector_kicker">Inspector</span>
+        <h2 class="ctox-pane-title" data-inspector-title>Properties</h2>
+      </div>
+    </header>
+    <div class="ctox-pane-body">
+      <dl class="ctox-fields" data-record-inspector></dl>
+      <div class="ctox-callout" data-request-note></div>
+    </div>
+  </aside>
+</section>

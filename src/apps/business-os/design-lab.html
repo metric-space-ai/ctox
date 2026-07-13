@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="de" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Business OS Design Lab</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="shared/base.css">
+  <style>
+    html, body { overflow: auto; height: auto; min-height: 100%; }
+    body { padding: 16px; }
+    .lab-shell { width: min(100%, 1180px); margin: 0 auto; }
+    .lab-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+    .lab-head h1 { margin:0 auto 0 0; font-size:16px; }
+    .lab-frame { container: business-app-window / inline-size; height: 720px; border:1px solid var(--line); resize:horizontal; overflow:hidden; min-width:640px; max-width:100%; }
+    .lab-pane-copy { padding:12px; display:grid; gap:10px; align-content:start; }
+    .lab-table-name { font-weight:700; }
+  </style>
+</head>
+<body>
+  <main class="lab-shell">
+    <header class="lab-head">
+      <h1 data-i18n="title">Operatives Instrument · Design Lab</h1>
+      <select class="ctox-select" style="width:auto" data-lab-theme aria-label="Theme">
+        <option value="dark">Dark</option><option value="light">Light</option>
+      </select>
+      <select class="ctox-select" style="width:auto" data-lab-width aria-label="Breite">
+        <option value="640">Compact</option><option value="960" selected>Standard</option><option value="1180">Wide</option>
+      </select>
+    </header>
+    <section class="lab-frame" data-lab-frame>
+      <div class="ctox-workspace ctox-workspace--two-pane" style="--ctox-left-width:260px">
+        <aside class="ctox-pane">
+          <header class="ctox-pane-band">
+            <span class="ctox-field-label" data-i18n="register">Register</span>
+            <strong data-i18n="records">Vorgänge</strong>
+            <div class="ctox-pane-tools">
+              <input class="ctox-pane-search" type="search" placeholder="Suchen…" data-i18n-placeholder="search">
+              <button class="ctox-pane-icon" aria-label="Filter" data-i18n-aria-label="filter">≡</button>
+            </div>
+          </header>
+          <div class="ctox-list">
+            <button class="ctox-list-item is-selected"><strong>Nord GmbH</strong><br><small data-i18n="reviewRunning">Prüfung läuft</small></button>
+            <button class="ctox-list-item"><strong>Delta AG</strong><br><small data-i18n="ready">Bereit</small></button>
+            <button class="ctox-list-item"><strong>Werk 17</strong><br><small data-i18n="draft">Entwurf</small></button>
+          </div>
+        </aside>
+        <button class="ctox-column-resizer" aria-label="Spaltenbreite anpassen"></button>
+        <section class="ctox-pane">
+          <header class="ctox-action-strip">
+            <span class="ctox-action-strip__group">
+              <button class="ctox-button ctox-button--sm" data-i18n="import">Import</button>
+              <button class="ctox-button ctox-button--sm" data-i18n="filter">Filter</button>
+              <button class="ctox-button ctox-button--sm" data-i18n="sort">Sortieren</button>
+              <button class="ctox-button ctox-button--sm" data-i18n="edit">Bearbeiten</button>
+            </span>
+            <span class="ctox-action-strip__group">
+              <span class="ctox-badge is-success" data-i18n="synced">Synchron</span>
+              <button class="ctox-run-control" data-i18n="startAutomation">Automatisierung starten</button>
+            </span>
+          </header>
+          <div class="lab-pane-copy">
+            <div class="ctox-callout"><strong>Nord GmbH</strong><p data-i18n="principle">Routinearbeit bleibt ruhig; die Automation ist der klare Kontrast.</p></div>
+            <div class="ctox-table-wrap">
+              <table class="ctox-table">
+                <thead><tr><th><button class="ctox-table-sort"><span data-i18n="field">Feld</span> ↕</button></th><th>Status</th><th class="is-num" data-i18n="value">Wert</th></tr></thead>
+                <tbody>
+                  <tr class="is-selected"><td class="lab-table-name" data-i18n="dataReview">Datenprüfung</td><td><span class="ctox-badge is-warning" data-i18n="open">Offen</span></td><td class="is-num">18</td></tr>
+                  <tr><td class="lab-table-name" data-i18n="approval">Freigabe</td><td><span class="ctox-badge is-success" data-i18n="done">Fertig</span></td><td class="is-num">42</td></tr>
+                  <tr><td class="lab-table-name">Export</td><td><span class="ctox-badge" data-i18n="scheduled">Geplant</span></td><td class="is-num">7</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="ctox-card"><header data-i18n="formStates">Formularzustände</header><div class="ctox-card-body">
+              <label class="ctox-field-label" for="lab-name" data-i18n="name">Bezeichnung</label>
+              <input class="ctox-input" id="lab-name" value="Nord GmbH">
+            </div></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="design-lab.js"></script>
+</body>
+</html>
