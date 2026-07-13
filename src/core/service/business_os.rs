@@ -4901,8 +4901,9 @@ const pageSignals = async () => {
       ].filter(Boolean).join(" ").toLowerCase();
       const visibleText = String(document.body ? document.body.innerText || "" : "").replace(/\s+/g, " ").trim();
       const lowerText = visibleText.toLowerCase();
+      const normalizedText = lowerText.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/ł/g, "l");
       const matchingTerms = (entries) => entries
-        .filter((entry) => entry.pattern.test(lowerText))
+        .filter((entry) => entry.pattern.test(normalizedText))
         .map((entry) => entry.term);
       const mfaTerms = matchingTerms([
         { term: "mfa", pattern: /\bmfa\b/ },
@@ -4928,11 +4929,18 @@ const pageSignals = async () => {
         { term: "disabled", pattern: /\bdisabled\b/ },
         { term: "too-many", pattern: /too\s+many/ },
         { term: "expired", pattern: /\bexpired\b/ },
-        { term: "ungueltig", pattern: /ungueltig/ },
+        { term: "ungueltig", pattern: /ungultig|ungueltig/ },
         { term: "falsches-passwort", pattern: /falsches\s+passwort/ },
         { term: "anmeldung-fehlgeschlagen", pattern: /anmeldung\s+fehlgeschlagen/ },
         { term: "gesperrt", pattern: /gesperrt/ },
         { term: "abgelaufen", pattern: /abgelaufen/ },
+        { term: "identifiants-incorrects", pattern: /identifiants?\s+(incorrects?|invalides?)/ },
+        { term: "connexion-echouee", pattern: /connexion\s+(a\s+)?echoue|echec\s+de\s+(la\s+)?connexion/ },
+        { term: "credenciales-incorrectas", pattern: /credenciales?\s+(incorrectas?|invalidas?)/ },
+        { term: "inicio-sesion-fallido", pattern: /inicio\s+de\s+sesion\s+fallido/ },
+        { term: "credenziali-non-valide", pattern: /credenziali\s+(non\s+valide|errate)/ },
+        { term: "inloggegevens-onjuist", pattern: /inloggegevens\s+(onjuist|ongeldig)/ },
+        { term: "nieprawidlowe-dane", pattern: /nieprawidlowe\s+dane|bledne\s+haslo/ },
       ]);
       const otpFieldCount = Array.from(document.querySelectorAll("input, textarea"))
         .filter(visible)
@@ -5815,6 +5823,14 @@ mod tests {
         assert!(source.contains("credential_url_changed"));
         assert!(source.contains("verifyLocator.waitFor({ state: \"visible\", timeout: 10000 })"));
         assert!(source.contains("afterSignals = await pageSignals()"));
+        assert!(source.contains("lowerText.normalize(\"NFKD\")"));
+        assert!(source.contains("ungultig|ungueltig"));
+        assert!(source.contains("identifiants-incorrects"));
+        assert!(source.contains("credenciales-incorrectas"));
+        assert!(source.contains("credenziali-non-valide"));
+        assert!(source.contains("inloggegevens-onjuist"));
+        assert!(source.contains("nieprawidlowe-dane"));
+        assert!(source.contains("baseLoginSignal && !mfaRequired && !loginErrorDetected"));
 
         Ok(())
     }

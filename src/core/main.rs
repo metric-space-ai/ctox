@@ -1299,7 +1299,7 @@ fn append_appsec_credential_proof_arg(root: &Path, args: &[String]) -> anyhow::R
                 subjects_path.display()
             )
         })?)?;
-    let proof = build_appsec_credential_proof(root, &subjects_value)?;
+    let mut proof = build_appsec_credential_proof(root, &subjects_value)?;
     let state_dir = resolve_appsec_cli_path(root, &appsec_state_dir_for_args(root, args));
     let authz_dir = state_dir.join("authz");
     fs::create_dir_all(&authz_dir).with_context(|| {
@@ -1308,20 +1308,119 @@ fn append_appsec_credential_proof_arg(root: &Path, args: &[String]) -> anyhow::R
             authz_dir.display()
         )
     })?;
-    let proof_path = authz_dir.join(format!("authz-credential-proof-{}.json", current_millis()));
-    fs::write(&proof_path, serde_json::to_vec_pretty(&proof)?).with_context(|| {
+    let canonical_path = authz_dir.join("credential-proof.json");
+    if matches!(command_pair, Some(("authz", Some("run")))) && canonical_path.is_file() {
+        let existing: Value =
+            serde_json::from_slice(&fs::read(&canonical_path).with_context(|| {
+                format!(
+                    "failed to read canonical AppSec authz credential proof {}",
+                    canonical_path.display()
+                )
+            })?)
+            .with_context(|| {
+                format!(
+                    "canonical AppSec authz credential proof is not valid JSON: {}",
+                    canonical_path.display()
+                )
+            })?;
+        preserve_appsec_login_proof_evidence(&mut proof, &existing);
+    }
+    let proof_bytes = serde_json::to_vec_pretty(&proof)?;
+    let proof_path = authz_dir.join(format!("credential-proof-{}.json", current_millis()));
+    fs::write(&proof_path, &proof_bytes).with_context(|| {
         format!(
             "failed to write AppSec authz credential proof {}",
             proof_path.display()
         )
     })?;
+    let proof_arg_path = if matches!(command_pair, Some(("authz", Some("run")))) {
+        fs::write(&canonical_path, &proof_bytes).with_context(|| {
+            format!(
+                "failed to publish canonical AppSec authz credential proof {}",
+                canonical_path.display()
+            )
+        })?;
+        canonical_path
+    } else {
+        proof_path
+    };
 
     let mut augmented = args.to_vec();
     augmented.extend([
         "--credential-proof".to_string(),
-        proof_path.to_string_lossy().to_string(),
+        proof_arg_path.to_string_lossy().to_string(),
     ]);
     Ok(augmented)
+}
+
+fn preserve_appsec_login_proof_evidence(fresh: &mut Value, existing: &Value) {
+    if existing.get("version").and_then(Value::as_str)
+        != Some("ctox.appsec_pentest.authz_credential_proof.v1")
+    {
+        return;
+    }
+    let existing_rows = existing
+        .get("subjects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(fresh_rows) = fresh.get_mut("subjects").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut login_authenticated = 0usize;
+    let mut login_not_checked = 0usize;
+    let mut login_failed = 0usize;
+    let mut preserved = 0usize;
+    for row in fresh_rows {
+        let subject_id = row.get("subject_id").and_then(Value::as_str);
+        let credential_ref = row.get("credential_ref").and_then(Value::as_str);
+        let Some(existing_row) = existing_rows.iter().find(|candidate| {
+            candidate.get("subject_id").and_then(Value::as_str) == subject_id
+                && candidate.get("credential_ref").and_then(Value::as_str) == credential_ref
+        }) else {
+            continue;
+        };
+        let login_status = existing_row
+            .get("login_status")
+            .and_then(Value::as_str)
+            .unwrap_or("not_checked");
+        let normalized_status = match login_status {
+            "authenticated" => {
+                login_authenticated += 1;
+                "authenticated"
+            }
+            "not_checked" | "not_required" => {
+                login_not_checked += usize::from(login_status == "not_checked");
+                login_status
+            }
+            _ => {
+                login_failed += 1;
+                login_status
+            }
+        };
+        if let Some(object) = row.as_object_mut() {
+            object.insert("login_status".to_string(), json!(normalized_status));
+            if let Some(mut login_proof) = existing_row.get("login_proof").cloned() {
+                appsec_redact_for_authz_evidence(&mut login_proof);
+                object.insert("login_proof".to_string(), login_proof);
+            }
+        }
+        preserved += 1;
+    }
+    if preserved == 0 {
+        return;
+    }
+    if let Some(summary) = fresh.get_mut("summary").and_then(Value::as_object_mut) {
+        summary.insert(
+            "login_authenticated".to_string(),
+            json!(login_authenticated),
+        );
+        summary.insert("login_not_checked".to_string(), json!(login_not_checked));
+        summary.insert("login_failed".to_string(), json!(login_failed));
+    }
+    if let Some(object) = fresh.as_object_mut() {
+        object.insert("login_evidence_preserved".to_string(), json!(true));
+    }
 }
 
 fn resolve_appsec_cli_path(root: &Path, value: impl AsRef<Path>) -> PathBuf {
@@ -1514,8 +1613,14 @@ pub(crate) fn handle_appsec_pipeline_work(root: &Path, args: &[String]) -> anyho
     let lease_owner = arg_value(args, "--lease-owner")
         .unwrap_or_else(|| "ctox-appsec-pipeline-worker".to_string());
     let message_key = arg_value(args, "--message-key");
-    let candidates =
-        select_appsec_pipeline_queue_tasks(root, &state_dir, message_key.as_deref(), limit)?;
+    let stage_id = arg_value(args, "--stage-id");
+    let candidates = select_appsec_pipeline_queue_tasks(
+        root,
+        &state_dir,
+        message_key.as_deref(),
+        stage_id.as_deref(),
+        limit,
+    )?;
     let mut results = Vec::new();
     for task in candidates.into_iter().take(limit) {
         let result = if dry_run {
@@ -1548,6 +1653,7 @@ pub(crate) fn handle_appsec_pipeline_work(root: &Path, args: &[String]) -> anyho
         "state_dir": state_dir.to_string_lossy(),
         "dry_run": dry_run,
         "lease_owner": lease_owner,
+        "stage_id": stage_id,
         "summary": {
             "selected": results.len(),
             "handled": succeeded,
@@ -1564,6 +1670,7 @@ fn select_appsec_pipeline_queue_tasks(
     root: &Path,
     state_dir: &Path,
     message_key: Option<&str>,
+    stage_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<channels::QueueTaskView>> {
     if let Some(message_key) = message_key {
@@ -1571,6 +1678,11 @@ fn select_appsec_pipeline_queue_tasks(
             anyhow::bail!("queue task `{message_key}` was not found");
         };
         ensure_appsec_pipeline_task(root, state_dir, &task)?;
+        anyhow::ensure!(
+            appsec_pipeline_task_matches_stage(root, &task, stage_id)?,
+            "queue task `{message_key}` does not match requested AppSec stage `{}`",
+            stage_id.unwrap_or_default()
+        );
         if appsec_pipeline_retry_due(root, &task.message_key)? {
             return Ok(vec![task]);
         }
@@ -1581,6 +1693,7 @@ fn select_appsec_pipeline_queue_tasks(
     let mut selected = Vec::new();
     for task in channels::list_queue_tasks(root, &pending, limit.saturating_mul(20).max(50))? {
         if is_appsec_pipeline_task_for_state(root, state_dir, &task)?
+            && appsec_pipeline_task_matches_stage(root, &task, stage_id)?
             && appsec_pipeline_retry_due(root, &task.message_key)?
         {
             selected.push(task);
@@ -1590,6 +1703,20 @@ fn select_appsec_pipeline_queue_tasks(
         }
     }
     Ok(selected)
+}
+
+fn appsec_pipeline_task_matches_stage(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    stage_id: Option<&str>,
+) -> anyhow::Result<bool> {
+    let Some(stage_id) = stage_id else {
+        return Ok(true);
+    };
+    Ok(appsec_pipeline_task_stage(root, task)?
+        .get("id")
+        .and_then(Value::as_str)
+        == Some(stage_id))
 }
 
 fn ensure_appsec_pipeline_task(
@@ -1664,7 +1791,7 @@ fn appsec_pipeline_worker_execute_task(
     ensure_appsec_pipeline_task(root, state_dir, task)?;
     let leased = channels::lease_queue_task(root, &task.message_key, lease_owner)?;
     let stage = appsec_pipeline_task_stage(root, &leased)?;
-    let execution = execute_appsec_stage_commands(root, state_dir, &stage)?;
+    let mut execution = execute_appsec_stage_commands(root, state_dir, &stage)?;
     let commands = execution
         .get("commands")
         .and_then(Value::as_array)
@@ -1787,7 +1914,11 @@ fn appsec_pipeline_worker_execute_task(
     }
 
     let refreshed = channels::load_queue_task(root, &leased.message_key)?.unwrap_or(leased);
-    let result = json!({
+    strip_appsec_worker_nested_projections(&mut execution);
+    strip_appsec_worker_nested_projections(&mut analyze_output);
+    strip_appsec_worker_nested_projections(&mut coverage_update);
+    strip_appsec_worker_nested_projections(&mut pipeline_status);
+    let detailed_result = json!({
         "message_key": refreshed.message_key,
         "status": final_status,
         "note": final_note,
@@ -1798,6 +1929,43 @@ fn appsec_pipeline_worker_execute_task(
         "analysis": analyze_output,
         "coverage_update": coverage_update,
         "pipeline_status": pipeline_status,
+    });
+    let details_dir = state_dir.join("pipeline-work");
+    fs::create_dir_all(&details_dir).with_context(|| {
+        format!(
+            "failed to create AppSec pipeline worker detail directory {}",
+            details_dir.display()
+        )
+    })?;
+    let details_artifact = details_dir.join(format!(
+        "worker-{}-{}.json",
+        appsec_sanitize_session_placeholder_key(appsec_stage_id(&stage).unwrap_or("unknown-stage")),
+        current_millis()
+    ));
+    fs::write(
+        &details_artifact,
+        serde_json::to_vec_pretty(&detailed_result)?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write AppSec pipeline worker details {}",
+            details_artifact.display()
+        )
+    })?;
+    let result = json!({
+        "message_key": refreshed.message_key,
+        "status": final_status,
+        "note": final_note,
+        "route_status": refreshed.route_status,
+        "stage": appsec_stage_summary(&stage),
+        "details_artifact": details_artifact.to_string_lossy(),
+        "summary": {
+            "commands": commands.len(),
+            "command_failures": command_failures,
+            "command_blocks": command_blocks,
+            "completed_artifacts": completed_artifacts,
+        },
+        "failure_policy": failure_policy,
     });
     channels::set_queue_task_metadata_value(
         root,
@@ -1815,6 +1983,23 @@ fn appsec_pipeline_worker_execute_task(
         ],
     )?;
     Ok(result)
+}
+
+fn strip_appsec_worker_nested_projections(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("ctox_durable_projection");
+            for child in object.values_mut() {
+                strip_appsec_worker_nested_projections(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_appsec_worker_nested_projections(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn appsec_pipeline_retry_due(root: &Path, message_key: &str) -> anyhow::Result<bool> {
@@ -4920,6 +5105,194 @@ mod tests {
     }
 
     #[test]
+    fn appsec_authz_run_publishes_timestamped_and_canonical_credential_proof() {
+        let root = make_fake_ctox_root("appsec-canonical-credential-proof");
+        let state = root.join("runtime/appsec/proof-test");
+        let authz_dir = state.join("authz");
+        fs::create_dir_all(&authz_dir).unwrap();
+        let subjects = authz_dir.join("authz-subjects.json");
+        fs::write(
+            &subjects,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.authz_subjects.v1",
+                "subjects": [
+                    {"id": "user-a", "role": "owner", "credential_ref": "ctox-secret://appsec/a"},
+                    {"id": "user-b", "role": "member", "credential_ref": "ctox-secret://appsec/b"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            authz_dir.join("credential-proof.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "ctox.appsec_pentest.authz_credential_proof.v1",
+                "generated_by": "ctox-web-stack-login-evidence",
+                "subjects": [
+                    {
+                        "subject_id": "user-a",
+                        "credential_ref": "ctox-secret://appsec/a",
+                        "status": "available",
+                        "login_status": "authenticated",
+                        "login_proof": {"status": "authenticated", "redacted": true}
+                    },
+                    {
+                        "subject_id": "user-b",
+                        "credential_ref": "ctox-secret://appsec/b",
+                        "status": "available",
+                        "login_status": "login_error",
+                        "login_proof": {"status": "login_error", "redacted": true}
+                    }
+                ],
+                "secret_policy": "redacted availability and login liveness only"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let args = vec![
+            "authz".to_string(),
+            "run".to_string(),
+            "--state-dir".to_string(),
+            state.to_string_lossy().to_string(),
+            "--target".to_string(),
+            "https://example.test/app".to_string(),
+            "--subjects".to_string(),
+            subjects.to_string_lossy().to_string(),
+        ];
+
+        let augmented = append_appsec_credential_proof_arg(&root, &args).unwrap();
+        let proof_arg = augmented
+            .windows(2)
+            .find(|window| window.first().map(String::as_str) == Some("--credential-proof"))
+            .and_then(|window| window.get(1))
+            .map(PathBuf::from)
+            .unwrap();
+        let canonical = authz_dir.join("credential-proof.json");
+        assert_eq!(proof_arg, canonical);
+        let canonical_bytes = fs::read(&canonical).unwrap();
+        let timestamped = fs::read_dir(&authz_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("credential-proof-") && name.ends_with(".json")
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(timestamped.len(), 1);
+        assert_eq!(fs::read(&timestamped[0]).unwrap(), canonical_bytes);
+        let canonical_value: serde_json::Value = serde_json::from_slice(&canonical_bytes).unwrap();
+        assert_eq!(
+            canonical_value
+                .pointer("/summary/login_authenticated")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            canonical_value
+                .pointer("/summary/login_failed")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            canonical_value
+                .pointer("/subjects/0/login_status")
+                .and_then(serde_json::Value::as_str),
+            Some("authenticated")
+        );
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_pipeline_worker_stage_filter_selects_only_requested_queue_task() {
+        let root = make_fake_ctox_root("appsec-pipeline-stage-filter");
+        let state = root.join("runtime/appsec/default");
+        fs::create_dir_all(&state).unwrap();
+        let create_task = |stage_id: &str| {
+            crate::channels::create_queue_task(
+                &root,
+                crate::channels::QueueTaskCreateRequest {
+                    title: format!("Deployment audit stage: {stage_id}"),
+                    prompt: format!("Run deployment audit stage {stage_id}."),
+                    thread_key: format!("deployment-audit:{stage_id}"),
+                    workspace_root: Some(root.to_string_lossy().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: Some("appsec-pentest".to_string()),
+                    parent_message_key: None,
+                    extra_metadata: Some(serde_json::json!({
+                        "source": "ctox-appsec-pipeline",
+                        "idempotency_key": format!("deployment-audit-{stage_id}"),
+                        "appsec_state_dir": state.to_string_lossy(),
+                        "stage": {
+                            "id": stage_id,
+                            "phase": "blackbox-map",
+                            "target": "https://example.test",
+                            "status": "ready",
+                            "run_commands": []
+                        }
+                    })),
+                },
+            )
+            .unwrap()
+        };
+        let stage_a = create_task("stage-a");
+        create_task("stage-b");
+
+        let filtered = handle_appsec_pipeline_work(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "work".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--stage-id".to_string(),
+                "stage-b".to_string(),
+                "--limit".to_string(),
+                "10".to_string(),
+                "--dry-run".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            filtered
+                .pointer("/summary/selected")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            filtered
+                .pointer("/tasks/0/stage/id")
+                .and_then(serde_json::Value::as_str),
+            Some("stage-b")
+        );
+
+        let mismatch = handle_appsec_pipeline_work(
+            &root,
+            &[
+                "pipeline".to_string(),
+                "work".to_string(),
+                "--state-dir".to_string(),
+                state.to_string_lossy().to_string(),
+                "--message-key".to_string(),
+                stage_a.message_key,
+                "--stage-id".to_string(),
+                "stage-b".to_string(),
+                "--dry-run".to_string(),
+            ],
+        )
+        .unwrap_err();
+        assert!(mismatch
+            .to_string()
+            .contains("does not match requested AppSec stage `stage-b`"));
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
     fn chat_attachment_paths_are_canonicalized_for_service_send() {
         let root = unique_test_dir("chat-attachments");
         fs::create_dir_all(&root).unwrap();
@@ -5075,16 +5448,28 @@ mod tests {
                 "generated_at": "test",
                 "profile": "minimal",
                 "active": false,
-                "stages": [{
-                    "id": "stage-1-blackbox-map",
-                    "order": 1,
-                    "phase": "blackbox-map",
-                    "target": "https://example.test",
-                    "tools": ["httpx"],
-                    "active_required": false,
-                    "readiness_blockers": [],
-                    "completion_gate": "httpx mapping run artifact"
-                }]
+                "stages": [
+                    {
+                        "id": "stage-1-blackbox-map",
+                        "order": 1,
+                        "phase": "blackbox-map",
+                        "target": "https://example.test",
+                        "tools": ["httpx"],
+                        "active_required": false,
+                        "readiness_blockers": [],
+                        "completion_gate": "httpx mapping run artifact"
+                    },
+                    {
+                        "id": "stage-2-blackbox-fingerprint",
+                        "order": 2,
+                        "phase": "blackbox-fingerprint",
+                        "target": "https://example.test",
+                        "tools": ["httpx"],
+                        "active_required": false,
+                        "readiness_blockers": [],
+                        "completion_gate": "httpx fingerprint run artifact"
+                    }
+                ]
             }))
             .unwrap(),
         )
@@ -5093,13 +5478,22 @@ mod tests {
             state.join("coverage.json"),
             serde_json::to_string_pretty(&serde_json::json!({
                 "version": "ctox.appsec_pentest.coverage.v1",
-                "workstreams": [{
-                    "id": "ws-map",
-                    "phase": "blackbox-map",
-                    "target": "https://example.test",
-                    "status": "planned",
-                    "tools": ["httpx"]
-                }]
+                "workstreams": [
+                    {
+                        "id": "ws-map",
+                        "phase": "blackbox-map",
+                        "target": "https://example.test",
+                        "status": "planned",
+                        "tools": ["httpx"]
+                    },
+                    {
+                        "id": "ws-fingerprint",
+                        "phase": "blackbox-fingerprint",
+                        "target": "https://example.test",
+                        "status": "planned",
+                        "tools": ["httpx"]
+                    }
+                ]
             }))
             .unwrap(),
         )
@@ -5114,12 +5508,20 @@ mod tests {
                 state.to_string_lossy().to_string(),
                 "--workspace-root".to_string(),
                 root.to_string_lossy().to_string(),
+                "--stage-id".to_string(),
+                "stage-1-blackbox-map".to_string(),
             ],
         )
         .unwrap();
         assert_eq!(
             enqueue
                 .pointer("/ctox_queue_enqueue/created_or_updated")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            enqueue
+                .pointer("/queue_spec/summary/matched_stages")
                 .and_then(serde_json::Value::as_u64),
             Some(1)
         );
@@ -5234,6 +5636,52 @@ mod tests {
                         "verify_selector": "[data-testid='account-shell']"
                     }
                 ]
+            }),
+        );
+        for subject in ["user-a", "user-b"] {
+            crate::secrets::write_secret_record(
+                &root,
+                "appsec",
+                subject,
+                "test-only-password",
+                Some("deployment audit authz test credential".to_string()),
+                serde_json::json!({"source": "test"}),
+            )
+            .unwrap();
+        }
+        write_json_file(
+            authz_dir.join("credential-proof.json"),
+            serde_json::json!({
+                "version": "ctox.appsec_pentest.authz_credential_proof.v1",
+                "generated_by": "ctox-web-stack-login-evidence",
+                "subjects": [
+                    {
+                        "subject_id": "user-a",
+                        "credential_ref": "ctox-secret://appsec/user-a",
+                        "status": "available",
+                        "login_status": "authenticated",
+                        "login_proof": {"status": "authenticated", "redacted": true}
+                    },
+                    {
+                        "subject_id": "user-b",
+                        "credential_ref": "ctox-secret://appsec/user-b",
+                        "status": "available",
+                        "login_status": "authenticated",
+                        "login_proof": {"status": "authenticated", "redacted": true}
+                    }
+                ],
+                "summary": {
+                    "subjects": 2,
+                    "credential_subjects": 2,
+                    "available": 2,
+                    "missing": 0,
+                    "empty": 0,
+                    "invalid": 0,
+                    "login_authenticated": 2,
+                    "login_not_checked": 0,
+                    "login_failed": 0
+                },
+                "secret_policy": "redacted availability and login liveness only"
             }),
         );
         for (subject, object_ref) in [("user-a", "tenant-a"), ("user-b", "tenant-b")] {
@@ -5460,8 +5908,23 @@ mod tests {
             Some(1),
             "{worker:#}"
         );
-        assert!(worker
-            .pointer("/tasks/0/execution/commands")
+        assert!(worker.pointer("/tasks/0/execution").is_none());
+        assert!(worker.pointer("/tasks/0/pipeline_status").is_none());
+        let details_artifact = worker
+            .pointer("/tasks/0/details_artifact")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .expect("worker details artifact");
+        assert!(details_artifact.is_file());
+        let worker_details: serde_json::Value = serde_json::from_slice(
+            &fs::read(&details_artifact).expect("read worker details artifact"),
+        )
+        .expect("parse worker details artifact");
+        assert!(!serde_json::to_string(&worker_details)
+            .unwrap()
+            .contains("ctox_durable_projection"));
+        assert!(worker_details
+            .pointer("/execution/commands")
             .and_then(serde_json::Value::as_array)
             .unwrap()
             .iter()
@@ -5476,8 +5939,8 @@ mod tests {
                         == Some("ctox_web_auth_assist_login")
             }));
         assert_eq!(
-            worker
-                .pointer("/tasks/0/execution/artifact_bindings/authz-run")
+            worker_details
+                .pointer("/execution/artifact_bindings/authz-run")
                 .and_then(serde_json::Value::as_str)
                 .map(|value| value.contains("authz-run-")),
             Some(true)

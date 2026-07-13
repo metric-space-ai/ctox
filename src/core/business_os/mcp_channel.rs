@@ -2540,6 +2540,10 @@ fn call_tool_inner(
             )));
         }
     };
+    let mut result = result;
+    if tool_name.starts_with("appsec_") {
+        compact_appsec_durable_projection_for_mcp(&mut result);
+    }
     let result = redact_mcp_response(result);
     ensure_mcp_response_size(&result)?;
     record_tool_event(
@@ -2550,6 +2554,31 @@ fn call_tool_inner(
         argument_metadata_with_policy(root, &context, tool_name, &arguments),
     )?;
     Ok(result)
+}
+
+fn compact_appsec_durable_projection_for_mcp(result: &mut Value) {
+    let Some(projection) = result
+        .get_mut("ctox_durable_projection")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "version",
+        "database",
+        "state_dir",
+        "command",
+        "projected_at",
+        "counts",
+        "business_os_projection",
+    ] {
+        if let Some(value) = projection.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    compact.insert("response_compacted".to_string(), Value::Bool(true));
+    *projection = compact;
 }
 
 pub fn call_tool_audited(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
@@ -3213,6 +3242,12 @@ fn appsec_report_get(
     if format == "json" {
         let report: Value = serde_json::from_str(&content)
             .with_context(|| format!("failed to parse AppSec report {}", report_path.display()))?;
+        let report_compacted = content.len() > MAX_MCP_RESPONSE_BYTES / 2;
+        let report = if report_compacted {
+            compact_appsec_report_for_mcp(&report)
+        } else {
+            report
+        };
         Ok(serde_json::json!({
             "ok": true,
             "command": "appsec_report_get",
@@ -3221,9 +3256,16 @@ fn appsec_report_get(
             "format": format,
             "state_dir": path_string(&state_dir),
             "report_path": path_string(&report_path),
+            "report_compacted": report_compacted,
             "report": report,
         }))
     } else {
+        let markdown_compacted = content.len() > MAX_MCP_RESPONSE_BYTES / 2;
+        let markdown = if markdown_compacted {
+            content.chars().take(32 * 1024).collect::<String>()
+        } else {
+            content
+        };
         Ok(serde_json::json!({
             "ok": true,
             "command": "appsec_report_get",
@@ -3232,9 +3274,62 @@ fn appsec_report_get(
             "format": format,
             "state_dir": path_string(&state_dir),
             "report_path": path_string(&report_path),
-            "markdown": content,
+            "markdown_compacted": markdown_compacted,
+            "markdown": markdown,
         }))
     }
+}
+
+fn compact_appsec_report_for_mcp(report: &Value) -> Value {
+    let findings = report
+        .get("findings")
+        .and_then(Value::as_array)
+        .map(|findings| {
+            findings
+                .iter()
+                .map(|finding| {
+                    let mut compact = serde_json::Map::new();
+                    for key in ["id", "title", "severity", "status", "target"] {
+                        if let Some(value) = finding.get(key) {
+                            compact.insert(key.to_string(), value.clone());
+                        }
+                    }
+                    Value::Object(compact)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "version",
+        "generated_at",
+        "report_complete",
+        "scanner_summary",
+        "scanner_inventory_summary",
+        "active_approval_summary",
+        "proof_handoff_summary",
+        "completion_review_artifact",
+    ] {
+        if let Some(value) = report.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(review) = report.get("completion_review") {
+        compact.insert(
+            "completion_review".to_string(),
+            serde_json::json!({
+                "status": review.get("status").cloned().unwrap_or(Value::Null),
+                "closable": review.get("closable").cloned().unwrap_or(Value::Null),
+                "blocker_count": review
+                    .get("blockers")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
+            }),
+        );
+    }
+    compact.insert("findings".to_string(), Value::Array(findings));
+    compact.insert("content_omitted".to_string(), Value::Bool(true));
+    Value::Object(compact)
 }
 
 fn appsec_finding_get(
@@ -6058,7 +6153,9 @@ fn redact_mcp_response(value: Value) -> Value {
         Value::Object(map) => Value::Object(
             map.into_iter()
                 .map(|(key, value)| {
-                    if is_sensitive_mcp_key(&key) {
+                    if is_sensitive_mcp_key(&key)
+                        && !is_redacted_appsec_evidence_container(&key, &value)
+                    {
                         (key, Value::String(REDACTED_MCP_VALUE.to_string()))
                     } else {
                         (key, redact_mcp_response(value))
@@ -6069,6 +6166,18 @@ fn redact_mcp_response(value: Value) -> Value {
         Value::Array(items) => Value::Array(items.into_iter().map(redact_mcp_response).collect()),
         other => other,
     }
+}
+
+fn is_redacted_appsec_evidence_container(key: &str, value: &Value) -> bool {
+    key.eq_ignore_ascii_case("credential_proof")
+        && value
+            .get("version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| version == "ctox.appsec_pentest.authz_credential_proof.v1")
+        && value
+            .get("secret_policy")
+            .and_then(Value::as_str)
+            .is_some_and(|policy| policy.to_ascii_lowercase().contains("redact"))
 }
 
 fn is_sensitive_mcp_key(key: &str) -> bool {
@@ -6803,8 +6912,8 @@ mod tests {
             &subjects_path,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "subjects": [
-                    {"id": "user-a", "role": "owner", "login_hint": "a@example.test", "credential_ref": "ctox-secret://appsec/a"},
-                    {"id": "user-b", "role": "member", "login_hint": "b@example.test", "credential_ref": "ctox-secret://appsec/b"}
+                    {"id": "user-a", "role": "owner", "login_hint": "a@example.test", "credential_ref": "ctox-secret://appsec/a", "verify_selector": "[data-testid='account-shell']"},
+                    {"id": "user-b", "role": "member", "login_hint": "b@example.test", "credential_ref": "ctox-secret://appsec/b", "verify_selector": "[data-testid='account-shell']"}
                 ]
             }))?,
         )?;
@@ -6834,6 +6943,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.appsec_pentest.authz_credential_proof.v1")
         );
+        assert_eq!(
+            authz_preflight
+                .pointer("/credential_proof/subjects/0/credential_ref")
+                .and_then(Value::as_str),
+            Some(REDACTED_MCP_VALUE)
+        );
         let credential_proof_artifact = authz_preflight
             .get("artifact")
             .and_then(Value::as_str)
@@ -6862,17 +6977,55 @@ mod tests {
         );
         assert_eq!(
             authz_preflight.get("ok").and_then(Value::as_bool),
-            Some(true)
+            Some(false)
         );
         assert_eq!(
             authz_preflight.get("status").and_then(Value::as_str),
-            Some("ready-for-web-stack-execution")
+            Some("blocked")
         );
         assert_eq!(
             authz_preflight
                 .pointer("/preflight/subject_summary/cross_subject_pairs")
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        let mut available_proof: Value =
+            serde_json::from_slice(&fs::read(&credential_proof_artifact)?)?;
+        for subject in available_proof["subjects"]
+            .as_array_mut()
+            .expect("credential proof subjects")
+        {
+            subject["status"] = Value::String("available".to_string());
+        }
+        available_proof["generated_by"] = Value::String("mcp-unit-test-fixture".to_string());
+        available_proof["summary"]["available"] = serde_json::json!(2);
+        available_proof["summary"]["missing"] = serde_json::json!(0);
+        fs::write(
+            &credential_proof_artifact,
+            serde_json::to_vec_pretty(&available_proof)?,
+        )?;
+        let authz_preflight = call_tool(
+            root,
+            "appsec_authz_preflight",
+            serde_json::json!({
+                "target": "https://example.test",
+                "subjects": "authz-subjects.json",
+                "source_id": "custom-web-app",
+                "credential_proof": credential_proof_artifact.clone(),
+                "require_credentials": true,
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            authz_preflight.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            authz_preflight.get("status").and_then(Value::as_str),
+            Some("ready-for-web-stack-execution")
         );
         let authz_run = call_tool(
             root,
@@ -6908,7 +7061,8 @@ mod tests {
                     "workspace": "test"
                 }
             }),
-        )?;
+        )
+        .context("appsec_authz_status MCP response")?;
         assert_eq!(
             authz_status.get("mcp_tool").and_then(Value::as_str),
             Some("appsec_authz_status")
@@ -6950,6 +7104,88 @@ mod tests {
                 ]
             }))?,
         )?;
+        for task in authz_run
+            .pointer("/run/web_stack_tasks")
+            .and_then(Value::as_array)
+            .expect("authz web-stack tasks")
+        {
+            let tool = task.get("tool").and_then(Value::as_str).unwrap_or("");
+            let phase = task.get("phase").and_then(Value::as_str).unwrap_or("");
+            let subject_id = task
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-subject");
+            let owner_subject = task
+                .get("owner_subject")
+                .and_then(Value::as_str)
+                .unwrap_or(subject_id);
+            let actor_subject = task
+                .get("actor_subject")
+                .and_then(Value::as_str)
+                .unwrap_or(subject_id);
+            let expected_artifact = task
+                .get("expected_artifact")
+                .and_then(Value::as_str)
+                .expect("expected authz task artifact");
+            let artifact = authz_evidence_dir.join(expected_artifact);
+            fs::create_dir_all(artifact.parent().expect("authz task artifact parent"))?;
+            let evidence = match (tool, phase) {
+                ("ctox_web_auth_assist_login", _) => serde_json::json!({
+                    "source_tool": tool,
+                    "subject_id": subject_id,
+                    "ok": true,
+                    "status": "completed",
+                    "login_state": "authenticated",
+                    "mfa_required": false,
+                    "login_error_detected": false,
+                    "verify_selector_found": true,
+                    "redacted": true
+                }),
+                ("ctox_browser_automation", "cross-subject-replay") => serde_json::json!({
+                    "source_tool": tool,
+                    "task_type": "cross-subject-replay",
+                    "ok": true,
+                    "status": "completed",
+                    "redacted": true,
+                    "objects": [{
+                        "id": format!("tenant-{owner_subject}"),
+                        "object_type": "tenant",
+                        "owner_subject": owner_subject
+                    }],
+                    "cases": [{
+                        "actor_subject": actor_subject,
+                        "owner_subject": owner_subject,
+                        "object_ref": format!("tenant-{owner_subject}"),
+                        "endpoint": format!("/api/tenants/tenant-{owner_subject}"),
+                        "method": "GET",
+                        "expected": "deny",
+                        "actual_status": 404,
+                        "result": "pass",
+                        "body_class": "not-found",
+                        "leak": false,
+                        "mutation": false
+                    }]
+                }),
+                ("ctox_browser_automation", _) => serde_json::json!({
+                    "source_tool": tool,
+                    "task_type": "same-origin-api-map",
+                    "subject_id": subject_id,
+                    "ok": true,
+                    "status": "completed",
+                    "redacted": true,
+                    "objects": [],
+                    "replay_candidates": []
+                }),
+                _ => serde_json::json!({
+                    "source_tool": tool,
+                    "subject_id": subject_id,
+                    "ok": true,
+                    "status": "completed",
+                    "redacted": true
+                }),
+            };
+            fs::write(artifact, serde_json::to_vec_pretty(&evidence)?)?;
+        }
         let authz_matrix = call_tool(
             root,
             "appsec_authz_build_matrix",
@@ -6962,7 +7198,8 @@ mod tests {
                     "workspace": "test"
                 }
             }),
-        )?;
+        )
+        .context("appsec_authz_build_matrix MCP response")?;
         assert_eq!(authz_matrix.get("ok").and_then(Value::as_bool), Some(true));
         assert_eq!(
             authz_matrix.get("mcp_tool").and_then(Value::as_str),
@@ -6972,13 +7209,13 @@ mod tests {
             authz_matrix
                 .pointer("/summary/cases")
                 .and_then(Value::as_u64),
-            Some(1)
+            Some(3)
         );
         assert_eq!(
             authz_matrix
                 .pointer("/summary/cross_subject_cases")
                 .and_then(Value::as_u64),
-            Some(1)
+            Some(3)
         );
         assert_eq!(
             authz_matrix
@@ -7024,7 +7261,8 @@ mod tests {
                     "workspace": "test"
                 }
             }),
-        )?;
+        )
+        .context("appsec_pipeline_rework MCP response")?;
         assert_eq!(rework.get("ok").and_then(Value::as_bool), Some(true));
         assert_eq!(
             rework.get("mcp_tool").and_then(Value::as_str),
@@ -7075,7 +7313,8 @@ mod tests {
                     "workspace": "test"
                 }
             }),
-        )?;
+        )
+        .context("appsec_finding_get MCP response")?;
         assert_eq!(finding.get("ok").and_then(Value::as_bool), Some(true));
         assert_eq!(
             finding.pointer("/finding/id").and_then(Value::as_str),
@@ -7092,7 +7331,8 @@ mod tests {
                     "workspace": "test"
                 }
             }),
-        )?;
+        )
+        .context("appsec_report_get MCP response")?;
         assert_eq!(report.get("ok").and_then(Value::as_bool), Some(true));
         assert_eq!(
             report.get("status").and_then(Value::as_str),
