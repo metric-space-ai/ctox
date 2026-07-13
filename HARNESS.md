@@ -504,6 +504,12 @@ without its required route as `lost_between_chairs`.
 Human-route evidence reads are scoped to the selected run's creation time.
 They must not use the collection-wide 2,000-record window, because a long-lived
 instance can otherwise omit a fresh notification and produce a false loss.
+The inverse false positive is also forbidden: approval/escalation evidence by
+itself does not settle a case while its command is still `running` or
+`awaiting_review`. `awaiting_human` requires the durable Threads evidence and
+the routing command/queue boundary to be non-executing: either the command owns
+the typed `blocked` wait, or it has completed after durably creating the
+separate approval/escalation aggregate.
 
 ```bash
 ctox business-os harness-bench catalog

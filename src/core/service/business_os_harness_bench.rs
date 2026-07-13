@@ -427,17 +427,43 @@ fn evaluate(
         )
     });
     let visible = thread.is_some() && notifications > 0;
+    let waiting_on_human = ["execution_phase", "task_status", "route_status", "status"]
+        .iter()
+        .any(|field_name| field(command, field_name) == "blocked");
+    // A human-route command may either own the wait itself (`blocked`) or
+    // finish after durably creating a separate approval/escalation aggregate
+    // (`completed`). In both cases the routing worker must no longer be in an
+    // executing phase before the bench calls the case settled.
+    let human_route_settled = waiting_on_human || completed;
     match case.route.as_str() {
-        "approval" if approval && visible => {
+        "approval" if approval && visible && human_route_settled => {
             return (
                 State::AwaitingHuman,
-                "approval, thread and notification are durable".into(),
+                "approval, thread and notification are durable and the routing command is settled"
+                    .into(),
+            )
+        }
+        "escalation" if visible && human_route_settled => {
+            return (
+                State::AwaitingHuman,
+                "escalation and notification are durable in Threads and the routing command is settled"
+                    .into(),
+            )
+        }
+        "approval" if approval && visible => {
+            return (
+                State::InFlight,
+                format!(
+                    "human route is durable but command has not reached a non-executing settled state (current status {status})"
+                ),
             )
         }
         "escalation" if visible => {
             return (
-                State::AwaitingHuman,
-                "escalation and notification are durable in Threads".into(),
+                State::InFlight,
+                format!(
+                    "escalation is durable but command has not reached a non-executing settled state (current status {status})"
+                ),
             )
         }
         "approval" | "escalation" if completed || failed => {
@@ -995,6 +1021,76 @@ mod tests {
             .0,
             State::AwaitingHuman
         )
+    }
+
+    #[test]
+    fn human_route_does_not_settle_while_command_is_still_executing() {
+        let case = SubmittedCase {
+            id: "H081".into(),
+            family: "human_approval".into(),
+            module: "x".into(),
+            route: "approval".into(),
+            terms: vec![],
+            command_id: "c".into(),
+            task_id: "t".into(),
+            thread_id: "h".into(),
+        };
+        let approval = json!({"status":"pending","thread_id":"h"});
+        let thread = json!({"status":"needs_review"});
+        let command = json!({
+            "status": "accepted",
+            "execution_phase": "awaiting_review",
+            "task_status": "running",
+            "route_status": "leased",
+            "terminal_status": "none"
+        });
+        let (state, reason) = evaluate(
+            &case,
+            Some(&command),
+            None,
+            Some(&thread),
+            None,
+            &[approval],
+            1,
+        );
+        assert_eq!(state, State::InFlight);
+        assert!(reason.contains("has not reached a non-executing settled state"));
+    }
+
+    #[test]
+    fn completed_routing_command_settles_when_separate_human_gate_is_durable() {
+        let case = SubmittedCase {
+            id: "H081".into(),
+            family: "human_approval".into(),
+            module: "x".into(),
+            route: "approval".into(),
+            terms: vec![],
+            command_id: "c".into(),
+            task_id: "t".into(),
+            thread_id: "h".into(),
+        };
+        let approval = json!({"status":"pending","thread_id":"h"});
+        let thread = json!({"status":"needs_review"});
+        let command = json!({
+            "status": "accepted",
+            "execution_phase": "terminal",
+            "task_status": "completed",
+            "route_status": "handled",
+            "terminal_status": "completed"
+        });
+        assert_eq!(
+            evaluate(
+                &case,
+                Some(&command),
+                None,
+                Some(&thread),
+                None,
+                &[approval],
+                1,
+            )
+            .0,
+            State::AwaitingHuman
+        );
     }
 
     #[test]
