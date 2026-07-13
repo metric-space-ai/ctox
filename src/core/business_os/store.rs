@@ -17558,6 +17558,16 @@ pub fn complete_business_command_from_queue_reply(
         None,
         "command-specific writeback completed after review and validation",
     )?;
+    if is_business_chat_command(&command) {
+        persist_terminal_business_chat_command_projection(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            task_id,
+            &accepted_value,
+        )?;
+    }
     if channels::load_queue_task(root, task_id)?.is_some() {
         if let Err(error) = refresh_business_command_queue_task_projection(root, task_id) {
             eprintln!(
@@ -17571,6 +17581,60 @@ pub fn complete_business_command_from_queue_reply(
         );
     }
     Ok(Some(accepted_value))
+}
+
+fn persist_terminal_business_chat_command_projection(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    task_id: &str,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let completed_at_ms = now_ms() as i64;
+    let result = accepted.get("result").cloned().unwrap_or(Value::Null);
+    let reply_text = accepted
+        .get("outbound_text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "completed",
+        "execution_mode": "queue",
+        "execution_phase": "terminal",
+        "terminal_status": "completed",
+        "route_status": "handled",
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": task_id,
+        "task_status": "completed",
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": result,
+        "outbound_text": reply_text,
+        "response": reply_text,
+        "answer": reply_text,
+        "updated_at_ms": completed_at_ms
+    });
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        payload.clone(),
+    )?;
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut rxdb_writers),
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        payload,
+    )
 }
 
 fn ensure_business_command_terminal_gate_ready(root: &Path, task_id: &str) -> anyhow::Result<bool> {
@@ -18001,31 +18065,6 @@ fn process_business_chat_reply(
         "summary": reply_text,
         "document_writeback": document_writeback
     });
-    let command_payload = serde_json::json!({
-        "id": command_id,
-        "command_id": command_id,
-        "module": command.module.clone(),
-        "command_type": command.command_type.clone(),
-        "record_id": command.record_id.clone().unwrap_or_default(),
-        "status": "accepted",
-        "inbound_channel": command_inbound_channel(command),
-        "task_id": task_id,
-        "task_status": terminal_queue_task.as_ref().map(|task| normalize_queue_status(&task.route_status)),
-        "payload": command.payload.clone(),
-        "client_context": command.client_context.clone(),
-        "result": result_payload.clone(),
-        "outbound_text": reply_text,
-        "response": reply_text,
-        "answer": reply_text,
-        "updated_at_ms": completed_at_ms
-    });
-    upsert_business_record(
-        conn,
-        "business_commands",
-        command_id,
-        completed_at_ms,
-        command_payload,
-    )?;
     // Do not publish the compatibility command/queue projection while the
     // canonical aggregate is still `validating`. The native peer treats an
     // active queue projection as an execution signal; publishing the stale
