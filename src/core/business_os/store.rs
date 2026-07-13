@@ -1333,7 +1333,8 @@ fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn rxdb_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+    let quoted = sqlite_quote_identifier(table);
+    conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
         row.get::<_, i64>(0)
     })
     .with_context(|| format!("count rows in {table}"))
@@ -1348,12 +1349,19 @@ fn rxdb_collection_tracks_updated_at_ms(collection: &str) -> bool {
 }
 
 fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Result<Option<i64>> {
+    let quoted = sqlite_quote_identifier(table);
     conn.query_row(
-        &format!("SELECT MAX(CAST(json_extract(data, '$.updated_at_ms') AS INTEGER)) FROM {table}"),
+        &format!(
+            "SELECT MAX(CAST(json_extract(data, '$.updated_at_ms') AS INTEGER)) FROM {quoted}"
+        ),
         [],
         |row| row.get::<_, Option<i64>>(0),
     )
     .with_context(|| format!("read latest updated_at_ms in {table}"))
+}
+
+fn sqlite_quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn rxdb_collection_table_name(path: &Path, conn: &Connection, collection: &str) -> Option<String> {
@@ -38135,6 +38143,37 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn rxdb_table_metrics_quote_identifier_payloads() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE sentinel (value TEXT)", [])
+            .unwrap();
+        let table = "records\"; DROP TABLE sentinel; --";
+        let quoted = sqlite_quote_identifier(table);
+        conn.execute(&format!("CREATE TABLE {quoted} (data TEXT NOT NULL)"), [])
+            .unwrap();
+        conn.execute(
+            &format!("INSERT INTO {quoted} (data) VALUES (?1)"),
+            [serde_json::json!({"updated_at_ms": 42}).to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(rxdb_table_row_count(&conn, table).unwrap(), 1);
+        assert_eq!(
+            rxdb_table_latest_updated_at_ms(&conn, table).unwrap(),
+            Some(42)
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sentinel'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+    }
 
     #[test]
     fn dkim_generation_fails_closed_without_a_key_generator() {
