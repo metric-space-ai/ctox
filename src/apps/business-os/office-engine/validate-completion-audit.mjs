@@ -9,6 +9,7 @@ const readText = (path, base = root) => readFile(new URL(path, base), 'utf8');
 const audit = await readJson('completion-audit.json');
 const matrix = await readJson('features.json');
 const rollout = await readJson('rollout.json');
+const securitySignoff = await readJson('../../../../docs/business-os-security-privacy-signoff.json');
 const pin = await readJson('upstream/euro-office-v9.3.1.json');
 const provenance = await readJson('../vendor/ctox-office/provenance.json');
 const ui = await readJson('oracle/evidence/office.fork-business-os-ui.json');
@@ -35,6 +36,23 @@ assert.equal(audit.requirements.at(-1).status, 'release_observation_pending');
 for (const requirement of audit.requirements) {
   for (const evidence of requirement.evidence) await access(new URL(evidence, root));
 }
+assert.equal(audit.release_prerequisites.technical_office_matrix.status, 'verified');
+assert.match(audit.release_prerequisites.technical_office_matrix.evidence_run, /^https:\/\/github\.com\/metric-space-ai\/ctox\/actions\/runs\/\d+$/);
+assert.equal(audit.release_prerequisites.operational_evidence.status, 'pending');
+assert.deepEqual(audit.release_prerequisites.operational_evidence.required, [
+  'nightly_soak_9x33_no_retry',
+  'canary_72h',
+  'wan_turn_matrix',
+  'native_restore_drill',
+  'runbook_exercises',
+  'record_workbench_30_day_pilot',
+  'workflow_30_day_pilot',
+]);
+assert.equal(audit.release_prerequisites.security_privacy_signoff.status, securitySignoff.status);
+assert.equal(audit.release_prerequisites.security_privacy_signoff.required_controls, Object.keys(securitySignoff.controls).length);
+assert.equal(audit.release_prerequisites.release_observation.status, 'pending');
+assert.equal(audit.release_prerequisites.release_observation.minimum_switch_release, '0.3.32');
+assert.equal(audit.release_prerequisites.release_observation.minimum_stable_followup_releases, rollout.minimum_stable_releases_after_switch);
 
 assert.equal(pin.release, 'v9.3.1');
 assert.match(pin.commit_sha, /^[0-9a-f]{40}$/);
@@ -120,5 +138,8 @@ assert.equal(audit.external_release_observation.latest_published_release, rollou
 assert.equal(audit.external_release_observation.legacy_removal_authorized, rollout.legacy_removal_authorized);
 assert.match(plan, /Gesamtfortschritt: 9 von 10 Arbeitsstroemen/);
 assert.match(plan, /Die technischen Arbeitsstroeme A1 bis A9 sind abgenommen/);
+assert.match(plan, /72-Stunden-Canary/);
+assert.match(plan, /zwei 30-Tage-Piloten/);
+assert.match(plan, /Security-\/Privacy-Freigabe/);
 
 console.log('CTOX Documents/Spreadsheets completion audit OK: A1-A9 verified, A10 release observation pending');

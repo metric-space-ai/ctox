@@ -16,8 +16,35 @@
     { "id": "A7", "status": "verified", "evidence": ["oracle/side-by-side.html", "features.json"] },
     { "id": "A8", "status": "verified", "evidence": ["oracle/evidence/document.docx-roundtrip-corpus.json", "oracle/validate-document-corpus.mjs"] },
     { "id": "A9", "status": "verified", "evidence": ["oracle/evidence/spreadsheet.xlsx-roundtrip-corpus.json", "oracle/validate-spreadsheet-corpus.mjs"] },
-    { "id": "A10", "status": "release_observation_pending", "evidence": ["rollout.json", "validate-rollout.mjs", "capture-release-evidence.mjs"] }
+    { "id": "A10", "status": "release_observation_pending", "evidence": ["rollout.json", "validate-rollout.mjs", "capture-release-evidence.mjs", "../../../../docs/business-os-security-privacy-signoff.json", "../../../../docs/ctox-sync-production-readiness-95.md", "../../../../docs/ctox-sync-production-readiness-runbooks.md"] }
   ],
+  "release_prerequisites": {
+    "technical_office_matrix": {
+      "status": "verified",
+      "evidence_run": "https://github.com/metric-space-ai/ctox/actions/runs/29292819588"
+    },
+    "operational_evidence": {
+      "status": "pending",
+      "required": [
+        "nightly_soak_9x33_no_retry",
+        "canary_72h",
+        "wan_turn_matrix",
+        "native_restore_drill",
+        "runbook_exercises",
+        "record_workbench_30_day_pilot",
+        "workflow_30_day_pilot"
+      ]
+    },
+    "security_privacy_signoff": {
+      "status": "pending-signoff",
+      "required_controls": 11
+    },
+    "release_observation": {
+      "status": "pending",
+      "minimum_switch_release": "0.3.32",
+      "minimum_stable_followup_releases": 1
+    }
+  },
   "external_release_observation": {
     "repository": "metric-space-ai/ctox",
     "checked_at": "2026-07-13",

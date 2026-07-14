@@ -30,9 +30,11 @@ Build-Input des Forks, kein zur Laufzeit eingebettetes Fremdprodukt.
 Aktueller Stand:
 
 - Gesamtfortschritt: 9 von 10 Arbeitsstroemen sind technisch abgenommen
-  (90 % des Gesamtplans). Offen bleibt A10 nur fuer das reale Switch-Release,
-  eine nachfolgende stabile Release-Periode und die danach erst erlaubte
-  Entfernung der Legacy-Engines.
+  (90 % des Gesamtplans). A10 bleibt fuer die echte Operational-Evidenz
+  (72-Stunden-Canary, reale WAN-/TURN-Matrix, Runbook-Uebungen, Restore und
+  zwei 30-Tage-Piloten), die menschliche Security-/Privacy-Freigabe, das reale
+  Switch-Release, eine nachfolgende stabile Release-Periode und die danach erst
+  erlaubte Entfernung der Legacy-Engines offen.
 - Die Release-Kandidatenbasis `4e0b2b43` schloss den zuvor reproduzierbaren
   `business-os-app-audience-ui`-Fehler: Der reine
   Audience-/Policy-Smoke ist nicht mehr an die fachfremde spaete
@@ -376,7 +378,7 @@ Produktionsregeln:
 | A7 | Oracle-Harness | abgenommen; Split-Screen-Gate akzeptiert nur exaktes `document-ready`, prueft reale Euro-Office-Frames und ist fuer alle 24 Features samt Reopens belegt | gepinntes Oracle, deterministische Fixtures, harter visueller Split-Screen-Gate, Screenshots und Strukturvergleich |
 | A8 | Documents-Format-/Feature-Paritaet | abgenommen: alle 12/12 vertikalen Features, nativer DOCX→DOCY→DOCX-Gesamtkorpus, Produkt-UI-Matrix und echter Business-OS-Mount | Release-Gates bis zur Legacy-Ablösung grün halten |
 | A9 | Spreadsheets-Format-/Feature-Paritaet | abgenommen: alle 12/12, nativer 11-Fixture-/147-Part-XLSX-Gesamtkorpus, CTOX-/Oracle-Reopens, Produkt-UI-Matrix und echter Business-OS-Mount | Release-Gates bis zur Legacy-Ablösung grün halten |
-| A10 | Rollout und Legacy-Abloesung | technische Rollout-Matrix bestanden: Chunk-/Hashintegritaet, Rechte, Konfliktweitergabe, Browser-Offline/Reconnect, Clean Profile, Reload, Locale, Shellstil, typisierter Engine-Rollback, Teardown und echter Office-Save ueber einen CTOX-/Peer-Neustart sind belegt; `ctox_documents` bzw. `ctox_spreadsheets` sind die typisierten Standards; Skill-Feature-/Rust-Op-Drift wird fail-closed geprueft; das Release-Gate erzeugt und archiviert ein hashgebundenes Kandidaten-Artefakt | reales Switch-Release ab mindestens `v0.3.32` und eine nachfolgende stabile Release-Periode beobachten; Legacy erst danach entfernen |
+| A10 | Rollout und Legacy-Abloesung | technische Rollout-Matrix bestanden: Chunk-/Hashintegritaet, Rechte, Konfliktweitergabe, Browser-Offline/Reconnect, Clean Profile, Reload, Locale, Shellstil, typisierter Engine-Rollback, Teardown und echter Office-Save ueber einen CTOX-/Peer-Neustart sind belegt; `ctox_documents` bzw. `ctox_spreadsheets` sind die typisierten Standards; Skill-Feature-/Rust-Op-Drift wird fail-closed geprueft; das Release-Gate erzeugt und archiviert ein hashgebundenes Kandidaten-Artefakt | echte Operational-Evidenz (72h, WAN/TURN, Restore, Runbooks, zwei 30-Tage-Piloten), menschliche Security-/Privacy-Freigabe, reales Switch-Release ab mindestens `v0.3.32` und eine nachfolgende stabile Release-Periode beobachten; Legacy erst danach entfernen |
 
 Die technischen Arbeitsstroeme A1 bis A9 sind abgenommen. A10 bleibt bis zum
 maschinenlesbar definierten realen Release-Zeitfenster und der erlaubten
