@@ -104,11 +104,21 @@ export async function mount(ctx) {
 
   refs.refresh?.addEventListener('click', safeLoadAndRender);
   refs.start?.addEventListener('click', () => {
+    const now = Date.now();
+    const sessionId = `browser_session_${now}`;
+    const tabId = `browser_tab_${now}`;
     const url = refs.address?.value || 'https://example.com';
     state.addressDirty = false;
+    state.selectedSessionId = sessionId;
+    state.requestedSessionId = sessionId;
     state.notice = 'Browser wird mit CTOX verbunden …';
     safeLoadAndRender();
-    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', { url, new_session: true }));
+    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', {
+      session_id: sessionId,
+      tab_id: tabId,
+      url,
+      new_session: true,
+    }));
   });
   refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
   refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
@@ -259,12 +269,12 @@ function recoverFrameSyncIfNeeded(ctx, state) {
 async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}) {
   const now = Date.now();
   const opensNewSession = payloadPatch.new_session === true;
-  const sessionId = opensNewSession
+  const sessionId = String(payloadPatch.session_id || (opensNewSession
     ? `browser_session_${now}`
-    : state.latestSession?.id || DEFAULT_SESSION_ID;
-  const tabId = opensNewSession
+    : state.latestSession?.id || DEFAULT_SESSION_ID));
+  const tabId = String(payloadPatch.tab_id || (opensNewSession
     ? `browser_tab_${now}`
-    : state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID;
+    : state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID));
   const commandId = `browser_cmd_${now}_${Math.random().toString(36).slice(2, 10)}`;
   const payload = {
     session_id: sessionId,
