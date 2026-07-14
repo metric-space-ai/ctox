@@ -902,23 +902,24 @@ fn command_file_names(program: &str) -> Vec<String> {
     }
     #[cfg(windows)]
     {
-        let mut names = vec![program.to_string()];
-        if Path::new(program).extension().is_none() {
-            let extensions =
-                std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-            for extension in extensions.split(';').filter(|value| !value.is_empty()) {
-                let extension = if extension.starts_with('.') {
-                    extension.to_string()
-                } else {
-                    format!(".{extension}")
-                };
-                let candidate = format!("{program}{}", extension.to_ascii_lowercase());
-                if !names
-                    .iter()
-                    .any(|name| name.eq_ignore_ascii_case(&candidate))
-                {
-                    names.push(candidate);
-                }
+        if Path::new(program).extension().is_some() {
+            return vec![program.to_string()];
+        }
+        let extensions =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        let mut names = Vec::new();
+        for extension in extensions.split(';').filter(|value| !value.is_empty()) {
+            let extension = if extension.starts_with('.') {
+                extension.to_string()
+            } else {
+                format!(".{extension}")
+            };
+            let candidate = format!("{program}{}", extension.to_ascii_lowercase());
+            if !names
+                .iter()
+                .any(|name: &String| name.eq_ignore_ascii_case(&candidate))
+            {
+                names.push(candidate);
             }
         }
         names
@@ -2530,6 +2531,16 @@ mod tests {
             Some(executable)
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_lookup_uses_pathext_instead_of_extensionless_shims() {
+        let names = super::command_file_names("npm");
+        assert!(!names.iter().any(|name| name == "npm"));
+        assert!(names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("npm.cmd")));
     }
 
     #[test]
