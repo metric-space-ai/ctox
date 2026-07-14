@@ -177,7 +177,8 @@ export async function mount(ctx) {
 
   function runBrowserCommand(promise) {
     return promise
-      .then(() => {
+      .then((result) => {
+        if (result?.opensNewSession && result.sessionId) state.selectedSessionId = result.sessionId;
         state.notice = '';
         safeLoadAndRender();
       })
@@ -294,6 +295,7 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     created_at_ms: now,
     updated_at_ms: now,
   }, { until: 'accepted' });
+  return { commandId, sessionId, tabId, opensNewSession };
 }
 
 function browserCommandErrorMessage(error) {
