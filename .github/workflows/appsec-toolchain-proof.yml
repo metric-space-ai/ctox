@@ -272,6 +272,9 @@ jobs:
           const inventory = JSON.parse(fs.readFileSync(inventoryPath, 'utf8'));
           const requiredTools = (inventory.tools || []).filter(tool =>
             ['httpx', 'katana', 'nuclei'].includes(tool.name));
+          const zap = (inventory.tools || []).find(tool => tool.name === 'zaproxy');
+          const requiredDataBundles = (inventory.data_bundles || []).filter(bundle =>
+            bundle.profile === 'minimal');
           const acceptance = {
             version: 'ctox.deployment_audit.platform_acceptance.v1',
             generated_at: new Date().toISOString(),
@@ -286,20 +289,33 @@ jobs:
               artifact_audit: audit?.ok === true,
               report: report?.ok === true && report?.report_complete === true,
               retained_export: exported?.ok === true && verified?.ok === true,
+              zap_nonblocking: zap?.default_enabled === false,
             },
             required_tools: requiredTools.map(tool => ({
               name: tool.name,
               available: tool.available,
-              version: tool.version,
+              detected_version: tool.detected_version,
+              pinned_version: tool.pinned_version,
               license: tool.license,
               checksum: tool.checksum,
               provenance: tool.provenance,
             })),
-            data_bundles: inventory.data_bundles || [],
+            required_data_bundles: requiredDataBundles,
           };
           acceptance.ok = Object.values(acceptance.gates).every(Boolean)
             && acceptance.required_tools.length === 3
-            && acceptance.required_tools.every(tool => tool.available === true);
+            && acceptance.required_tools.every(tool =>
+              tool.available === true
+              && typeof tool.detected_version === 'string'
+              && tool.detected_version.length > 0
+              && typeof tool.pinned_version === 'string'
+              && tool.pinned_version.length > 0
+              && typeof tool.license === 'string'
+              && tool.license.length > 0
+              && tool.checksum?.algorithm === 'sha256'
+              && /^[a-f0-9]{64}$/.test(tool.checksum?.value || ''))
+            && acceptance.required_data_bundles.length > 0
+            && acceptance.required_data_bundles.every(bundle => bundle.available === true);
           fs.writeFileSync(path.join(root, 'platform-acceptance.json'), `${JSON.stringify(acceptance, null, 2)}\n`);
           if (!acceptance.ok) {
             console.error(JSON.stringify(acceptance, null, 2));
