@@ -19,6 +19,7 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
       CTOX_UPDATE_GITHUB_REPO: metric-space-ai/ctox
+      CTOX_UPDATE_GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
