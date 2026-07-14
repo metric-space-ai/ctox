@@ -12,6 +12,7 @@ assert.match(source, /requestedSessionPending[\s\S]*?if \(!requestedSessionPendi
 assert.match(source, /refs\.start[\s\S]*?requestedSessionId\s*=\s*sessionId[\s\S]*?session_id:\s*sessionId/);
 assert.match(source, /applyLatestNavigationResult\(state, commands\)/);
 assert.match(source, /candidate\.result\?\.url/);
+assert.match(source, /renderSessionList\([^\n]*renderedTabs/);
 assert.doesNotMatch(
   source.match(/async function startBrowserRuntimeSync[\s\S]*?\n\}/)?.[0] || '',
   /catch\s*\([^)]*\)\s*\{[\s\S]*console\.warn/,

@@ -237,7 +237,10 @@ export async function mount(ctx) {
       Number(state.lastInputSeq || 0),
       ...inputs.map((event) => Number(event.seq || 0)).filter(Number.isFinite),
     );
-    renderSessionList(refs, sessions, tabs, state.latestSession);
+    const renderedTabs = state.latestTab?.id
+      ? tabs.map((tab) => tab.id === state.latestTab.id ? { ...tab, ...state.latestTab } : tab)
+      : tabs;
+    renderSessionList(refs, sessions, renderedTabs, state.latestSession);
     renderSession(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand, state);
     renderAuthAssist(refs, state.latestSession);
     renderStatus(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand);
