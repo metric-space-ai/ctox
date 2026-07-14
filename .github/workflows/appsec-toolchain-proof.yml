@@ -6,7 +6,7 @@ on:
       profile:
         description: "AppSec scanner profile to prove"
         required: true
-        default: "full"
+        default: "minimal"
         type: choice
         options:
           - minimal
@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'full' }}
+  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'minimal' }}
   cancel-in-progress: false
 
 jobs:
@@ -45,15 +45,24 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            label: Linux full AppSec toolchain proof
+            platform: linux-x86_64
+            label: Linux x86_64 deployment audit proof
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+            label: Linux aarch64 deployment audit proof
           - os: macos-latest
-            label: macOS full AppSec toolchain proof
+            platform: macos-aarch64
+            label: macOS aarch64 deployment audit proof
+          - os: macos-15-intel
+            platform: macos-x86_64
+            label: macOS x86_64 deployment audit proof
           - os: windows-latest
-            label: Windows full AppSec toolchain proof
+            platform: windows-x86_64
+            label: Windows x86_64 deployment audit proof
 
     env:
       CARGO_TERM_COLOR: always
-      APPSEC_PROFILE: ${{ inputs.profile || 'full' }}
+      APPSEC_PROFILE: ${{ inputs.profile || 'minimal' }}
       APPSEC_INCLUDE_DATA_BUNDLES: ${{ inputs.include_data_bundles }}
       APPSEC_ATTEST_NATIVE: ${{ inputs.attest_native }}
       APPSEC_SMOKE_TIMEOUT_SECONDS: ${{ inputs.smoke_timeout_seconds || '45' }}
@@ -67,6 +76,7 @@ jobs:
           {
             echo "CARGO_TARGET_DIR=$RUNNER_TEMP/ctox-cargo-target"
             echo "APPSEC_PROOF_ROOT=$RUNNER_TEMP/ctox-appsec-proof"
+            echo "APPSEC_PLATFORM=${{ matrix.platform }}"
           } >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
@@ -132,8 +142,11 @@ jobs:
             proof-run
             --state-dir
             "$APPSEC_PROOF_ROOT/runtime/appsec/default"
+            --tools-root
+            "$APPSEC_PROOF_ROOT/runtime/tools/appsec"
             --profile
             "$APPSEC_PROFILE"
+            --install-missing
             --probe-versions
             --smoke-timeout
             "$APPSEC_SMOKE_TIMEOUT_SECONDS"
@@ -162,6 +175,137 @@ jobs:
           }
           NODE
 
+      - name: Prove CTOX web-stack browser runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+          fi
+          BROWSER_DIR="$APPSEC_PROOF_ROOT/runtime/browser/reference"
+          "$CTOX_BIN" web browser-prepare \
+            --dir "$BROWSER_DIR" \
+            --install-reference \
+            --install-browser \
+            | tee "$APPSEC_PROOF_ROOT/browser-prepare.json"
+          "$CTOX_BIN" web browser-automation \
+            --dir "$BROWSER_DIR" \
+            --script-file src/tools/appsec-pentest/fixtures/platform-browser-smoke.js \
+            | tee "$APPSEC_PROOF_ROOT/browser-automation.json"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.env.APPSEC_PROOF_ROOT;
+          const prepare = JSON.parse(fs.readFileSync(path.join(root, 'browser-prepare.json'), 'utf8'));
+          const automation = JSON.parse(fs.readFileSync(path.join(root, 'browser-automation.json'), 'utf8'));
+          if (prepare?.doctor?.automation_ready !== true || prepare?.doctor?.smoke?.ok !== true) {
+            throw new Error('CTOX web-stack browser doctor or smoke is not ready');
+          }
+          if (automation?.ok !== true || automation?.result?.ok !== true) {
+            throw new Error('CTOX web-stack browser automation did not return a passing result');
+          }
+          NODE
+
+      - name: Run retained deployment audit assessment
+        shell: bash
+        run: |
+          set -euo pipefail
+          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+          fi
+          STATE_DIR="$APPSEC_PROOF_ROOT/runtime/appsec/platform-assessment"
+          LAB_DIR="$APPSEC_PROOF_ROOT/lab"
+          RETAINED_DIR="$APPSEC_PROOF_ROOT/retained-assessment"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" \
+            lab create --out "$LAB_DIR" --json \
+            | tee "$APPSEC_PROOF_ROOT/lab-create.json"
+          python "$LAB_DIR/ctox-vulnerable-webapp.py" --host 127.0.0.1 --port 8766 \
+            >"$APPSEC_PROOF_ROOT/lab-server.log" 2>&1 &
+          LAB_PID=$!
+          cleanup() {
+            kill "$LAB_PID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          node -e "const http=require('http');let n=0;const ping=()=>http.get('http://127.0.0.1:8766/',r=>{r.resume();process.exit(0)}).on('error',()=>{if(++n>50)process.exit(1);setTimeout(ping,200)});ping()"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" lab run \
+            --url http://127.0.0.1:8766 --profile full --json \
+            | tee "$APPSEC_PROOF_ROOT/lab-run.json"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact audit --json \
+            | tee "$APPSEC_PROOF_ROOT/artifact-audit.json"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" report --format json \
+            --out "$STATE_DIR/reports/deployment-audit-report.json" --json \
+            | tee "$APPSEC_PROOF_ROOT/report.json"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact export \
+            --out "$RETAINED_DIR" --json \
+            | tee "$APPSEC_PROOF_ROOT/export.json"
+          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+            --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact verify-export \
+            --dir "$RETAINED_DIR" --json \
+            | tee "$APPSEC_PROOF_ROOT/verify-export.json"
+
+      - name: Validate platform acceptance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = process.env.APPSEC_PROOF_ROOT;
+          const read = name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+          const proof = read('proof-run-output.json');
+          const browserPrepare = read('browser-prepare.json');
+          const browserAutomation = read('browser-automation.json');
+          const lab = read('lab-run.json');
+          const audit = read('artifact-audit.json');
+          const report = read('report.json');
+          const exported = read('export.json');
+          const verified = read('verify-export.json');
+          const inventoryPath = path.join(root, 'runtime', 'appsec', 'default', 'tool-inventory.json');
+          const inventory = JSON.parse(fs.readFileSync(inventoryPath, 'utf8'));
+          const requiredTools = (inventory.tools || []).filter(tool =>
+            ['httpx', 'katana', 'nuclei'].includes(tool.name));
+          const acceptance = {
+            version: 'ctox.deployment_audit.platform_acceptance.v1',
+            generated_at: new Date().toISOString(),
+            platform: process.env.APPSEC_PLATFORM,
+            runner_os: process.env.RUNNER_OS,
+            profile: process.env.APPSEC_PROFILE,
+            gates: {
+              install_doctor_smoke: proof?.ok === true && proof?.proof_run?.ready === true,
+              browser_doctor: browserPrepare?.doctor?.automation_ready === true && browserPrepare?.doctor?.smoke?.ok === true,
+              browser_automation: browserAutomation?.ok === true && browserAutomation?.result?.ok === true,
+              assessment: lab?.ok === true && lab?.scan_completed === true,
+              artifact_audit: audit?.ok === true,
+              report: report?.ok === true && report?.report_complete === true,
+              retained_export: exported?.ok === true && verified?.ok === true,
+            },
+            required_tools: requiredTools.map(tool => ({
+              name: tool.name,
+              available: tool.available,
+              version: tool.version,
+              license: tool.license,
+              checksum: tool.checksum,
+              provenance: tool.provenance,
+            })),
+            data_bundles: inventory.data_bundles || [],
+          };
+          acceptance.ok = Object.values(acceptance.gates).every(Boolean)
+            && acceptance.required_tools.length === 3
+            && acceptance.required_tools.every(tool => tool.available === true);
+          fs.writeFileSync(path.join(root, 'platform-acceptance.json'), `${JSON.stringify(acceptance, null, 2)}\n`);
+          if (!acceptance.ok) {
+            console.error(JSON.stringify(acceptance, null, 2));
+            process.exit(1);
+          }
+          NODE
+
       - name: Summarize AppSec proof
         if: always()
         shell: bash
@@ -183,7 +327,7 @@ jobs:
           }
           const summary = payload?.summary || {};
           const lines = [
-            `# AppSec toolchain proof`,
+            `# Deployment audit platform proof`,
             ``,
             `ready: ${payload?.ready ?? 'unknown'}`,
             `profile: ${payload?.profile ?? process.env.APPSEC_PROFILE}`,
@@ -211,9 +355,18 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/ctox-appsec-proof/proof-run-output.json
-            ${{ runner.temp }}/ctox-appsec-proof/runtime/appsec/default/*.json
+            ${{ runner.temp }}/ctox-appsec-proof/platform-acceptance.json
+            ${{ runner.temp }}/ctox-appsec-proof/browser-prepare.json
+            ${{ runner.temp }}/ctox-appsec-proof/browser-automation.json
+            ${{ runner.temp }}/ctox-appsec-proof/lab-*.json
+            ${{ runner.temp }}/ctox-appsec-proof/artifact-audit.json
+            ${{ runner.temp }}/ctox-appsec-proof/report.json
+            ${{ runner.temp }}/ctox-appsec-proof/export.json
+            ${{ runner.temp }}/ctox-appsec-proof/verify-export.json
+            ${{ runner.temp }}/ctox-appsec-proof/runtime/appsec/**/*.json
             ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/*.json
             ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/install-logs/**
             ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/templates/**/.ctox-data-bundle.json
             ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/wordlists/**/.ctox-data-bundle.json
             ${{ runner.temp }}/ctox-appsec-proof/runtime/tools/appsec/trivy-cache/.ctox-data-bundle.json
+            ${{ runner.temp }}/ctox-appsec-proof/retained-assessment/**
