@@ -112,9 +112,22 @@ Aktueller Stand:
   Browser-Datenbank den nativ bestaetigten Datensatz wieder gepullt hat, darf
   die Fachpruefung ihren Modulzustand erfassen. Die Matrix-Selbstpruefung
   verlangt Manifest, beide Authority-Barrieren und diese abschliessende
-  Browser-Pull-Barriere gemeinsam. Die terminale
-  Remote-Evidenz wird nach dem korrigierten Kandidatenlauf eingetragen; A10 und
-  der Gesamtstand bleiben bis dahin unveraendert offen.
+  Browser-Pull-Barriere gemeinsam. Der korrigierte Kandidat `1c52eb81`
+  bestand Main CI in [Run 29292807901](https://github.com/metric-space-ai/ctox/actions/runs/29292807901)
+  vollstaendig. Production Readiness
+  [Run 29292819588](https://github.com/metric-space-ai/ctox/actions/runs/29292819588)
+  bestand die gesamte 40+-Modus-Browser/Rust-Matrix einschließlich des zuvor
+  roten Dynamic-Apps-Gates und scheiterte erst im nachgelagerten, bewusst
+  realzeitgebundenen `canary_72h`-Gate an fehlender Operational-Evidenz. Das
+  Readiness- und Release-Wiring fuehrt kuenftig trotz solcher erwarteten
+  Langzeitblocker alle weiteren Evidenzgeneratoren aus; allein der
+  unveraenderte abschließende `--require-complete`-Audit entscheidet weiterhin
+  fail-closed. Dadurch werden fehlende 72-Stunden-/30-Tage-/WAN-/Runbook-
+  Nachweise vollstaendig berichtet, ohne sie synthetisch gruen zu schreiben.
+  Der dreizyklische Zero-Retry-Soak
+  [Run 29292815082](https://github.com/metric-space-ai/ctox/actions/runs/29292815082)
+  laeuft am letzten Checkpoint weiter. A10 und der Gesamtstand bleiben bis zur
+  echten Operational- und Release-Evidenz unveraendert offen.
 - Der vor dem konfliktfreien Rebase auf `origin/main` attestierte
   Office-Integrations-Snapshot
   `b54aec3529ca1203d2df128c63dc29038e162198` ist lokal vollstaendig

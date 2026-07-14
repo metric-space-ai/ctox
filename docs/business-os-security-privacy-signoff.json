@@ -96,12 +96,12 @@
     }
   },
   "source_hashes": {
-    ".github/workflows/release.yml": "d5327da823e611764dc76777ebe98cdf4513c6435af007b0f5c31c2c32f5c5ce",
-    ".github/workflows/rxdb-production-readiness.yml": "d09d248885a4c577b13874be810a23a65f2216c70c4b832d6624e3efc665c9a0",
+    ".github/workflows/release.yml": "5bde5a101de955a20bfe9dec2f803af5a618318c596f9d017ad1a9e475674bf1",
+    ".github/workflows/rxdb-production-readiness.yml": "db74d7bad158ecc24eb01d3cff6484687f72a41cd114fbd555df7d21926b9224",
     "docs/ctox-sync-production-readiness-95.md": "f6faeeacec39982b2226fce04c4a16fe07b7d560799a4f223dd0e92da39f373d",
     "docs/ctox-sync-production-readiness-runbooks.md": "ee9c8ab96b93f50582c61cdc3dc8efb66802ae6f3d07970307da4943eb6c30b2",
     "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "03c2703e3460d62a71a8dead859315bb0ddf8c8d6e98b1b31de4ab77d5dfdcdb",
-    "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "31033e2c7b574e3aadcc9bb07bf11bf6206f17d897bc4d9c9a4db943572b2e0a",
+    "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "d0ae0f5bdb534338b14a6bdb48106ce81da6d1726163109abb47eedba45dc265",
     "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "ab08666e006f89ac70a1e2ad0ef1aa81608f3698b64538c15a581d79533096c7",
     "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "15635199f05ea4b494a2b1e0088f567cda036cbd686ce96364667511b63073fa",
     "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "293baf5c79839131fb7bbf45531ea034c906266f5718d9a790fb40872b51db77",
