@@ -1007,17 +1007,29 @@ fn find_playwright_chromium_executable_in(cache_root: &Path) -> Option<PathBuf> 
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !name.starts_with("chromium-") || name.contains("headless") {
+        let relative_paths: &[&str] = if name.starts_with("chromium-") {
+            &[
+                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-linux64/chrome",
+                "chrome-linux/chrome",
+                "chrome-win64/chrome.exe",
+                "chrome-win/chrome.exe",
+            ]
+        } else if name.starts_with("chromium_headless_shell-") {
+            &[
+                "chrome-headless-shell-mac-arm64/chrome-headless-shell",
+                "chrome-headless-shell-mac-x64/chrome-headless-shell",
+                "chrome-headless-shell-linux64/chrome-headless-shell",
+                "chrome-headless-shell-linux/chrome-headless-shell",
+                "chrome-headless-shell-win64/chrome-headless-shell.exe",
+                "chrome-headless-shell-win/chrome-headless-shell.exe",
+            ]
+        } else {
             continue;
-        }
-        for relative in [
-            "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-            "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-            "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-            "chrome-linux64/chrome",
-            "chrome-linux/chrome",
-            "chrome-win/chrome.exe",
-        ] {
+        };
+        for relative in relative_paths {
             let candidate = path.join(relative);
             if candidate.is_file() {
                 return Some(candidate);
@@ -2424,6 +2436,34 @@ mod tests {
         let dir = temp_path("macos-x64-cache");
         let executable = dir.join(
             "chromium-1217/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        );
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finds_playwright_chromium_windows_x64_executable() {
+        let dir = temp_path("windows-x64-cache");
+        let executable = dir.join("chromium-1217/chrome-win64/chrome.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finds_playwright_chromium_windows_headless_shell() {
+        let dir = temp_path("windows-headless-cache");
+        let executable = dir.join(
+            "chromium_headless_shell-1217/chrome-headless-shell-win64/chrome-headless-shell.exe",
         );
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"").unwrap();
