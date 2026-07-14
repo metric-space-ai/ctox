@@ -6460,11 +6460,7 @@ async fn capture_and_store_browser_frame(
         .and_then(Value::as_str)
         .unwrap_or("image/png")
         .to_string();
-    let nav = nav_hint
-        .cloned()
-        .filter(|value| !value.is_null())
-        .or_else(|| screenshot.get("nav").cloned())
-        .unwrap_or(Value::Null);
+    let nav = browser_capture_navigation(&screenshot, nav_hint);
 
     let session_doc = find_browser_document(database, "browser_sessions", session_id).await?;
     let tab_id = session_doc
@@ -6553,6 +6549,15 @@ async fn capture_and_store_browser_frame(
     )
     .await?;
     Ok(())
+}
+
+fn browser_capture_navigation(screenshot: &Value, nav_hint: Option<&Value>) -> Value {
+    screenshot
+        .get("nav")
+        .cloned()
+        .filter(|value| !value.is_null())
+        .or_else(|| nav_hint.cloned().filter(|value| !value.is_null()))
+        .unwrap_or(Value::Null)
 }
 
 /// Recompute `last_input_seq` and the live pending input count on a session
@@ -13988,6 +13993,16 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn browser_capture_prefers_fresh_screenshot_navigation() {
+        let screenshot = json!({ "nav": { "url": "https://iana.org/" } });
+        let stale_hint = json!({ "url": "https://example.com/" });
+        assert_eq!(
+            browser_capture_navigation(&screenshot, Some(&stale_hint))["url"],
+            "https://iana.org/"
+        );
+    }
 
     fn issue_test_capability(root: &Path, user_id: &str, role: &str) -> String {
         store::issue_business_os_capability_token_for_managed_user(
