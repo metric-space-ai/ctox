@@ -27,6 +27,14 @@ on:
         required: true
         default: "45"
         type: string
+      platform_scope:
+        description: "Run the complete matrix or a focused Windows acceptance"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows-only
 
 permissions:
   contents: read
@@ -43,22 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux-x86_64
-            label: Linux x86_64 deployment audit proof
-          - os: ubuntu-24.04-arm
-            platform: linux-aarch64
-            label: Linux aarch64 deployment audit proof
-          - os: macos-latest
-            platform: macos-aarch64
-            label: macOS aarch64 deployment audit proof
-          - os: macos-15-intel
-            platform: macos-x86_64
-            label: macOS x86_64 deployment audit proof
-          - os: windows-latest
-            platform: windows-x86_64
-            label: Windows x86_64 deployment audit proof
+        include: ${{ fromJSON(inputs.platform_scope == 'windows-only' && '[{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]' || '[{"os":"ubuntu-22.04","platform":"linux-x86_64","label":"Linux x86_64 deployment audit proof"},{"os":"ubuntu-24.04-arm","platform":"linux-aarch64","label":"Linux aarch64 deployment audit proof"},{"os":"macos-latest","platform":"macos-aarch64","label":"macOS aarch64 deployment audit proof"},{"os":"macos-15-intel","platform":"macos-x86_64","label":"macOS x86_64 deployment audit proof"},{"os":"windows-latest","platform":"windows-x86_64","label":"Windows x86_64 deployment audit proof"}]') }}
 
     env:
       CARGO_TERM_COLOR: always
