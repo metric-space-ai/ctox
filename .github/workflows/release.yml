@@ -637,8 +637,8 @@ jobs:
       - name: Package runtime bundle (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p bundle/target/release
-          cp target/${{ matrix.target }}/release/ctox bundle/target/release/
+          mkdir -p bundle/bin
+          cp target/${{ matrix.target }}/release/ctox bundle/bin/ctox
           cp -r src/skills bundle/skills
           mkdir -p bundle/rxdb-js
           mkdir -p bundle/rxdb-js/app-local/dist
@@ -659,8 +659,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force bundle\target\release | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\target\release\"
+          New-Item -ItemType Directory -Force bundle\bin | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\bin\ctox.exe"
           Copy-Item -Path "src\skills" -Destination "bundle\skills" -Recurse
           New-Item -ItemType Directory -Force bundle\rxdb-js | Out-Null
           New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\dist | Out-Null

@@ -1881,6 +1881,7 @@ fn download_release_binary_bundle(
     if !extracted_root.exists() {
         extract_bundle_to_root(&archive_path, &extracted_root)?;
     }
+    normalize_binary_bundle_layout(&extracted_root)?;
     Ok(DownloadedReleaseSource {
         release,
         extracted_root,
@@ -2357,13 +2358,45 @@ fn copy_workspace(source_root: &Path, release_root: &Path, kind: UpdateSourceKin
 }
 
 fn validate_binary_bundle(source_root: &Path) -> Result<()> {
-    let binary = source_root.join("bin/ctox");
+    let binary = source_root.join("bin").join(bundle_binary_name());
     if !binary.exists() {
         anyhow::bail!(
             "binary bundle is missing the ctox executable at {}",
             binary.display()
         );
     }
+    Ok(())
+}
+
+fn bundle_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "ctox.exe"
+    } else {
+        "ctox"
+    }
+}
+
+fn normalize_binary_bundle_layout(source_root: &Path) -> Result<()> {
+    let canonical = source_root.join("bin").join(bundle_binary_name());
+    if canonical.is_file() {
+        return Ok(());
+    }
+    let legacy = source_root
+        .join("target/release")
+        .join(bundle_binary_name());
+    if !legacy.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = canonical.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::copy(&legacy, &canonical).with_context(|| {
+        format!(
+            "failed to normalize legacy release binary {} to {}",
+            legacy.display(),
+            canonical.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -3330,6 +3363,23 @@ mod tests {
             format_progress_done(80, "downloaded v1.2.3", 75),
             "ctox upgrade | 01:20 | done    | downloaded v1.2.3 | took 1m 15s"
         );
+    }
+
+    #[test]
+    fn legacy_release_bundle_is_normalized_to_installable_layout() {
+        let temp = tempdir().unwrap();
+        let legacy = temp
+            .path()
+            .join("target/release")
+            .join(bundle_binary_name());
+        ensure_dir(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "release-binary").unwrap();
+
+        normalize_binary_bundle_layout(temp.path()).unwrap();
+
+        let canonical = temp.path().join("bin").join(bundle_binary_name());
+        assert_eq!(fs::read_to_string(&canonical).unwrap(), "release-binary");
+        validate_binary_bundle(temp.path()).unwrap();
     }
 
     #[test]
