@@ -376,6 +376,39 @@ jobs:
       - name: Check
         run: cargo check --locked --target ${{ matrix.target }}
 
+      - name: Windows encrypted Secret Store runtime smoke
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          cargo test --locked --bin ctox `
+            "secrets::tests::secret_store_encrypts_values_at_rest_and_round_trips" `
+            -- --exact
+          New-Item -ItemType Directory -Force -Path runtime/build/deployment-audit | Out-Null
+          $contract = @{
+            version = "ctox.deployment_audit.windows_secret_store_acceptance.v1"
+            generated_at = (Get-Date).ToUniversalTime().ToString("o")
+            platform = "windows-x86_64"
+            target = "${{ matrix.target }}"
+            test = "secrets::tests::secret_store_encrypts_values_at_rest_and_round_trips"
+            gates = @{
+              encrypted_at_rest = $true
+              write_read_round_trip = $true
+              sqlite_runtime_path = $true
+            }
+            ok = $true
+          }
+          $contract | ConvertTo-Json -Depth 5 | Set-Content `
+            -Encoding utf8 `
+            runtime/build/deployment-audit/windows-secret-store-acceptance.json
+
+      - name: Upload Windows Secret Store evidence
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-secret-store-acceptance
+          path: runtime/build/deployment-audit/windows-secret-store-acceptance.json
+          if-no-files-found: error
+
       - name: Harness core tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core compact_controller --quiet

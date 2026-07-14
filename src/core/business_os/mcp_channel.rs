@@ -3212,7 +3212,9 @@ fn appsec_report_get(
     let (format, report_path) = match format.as_str() {
         "json" => (
             "json",
-            state_dir.join("reports").join("deployment-audit-report.json"),
+            state_dir
+                .join("reports")
+                .join("deployment-audit-report.json"),
         ),
         "markdown" | "md" => (
             "markdown",
