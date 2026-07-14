@@ -3212,11 +3212,11 @@ fn appsec_report_get(
     let (format, report_path) = match format.as_str() {
         "json" => (
             "json",
-            state_dir.join("reports").join("pentest-report.json"),
+            state_dir.join("reports").join("deployment-audit-report.json"),
         ),
         "markdown" | "md" => (
             "markdown",
-            state_dir.join("reports").join("pentest-report.md"),
+            state_dir.join("reports").join("deployment-audit-report.md"),
         ),
         other => {
             return Err(anyhow::Error::new(BusinessOsMcpError::validation(
