@@ -1689,6 +1689,10 @@ build_ctox() {
   esac
   if [[ -n "$configured_target_dir" ]]; then
     main_target_dir="$configured_target_dir"
+    if [[ -n "${CACHE_ROOT:-}" && -L "$main_target_dir" && "$(readlink "$main_target_dir")" == "$CACHE_ROOT/cargo-target/ctox-main" ]]; then
+      rm -f "$main_target_dir"
+    fi
+    mkdir -p "$main_target_dir"
   fi
   if [[ "$managed_release_build" -eq 1 || -n "$configured_target_dir" ]]; then
     cargo_env+=("CARGO_TARGET_DIR=$main_target_dir")
@@ -1708,7 +1712,9 @@ build_ctox() {
   if [[ "${#cargo_env[@]}" -gt 0 ]]; then
     workspace_cargo_env=(env "${cargo_env[@]}")
   fi
-  prepare_cargo_target_cache "$main_target_dir" "ctox-main"
+  if [[ -z "$configured_target_dir" ]]; then
+    prepare_cargo_target_cache "$main_target_dir" "ctox-main"
+  fi
   clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
   # 1. Build main CTOX binary
@@ -1716,6 +1722,7 @@ build_ctox() {
   mkdir -p "$source_root/bin"
   local ctox_built_binary=""
   for candidate in \
+    "$main_target_dir/release/ctox" \
     "$source_root/runtime/build/cargo-target/release/ctox" \
     "$source_root/target/release/ctox"
   do
