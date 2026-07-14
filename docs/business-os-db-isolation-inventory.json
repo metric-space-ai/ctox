@@ -5,7 +5,7 @@
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
     "appsec-pentest": {
-      "title": "Deployment Audit",
+      "title": "Penetration Testing",
       "manifest_path": "src/apps/business-os/modules/appsec-pentest/module.json",
       "source_path": "src/apps/business-os/modules/appsec-pentest",
       "install_scope": "core",

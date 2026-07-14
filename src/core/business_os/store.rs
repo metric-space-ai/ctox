@@ -37255,6 +37255,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
     matches!(
         command_type,
         "ctox.appsec.assessment.create"
+            | "ctox.appsec.assessment.run"
             | "ctox.appsec.lab.create"
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
@@ -37305,6 +37306,67 @@ fn handle_appsec_business_command(
                 .or_else(|| appsec_payload_string(&command.payload, "target"))
                 .context("ctox.appsec.assessment.create payload.url is required")?;
             args.extend(["init".to_string(), "--url".to_string(), url]);
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.assessment.run" => {
+            args.push("assess".to_string());
+            let profile = appsec_payload_string(&command.payload, "profile")
+                .unwrap_or_else(|| "full".to_string());
+            anyhow::ensure!(
+                matches!(profile.as_str(), "quick" | "standard" | "deep" | "full"),
+                "ctox.appsec.assessment.run payload.profile must be quick, standard, deep, or full"
+            );
+            args.extend(["--profile".to_string(), profile]);
+
+            let mut target_count = 0usize;
+            if let Some(url) = appsec_payload_string(&command.payload, "url") {
+                args.extend(["--url".to_string(), url]);
+                target_count += 1;
+            }
+            if let Some(source_path) = appsec_payload_string(&command.payload, "source_path")
+                .or_else(|| appsec_payload_string(&command.payload, "source"))
+            {
+                let source_path = workspace_bound_path(root, &source_path, "source_path")?;
+                args.extend(["--target".to_string(), source_path.display().to_string()]);
+                target_count += 1;
+            }
+            anyhow::ensure!(
+                target_count > 0,
+                "ctox.appsec.assessment.run requires payload.url or payload.source_path"
+            );
+
+            if let Some(subjects) = appsec_payload_string(&command.payload, "authz_subjects") {
+                let subjects = workspace_bound_path(root, &subjects, "authz_subjects")?;
+                args.extend([
+                    "--authz-subjects".to_string(),
+                    subjects.display().to_string(),
+                ]);
+            }
+            if command
+                .payload
+                .get("authz_enabled")
+                .and_then(Value::as_bool)
+                == Some(false)
+            {
+                args.push("--no-authz".to_string());
+            }
+
+            let active = command.payload.get("active").and_then(Value::as_bool) == Some(true);
+            if active {
+                let approval_id = appsec_payload_string(&command.payload, "approval_id").context(
+                    "ctox.appsec.assessment.run active testing requires payload.approval_id",
+                )?;
+                args.extend([
+                    "--active".to_string(),
+                    "--confirm-active".to_string(),
+                    "--approval-id".to_string(),
+                    approval_id,
+                ]);
+                if let Some(wordlist) = appsec_payload_string(&command.payload, "wordlist") {
+                    let wordlist = workspace_bound_path(root, &wordlist, "wordlist")?;
+                    args.extend(["--wordlist".to_string(), wordlist.display().to_string()]);
+                }
+            }
             args.push("--json".to_string());
         }
         "ctox.appsec.lab.create" => {
@@ -39272,6 +39334,67 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn appsec_assessment_run_is_a_write_command_with_bounded_active_gates() -> anyhow::Result<()> {
+        assert!(appsec_business_command_requires_data_write(
+            "ctox.appsec.assessment.run"
+        ));
+        let root = tempdir()?;
+        fs::create_dir_all(root.path().join("project"))?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_appsec_assessment_run".into()),
+            module: APPSEC_MODULE_ID.into(),
+            command_type: "ctox.appsec.assessment.run".into(),
+            record_id: Some("runtime/appsec/test".into()),
+            payload: serde_json::json!({
+                "state_dir": "runtime/appsec/test",
+                "url": "https://example.test",
+                "source_path": "project",
+                "profile": "full",
+                "active": true
+            }),
+            client_context: Value::Null,
+        };
+        let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
+            .expect_err("active assessment must require a durable approval id");
+        assert!(error.to_string().contains("payload.approval_id"));
+        Ok(())
+    }
+
+    #[test]
+    fn appsec_assessment_run_rejects_unbounded_source_paths_and_unknown_profiles(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let outside = tempdir()?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_appsec_assessment_run_invalid".into()),
+            module: APPSEC_MODULE_ID.into(),
+            command_type: "ctox.appsec.assessment.run".into(),
+            record_id: Some("runtime/appsec/test".into()),
+            payload: serde_json::json!({
+                "state_dir": "runtime/appsec/test",
+                "source_path": outside.path(),
+                "profile": "full"
+            }),
+            client_context: Value::Null,
+        };
+        let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
+            .expect_err("source workspace must stay inside the CTOX workspace");
+        assert!(error.to_string().contains("source_path must stay inside"));
+
+        command.payload = serde_json::json!({
+            "state_dir": "runtime/appsec/test",
+            "url": "https://example.test",
+            "profile": "unbounded"
+        });
+        let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
+            .expect_err("unknown profile must be rejected before execution");
+        assert!(error.to_string().contains("payload.profile"));
+        Ok(())
+    }
 
     #[test]
     fn rxdb_table_metrics_quote_identifier_payloads() {
