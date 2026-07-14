@@ -7,6 +7,7 @@ assert.match(source, /commandBus\.dispatch\([\s\S]*\{ until: 'accepted' \}\)/);
 assert.match(source, /refs\.start[\s\S]*?new_session:\s*true/);
 assert.match(source, /opensNewSession[\s\S]*?`browser_tab_\$\{now\}`/);
 assert.match(source, /result\?\.opensNewSession[\s\S]*?selectedSessionId\s*=\s*result\.sessionId/);
+assert.match(source, /requestedSessionId\s*=\s*result\.sessionId/);
 assert.doesNotMatch(
   source.match(/async function startBrowserRuntimeSync[\s\S]*?\n\}/)?.[0] || '',
   /catch\s*\([^)]*\)\s*\{[\s\S]*console\.warn/,

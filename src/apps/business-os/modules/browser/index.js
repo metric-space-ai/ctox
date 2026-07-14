@@ -65,6 +65,7 @@ export async function mount(ctx) {
 
   const state = {
     selectedSessionId: '',
+    requestedSessionId: '',
     latestFrame: null,
     latestSession: null,
     latestTab: null,
@@ -178,7 +179,10 @@ export async function mount(ctx) {
   function runBrowserCommand(promise) {
     return promise
       .then((result) => {
-        if (result?.opensNewSession && result.sessionId) state.selectedSessionId = result.sessionId;
+        if (result?.opensNewSession && result.sessionId) {
+          state.selectedSessionId = result.sessionId;
+          state.requestedSessionId = result.sessionId;
+        }
         state.notice = '';
         safeLoadAndRender();
       })
@@ -199,6 +203,7 @@ export async function mount(ctx) {
       readCollection(browserCollection(ctx, 'ctox_queue_tasks'), { limit: 50 }),
     ]);
     const selectedSession = state.selectedSessionId ? latestSession(sessions, state.selectedSessionId) : null;
+    const requestedSessionPending = Boolean(state.requestedSessionId && !selectedSession);
     const frameSessionId = selectedSession?.id || state.selectedSessionId || '';
     const frames = await readCollection(browserCollection(ctx, 'browser_frames'), {
       limit: frameSessionId ? 20 : 30,
@@ -207,7 +212,10 @@ export async function mount(ctx) {
     if (!mounted) return;
     const newestFrame = latestFrame(frames);
     state.latestSession = selectedSession || latestSession(sessions, newestFrame?.session_id) || latestSession(sessions);
-    state.selectedSessionId = state.latestSession?.id || '';
+    if (!requestedSessionPending) {
+      state.selectedSessionId = state.latestSession?.id || '';
+      if (state.latestSession?.id === state.requestedSessionId) state.requestedSessionId = '';
+    }
     state.latestFrame = latestFrame(frames, state.latestSession?.id);
     state.latestTab = latestTab(tabs, state.latestFrame?.tab_id || state.latestSession?.current_tab_id);
     state.latestCommand = latestBrowserCommand(commands, state.latestSession?.id || state.latestFrame?.session_id);
