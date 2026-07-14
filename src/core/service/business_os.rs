@@ -4977,15 +4977,43 @@ const pageSignals = async () => {
   } catch {}
   return { url: page.url(), title, form_state: formState, auth_signals: authSignals };
 };
-const waitForAuthTransition = async (previousUrl, timeoutMs = 12000) => {
-  const waiters = [
-    page.waitForLoadState("networkidle", { timeout: timeoutMs }).catch(() => null),
-    page.waitForURL((url) => String(url) !== previousUrl, { timeout: timeoutMs }).catch(() => null),
-    page.waitForTimeout(1200).catch(() => null),
-  ];
-  await Promise.race(waiters).catch(() => null);
-  await page.waitForTimeout(500).catch(() => null);
-  return pageSignals();
+const waitForAuthTransition = async (previousUrl, timeoutMs = 12000, verifySelector = "") => {
+  const deadline = Date.now() + timeoutMs;
+  let signals = await pageSignals();
+  let verifyFound = false;
+  let settledReason = "timeout";
+  while (Date.now() < deadline) {
+    await Promise.race([
+      page.waitForLoadState("domcontentloaded", { timeout: 1500 }).catch(() => null),
+      page.waitForTimeout(250).catch(() => null),
+    ]).catch(() => null);
+    if (verifySelector) {
+      verifyFound = await page.locator(verifySelector).first().isVisible().catch(() => false);
+      if (verifyFound) {
+        signals = await pageSignals();
+        settledReason = "verify-selector-visible";
+        break;
+      }
+    }
+    signals = await pageSignals();
+    const authSignals = signals.auth_signals || emptyAuthSignals();
+    if (authSignals.mfa_required === true || authSignals.login_error_detected === true) {
+      settledReason = "auth-terminal-signal";
+      break;
+    }
+    const transientDocument = /^Loading https?:\/\//i.test(String(signals.title || ""))
+      || (!signals.title
+        && Number(signals.form_state?.visible_forms || 0) === 0
+        && Number(signals.form_state?.visible_password_fields || 0) === 0);
+    const formGone = Number(signals.form_state?.visible_password_fields || 0) === 0;
+    const urlChanged = signals.url !== previousUrl;
+    if (!verifySelector && !transientDocument && (formGone || urlChanged)) {
+      settledReason = "navigation-settled";
+      break;
+    }
+    await page.waitForTimeout(250).catch(() => null);
+  }
+  return { signals, verify_found: verifyFound, settled_reason: settledReason };
 };
 const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
@@ -5000,7 +5028,7 @@ let afterLoginStepSignals = null;
 if (!credentialField && loginField) {
   loginTransition = await clickSubmit(loginField);
   if (loginTransition) {
-    afterLoginStepSignals = await waitForAuthTransition(beforeSignals.url, 12000);
+    afterLoginStepSignals = (await waitForAuthTransition(beforeSignals.url, 12000)).signals;
     credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
   }
 }
@@ -5029,14 +5057,13 @@ if (!credentialField) {
 }
 const submit = await clickSubmit(credentialField);
 const credentialSubmitBaseSignals = await pageSignals();
-let afterSignals = await waitForAuthTransition(credentialSubmitBaseSignals.url, 12000);
-let verifyFound = null;
-if (configuredVerifySelector) {
-  const verifyLocator = page.locator(configuredVerifySelector).first();
-  await verifyLocator.waitFor({ state: "visible", timeout: 10000 }).catch(() => null);
-  verifyFound = await verifyLocator.isVisible().catch(() => false);
-  afterSignals = await pageSignals();
-}
+const authTransition = await waitForAuthTransition(
+  credentialSubmitBaseSignals.url,
+  12000,
+  configuredVerifySelector,
+);
+let afterSignals = authTransition.signals;
+let verifyFound = configuredVerifySelector ? authTransition.verify_found : null;
 const observed = await ctoxBrowser.observe({ limit: 50, textMax: 140 });
 const urlChanged = afterSignals.url !== beforeSignals.url;
 const credentialUrlChanged = afterSignals.url !== credentialSubmitBaseSignals.url;
@@ -5086,6 +5113,7 @@ const loginOutcome = {
   submit,
   verify_selector: configuredVerifySelector || null,
   verify_selector_found: verifyFound,
+  auth_transition_settled_reason: authTransition.settled_reason,
   before: { url: beforeSignals.url, title: beforeSignals.title, form_state: beforeSignals.form_state, auth_signals: beforeSignals.auth_signals },
   credential_submit_base: { url: credentialSubmitBaseSignals.url, title: credentialSubmitBaseSignals.title, form_state: credentialSubmitBaseSignals.form_state, auth_signals: credentialSubmitBaseSignals.auth_signals },
   after: { url: afterSignals.url, title: afterSignals.title, form_state: afterSignals.form_state, auth_signals: afterSignals.auth_signals },
@@ -5821,8 +5849,11 @@ mod tests {
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));
-        assert!(source.contains("verifyLocator.waitFor({ state: \"visible\", timeout: 10000 })"));
-        assert!(source.contains("afterSignals = await pageSignals()"));
+        assert!(source.contains("while (Date.now() < deadline)"));
+        assert!(source.contains("verify-selector-visible"));
+        assert!(source.contains("auth-terminal-signal"));
+        assert!(source.contains("transientDocument"));
+        assert!(source.contains("auth_transition_settled_reason"));
         assert!(source.contains("lowerText.normalize(\"NFKD\")"));
         assert!(source.contains("ungultig|ungueltig"));
         assert!(source.contains("identifiants-incorrects"));
