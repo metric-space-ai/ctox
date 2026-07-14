@@ -1673,6 +1673,7 @@ build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
   local main_target_dir="$source_root/runtime/build/cargo-target"
+  local configured_target_dir="${CTOX_BUILD_TARGET_DIR:-}"
   local managed_release_build=0
   local skip_optional_runtime_builds=0
   if [[ "${CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS:-0}" == "1" ]]; then
@@ -1684,9 +1685,14 @@ build_ctox() {
     "$INSTALL_ROOT"/releases/*)
       managed_release_build=1
       main_target_dir="$source_root/target"
-      cargo_env+=("CARGO_TARGET_DIR=$main_target_dir")
       ;;
   esac
+  if [[ -n "$configured_target_dir" ]]; then
+    main_target_dir="$configured_target_dir"
+  fi
+  if [[ "$managed_release_build" -eq 1 || -n "$configured_target_dir" ]]; then
+    cargo_env+=("CARGO_TARGET_DIR=$main_target_dir")
+  fi
   if [[ "$skip_optional_runtime_builds" -eq 1 ]]; then
     cargo_env+=(
       "CTOX_VOXTRAL_BUILD_GGML=0"
@@ -2562,6 +2568,7 @@ parse_args() {
         printf '  CTOX_DEPENDENCIES_ROOT      Canonical install root for downloaded dependencies/assets\n'
         printf '  CTOX_RELEASE_RETENTION      Managed releases to keep after upgrade (default: 2)\n'
         printf '  CTOX_DISABLE_CARGO_TARGET_CACHE=1 Disable persistent upgrade build cache\n'
+        printf '  CTOX_BUILD_TARGET_DIR=<path> Put the main Cargo build target on a selected volume\n'
         printf '  CTOX_SKIP_DESKTOP_HOST_BUILD=1 Skip optional desktop host build on headless/server installs\n'
         printf '  CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1 Skip optional desktop/inference runtime rebuilds during source upgrades\n'
         printf '  CTOX_REPO                   Same as --repo\n'
