@@ -2155,6 +2155,10 @@ fn execute_appsec_stage_commands(
     state_dir: &Path,
     stage: &Value,
 ) -> anyhow::Result<Value> {
+    let reuse_existing_artifacts = stage
+        .get("reuse_existing_artifacts")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let mut execution_context = AppsecStageExecutionContext::default();
     let mut command_results = Vec::new();
     let commands = stage
@@ -2256,8 +2260,11 @@ fn execute_appsec_stage_commands(
             }));
             continue;
         }
-        let execution_output = match appsec_reusable_expected_artifact_output(state_dir, &command)?
-        {
+        let execution_output = match appsec_reusable_expected_artifact_output(
+            state_dir,
+            &command,
+            reuse_existing_artifacts,
+        )? {
             Some(reused) => Ok(reused),
             None => execute_appsec_ctox_cli_command(root, state_dir, &command, &argv_strings)
                 .map(|output| (output, None)),
@@ -3100,8 +3107,9 @@ fn parse_optional_u64_arg(args: &[String], flag: &str) -> anyhow::Result<Option<
 fn appsec_reusable_expected_artifact_output(
     state_dir: &Path,
     command: &Value,
+    reuse_existing_artifacts: bool,
 ) -> anyhow::Result<Option<(Value, Option<String>)>> {
-    if !appsec_command_can_reuse_expected_artifact(command) {
+    if !reuse_existing_artifacts || !appsec_command_can_reuse_expected_artifact(command) {
         return Ok(None);
     }
     let Some(expected) = command
@@ -4815,8 +4823,9 @@ mod tests {
     use super::lcm;
     use super::{
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
-        appsec_command_unresolved_placeholders, browser_automation_source_from_stage_command,
-        build_appsec_forwarded_args, chat_wait_assistant_completion, execute_appsec_stage_commands,
+        appsec_command_unresolved_placeholders, appsec_reusable_expected_artifact_output,
+        browser_automation_source_from_stage_command, build_appsec_forwarded_args,
+        chat_wait_assistant_completion, execute_appsec_stage_commands,
         find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
         looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
@@ -6680,6 +6689,42 @@ mod tests {
             .contains("browser_stream"));
         assert!(written.get("screenshot").is_none());
         assert!(written.pointer("/result/screenshot").is_none());
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_explicit_rerun_does_not_reuse_expected_artifact() {
+        let root = make_fake_ctox_root("appsec-rerun-no-artifact-reuse");
+        let state = root.join("runtime/appsec/default");
+        let artifact = state.join("authz/user-a/auth-login-redacted.json");
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        fs::write(
+            &artifact,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "ok": true,
+                "status": "authenticated",
+                "redacted": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let command = serde_json::json!({
+            "kind": "ctox-cli",
+            "tool": "ctox_web_auth_assist_login",
+            "expected_artifact": "authz/user-a/auth-login-redacted.json"
+        });
+
+        assert!(
+            appsec_reusable_expected_artifact_output(&state, &command, true)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            appsec_reusable_expected_artifact_output(&state, &command, false)
+                .unwrap()
+                .is_none()
+        );
 
         cleanup_test_dir(&root);
     }

@@ -4870,6 +4870,51 @@ const clickSubmit = async (credentialField) => {
   }
   return null;
 };
+const clickLoginEntry = async () => {
+  const targetOrigin = (() => { try { return new URL(targetUrl).origin; } catch { return null; } })();
+  try {
+    const candidates = await page.locator("a[href]").evaluateAll((links) => links.map((link, index) => {
+      const style = globalThis.getComputedStyle(link);
+      const box = link.getBoundingClientRect();
+      return {
+        index,
+        href: link.href || "",
+        text: String(link.innerText || link.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+        visible: style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0,
+      };
+    }));
+    for (const candidate of candidates) {
+      if (!candidate.visible || !candidate.href) continue;
+      let parsed = null;
+      try { parsed = new URL(candidate.href, targetUrl); } catch { continue; }
+      if (targetOrigin && parsed.origin !== targetOrigin) continue;
+      const signal = `${parsed.pathname} ${candidate.text}`.toLowerCase();
+      if (!/(^|[\s/_-])(login|log-in|signin|sign-in|anmelden|einloggen)([\s/_-]|$)/.test(signal)) continue;
+      if (/(signup|sign-up|register|create-account|registrieren)/.test(signal)) continue;
+      await page.locator("a[href]").nth(candidate.index).click({ timeout: 3500 });
+      return { mode: "same-origin-link", path: parsed.pathname.slice(0, 160) };
+    }
+  } catch {}
+  const buttonSelectors = [
+    "button:has-text('Sign in')",
+    "button:has-text('Log in')",
+    "button:has-text('Login')",
+    "button:has-text('Anmelden')",
+    "button:has-text('Einloggen')",
+    "[role='button']:has-text('Sign in')",
+    "[role='button']:has-text('Log in')",
+    "[role='button']:has-text('Anmelden')",
+  ];
+  for (const selector of buttonSelectors) {
+    try {
+      const locator = page.locator(selector).first();
+      if ((await locator.count()) < 1 || !(await locator.isVisible())) continue;
+      await locator.click({ timeout: 3500 });
+      return { mode: "login-button", selector };
+    } catch {}
+  }
+  return null;
+};
 const pageSignals = async () => {
   let title = "";
   try { title = await page.title(); } catch {}
@@ -5015,7 +5060,39 @@ const waitForAuthTransition = async (previousUrl, timeoutMs = 12000, verifySelec
   }
   return { signals, verify_found: verifyFound, settled_reason: settledReason };
 };
-const before = await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 30000, limit: 80, textMax: 120 });
+const waitForLoginEntryTransition = async (previousUrl, timeoutMs = 12000) => {
+  const deadline = Date.now() + timeoutMs;
+  let signals = await pageSignals();
+  while (Date.now() < deadline) {
+    await Promise.race([
+      page.waitForLoadState("domcontentloaded", { timeout: 1500 }).catch(() => null),
+      page.waitForTimeout(250).catch(() => null),
+    ]).catch(() => null);
+    signals = await pageSignals();
+    const formState = signals.form_state || {};
+    const transientDocument = /^Loading https?:\/\//i.test(String(signals.title || ""))
+      || (!signals.title && Number(formState.visible_forms || 0) === 0);
+    const authFormVisible = Number(formState.visible_password_fields || 0) > 0
+      || Number(formState.visible_email_fields || 0) > 0
+      || Number(formState.visible_forms || 0) > 0;
+    if (!transientDocument && (signals.url !== previousUrl || authFormVisible)) break;
+    await page.waitForTimeout(250).catch(() => null);
+  }
+  return signals;
+};
+const gotoTargetWithRetry = async () => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await ctoxBrowser.goto(targetUrl, { waitUntil: "domcontentloaded", timeoutMs: 20000, limit: 80, textMax: 120 });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await page.waitForTimeout(500).catch(() => null);
+    }
+  }
+  throw lastError || new Error("login target navigation failed");
+};
+const before = await gotoTargetWithRetry();
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
 const beforeSignals = await pageSignals();
 let loginField = null;
@@ -5023,6 +5100,18 @@ if (loginHint) {
   loginField = await fillField("login", loginHint);
 }
 let credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+let loginEntry = null;
+let afterLoginEntrySignals = null;
+if (!credentialField && !loginField) {
+  loginEntry = await clickLoginEntry();
+  if (loginEntry) {
+    afterLoginEntrySignals = await waitForLoginEntryTransition(beforeSignals.url, 12000);
+    if (loginHint) {
+      loginField = await fillField("login", loginHint);
+    }
+    credentialField = await fillField("credential", credentialValue, configuredCredentialSelector);
+  }
+}
 let loginTransition = null;
 let afterLoginStepSignals = null;
 if (!credentialField && loginField) {
@@ -5043,6 +5132,10 @@ if (!credentialField) {
     target_url: targetUrl,
     credential_ref: credentialRef,
     login_hint_present: !!loginHint,
+    login_entry: loginEntry,
+    after_login_entry: afterLoginEntrySignals
+      ? { url: afterLoginEntrySignals.url, title: afterLoginEntrySignals.title, form_state: afterLoginEntrySignals.form_state, auth_signals: afterLoginEntrySignals.auth_signals }
+      : null,
     login_transition: loginTransition,
     mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
     login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
@@ -5846,6 +5939,13 @@ mod tests {
         assert!(source.contains("verify-selector-not-found"));
         assert!(source.contains("waitForAuthTransition"));
         assert!(source.contains("login_transition"));
+        assert!(source.contains("clickLoginEntry"));
+        assert!(source.contains("waitForLoginEntryTransition"));
+        assert!(source.contains("gotoTargetWithRetry"));
+        assert!(source.contains("attempt <= 2"));
+        assert!(source.contains("same-origin-link"));
+        assert!(source.contains("after_login_entry"));
+        assert!(source.contains("parsed.origin !== targetOrigin"));
         assert!(source.contains("credential-field-not-found-after-login-transition"));
         assert!(source.contains("credentialSubmitBaseSignals"));
         assert!(source.contains("credential_url_changed"));
