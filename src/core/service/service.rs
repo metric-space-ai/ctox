@@ -3204,6 +3204,7 @@ fn handle_service_ipc_request(
                     eprintln!("ctox backend shutdown error during service stop: {err}");
                 }
                 let _ = std::fs::remove_file(service_pid_path(&root));
+                #[cfg(unix)]
                 let _ = std::fs::remove_file(service_socket_path(&root));
                 thread::sleep(Duration::from_millis(50));
                 std::process::exit(0);
