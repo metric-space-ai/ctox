@@ -107,7 +107,7 @@ export async function mount(ctx) {
     state.addressDirty = false;
     state.notice = 'Browser wird mit CTOX verbunden …';
     safeLoadAndRender();
-    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', { url }));
+    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', { url, new_session: true }));
   });
   refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
   refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
@@ -249,8 +249,13 @@ function recoverFrameSyncIfNeeded(ctx, state) {
 
 async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}) {
   const now = Date.now();
-  const sessionId = state.latestSession?.id || DEFAULT_SESSION_ID;
-  const tabId = state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID;
+  const opensNewSession = payloadPatch.new_session === true;
+  const sessionId = opensNewSession
+    ? `browser_session_${now}`
+    : state.latestSession?.id || DEFAULT_SESSION_ID;
+  const tabId = opensNewSession
+    ? `browser_tab_${now}`
+    : state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID;
   const commandId = `browser_cmd_${now}_${Math.random().toString(36).slice(2, 10)}`;
   const payload = {
     session_id: sessionId,
@@ -259,6 +264,7 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     viewport_h: VIEWPORT.height,
     ...payloadPatch,
   };
+  delete payload.new_session;
   if (payload.url) payload.url = normalizeUrl(payload.url);
   await startBrowserRuntimeSync(ctx);
   if (commandType === 'browser.session.stop') {
