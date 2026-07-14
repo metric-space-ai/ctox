@@ -10,6 +10,8 @@ assert.match(source, /result\?\.opensNewSession[\s\S]*?selectedSessionId\s*=\s*r
 assert.match(source, /requestedSessionId\s*=\s*result\.sessionId/);
 assert.match(source, /requestedSessionPending[\s\S]*?if \(!requestedSessionPending\)/);
 assert.match(source, /refs\.start[\s\S]*?requestedSessionId\s*=\s*sessionId[\s\S]*?session_id:\s*sessionId/);
+assert.match(source, /applyLatestNavigationResult\(state, commands\)/);
+assert.match(source, /candidate\.result\?\.url/);
 assert.doesNotMatch(
   source.match(/async function startBrowserRuntimeSync[\s\S]*?\n\}/)?.[0] || '',
   /catch\s*\([^)]*\)\s*\{[\s\S]*console\.warn/,

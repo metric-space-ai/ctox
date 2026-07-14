@@ -229,6 +229,7 @@ export async function mount(ctx) {
     state.latestFrame = latestFrame(frames, state.latestSession?.id);
     state.latestTab = latestTab(tabs, state.latestFrame?.tab_id || state.latestSession?.current_tab_id);
     state.latestCommand = latestBrowserCommand(commands, state.latestSession?.id || state.latestFrame?.session_id);
+    applyLatestNavigationResult(state, commands);
     state.browserCommands = latestBrowserCommands(commands, state.latestSession?.id || state.latestFrame?.session_id, 5);
     state.handoffTasks = latestBrowserHandoffTasks(handoffTasks, state.latestSession?.id || state.latestFrame?.session_id, 5);
     await reconcileCompletedStopCommand(ctx, state, commands);
@@ -937,6 +938,26 @@ function latestTab(tabs, tabId) {
 
 function latestBrowserCommand(commands, sessionId) {
   return latestBrowserCommands(commands, sessionId, 1)[0] || null;
+}
+
+function applyLatestNavigationResult(state, commands) {
+  const sessionId = state.latestSession?.id || state.latestFrame?.session_id;
+  if (!sessionId) return;
+  const command = commands
+    .filter((candidate) => {
+      const type = candidate.command_type || candidate.type || '';
+      const candidateSessionId = candidate.payload?.session_id || candidate.record_id || '';
+      return candidateSessionId === sessionId
+        && ['browser.session.start', 'browser.navigate', 'browser.reload', 'browser.back', 'browser.forward', 'browser.reset'].includes(type)
+        && candidate.status === 'completed'
+        && candidate.result?.url;
+    })
+    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0];
+  if (!command) return;
+  const url = String(command.result.url || '');
+  const title = String(command.result.title || state.latestTab?.title || state.latestSession?.title || 'Browser');
+  state.latestSession = { ...state.latestSession, current_url: url, title };
+  state.latestTab = { ...(state.latestTab || {}), url, title };
 }
 
 function latestBrowserCommands(commands, sessionId, limit = 5) {
