@@ -2139,6 +2139,7 @@ name = "ctox-appsec-pentest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "native-tls",
  "serde",
  "serde_json",
  "sha2",
