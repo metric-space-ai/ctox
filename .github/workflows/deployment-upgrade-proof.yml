@@ -94,6 +94,7 @@ jobs:
           partials = sorted(str(path) for path in cache.rglob("*.partial"))
           current_binary = install / "current" / "bin" / "ctox"
           version_output = subprocess.check_output([str(current_binary), "version"], text=True).strip()
+          version_contract = json.loads(version_output)
           contract = {
               "version": "ctox.deployment_audit.release_upgrade_acceptance.v1",
               "platform": "linux-x86_64",
@@ -103,7 +104,8 @@ jobs:
               "previous_release": status.get("manifest", {}).get("previous_release"),
               "release_slots": releases,
               "partial_cache_artifacts": partials,
-              "installed_binary_version": version_output,
+              "installed_binary_version": version_contract.get("version"),
+              "installed_binary_contract": version_contract,
               "status_sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
           }
           contract["ok"] = (
@@ -112,7 +114,7 @@ jobs:
               and contract["previous_release"] == "ci-baseline"
               and len(releases) == 2
               and not partials
-              and version_output
+              and version_contract.get("version") == "v0.3.27"
           )
           (evidence / "release-upgrade-acceptance.json").write_text(
               json.dumps(contract, indent=2) + "\n"
