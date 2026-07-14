@@ -3,10 +3,14 @@ name = "ctox-web-stack"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["full"]
+full = ["dep:ctox-pdf-parse"]
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-ctox-pdf-parse = { path = "../pdf-parse" }
+ctox-pdf-parse = { path = "../pdf-parse", optional = true }
 libc = "0.2"
 rand = "0.8"
 regex = "1"

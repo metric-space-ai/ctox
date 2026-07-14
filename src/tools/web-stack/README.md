@@ -12,6 +12,13 @@ The root `ctox` binary now keeps only thin adapters plus the durable scrape
 executor injection, so search/read/browser work can evolve without dragging
 unrelated CTOX execution modules into the same edit surface.
 
+The crate also exposes a focused `ctox-web-stack` binary for native platform
+acceptance and diagnostics. It accepts the same `browser-prepare`,
+`browser-automation`, and `browser-capture` contracts as `ctox web`, plus an
+optional global `--root <path>`. Research, search, and durable scrape commands
+remain available through the root CTOX daemon; the focused binary can be built
+with `--no-default-features` without the Research/PDF dependency graph.
+
 `bench/` contains the standalone regression bench for this module. It is
 binary-first and data-driven so fixture and live checks can run against a built
 `ctox` binary without recompiling the whole repository for every iteration.

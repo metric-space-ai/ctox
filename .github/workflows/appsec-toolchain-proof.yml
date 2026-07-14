@@ -124,20 +124,21 @@ jobs:
             }
           }
 
-      - name: Build CTOX CLI
-        run: cargo build --locked --bin ctox
+      - name: Build focused deployment audit CLIs
+        run: |
+          cargo build --locked --manifest-path src/tools/appsec-pentest/Cargo.toml
+          cargo build --locked --manifest-path src/tools/web-stack/Cargo.toml --no-default-features --bin ctox-web-stack
 
       - name: Run AppSec toolchain proof
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$APPSEC_PROOF_ROOT/runtime/appsec/default"
-          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          APPSEC_BIN="$CARGO_TARGET_DIR/debug/pentest"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+            APPSEC_BIN="$CARGO_TARGET_DIR/debug/pentest.exe"
           fi
           args=(
-            appsec
             tools
             proof-run
             --state-dir
@@ -157,7 +158,7 @@ jobs:
           if [ "$APPSEC_ATTEST_NATIVE" = "true" ]; then
             args+=(--attest-current-native --reviewed-by "github-actions:${RUNNER_OS}")
           fi
-          "$CTOX_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
+          "$APPSEC_BIN" "${args[@]}" --json | tee "$APPSEC_PROOF_ROOT/proof-run-output.json"
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
@@ -179,17 +180,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          WEB_BIN="$CARGO_TARGET_DIR/debug/ctox-web-stack"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+            WEB_BIN="$CARGO_TARGET_DIR/debug/ctox-web-stack.exe"
           fi
           BROWSER_DIR="$APPSEC_PROOF_ROOT/runtime/browser/reference"
-          "$CTOX_BIN" web browser-prepare \
+          "$WEB_BIN" --root "$APPSEC_PROOF_ROOT" browser-prepare \
             --dir "$BROWSER_DIR" \
             --install-reference \
             --install-browser \
             | tee "$APPSEC_PROOF_ROOT/browser-prepare.json"
-          "$CTOX_BIN" web browser-automation \
+          "$WEB_BIN" --root "$APPSEC_PROOF_ROOT" browser-automation \
             --dir "$BROWSER_DIR" \
             --script-file src/tools/appsec-pentest/fixtures/platform-browser-smoke.js \
             | tee "$APPSEC_PROOF_ROOT/browser-automation.json"
@@ -211,14 +212,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox"
+          APPSEC_BIN="$CARGO_TARGET_DIR/debug/pentest"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox.exe"
+            APPSEC_BIN="$CARGO_TARGET_DIR/debug/pentest.exe"
           fi
           STATE_DIR="$APPSEC_PROOF_ROOT/runtime/appsec/platform-assessment"
           LAB_DIR="$APPSEC_PROOF_ROOT/lab"
           RETAINED_DIR="$APPSEC_PROOF_ROOT/retained-assessment"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" \
             lab create --out "$LAB_DIR" --json \
             | tee "$APPSEC_PROOF_ROOT/lab-create.json"
@@ -230,22 +231,22 @@ jobs:
           }
           trap cleanup EXIT
           node -e "const http=require('http');let n=0;const ping=()=>http.get('http://127.0.0.1:8766/',r=>{r.resume();process.exit(0)}).on('error',()=>{if(++n>50)process.exit(1);setTimeout(ping,200)});ping()"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" lab run \
             --url http://127.0.0.1:8766 --profile full --json \
             | tee "$APPSEC_PROOF_ROOT/lab-run.json"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact audit --json \
             | tee "$APPSEC_PROOF_ROOT/artifact-audit.json"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" report --format json \
             --out "$STATE_DIR/reports/deployment-audit-report.json" --json \
             | tee "$APPSEC_PROOF_ROOT/report.json"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact export \
             --out "$RETAINED_DIR" --json \
             | tee "$APPSEC_PROOF_ROOT/export.json"
-          "$CTOX_BIN" appsec --state-dir "$STATE_DIR" \
+          "$APPSEC_BIN" --state-dir "$STATE_DIR" \
             --tools-root "$APPSEC_PROOF_ROOT/runtime/tools/appsec" artifact verify-export \
             --dir "$RETAINED_DIR" --json \
             | tee "$APPSEC_PROOF_ROOT/verify-export.json"
