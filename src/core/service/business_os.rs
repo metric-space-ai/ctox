@@ -3947,7 +3947,7 @@ fn business_os_usage() -> String {
         )
         .replace(
             "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
-            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack auth-assist-status --session-id <id>",
+            "  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack authenticated-automation --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>] < automation.js\n  ctox business-os web-stack auth-assist-status --session-id <id>",
         )
 }
 
@@ -5792,6 +5792,15 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn business_os_usage_documents_atomic_authenticated_automation() {
+        let usage = business_os_usage();
+        assert!(
+            usage.contains("ctox business-os web-stack authenticated-automation --source-id <id>")
+        );
+        assert!(usage.contains("< automation.js"));
+    }
 
     #[test]
     fn rxdb_status_includes_production_readiness_contract() {
