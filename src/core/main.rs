@@ -2166,6 +2166,11 @@ fn execute_appsec_stage_commands(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let archived_artifacts = if reuse_existing_artifacts {
+        Vec::new()
+    } else {
+        archive_appsec_stage_expected_artifacts(state_dir, &commands)?
+    };
     for command in commands {
         let (command, resolved_placeholders) =
             match resolve_appsec_stage_command_placeholders(command, &execution_context) {
@@ -2266,8 +2271,21 @@ fn execute_appsec_stage_commands(
             reuse_existing_artifacts,
         )? {
             Some(reused) => Ok(reused),
-            None => execute_appsec_ctox_cli_command(root, state_dir, &command, &argv_strings)
-                .map(|output| (output, None)),
+            None => {
+                execute_appsec_ctox_cli_command_with_retry(root, state_dir, &command, &argv_strings)
+                    .map(|(output, retry_attempted)| {
+                        let mut output = output;
+                        if retry_attempted {
+                            if let Some(object) = output.as_object_mut() {
+                                object.insert(
+                                    "transient_retry_attempted".to_string(),
+                                    Value::Bool(true),
+                                );
+                            }
+                        }
+                        (output, None)
+                    })
+            }
         };
         match execution_output {
             Ok(output) => {
@@ -2329,9 +2347,58 @@ fn execute_appsec_stage_commands(
     }
     Ok(json!({
         "commands": command_results,
+        "archived_artifacts": archived_artifacts,
         "session_bindings": appsec_stage_session_bindings_value(&execution_context),
         "artifact_bindings": appsec_stage_artifact_bindings_value(&execution_context),
     }))
+}
+
+fn archive_appsec_stage_expected_artifacts(
+    state_dir: &Path,
+    commands: &[Value],
+) -> anyhow::Result<Vec<Value>> {
+    let archive_root = state_dir
+        .join("pipeline-work")
+        .join(format!("rerun-artifacts-{}", current_millis()));
+    let mut archived = Vec::new();
+    for command in commands {
+        let Some(expected) = command
+            .get("expected_artifact")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let source = appsec_expected_artifact_path(state_dir, expected);
+        if !source.is_file() {
+            continue;
+        }
+        let Ok(relative) = source.strip_prefix(state_dir) else {
+            anyhow::bail!(
+                "fresh AppSec rerun refuses to archive expected artifact outside state dir: {}",
+                source.display()
+            );
+        };
+        let destination = archive_root.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create AppSec rerun archive {}", parent.display())
+            })?;
+        }
+        fs::rename(&source, &destination).with_context(|| {
+            format!(
+                "failed to archive prior AppSec artifact {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        archived.push(json!({
+            "expected_artifact": expected,
+            "archived_to": destination.to_string_lossy(),
+        }));
+    }
+    Ok(archived)
 }
 
 #[derive(Debug, Default)]
@@ -2799,6 +2866,85 @@ fn execute_appsec_ctox_cli_command(
         Some(other) => anyhow::bail!("unsupported CTOX CLI domain `{other}` for AppSec worker"),
         None => anyhow::bail!("missing CTOX CLI domain"),
     }
+}
+
+fn execute_appsec_ctox_cli_command_with_retry(
+    root: &Path,
+    state_dir: &Path,
+    command: &Value,
+    argv: &[String],
+) -> anyhow::Result<(Value, bool)> {
+    match execute_appsec_ctox_cli_command(root, state_dir, command, argv) {
+        Ok(output) if appsec_web_stack_output_is_transient(command, &output) => {
+            let output = execute_appsec_ctox_cli_command(root, state_dir, command, argv)?;
+            Ok((output, true))
+        }
+        Ok(output) => Ok((output, false)),
+        Err(error) if appsec_web_stack_error_is_transient(command, &error) => {
+            let output = execute_appsec_ctox_cli_command(root, state_dir, command, argv)?;
+            Ok((output, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn appsec_web_stack_output_is_transient(command: &Value, output: &Value) -> bool {
+    if command.get("tool").and_then(Value::as_str) != Some("ctox_web_auth_assist_login") {
+        return false;
+    }
+    if appsec_output_bool(output, "mfa_required") == Some(true)
+        || appsec_output_bool(output, "login_error_detected") == Some(true)
+    {
+        return false;
+    }
+    let status = appsec_artifact_string(output, "status").unwrap_or_default();
+    if status == "verify_selector_missing" {
+        return true;
+    }
+    status == "login_failed"
+        && appsec_output_error_text(output)
+            .is_some_and(|error| appsec_transient_browser_error_text(&error))
+}
+
+fn appsec_web_stack_error_is_transient(command: &Value, error: &anyhow::Error) -> bool {
+    matches!(
+        command.get("phase").and_then(Value::as_str),
+        Some("subject-auth-login" | "subject-crawl" | "cross-subject-replay")
+    ) && appsec_transient_browser_error_text(&format!("{error:#}"))
+}
+
+fn appsec_transient_browser_error_text(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("timeout")
+        || error.contains("timed out")
+        || error.contains("navigation")
+        || error.contains("net::err_")
+        || error.contains("target page, context or browser has been closed")
+}
+
+fn appsec_output_bool(output: &Value, key: &str) -> Option<bool> {
+    [
+        format!("/{key}"),
+        format!("/login_result/{key}"),
+        format!("/result/{key}"),
+        format!("/result/login_result/{key}"),
+        format!("/automation/result/{key}"),
+    ]
+    .into_iter()
+    .find_map(|pointer| output.pointer(&pointer).and_then(Value::as_bool))
+}
+
+fn appsec_output_error_text(output: &Value) -> Option<String> {
+    [
+        "/error",
+        "/automation/error",
+        "/result/error",
+        "/result/automation/error",
+        "/login_result/error",
+    ]
+    .into_iter()
+    .find_map(|pointer| output.pointer(pointer).and_then(Value::as_str))
+    .map(str::to_string)
 }
 
 fn execute_appsec_web_cli_command(
@@ -4824,8 +4970,8 @@ mod tests {
     use super::{
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
         appsec_command_unresolved_placeholders, appsec_reusable_expected_artifact_output,
-        browser_automation_source_from_stage_command, build_appsec_forwarded_args,
-        chat_wait_assistant_completion, execute_appsec_stage_commands,
+        appsec_web_stack_output_is_transient, browser_automation_source_from_stage_command,
+        build_appsec_forwarded_args, chat_wait_assistant_completion, execute_appsec_stage_commands,
         find_ctox_root_from_ancestors, handle_appsec_pipeline_work, handle_continuity_update,
         looks_like_ctox_root, openrouter_tool_smoke_summary,
         persist_appsec_command_expected_artifact, persist_runtime_turn_timeout,
@@ -6727,6 +6873,44 @@ mod tests {
         );
 
         cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_transient_login_retry_classification_is_fail_closed() {
+        let command = serde_json::json!({
+            "tool": "ctox_web_auth_assist_login",
+            "phase": "subject-auth-login"
+        });
+        assert!(appsec_web_stack_output_is_transient(
+            &command,
+            &serde_json::json!({
+                "status": "verify_selector_missing",
+                "mfa_required": false,
+                "login_error_detected": false
+            })
+        ));
+        assert!(appsec_web_stack_output_is_transient(
+            &command,
+            &serde_json::json!({
+                "status": "login_failed",
+                "automation": {"error": "page.goto: Timeout 20000ms exceeded"}
+            })
+        ));
+        assert!(!appsec_web_stack_output_is_transient(
+            &command,
+            &serde_json::json!({
+                "status": "login_failed",
+                "login_error_detected": true,
+                "automation": {"error": "invalid credential"}
+            })
+        ));
+        assert!(!appsec_web_stack_output_is_transient(
+            &command,
+            &serde_json::json!({
+                "status": "mfa_required",
+                "mfa_required": true
+            })
+        ));
     }
 
     #[test]
