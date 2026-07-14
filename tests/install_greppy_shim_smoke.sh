@@ -11,6 +11,12 @@ trap cleanup EXIT
 # shellcheck source=/dev/null
 source "$repo_root/install.sh"
 
+if [[ "$GREPPY_REPO@$GREPPY_REV" != \
+  "https://github.com/metric-space-ai/greppy.git@1a1737822ede4988756df1f06669d9d6f9bae599" ]]; then
+  printf 'unexpected Greppy installer provenance: %s@%s\n' "$GREPPY_REPO" "$GREPPY_REV" >&2
+  exit 1
+fi
+
 target_one="$tmp_dir/greppy-real-one"
 target_two="$tmp_dir/greppy-real-two"
 bin_dir="$tmp_dir/bin"
