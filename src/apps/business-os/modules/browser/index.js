@@ -105,7 +105,9 @@ export async function mount(ctx) {
   refs.start?.addEventListener('click', () => {
     const url = refs.address?.value || 'https://example.com';
     state.addressDirty = false;
-    dispatchBrowserCommand(ctx, state, 'browser.session.start', { url }).then(safeLoadAndRender);
+    state.notice = 'Browser wird mit CTOX verbunden …';
+    safeLoadAndRender();
+    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', { url }));
   });
   refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
   refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
@@ -147,9 +149,11 @@ export async function mount(ctx) {
     const commandType = state.latestSession?.id ? 'browser.navigate' : 'browser.session.start';
     const url = refs.address?.value || 'https://example.com';
     state.addressDirty = false;
-    dispatchBrowserCommand(ctx, state, commandType, {
+    state.notice = 'Browser wird mit CTOX verbunden …';
+    safeLoadAndRender();
+    runBrowserCommand(dispatchBrowserCommand(ctx, state, commandType, {
       url,
-    }).then(safeLoadAndRender);
+    }));
   });
   installInputHandlers(ctx, refs, state, scheduleRefresh);
   const viewerHeartbeat = setInterval(() => {
@@ -169,6 +173,19 @@ export async function mount(ctx) {
 
   function safeLoadAndRender() {
     loadAndRender().catch((error) => console.warn('[browser] refresh failed', error));
+  }
+
+  function runBrowserCommand(promise) {
+    return promise
+      .then(() => {
+        state.notice = '';
+        safeLoadAndRender();
+      })
+      .catch((error) => {
+        state.notice = browserCommandErrorMessage(error);
+        console.warn('[browser] command failed', error);
+        safeLoadAndRender();
+      });
   }
 
   async function loadAndRender() {
@@ -247,7 +264,12 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
   if (commandType === 'browser.session.stop') {
     await writeOptimisticBrowserSession(ctx, state, commandType, payload);
   }
-  await upsertDoc(browserCollection(ctx, 'business_commands'), {
+  if (!ctx.commandBus?.dispatch) {
+    const error = new Error('CTOX command bus is unavailable.');
+    error.code = 'sync_unavailable';
+    throw error;
+  }
+  await ctx.commandBus.dispatch({
     id: commandId,
     command_id: commandId,
     module: 'browser',
@@ -265,7 +287,17 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     },
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }, { until: 'accepted' });
+}
+
+function browserCommandErrorMessage(error) {
+  const code = String(error?.code || '').toLowerCase();
+  if (code === 'auth_required') return 'Die Browser-Anmeldung benötigt eine neue Business-OS-Autorisierung.';
+  if (['native_unavailable', 'projection_delayed', 'sync_unavailable'].includes(code)) {
+    return 'CTOX ist nicht mit dem Browser-Datenkanal verbunden. Der Browser wurde nicht gestartet. Bitte die Verbindung erneut aufbauen und dann erneut versuchen.';
+  }
+  const message = String(error?.message || '').trim();
+  return message ? `Der Browser konnte nicht gestartet werden: ${message}` : 'Der Browser konnte nicht gestartet werden.';
 }
 
 async function writeOptimisticBrowserSession(ctx, state, commandType, payload) {
@@ -668,11 +700,12 @@ async function startBrowserRuntimeSync(ctx, collections = [
   'browser_frames',
   'browser_input_events',
 ]) {
-  try {
-    await Promise.all(collections.map((collection) => ctx.sync?.startCollection?.(collection)));
-  } catch (error) {
-    console.warn('[browser] browser runtime sync start failed', error);
+  if (!ctx.sync?.startCollection) {
+    const error = new Error('CTOX Browser-Datenkanal ist nicht verfügbar.');
+    error.code = 'sync_unavailable';
+    throw error;
   }
+  await Promise.all(collections.map((collection) => ctx.sync.startCollection(collection)));
 }
 
 function actorContext(session) {

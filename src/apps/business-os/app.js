@@ -1998,7 +1998,7 @@ async function openSettingsDrawer(options = {}) {
     session: state.session,
     governance: state.governance,
     syncConfig: state.sync?.config,
-    sync: createLiveSyncFacade(),
+    sync: createLiveSyncFacade({ host: els.rightDrawer }),
     commandBus: createLiveCommandBusFacade(),
     db: createScopedSystemDbFacade('settings-drawer-react-settings', SETTINGS_DB_COLLECTIONS),
     initialTab: options.initialTab || 'runtime',
@@ -5359,15 +5359,30 @@ function renderModulePermissionDeniedState(mod, error) {
   host.replaceChildren(locked);
 }
 
-function createLiveSyncFacade() {
+function createLiveSyncFacade({ host = null } = {}) {
+  const assertActive = () => {
+    if (!host || host.isConnected) return;
+    const error = new Error('Business OS module sync context is no longer active.');
+    error.code = 'CTOX_BUSINESS_OS_MODULE_CONTEXT_CLOSED';
+    throw error;
+  };
   return {
     get mode() { return state.sync?.mode; },
     get config() { return state.sync?.config; },
     get diagnostics() { return state.sync?.diagnostics; },
-    startCollection: (...args) => state.sync?.startCollection?.(...args),
+    startCollection: (...args) => {
+      assertActive();
+      return state.sync?.startCollection?.(...args);
+    },
     stopCollection: (...args) => state.sync?.stopCollection?.(...args),
-    restartCollection: (...args) => state.sync?.restartCollection?.(...args),
-    restartCollections: (...args) => state.sync?.restartCollections?.(...args),
+    restartCollection: (...args) => {
+      assertActive();
+      return state.sync?.restartCollection?.(...args);
+    },
+    restartCollections: (...args) => {
+      assertActive();
+      return state.sync?.restartCollections?.(...args);
+    },
     suspendCollections: (...args) => state.sync?.suspendCollections?.(...args),
     resumeCollections: (...args) => state.sync?.resumeCollections?.(...args),
     stop: (...args) => state.sync?.stop?.(...args),
