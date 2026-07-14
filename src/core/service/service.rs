@@ -856,7 +856,6 @@ pub struct PreparedChatPrompt {
     pub suggested_skill: Option<String>,
 }
 
-#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ServiceIpcRequest {
@@ -893,7 +892,6 @@ enum ServiceIpcRequest {
     },
 }
 
-#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ServiceIpcResponse {
@@ -3063,7 +3061,6 @@ fn is_benign_client_disconnect(err: &std::io::Error) -> bool {
     )
 }
 
-#[cfg(unix)]
 fn handle_service_ipc_request(
     request: ServiceIpcRequest,
     root: &Path,

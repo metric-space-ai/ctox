@@ -841,7 +841,6 @@ mod tests {
             |listener| {
                 let bound = match &listener.inner {
                     ListenerInner::Tcp(tcp) => tcp.local_addr().expect("local_addr"),
-                    #[cfg(unix)]
                     _ => unreachable!("expected Tcp listener"),
                 };
                 LocalTransport::TcpLoopback {
