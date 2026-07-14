@@ -37256,6 +37256,7 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
         command_type,
         "ctox.appsec.assessment.create"
             | "ctox.appsec.assessment.run"
+            | "ctox.appsec.assessment.archive"
             | "ctox.appsec.lab.create"
             | "ctox.appsec.lab.run"
             | "ctox.appsec.report.export"
@@ -37302,10 +37303,11 @@ fn handle_appsec_business_command(
             args.push("--json".to_string());
         }
         "ctox.appsec.assessment.create" => {
-            let url = appsec_payload_string(&command.payload, "url")
-                .or_else(|| appsec_payload_string(&command.payload, "target"))
-                .context("ctox.appsec.assessment.create payload.url is required")?;
-            args.extend(["init".to_string(), "--url".to_string(), url]);
+            push_appsec_assessment_definition_args(root, &command.payload, &mut args, "draft")?;
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.assessment.archive" => {
+            push_appsec_assessment_definition_args(root, &command.payload, &mut args, "archived")?;
             args.push("--json".to_string());
         }
         "ctox.appsec.assessment.run" => {
@@ -37886,6 +37888,63 @@ fn push_appsec_state_dir_arg(
     Ok(())
 }
 
+fn push_appsec_assessment_definition_args(
+    root: &Path,
+    payload: &Value,
+    args: &mut Vec<String>,
+    status: &str,
+) -> anyhow::Result<()> {
+    args.push("init".to_string());
+    let profile = appsec_payload_string(payload, "profile").unwrap_or_else(|| "full".to_string());
+    anyhow::ensure!(
+        matches!(profile.as_str(), "quick" | "standard" | "deep" | "full"),
+        "AppSec assessment payload.profile must be quick, standard, deep, or full"
+    );
+    args.extend(["--profile".to_string(), profile]);
+    args.extend(["--status".to_string(), status.to_string()]);
+    if let Some(name) = appsec_payload_string(payload, "name") {
+        args.extend(["--name".to_string(), name]);
+    }
+
+    let mut target_count = 0usize;
+    if let Some(url) =
+        appsec_payload_string(payload, "url").or_else(|| appsec_payload_string(payload, "target"))
+    {
+        args.extend(["--url".to_string(), url]);
+        target_count += 1;
+    }
+    if let Some(source_path) = appsec_payload_string(payload, "source_path")
+        .or_else(|| appsec_payload_string(payload, "source"))
+    {
+        let source_path = workspace_bound_path(root, &source_path, "source_path")?;
+        args.extend(["--target".to_string(), source_path.display().to_string()]);
+        target_count += 1;
+    }
+    anyhow::ensure!(
+        target_count > 0,
+        "AppSec assessment definition requires payload.url or payload.source_path"
+    );
+
+    if let Some(subjects) = appsec_payload_string(payload, "authz_subjects") {
+        let subjects = workspace_bound_path(root, &subjects, "authz_subjects")?;
+        args.extend([
+            "--authz-subjects".to_string(),
+            subjects.display().to_string(),
+        ]);
+    }
+    if payload.get("active").and_then(Value::as_bool) == Some(true) {
+        args.push("--active".to_string());
+    }
+    if let Some(approval_id) = appsec_payload_string(payload, "approval_id") {
+        args.extend(["--approval-id".to_string(), approval_id]);
+    }
+    if let Some(wordlist) = appsec_payload_string(payload, "wordlist") {
+        let wordlist = workspace_bound_path(root, &wordlist, "wordlist")?;
+        args.extend(["--wordlist".to_string(), wordlist.display().to_string()]);
+    }
+    Ok(())
+}
+
 fn push_appsec_approval_target_args(payload: &Value, args: &mut Vec<String>) -> anyhow::Result<()> {
     if let Some(url) = appsec_payload_string(payload, "url") {
         args.extend(["--url".to_string(), url]);
@@ -38005,9 +38064,16 @@ fn project_appsec_assessments(
         let record = serde_json::json!({
             "assessment_id": id,
             "state_dir": state,
+            "name": payload.get("name").cloned().unwrap_or(Value::Null),
             "target": target,
             "profile": profile,
             "status": status,
+            "mode": payload.get("mode").cloned().unwrap_or(Value::Null),
+            "source_path": payload.get("source_path").cloned().unwrap_or(Value::Null),
+            "authz_subjects": payload.get("authz_subjects").cloned().unwrap_or(Value::Null),
+            "active": payload.get("active").cloned().unwrap_or(Value::Bool(false)),
+            "approval_id": payload.get("approval_id").cloned().unwrap_or(Value::Null),
+            "wordlist": payload.get("wordlist").cloned().unwrap_or(Value::Null),
             "command": command,
             "artifact_path": artifact_path,
             "scan_completed": payload.get("scan_completed").cloned().unwrap_or(Value::Null),
@@ -39340,6 +39406,9 @@ mod tests {
         assert!(appsec_business_command_requires_data_write(
             "ctox.appsec.assessment.run"
         ));
+        assert!(appsec_business_command_requires_data_write(
+            "ctox.appsec.assessment.archive"
+        ));
         let root = tempdir()?;
         fs::create_dir_all(root.path().join("project"))?;
         let command = BusinessCommand {
@@ -39360,6 +39429,44 @@ mod tests {
         let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
             .expect_err("active assessment must require a durable approval id");
         assert!(error.to_string().contains("payload.approval_id"));
+        Ok(())
+    }
+
+    #[test]
+    fn appsec_assessment_definition_creates_and_archives_a_managed_test() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_appsec_assessment_create".into()),
+            module: APPSEC_MODULE_ID.into(),
+            command_type: "ctox.appsec.assessment.create".into(),
+            record_id: Some("runtime/appsec/tests/customer-portal".into()),
+            payload: serde_json::json!({
+                "state_dir": "runtime/appsec/tests/customer-portal",
+                "name": "Customer portal",
+                "url": "https://example.test",
+                "profile": "deep"
+            }),
+            client_context: Value::Null,
+        };
+        let created = handle_appsec_business_command(root.path(), &chef_session(), &command)?;
+        assert_eq!(
+            created.get("name").and_then(Value::as_str),
+            Some("Customer portal")
+        );
+        assert_eq!(created.get("status").and_then(Value::as_str), Some("draft"));
+        assert!(created
+            .pointer("/ctox_durable_projection/business_os_projection/projected_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count >= 1));
+
+        command.command_type = "ctox.appsec.assessment.archive".into();
+        command.id = Some("cmd_appsec_assessment_archive".into());
+        let archived = handle_appsec_business_command(root.path(), &chef_session(), &command)?;
+        assert_eq!(
+            archived.get("status").and_then(Value::as_str),
+            Some("archived")
+        );
         Ok(())
     }
 
