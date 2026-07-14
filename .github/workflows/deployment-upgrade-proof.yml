@@ -1,0 +1,131 @@
+name: Deployment Upgrade Proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-upgrade-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stable-upgrade:
+    name: Linux x86_64 stable release upgrade proof
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CTOX_UPDATE_GITHUB_REPO: metric-space-ai/ctox
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: "1.93.0"
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev
+
+      - name: Configure isolated upgrade roots
+        shell: bash
+        run: |
+          {
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/ctox-upgrade-cargo-target"
+            echo "CTOX_INSTALL_ROOT=$RUNNER_TEMP/ctox-upgrade/install"
+            echo "CTOX_STATE_ROOT=$RUNNER_TEMP/ctox-upgrade/state"
+            echo "CTOX_CACHE_ROOT=$RUNNER_TEMP/ctox-upgrade/cache"
+            echo "CTOX_BIN_DIR=$RUNNER_TEMP/ctox-upgrade/bin"
+            echo "CTOX_BUILD_TARGET_DIR=$RUNNER_TEMP/ctox-upgrade/release-build-target"
+            echo "CTOX_ROOT=$GITHUB_WORKSPACE"
+            echo "UPGRADE_HOME=$RUNNER_TEMP/ctox-upgrade/home"
+            echo "UPGRADE_EVIDENCE=$RUNNER_TEMP/ctox-upgrade/evidence"
+          } >> "$GITHUB_ENV"
+
+      - name: Build current CTOX release controller
+        run: cargo build --locked --bin ctox
+
+      - name: Adopt isolated baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/bin" "$UPGRADE_HOME" "$UPGRADE_EVIDENCE"
+          cp "$CARGO_TARGET_DIR/debug/ctox" "$GITHUB_WORKSPACE/bin/ctox"
+          HOME="$UPGRADE_HOME" "$CARGO_TARGET_DIR/debug/ctox" update adopt \
+            --install-root "$CTOX_INSTALL_ROOT" \
+            --state-root "$CTOX_STATE_ROOT" \
+            --release ci-baseline \
+            --skip-build \
+            --force \
+            | tee "$UPGRADE_EVIDENCE/adopt.json"
+
+      - name: Execute stable release upgrade
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOME="$UPGRADE_HOME" "$CARGO_TARGET_DIR/debug/ctox" upgrade --stable \
+            | tee "$UPGRADE_EVIDENCE/upgrade.json"
+          HOME="$UPGRADE_HOME" "$CARGO_TARGET_DIR/debug/ctox" update status \
+            > "$UPGRADE_EVIDENCE/update-status.json"
+
+      - name: Validate upgrade acceptance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          evidence = pathlib.Path(os.environ["UPGRADE_EVIDENCE"])
+          install = pathlib.Path(os.environ["CTOX_INSTALL_ROOT"])
+          cache = pathlib.Path(os.environ["CTOX_CACHE_ROOT"])
+          status_path = evidence / "update-status.json"
+          status = json.loads(status_path.read_text())
+          releases = sorted(path.name for path in (install / "releases").iterdir() if path.is_dir())
+          partials = sorted(str(path) for path in cache.rglob("*.partial"))
+          current_binary = install / "current" / "bin" / "ctox"
+          version_output = subprocess.check_output([str(current_binary), "version"], text=True).strip()
+          contract = {
+              "version": "ctox.deployment_audit.release_upgrade_acceptance.v1",
+              "platform": "linux-x86_64",
+              "mode": "stable-release",
+              "phase": status.get("update", {}).get("phase"),
+              "current_release": status.get("manifest", {}).get("current_release"),
+              "previous_release": status.get("manifest", {}).get("previous_release"),
+              "release_slots": releases,
+              "partial_cache_artifacts": partials,
+              "installed_binary_version": version_output,
+              "status_sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
+          }
+          contract["ok"] = (
+              contract["phase"] == "completed"
+              and contract["current_release"] == "v0.3.27"
+              and contract["previous_release"] == "ci-baseline"
+              and len(releases) == 2
+              and not partials
+              and version_output
+          )
+          (evidence / "release-upgrade-acceptance.json").write_text(
+              json.dumps(contract, indent=2) + "\n"
+          )
+          print(json.dumps(contract, indent=2))
+          if not contract["ok"]:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload release upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: deployment-upgrade-proof-linux-x86_64
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ runner.temp }}/ctox-upgrade/evidence/**
