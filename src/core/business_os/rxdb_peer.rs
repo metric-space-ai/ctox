@@ -6877,7 +6877,8 @@ async fn upsert_browser_session(
         .and_then(|payload| payload.get("last_command_created_at_ms"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    if existing_command_created_at_ms > command_created_at_ms {
+    let updates_command_watermark = browser_updates_command_watermark(command_type);
+    if updates_command_watermark && existing_command_created_at_ms > command_created_at_ms {
         return Ok(());
     }
     // Carry forward input bookkeeping so a lifecycle/navigation write does not
@@ -6890,13 +6891,18 @@ async fn upsert_browser_session(
         .get("pending_input_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let mut payload = json!({
-        "browser_stream": "rxdb",
-        "last_command_type": command_type,
-        "last_command_created_at_ms": command_created_at_ms,
-        "runtime": "ctox-web-stack",
-        "updated_by": "native-rxdb-peer"
-    });
+    let mut payload = existing
+        .get("payload")
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    payload["browser_stream"] = Value::String("rxdb".to_string());
+    if updates_command_watermark {
+        payload["last_command_type"] = Value::String(command_type.to_string());
+        payload["last_command_created_at_ms"] = Value::from(command_created_at_ms);
+    }
+    payload["runtime"] = Value::String("ctox-web-stack".to_string());
+    payload["updated_by"] = Value::String("native-rxdb-peer".to_string());
     if let Some(error) = error {
         payload["error"] = Value::String(error.to_string());
     }
@@ -6929,6 +6935,10 @@ async fn upsert_browser_session(
         .await
         .map_err(|err| anyhow::anyhow!("upsert browser session {session_id}: {err}"))?;
     Ok(())
+}
+
+fn browser_updates_command_watermark(command_type: &str) -> bool {
+    command_type != "browser.input"
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14002,6 +14012,8 @@ mod tests {
             browser_capture_navigation(&screenshot, Some(&stale_hint))["url"],
             "https://iana.org/"
         );
+        assert!(!browser_updates_command_watermark("browser.input"));
+        assert!(browser_updates_command_watermark("browser.navigate"));
     }
 
     fn issue_test_capability(root: &Path, user_id: &str, role: &str) -> String {
