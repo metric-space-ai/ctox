@@ -873,14 +873,51 @@ fn ensure_node_runtime_compatible() -> Result<()> {
 }
 
 pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
-    if program.contains('/') {
-        let path = PathBuf::from(program);
-        return path.is_file().then_some(path);
+    let path = PathBuf::from(program);
+    if path.is_absolute() || path.components().count() > 1 {
+        return command_file_names(program)
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|candidate| candidate.is_file());
     }
     let path_env = std::env::var_os("PATH")?;
     std::env::split_paths(&path_env)
-        .map(|dir| dir.join(program))
+        .flat_map(|dir| {
+            command_file_names(program)
+                .into_iter()
+                .map(move |name| dir.join(name))
+        })
         .find(|candidate| candidate.is_file())
+}
+
+fn command_file_names(program: &str) -> Vec<String> {
+    #[cfg(not(windows))]
+    {
+        return vec![program.to_string()];
+    }
+    #[cfg(windows)]
+    {
+        let mut names = vec![program.to_string()];
+        if Path::new(program).extension().is_none() {
+            let extensions =
+                std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+            for extension in extensions.split(';').filter(|value| !value.is_empty()) {
+                let extension = if extension.starts_with('.') {
+                    extension.to_string()
+                } else {
+                    format!(".{extension}")
+                };
+                let candidate = format!("{program}{}", extension.to_ascii_lowercase());
+                if !names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&candidate))
+                {
+                    names.push(candidate);
+                }
+            }
+        }
+        names
+    }
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
@@ -2343,6 +2380,7 @@ mod tests {
     use super::build_persistent_browser_runner_script;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
+    use super::find_command_on_path;
     use super::find_playwright_chromium_executable_in;
     use super::parse_browser_automation_source;
     use super::parse_node_major_version;
@@ -2458,6 +2496,19 @@ mod tests {
         assert_eq!(parse_node_major_version("v12.22.9"), Some(12));
         assert_eq!(parse_node_major_version("18.19.1"), Some(18));
         assert_eq!(parse_node_major_version("not-a-version"), None);
+    }
+
+    #[test]
+    fn command_lookup_accepts_explicit_executable_path() {
+        let dir = temp_path("command-path");
+        fs::create_dir_all(&dir).unwrap();
+        let executable = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_command_on_path(executable.to_str().unwrap()),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
