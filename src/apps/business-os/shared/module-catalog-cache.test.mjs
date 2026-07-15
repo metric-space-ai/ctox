@@ -11,5 +11,15 @@ assert.doesNotMatch(
   /cache: 'force-cache'/,
   'runtime-installed module releases must not be hidden behind the shell build cache',
 );
+assert.match(
+  loader,
+  /const explicitlyAllowedIds = resolveModuleAllowlist\(\)/,
+  'the tenant allowlist must make selected packaged apps available without a runtime install',
+);
+assert.match(
+  loader,
+  /canonicalSystemIds\.has\(id\) \|\| explicitlyAllowedIds\.has\(id\)/,
+  'packaged catalog visibility must stay limited to system apps and explicit tenant selections',
+);
 
 console.log('runtime module catalog cache contract OK');

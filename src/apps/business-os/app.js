@@ -52,7 +52,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260715-first-party-store-v101';
+const APP_BUILD = '20260715-tenant-packaged-apps-v102';
 
 ensureShellStylesheets();
 
@@ -9536,6 +9536,11 @@ function getOfflineFallbackCatalog() {
 async function loadPackagedModuleCatalog() {
   const exposeCompleteQaCatalog = allowsCompleteQaModuleCatalog();
   const canonicalSystemIds = await loadCanonicalSystemModuleIds();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  const isPackagedModuleVisible = (mod) => {
+    const id = String(mod?.id || '').trim();
+    return canonicalSystemIds.has(id) || explicitlyAllowedIds.has(id);
+  };
   try {
     const response = await fetch(`modules/registry.json?v=${APP_BUILD}`, { cache: 'no-store' });
     if (response.ok) {
@@ -9547,7 +9552,7 @@ async function loadPackagedModuleCatalog() {
           ok: catalog.ok !== false,
           modules: await withPackagedModuleAssetRevisions(
             catalog.modules
-              .filter((mod) => exposeCompleteQaCatalog || canonicalSystemIds.has(String(mod?.id || '').trim()))
+              .filter((mod) => exposeCompleteQaCatalog || isPackagedModuleVisible(mod))
               .map((mod) => exposeCompleteQaCatalog ? {
                 ...mod,
                 runtime_installed: true,
@@ -9569,7 +9574,7 @@ async function loadPackagedModuleCatalog() {
     ...fallback,
     modules: await withPackagedModuleAssetRevisions(
       fallback.modules
-        .filter((mod) => exposeCompleteQaCatalog || canonicalSystemIds.has(String(mod?.id || '').trim()))
+        .filter((mod) => exposeCompleteQaCatalog || isPackagedModuleVisible(mod))
         .map((mod) => exposeCompleteQaCatalog ? {
           ...mod,
           runtime_installed: true,
