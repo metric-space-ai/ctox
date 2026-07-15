@@ -188,9 +188,7 @@ pub(super) fn is_threads_owned_collection(collection: &str) -> bool {
 }
 
 pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) -> bool {
-    if is_threads_owned_collection(collection)
-        || super::external_sql_sync::projection_collection_is_server_owned(root, collection)
-    {
+    if is_threads_owned_collection(collection) {
         return false;
     }
     if collection == "ctox_queue_tasks" {
