@@ -49,6 +49,28 @@ pub fn assert_fetchable_url(raw: &str) -> Result<()> {
     }
 }
 
+/// Validate a browser navigation at the native trust boundary. This resolves
+/// the destination immediately and applies the same public-address policy as
+/// server-side fetches; the persistent runner repeats scheme/IP-literal checks
+/// for redirects and subresources.
+pub fn assert_browser_egress_url(root: &Path, raw: &str) -> Result<()> {
+    if raw == "about:blank" {
+        return Ok(());
+    }
+    assert_fetchable_url(raw)?;
+    let parsed = Url::parse(raw)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("browser URL requires a host"))?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("browser URL requires a known port"))?;
+    let resolver = SsrfResolver::new(allow_hosts_from_config(root));
+    ureq::Resolver::resolve(&resolver, &format!("{host}:{port}"))
+        .map_err(|error| anyhow!("browser egress policy rejected destination: {error}"))?;
+    Ok(())
+}
+
 /// Extract the lower-cased host of a URL (no port, no brackets) for allow-list
 /// comparison. Returns `None` if the input does not parse or has no host.
 pub fn host_of(raw: &str) -> Option<String> {

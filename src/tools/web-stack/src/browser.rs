@@ -17,6 +17,10 @@ use std::process::ChildStdout;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -237,12 +241,40 @@ pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -
         anyhow::bail!("browser automation runtime failed: {detail}");
     }
 
-    serde_json::from_str(&stdout).with_context(|| {
+    let payload: Value = serde_json::from_str(&stdout).with_context(|| {
         format!(
             "browser automation runtime produced invalid json: {}",
             trim_text(&stdout, 400)
         )
-    })
+    })?;
+    record_browser_detection_signal(root, &payload);
+    Ok(payload)
+}
+
+fn record_browser_detection_signal(root: &Path, payload: &Value) {
+    let Some(detection) = payload.get("detection") else {
+        return;
+    };
+    let markers = detection
+        .get("markers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if markers.is_empty() {
+        return;
+    }
+    let probe_url = detection.get("url").and_then(Value::as_str);
+    crate::unlock::record_signal_lossy(
+        root,
+        "browser_automation",
+        probe_url,
+        json!({
+            "reason": "browser_challenge_detected",
+            "markers": markers,
+            "title": detection.get("title").cloned().unwrap_or(Value::Null),
+            "automation_ok": payload.get("ok").cloned().unwrap_or(Value::Null),
+        }),
+    );
 }
 
 pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -> Result<Value> {
@@ -789,19 +821,14 @@ fn run_command_with_env(
     envs: &[(&str, &Path)],
     error_message: &str,
 ) -> Result<()> {
-    let executable = find_command_on_path(program)
-        .with_context(|| format!("{error_message}: `{program}` was not found on PATH"))?;
-    let mut command = Command::new(&executable);
+    let mut command = Command::new(program);
     command.current_dir(cwd).args(args);
     for (key, value) in envs {
         command.env(key, value);
     }
-    let output = command.output().with_context(|| {
-        format!(
-            "{error_message}: failed to launch `{}`",
-            executable.display()
-        )
-    })?;
+    let output = command
+        .output()
+        .with_context(|| format!("{error_message}: failed to launch `{program}`"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -878,52 +905,14 @@ fn ensure_node_runtime_compatible() -> Result<()> {
 }
 
 pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(program);
-    if path.is_absolute() || path.components().count() > 1 {
-        return command_file_names(program)
-            .into_iter()
-            .map(PathBuf::from)
-            .find(|candidate| candidate.is_file());
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+        return path.is_file().then_some(path);
     }
     let path_env = std::env::var_os("PATH")?;
     std::env::split_paths(&path_env)
-        .flat_map(|dir| {
-            command_file_names(program)
-                .into_iter()
-                .map(move |name| dir.join(name))
-        })
+        .map(|dir| dir.join(program))
         .find(|candidate| candidate.is_file())
-}
-
-fn command_file_names(program: &str) -> Vec<String> {
-    #[cfg(not(windows))]
-    {
-        return vec![program.to_string()];
-    }
-    #[cfg(windows)]
-    {
-        if Path::new(program).extension().is_some() {
-            return vec![program.to_string()];
-        }
-        let extensions =
-            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-        let mut names = Vec::new();
-        for extension in extensions.split(';').filter(|value| !value.is_empty()) {
-            let extension = if extension.starts_with('.') {
-                extension.to_string()
-            } else {
-                format!(".{extension}")
-            };
-            let candidate = format!("{program}{}", extension.to_ascii_lowercase());
-            if !names
-                .iter()
-                .any(|name: &String| name.eq_ignore_ascii_case(&candidate))
-            {
-                names.push(candidate);
-            }
-        }
-        names
-    }
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
@@ -1007,29 +996,16 @@ fn find_playwright_chromium_executable_in(cache_root: &Path) -> Option<PathBuf> 
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        let relative_paths: &[&str] = if name.starts_with("chromium-") {
-            &[
-                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-                "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-                "chrome-linux64/chrome",
-                "chrome-linux/chrome",
-                "chrome-win64/chrome.exe",
-                "chrome-win/chrome.exe",
-            ]
-        } else if name.starts_with("chromium_headless_shell-") {
-            &[
-                "chrome-headless-shell-mac-arm64/chrome-headless-shell",
-                "chrome-headless-shell-mac-x64/chrome-headless-shell",
-                "chrome-headless-shell-linux64/chrome-headless-shell",
-                "chrome-headless-shell-linux/chrome-headless-shell",
-                "chrome-headless-shell-win64/chrome-headless-shell.exe",
-                "chrome-headless-shell-win/chrome-headless-shell.exe",
-            ]
-        } else {
+        if !name.starts_with("chromium-") || name.contains("headless") {
             continue;
-        };
-        for relative in relative_paths {
+        }
+        for relative in [
+            "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chrome-linux64/chrome",
+            "chrome-linux/chrome",
+            "chrome-win/chrome.exe",
+        ] {
             let candidate = path.join(relative);
             if candidate.is_file() {
                 return Some(candidate);
@@ -1189,6 +1165,27 @@ const pageMetadata = async (page) => {{
   return {{ url, title }};
 }};
 
+const detectionSnapshot = async (page) => {{
+  const metadata = await pageMetadata(page);
+  let text = "";
+  let html = "";
+  try {{ text = await page.locator("body").innerText({{ timeout: 1500 }}); }} catch {{}}
+  try {{ html = await page.content(); }} catch {{}}
+  const textCorpus = `${{metadata.title || ""}} ${{metadata.url || ""}} ${{text.slice(0, 8000)}}`.toLowerCase();
+  const htmlCorpus = html.slice(0, 32000).toLowerCase();
+  const checks = [
+    ["cloudflare_challenge", /just a moment|performing security verification|cf-chl-|challenge-platform/, `${{textCorpus}} ${{htmlCorpus}}`],
+    ["turnstile", /cf-turnstile|challenges\.cloudflare\.com\/turnstile/, htmlCorpus],
+    ["captcha", /g-recaptcha|h-captcha|recaptcha\/api|hcaptcha\.com\/1\/api|data-sitekey/, htmlCorpus],
+    ["human_verification", /verify (that )?you are human|human verification|security check/, textCorpus],
+    ["access_denied", /access denied|request blocked/, textCorpus],
+  ];
+  return {{
+    ...metadata,
+    markers: checks.filter(([, pattern, corpus]) => pattern.test(corpus)).map(([marker]) => marker),
+  }};
+}};
+
 const emit = async (payload) => {{
   process.stdout.write(JSON.stringify(payload));
 }};
@@ -1217,7 +1214,17 @@ const hostLocale = (() => {{
   }}
   return null;
 }})();
-const launchArgs = [`--user-agent=${{defaultUserAgent}}`];
+const launchArgs = [
+  `--user-agent=${{defaultUserAgent}}`,
+  "--disable-background-networking",
+  "--disable-component-update",
+  "--disable-default-apps",
+  "--disable-sync",
+  "--metrics-recording-only",
+  "--no-first-run",
+  "--no-service-autorun",
+  "--remote-allow-origins=",
+];
 if (hostLocale) launchArgs.push(`--lang=${{hostLocale}}`);
 const launchOptions = {{
   headless: true,
@@ -1438,6 +1445,7 @@ try {{
     result: safeSerialize(result),
     logs,
     page: await pageMetadata(page),
+    detection: await detectionSnapshot(page),
   }});
 }} catch (error) {{
   if (timeoutHandle) {{
@@ -1450,6 +1458,7 @@ try {{
     error: (error && error.stack) || String(error),
     logs,
     page: await pageMetadata(page),
+    detection: await detectionSnapshot(page),
   }});
 }} finally {{
   try {{
@@ -1473,6 +1482,10 @@ pub struct PersistentBrowserSpawn {
     pub dir: Option<PathBuf>,
     pub viewport_w: u64,
     pub viewport_h: u64,
+    pub profile_dir: Option<PathBuf>,
+    pub private_profile: bool,
+    pub egress_allow_hosts: Vec<String>,
+    pub downloads_dir: Option<PathBuf>,
 }
 
 /// A long-lived Chromium/Patchright process driven over newline-delimited JSON.
@@ -1487,9 +1500,64 @@ pub struct PersistentBrowserHandle {
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     runner_path: PathBuf,
+    profile_dir: Option<PathBuf>,
+    downloads_dir: Option<PathBuf>,
+    remove_profile_on_close: bool,
 }
 
 impl PersistentBrowserHandle {
+    fn wait_until_ready(&mut self, timeout: Duration) -> Result<()> {
+        let pid = self.child.id();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog_timed_out = Arc::clone(&timed_out);
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+        let watchdog = thread::spawn(move || {
+            if cancel_rx.recv_timeout(timeout).is_err() {
+                watchdog_timed_out.store(true, Ordering::Release);
+                terminate_persistent_browser_process_tree(pid);
+            }
+        });
+
+        let readiness = (|| -> Result<()> {
+            loop {
+                let mut buf = String::new();
+                let read = self
+                    .stdout
+                    .read_line(&mut buf)
+                    .context("failed to read persistent browser readiness")?;
+                if read == 0 {
+                    anyhow::bail!("persistent browser runtime exited before becoming ready");
+                }
+                let trimmed = buf.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+                    if value.get("ready").and_then(Value::as_bool) == Some(true) {
+                        return Ok(());
+                    }
+                    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+                        let detail = value
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("persistent browser runtime failed to start");
+                        anyhow::bail!("{detail}");
+                    }
+                }
+            }
+        })();
+
+        let _ = cancel_tx.send(());
+        let _ = watchdog.join();
+        if timed_out.load(Ordering::Acquire) {
+            anyhow::bail!(
+                "persistent browser runtime did not become ready after {}ms",
+                timeout.as_millis()
+            );
+        }
+        readiness
+    }
+
     /// Send one operation and block until the matching response line arrives.
     pub fn request(&mut self, op: &str, params: Value) -> Result<Value> {
         self.next_id += 1;
@@ -1540,20 +1608,92 @@ impl PersistentBrowserHandle {
         }
     }
 
+    /// Send one operation with a native deadline. If the JavaScript runtime
+    /// stops responding, terminate its isolated process tree so the blocking
+    /// stdout read is released and the profile can be reopened cleanly.
+    pub fn request_with_timeout(
+        &mut self,
+        op: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
+        let pid = self.child.id();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog_timed_out = Arc::clone(&timed_out);
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+        let watchdog = thread::spawn(move || {
+            if cancel_rx.recv_timeout(timeout).is_err() {
+                watchdog_timed_out.store(true, Ordering::Release);
+                terminate_persistent_browser_process_tree(pid);
+            }
+        });
+
+        let result = self.request(op, params);
+        let _ = cancel_tx.send(());
+        let _ = watchdog.join();
+        if timed_out.load(Ordering::Acquire) {
+            anyhow::bail!(
+                "persistent browser request `{op}` timed out after {}ms",
+                timeout.as_millis()
+            );
+        }
+        result
+    }
+
     /// Ask the runtime to close gracefully, then ensure the process is gone and
     /// the generated runner file is cleaned up. Never panics; best effort.
     pub fn shutdown(&mut self) {
+        let _ = self.request_with_timeout("close", json!({}), Duration::from_secs(5));
+        terminate_persistent_browser_process_tree(self.child.id());
         let _ = self.child.kill();
-        let _ = self.child.try_wait();
+        let _ = self.child.wait();
         let _ = fs::remove_file(&self.runner_path);
+        if self.remove_profile_on_close {
+            if let Some(profile_dir) = &self.profile_dir {
+                let _ = fs::remove_dir_all(profile_dir);
+            }
+            if let Some(downloads_dir) = &self.downloads_dir {
+                let _ = fs::remove_dir_all(downloads_dir);
+            }
+        }
     }
 }
 
+#[cfg(unix)]
+fn terminate_persistent_browser_process_tree(pid: u32) {
+    // The runtime is spawned into a dedicated process group. A negative PID
+    // targets that group, including Chromium children holding the profile.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn terminate_persistent_browser_process_tree(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_persistent_browser_process_tree(_pid: u32) {}
+
 impl Drop for PersistentBrowserHandle {
     fn drop(&mut self) {
+        terminate_persistent_browser_process_tree(self.child.id());
         let _ = self.child.kill();
-        let _ = self.child.try_wait();
+        let _ = self.child.wait();
         let _ = fs::remove_file(&self.runner_path);
+        if self.remove_profile_on_close {
+            if let Some(profile_dir) = &self.profile_dir {
+                let _ = fs::remove_dir_all(profile_dir);
+            }
+            if let Some(downloads_dir) = &self.downloads_dir {
+                let _ = fs::remove_dir_all(downloads_dir);
+            }
+        }
     }
 }
 
@@ -1581,6 +1721,32 @@ pub fn spawn_persistent_browser(
     let viewport_h = spawn.viewport_h.clamp(240, 2160);
     let fallback_executable =
         find_browser_executable(&reference_dir).map(|value| value.display().to_string());
+    let profile_dir = spawn.profile_dir.clone().unwrap_or_else(|| {
+        reference_dir.join(format!(
+            ".ctox-browser-private-{}-{}",
+            std::process::id(),
+            unix_ts()
+        ))
+    });
+    fs::create_dir_all(&profile_dir)
+        .with_context(|| format!("failed to create browser profile {}", profile_dir.display()))?;
+    cleanup_stale_chromium_profile_locks(&profile_dir)?;
+    let downloads_dir = spawn
+        .downloads_dir
+        .clone()
+        .unwrap_or_else(|| profile_dir.join("Downloads"));
+    fs::create_dir_all(&downloads_dir).with_context(|| {
+        format!(
+            "failed to create browser downloads directory {}",
+            downloads_dir.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&profile_dir, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(&downloads_dir, fs::Permissions::from_mode(0o700))?;
+    }
     let runner_path = reference_dir.join(format!(
         ".ctox-browser-live-{}-{}.mjs",
         std::process::id(),
@@ -1590,6 +1756,9 @@ pub fn spawn_persistent_browser(
         viewport_w,
         viewport_h,
         fallback_executable.as_deref(),
+        &profile_dir,
+        &downloads_dir,
+        &spawn.egress_allow_hosts,
     )?;
     fs::write(&runner_path, runner_source)
         .with_context(|| format!("failed to write {}", runner_path.display()))?;
@@ -1605,6 +1774,11 @@ pub fn spawn_persistent_browser(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
@@ -1631,54 +1805,96 @@ pub fn spawn_persistent_browser(
         stdout: BufReader::new(stdout),
         next_id: 0,
         runner_path,
+        profile_dir: Some(profile_dir),
+        downloads_dir: Some(downloads_dir),
+        remove_profile_on_close: spawn.private_profile || spawn.profile_dir.is_none(),
     };
 
-    // Wait for the runtime to confirm the page is live before returning.
-    loop {
-        let mut buf = String::new();
-        let read = handle
-            .stdout
-            .read_line(&mut buf)
-            .context("failed to read persistent browser readiness")?;
-        if read == 0 {
-            anyhow::bail!("persistent browser runtime exited before becoming ready");
+    // Chromium profile locks and browser startup can stall before any request
+    // is sent, so readiness needs the same process-level protection as calls.
+    handle.wait_until_ready(Duration::from_secs(45))?;
+    Ok(handle)
+}
+
+#[cfg(unix)]
+fn cleanup_stale_chromium_profile_locks(profile_dir: &Path) -> Result<()> {
+    let singleton_lock = profile_dir.join("SingletonLock");
+    if !singleton_lock.exists() && fs::symlink_metadata(&singleton_lock).is_err() {
+        return Ok(());
+    }
+    let Ok(target) = fs::read_link(&singleton_lock) else {
+        return Ok(());
+    };
+    let owner_pid = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .and_then(|value| value.rsplit('-').next())
+        .and_then(|value| value.parse::<i32>().ok());
+    let Some(owner_pid) = owner_pid else {
+        return Ok(());
+    };
+    let owner_alive = unsafe {
+        if libc::kill(owner_pid, 0) == 0 {
+            true
+        } else {
+            std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
         }
-        let trimmed = buf.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-            if value.get("ready").and_then(Value::as_bool) == Some(true) {
-                break;
-            }
-            if value.get("ok").and_then(Value::as_bool) == Some(false) {
-                let detail = value
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("persistent browser runtime failed to start");
-                anyhow::bail!("{detail}");
+    };
+    if owner_alive {
+        return Ok(());
+    }
+    for name in ["SingletonLock", "SingletonCookie", "SingletonSocket"] {
+        let path = profile_dir.join(name);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to remove stale browser profile lock {}",
+                        path.display()
+                    )
+                });
             }
         }
     }
-    Ok(handle)
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn cleanup_stale_chromium_profile_locks(_profile_dir: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn build_persistent_browser_runner_script(
     viewport_w: u64,
     viewport_h: u64,
     fallback_executable: Option<&str>,
+    profile_dir: &Path,
+    downloads_dir: &Path,
+    egress_allow_hosts: &[String],
 ) -> Result<String> {
     let encoded_executable = serde_json::to_string(&fallback_executable)
         .context("failed to encode browser executable override")?;
+    let encoded_profile_dir = serde_json::to_string(&profile_dir.display().to_string())
+        .context("failed to encode browser profile directory")?;
+    let encoded_downloads_dir = serde_json::to_string(&downloads_dir.display().to_string())
+        .context("failed to encode browser downloads directory")?;
+    let encoded_allow_hosts = serde_json::to_string(egress_allow_hosts)
+        .context("failed to encode browser egress allow-list")?;
     Ok(format!(
         r#"import process from "node:process";
 	import path from "node:path";
+	import dns from "node:dns/promises";
 	import readline from "node:readline";
 	import util from "node:util";
 
 	const VIEWPORT_W = {viewport_w};
 	const VIEWPORT_H = {viewport_h};
 	const fallbackExecutable = {encoded_executable};
+	const profileDir = {encoded_profile_dir};
+	const downloadsDir = {encoded_downloads_dir};
+	const egressAllowHosts = new Set({encoded_allow_hosts}.map((value) => String(value).toLowerCase()));
 	const logs = [];
 
 	const formatLogValue = (value) =>
@@ -1780,19 +1996,18 @@ const contextOptions = {{
   viewport: {{ width: VIEWPORT_W, height: VIEWPORT_H }},
   userAgent: defaultUserAgent,
   extraHTTPHeaders: defaultClientHints,
+  acceptDownloads: true,
 }};
 if (hostLocale) contextOptions.locale = hostLocale;
 
-let browser;
 let context;
 let page;
 try {{
-  browser = await chromium.launch(launchOptions);
-  context = await browser.newContext(contextOptions);
+  context = await chromium.launchPersistentContext(profileDir, {{ ...launchOptions, ...contextOptions }});
   try {{
     await context.addInitScript({{ path: path.join(process.cwd(), "stealth_init.js") }});
   }} catch {{}}
-  page = await context.newPage();
+  page = context.pages()[0] || await context.newPage();
 }} catch (error) {{
   respond({{ ok: false, error: (error && error.message) || String(error) }});
   process.exit(1);
@@ -1801,6 +2016,178 @@ try {{
 // Simple linear navigation model so the UI can enable/disable back/forward.
 let historyPos = -1;
 let historyMax = -1;
+let tabCounter = 0;
+const tabIds = new WeakMap();
+const ensureTabId = (candidate, preferred = null) => {{
+  if (!tabIds.has(candidate)) tabIds.set(candidate, preferred || `tab-${{++tabCounter}}`);
+  return tabIds.get(candidate);
+}};
+ensureTabId(page, "browser_tab_default");
+context.on("page", (candidate) => ensureTabId(candidate));
+let pendingDialog = null;
+let pendingWebAuthn = null;
+let pendingHttpAuth = null;
+let pendingPermission = null;
+const webAuthnSessions = new WeakMap();
+const ensureWebAuthn = async (candidate) => {{
+  if (webAuthnSessions.has(candidate)) return webAuthnSessions.get(candidate);
+  const client = await context.newCDPSession(candidate);
+  await client.send("WebAuthn.enable");
+  const created = await client.send("WebAuthn.addVirtualAuthenticator", {{ options: {{
+    protocol: "ctap2",
+    transport: "internal",
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+    automaticPresenceSimulation: false,
+  }} }});
+  const state = {{ client, authenticatorId: created.authenticatorId }};
+  await client.send("Fetch.enable", {{ handleAuthRequests: true }}).catch(() => {{}});
+  client.on("Fetch.requestPaused", (event) => {{
+    client.send("Fetch.continueRequest", {{ requestId: event.requestId }}).catch(() => {{}});
+  }});
+  client.on("Fetch.authRequired", (event) => {{
+    pendingHttpAuth = {{
+      client,
+      request_id: event.requestId,
+      origin: String(event.request?.url || "").replace(/([?#]).*$/, ""),
+      scheme: String(event.authChallenge?.scheme || "basic"),
+      realm: String(event.authChallenge?.realm || ""),
+    }};
+  }});
+  webAuthnSessions.set(candidate, state);
+  return state;
+}};
+await context.exposeBinding("__ctoxWebAuthnRequest", async (_source, request) => {{
+  pendingWebAuthn = {{
+    type: String(request && request.type || "get"),
+    rp_id: String(request && request.rp_id || ""),
+    requested_at_ms: Date.now(),
+  }};
+}}).catch(() => {{}});
+await context.exposeBinding("__ctoxPermissionRequest", async (source, request) => {{
+  pendingPermission = {{
+    kind: String(request && request.kind || "unknown"),
+    origin: new URL(source.page.url()).origin,
+    requested_at_ms: Date.now(),
+  }};
+}}).catch(() => {{}});
+await context.addInitScript(() => {{
+  const credentials = navigator.credentials;
+  if (!credentials || credentials.__ctoxWrapped) return;
+  for (const type of ["create", "get"]) {{
+    const original = credentials[type]?.bind(credentials);
+    if (!original) continue;
+    credentials[type] = (options = {{}}) => {{
+      const publicKey = options.publicKey || {{}};
+      const rpId = type === "create" ? publicKey.rp?.id : publicKey.rpId;
+      globalThis.__ctoxWebAuthnRequest?.({{ type, rp_id: rpId || location.hostname }}).catch?.(() => {{}});
+      return original(options);
+    }};
+  }}
+  Object.defineProperty(credentials, "__ctoxWrapped", {{ value: true }});
+  const pending = [];
+  globalThis.__ctoxResolvePermission = async (kind, accept) => {{
+    const index = pending.findIndex((entry) => entry.kind === kind);
+    if (index < 0) return false;
+    const [entry] = pending.splice(index, 1);
+    if (!accept) {{ entry.reject(new DOMException("Permission denied", "NotAllowedError")); return true; }}
+    entry.run();
+    return true;
+  }};
+  if (navigator.mediaDevices?.getUserMedia) {{
+    const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = (constraints = {{}}) => new Promise((resolve, reject) => {{
+      const kind = constraints.video ? "camera" : "microphone";
+      pending.push({{ kind, reject, run: () => originalGetUserMedia(constraints).then(resolve, reject) }});
+      globalThis.__ctoxPermissionRequest?.({{ kind }}).catch?.(() => {{}});
+    }});
+  }}
+  if (globalThis.Notification?.requestPermission) {{
+    const originalNotificationPermission = globalThis.Notification.requestPermission.bind(globalThis.Notification);
+    globalThis.Notification.requestPermission = () => new Promise((resolve, reject) => {{
+      const kind = "notifications";
+      pending.push({{ kind, reject, run: () => originalNotificationPermission().then(resolve, reject) }});
+      globalThis.__ctoxPermissionRequest?.({{ kind }}).catch?.(() => {{}});
+    }});
+  }}
+  if (navigator.geolocation?.getCurrentPosition) {{
+    const originalGeolocation = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
+    navigator.geolocation.getCurrentPosition = (resolve, reject, options) => {{
+      const kind = "geolocation";
+      pending.push({{
+        kind,
+        reject: (error) => reject?.(error),
+        run: () => originalGeolocation(resolve, reject, options),
+      }});
+      globalThis.__ctoxPermissionRequest?.({{ kind }}).catch?.(() => {{}});
+    }};
+  }}
+}}).catch(() => {{}});
+await ensureWebAuthn(page).catch(() => {{}});
+const downloads = [];
+const bindPageEvents = (candidate) => {{
+  ensureWebAuthn(candidate).catch(() => {{}});
+  candidate.on("dialog", (dialog) => {{ pendingDialog = dialog; }});
+  candidate.on("download", async (download) => {{
+    const suggested = String(download.suggestedFilename() || "download.bin").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 160);
+    const id = `download-${{Date.now()}}-${{downloads.length + 1}}`;
+    const target = path.join(downloadsDir, `${{id}}-${{suggested}}`);
+    try {{
+      await download.saveAs(target);
+      downloads.push({{ id, filename: suggested, status: "quarantined", scan_status: "pending" }});
+    }} catch (_error) {{
+      downloads.push({{ id, filename: suggested, status: "failed", error_code: "browser.download_quarantine_failed" }});
+    }}
+  }});
+}};
+context.pages().forEach(bindPageEvents);
+context.on("page", bindPageEvents);
+
+const tabState = async () => Promise.all(context.pages().map(async (candidate) => ({{
+  id: ensureTabId(candidate),
+  url: candidate.url(),
+  title: await candidate.title().catch(() => ""),
+  active: candidate === page,
+}})));
+
+const isBlockedHost = (host) => {{
+  const value = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (value === "localhost" || value === "::1" || value === "0.0.0.0") return true;
+  const parts = value.split(".").map(Number);
+  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {{
+    return parts[0] === 10 || parts[0] === 127 || parts[0] === 0
+      || (parts[0] === 169 && parts[1] === 254)
+      || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+      || (parts[0] === 192 && parts[1] === 168)
+      || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127);
+  }}
+  return value.startsWith("fc") || value.startsWith("fd")
+    || value.startsWith("fe8") || value.startsWith("fe9")
+    || value.startsWith("fea") || value.startsWith("feb");
+}};
+const assertAllowedUrl = async (raw) => {{
+  const parsed = new URL(String(raw));
+  if (["data:", "blob:"].includes(parsed.protocol)) return parsed.href;
+  if (!["http:", "https:", "about:"].includes(parsed.protocol)) {{
+    throw new Error(`blocked browser URL scheme: ${{parsed.protocol}}`);
+  }}
+  if (parsed.protocol !== "about:" && !egressAllowHosts.has(parsed.hostname.toLowerCase())) {{
+    const addresses = await dns.lookup(parsed.hostname, {{ all: true }}).catch(() => []);
+    if (isBlockedHost(parsed.hostname) || addresses.length === 0 || addresses.some((entry) => isBlockedHost(entry.address))) {{
+      throw new Error(`blocked browser egress host: ${{parsed.hostname}}`);
+    }}
+  }}
+  return parsed.href;
+}};
+await context.route("**/*", async (route) => {{
+  try {{
+    await assertAllowedUrl(route.request().url());
+    await route.continue();
+  }} catch {{
+    await route.abort("blockedbyclient");
+  }}
+}});
 
 const navState = async () => {{
   let url = "about:blank";
@@ -1812,12 +2199,26 @@ const navState = async () => {{
     title,
     can_go_back: historyPos > 0,
     can_go_forward: historyPos < historyMax,
+    active_tab_id: ensureTabId(page),
+    tabs: await tabState(),
+    dialog: pendingDialog ? {{ type: pendingDialog.type(), message: pendingDialog.message(), default_value: pendingDialog.defaultValue() }} : null,
+    downloads: downloads.slice(-20),
+    webauthn_request: pendingWebAuthn,
+    http_auth_request: pendingHttpAuth ? {{ origin: pendingHttpAuth.origin, scheme: pendingHttpAuth.scheme, realm: pendingHttpAuth.realm }} : null,
+    permission_request: pendingPermission,
   }};
 }};
 
-const screenshot = async () => {{
-  const buffer = await page.screenshot({{ fullPage: false }});
-  return {{ mimeType: "image/png", base64: buffer.toString("base64") }};
+const screenshot = async (options = {{}}) => {{
+  const format = options.format === "jpeg" ? "jpeg" : "png";
+  const buffer = await page.screenshot({{
+    fullPage: false,
+    type: format,
+    ...(format === "jpeg" ? {{ quality: Math.max(40, Math.min(92, Number(options.quality || 82))) }} : {{}}),
+    mask: [page.locator('input[type="password"], input[autocomplete="one-time-code"]')],
+    maskColor: "black",
+  }});
+  return {{ mimeType: format === "jpeg" ? "image/jpeg" : "image/png", base64: buffer.toString("base64") }};
 }};
 
 const applyInput = async (events) => {{
@@ -1845,7 +2246,9 @@ const applyInput = async (events) => {{
         if (event.text) {{
           await page.keyboard.type(String(event.text));
         }} else if (event.key) {{
-          await page.keyboard.press(String(event.key));
+          const modifiers = Array.isArray(event.modifiers) ? event.modifiers : [];
+          const key = [...modifiers, String(event.key)].join("+");
+          await page.keyboard.press(key);
         }}
       }} else if (type === "keyUp") {{
         // keyDown already performs a full press; ignore the paired keyUp.
@@ -1879,11 +2282,11 @@ const applyInput = async (events) => {{
 	globalThis.chromium = chromium;
 	globalThis.context = context;
 	globalThis.page = page;
-	globalThis.browser = browser;
+	globalThis.browser = context.browser();
 	globalThis.humanlike = humanlike;
 	const ctoxBrowserApi = {{
 	  logs,
-	  profileDir: path.join(process.cwd(), ".ctox-browser-profile"),
+	  profileDir,
 	  locatorFor(target) {{
 	    if (typeof target === "string") return page.locator(target);
 	    if (!target || typeof target !== "object") throw new Error("ctoxBrowser target must be a selector string or target object");
@@ -2099,7 +2502,7 @@ for await (const line of rl) {{
   const timeoutMs = Number(message.timeoutMs || 30000);
   try {{
     if (op === "navigate") {{
-      await page.goto(String(message.url || "about:blank"), {{
+        await page.goto(await assertAllowedUrl(message.url || "about:blank"), {{
         waitUntil: message.waitUntil || "domcontentloaded",
         timeout: timeoutMs,
       }});
@@ -2121,11 +2524,104 @@ for await (const line of rl) {{
         historyPos += 1;
       }}
       respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "tab_open") {{
+      if (context.pages().length >= 20) throw new Error("browser tab budget is exhausted");
+      page = await context.newPage();
+      ensureTabId(page, message.tabId || null);
+      if (message.url) {{
+        await page.goto(await assertAllowedUrl(message.url), {{ waitUntil: "domcontentloaded", timeout: timeoutMs }});
+      }}
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "tab_activate") {{
+      const selected = context.pages().find((candidate) => ensureTabId(candidate) === message.tabId);
+      if (!selected) throw new Error("browser tab not found");
+      page = selected;
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "tab_close") {{
+      const selected = context.pages().find((candidate) => ensureTabId(candidate) === message.tabId);
+      if (!selected) throw new Error("browser tab not found");
+      await selected.close();
+      page = context.pages()[0] || await context.newPage();
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "dialog_respond") {{
+      if (!pendingDialog) throw new Error("no browser dialog is pending");
+      const dialog = pendingDialog;
+      pendingDialog = null;
+      if (message.accept) await dialog.accept(message.value == null ? undefined : String(message.value));
+      else await dialog.dismiss();
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "upload") {{
+      if (!message.filePath) throw new Error("server-derived upload path is required");
+      const locator = page.locator(String(message.selector || "input[type=file]"));
+      if (await locator.count() !== 1) throw new Error("upload selector must resolve to exactly one file input");
+      await locator.setInputFiles(String(message.filePath));
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "credential_fill") {{
+      const selector = String(message.selector || "");
+      if (!selector) throw new Error("credential selector is required");
+      const locator = page.locator(selector);
+      if (await locator.count() !== 1) throw new Error("credential selector must resolve to exactly one field");
+      await locator.fill(String(message.value || ""));
+      message.value = "[redacted]";
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "clipboard_copy") {{
+      const clipboardText = await page.evaluate(() => String(globalThis.getSelection?.()?.toString?.() || ""));
+      respond({{ id, ok: true, clipboardText, nav: await navState() }});
+    }} else if (op === "clipboard_paste") {{
+      await page.keyboard.insertText(String(message.value || ""));
+      message.value = "[redacted]";
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "webauthn_respond") {{
+      if (!pendingWebAuthn) throw new Error("no WebAuthn ceremony is pending");
+      const state = await ensureWebAuthn(page);
+      for (const credential of Array.isArray(message.credentials) ? message.credentials : []) {{
+        await state.client.send("WebAuthn.addCredential", {{ authenticatorId: state.authenticatorId, credential }}).catch(() => {{}});
+      }}
+      if (!message.accept) {{
+        await state.client.send("WebAuthn.removeVirtualAuthenticator", {{ authenticatorId: state.authenticatorId }}).catch(() => {{}});
+        webAuthnSessions.delete(page);
+        pendingWebAuthn = null;
+        await ensureWebAuthn(page).catch(() => {{}});
+        respond({{ id, ok: true, accepted: false, credentials: [], nav: await navState() }});
+        continue;
+      }}
+      await state.client.send("WebAuthn.setAutomaticPresenceSimulation", {{ authenticatorId: state.authenticatorId, enabled: true }});
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      const exported = await state.client.send("WebAuthn.getCredentials", {{ authenticatorId: state.authenticatorId }});
+      await state.client.send("WebAuthn.setAutomaticPresenceSimulation", {{ authenticatorId: state.authenticatorId, enabled: false }});
+      const rpId = pendingWebAuthn.rp_id;
+      pendingWebAuthn = null;
+      respond({{ id, ok: true, rpId, credentials: exported.credentials || [], nav: await navState() }});
+    }} else if (op === "http_auth_respond") {{
+      if (!pendingHttpAuth) throw new Error("no HTTP authentication challenge is pending");
+      const challenge = pendingHttpAuth;
+      pendingHttpAuth = null;
+      await challenge.client.send("Fetch.continueWithAuth", {{
+        requestId: challenge.request_id,
+        authChallengeResponse: message.accept
+          ? {{ response: "ProvideCredentials", username: String(message.username || ""), password: String(message.password || "") }}
+          : {{ response: "CancelAuth" }},
+      }});
+      message.username = "[redacted]";
+      message.password = "[redacted]";
+      respond({{ id, ok: true, accepted: Boolean(message.accept), nav: await navState() }});
+    }} else if (op === "permission_respond") {{
+      if (!pendingPermission) throw new Error("no browser permission request is pending");
+      const request = pendingPermission;
+      pendingPermission = null;
+      const allowed = ["camera", "microphone", "geolocation", "notifications"];
+      if (!allowed.includes(request.kind)) throw new Error("unsupported browser permission kind");
+      if (message.accept) {{
+        await context.grantPermissions([request.kind], {{ origin: request.origin }});
+        setTimeout(() => context.clearPermissions().catch(() => {{}}), 60_000).unref?.();
+      }}
+      await page.evaluate((input) => globalThis.__ctoxResolvePermission?.(input.kind, input.accept), {{ kind: request.kind, accept: Boolean(message.accept) }});
+      respond({{ id, ok: true, accepted: Boolean(message.accept), permission: request.kind, nav: await navState() }});
     }} else if (op === "input") {{
       const applied = await applyInput(message.events);
       respond({{ id, ok: true, applied, nav: await navState() }});
     }} else if (op === "screenshot") {{
-      respond({{ id, ok: true, screenshot: await screenshot(), nav: await navState() }});
+      respond({{ id, ok: true, screenshot: await screenshot(message), nav: await navState() }});
     }} else if (op === "nav_state") {{
       respond({{ id, ok: true, nav: await navState() }});
     }} else if (op === "viewport") {{
@@ -2137,13 +2633,12 @@ for await (const line of rl) {{
 	    }} else if (op === "observe") {{
 	      respond({{ id, ok: true, observed: await observe(message.limit, message.textMax) }});
 	    }} else if (op === "automation") {{
-	      const automationTimeoutMs = Math.max(1000, Math.min(300000, timeoutMs));
+	      const automationTimeoutMs = Math.max(1000, Math.min(300000, Number(message.timeoutMs || 30000)));
 	      const result = await runAutomation(message.source, automationTimeoutMs);
 	      respond({{ id, ...result }});
 	    }} else if (op === "close") {{
 	      respond({{ id, ok: true }});
 	      try {{ await context.close(); }} catch {{}}
-      try {{ await browser.close(); }} catch {{}}
       process.exit(0);
     }} else {{
       respond({{ id, ok: false, error: `unknown op ${{op}}` }});
@@ -2398,15 +2893,28 @@ mod tests {
     use super::build_browser_runner_script;
     use super::build_persistent_browser_runner_script;
     use super::capture_chrome_extra_args;
+    #[cfg(unix)]
+    use super::cleanup_stale_chromium_profile_locks;
     use super::ensure_reference_package_json;
-    use super::find_command_on_path;
     use super::find_playwright_chromium_executable_in;
     use super::parse_browser_automation_source;
     use super::parse_node_major_version;
     use super::resolve_root_relative_path;
     use super::select_capture_browser_executable;
+    #[cfg(unix)]
+    use super::PersistentBrowserHandle;
     use std::fs;
+    #[cfg(unix)]
+    use std::io::BufReader;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::Command;
+    #[cfg(unix)]
+    use std::process::Stdio;
+    #[cfg(unix)]
+    use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
@@ -2422,49 +2930,6 @@ mod tests {
     fn finds_playwright_chromium_linux64_executable() {
         let dir = temp_path("linux64-cache");
         let executable = dir.join("chromium-1217/chrome-linux64/chrome");
-        fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        fs::write(&executable, b"").unwrap();
-        assert_eq!(
-            find_playwright_chromium_executable_in(&dir),
-            Some(executable)
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn finds_playwright_chromium_macos_x64_executable() {
-        let dir = temp_path("macos-x64-cache");
-        let executable = dir.join(
-            "chromium-1217/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-        );
-        fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        fs::write(&executable, b"").unwrap();
-        assert_eq!(
-            find_playwright_chromium_executable_in(&dir),
-            Some(executable)
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn finds_playwright_chromium_windows_x64_executable() {
-        let dir = temp_path("windows-x64-cache");
-        let executable = dir.join("chromium-1217/chrome-win64/chrome.exe");
-        fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        fs::write(&executable, b"").unwrap();
-        assert_eq!(
-            find_playwright_chromium_executable_in(&dir),
-            Some(executable)
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn finds_playwright_chromium_windows_headless_shell() {
-        let dir = temp_path("windows-headless-cache");
-        let executable = dir.join(
-            "chromium_headless_shell-1217/chrome-headless-shell-win64/chrome-headless-shell.exe",
-        );
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"").unwrap();
         assert_eq!(
@@ -2542,15 +3007,155 @@ mod tests {
         assert!(script.contains("async resolveTarget(target)"));
         assert!(script.contains("async click(target, options = {})"));
         assert!(script.contains("async screenshot(options = {})"));
+        assert!(script.contains("const detectionSnapshot = async (page)"));
+        assert!(script.contains("cloudflare_challenge"));
+        let path = std::env::temp_dir().join(format!(
+            "ctox-browser-runner-detection-{}.mjs",
+            std::process::id()
+        ));
+        std::fs::write(&path, script).unwrap();
+        let status = std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "generated browser runner must parse");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn persistent_browser_runner_exposes_session_automation_op() {
-        let script = build_persistent_browser_runner_script(1280, 720, None).unwrap();
+        let script = build_persistent_browser_runner_script(
+            1280,
+            720,
+            None,
+            std::path::Path::new("/tmp/ctox-browser-test-profile"),
+            std::path::Path::new("/tmp/ctox-browser-test-downloads"),
+            &[],
+        )
+        .unwrap();
         assert!(script.contains("op === \"automation\""));
         assert!(script.contains("session_mode: \"business-os-persistent\""));
         assert!(script.contains("globalThis.ctoxBrowser = ctoxBrowserApi;"));
         assert!(script.contains("async observe(options = {})"));
+        assert!(script.contains("launchPersistentContext"));
+        assert!(script.contains("blocked browser egress host"));
+        assert!(script.contains("op === \"webauthn_respond\""));
+        assert!(script.contains("op === \"credential_fill\""));
+        assert!(script.contains("op === \"clipboard_copy\""));
+        let path = std::env::temp_dir().join(format!(
+            "ctox-persistent-browser-runner-{}.mjs",
+            std::process::id()
+        ));
+        std::fs::write(&path, script).unwrap();
+        let status = std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "generated persistent browser runner must parse"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_browser_request_timeout_terminates_unresponsive_process() {
+        use std::os::unix::process::CommandExt;
+
+        let runner_path = temp_path("unresponsive-runner");
+        fs::write(&runner_path, b"").unwrap();
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("while read line; do sleep 300; done")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut handle = PersistentBrowserHandle {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            next_id: 0,
+            runner_path,
+            profile_dir: None,
+            downloads_dir: None,
+            remove_profile_on_close: false,
+        };
+
+        let started = Instant::now();
+        let error = handle
+            .request_with_timeout(
+                "automation",
+                serde_json::json!({}),
+                Duration::from_millis(100),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_browser_startup_timeout_terminates_unresponsive_process() {
+        use std::os::unix::process::CommandExt;
+
+        let runner_path = temp_path("unresponsive-startup-runner");
+        fs::write(&runner_path, b"").unwrap();
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 300")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut handle = PersistentBrowserHandle {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            next_id: 0,
+            runner_path,
+            profile_dir: None,
+            downloads_dir: None,
+            remove_profile_on_close: false,
+        };
+
+        let started = Instant::now();
+        let error = handle
+            .wait_until_ready(Duration::from_millis(100))
+            .unwrap_err();
+        assert!(error.to_string().contains("did not become ready"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_chromium_profile_lock_is_removed_but_live_lock_is_preserved() {
+        use std::os::unix::fs::symlink;
+
+        let profile = temp_path("profile-lock-cleanup");
+        fs::create_dir_all(&profile).unwrap();
+        let lock = profile.join("SingletonLock");
+        symlink("host-2147483647", &lock).unwrap();
+        fs::write(profile.join("SingletonCookie"), b"stale").unwrap();
+        cleanup_stale_chromium_profile_locks(&profile).unwrap();
+        assert!(fs::symlink_metadata(&lock).is_err());
+        assert!(!profile.join("SingletonCookie").exists());
+
+        symlink(format!("host-{}", std::process::id()), &lock).unwrap();
+        cleanup_stale_chromium_profile_locks(&profile).unwrap();
+        assert!(fs::symlink_metadata(&lock).is_ok());
+        let _ = fs::remove_dir_all(profile);
     }
 
     #[test]
@@ -2558,29 +3163,6 @@ mod tests {
         assert_eq!(parse_node_major_version("v12.22.9"), Some(12));
         assert_eq!(parse_node_major_version("18.19.1"), Some(18));
         assert_eq!(parse_node_major_version("not-a-version"), None);
-    }
-
-    #[test]
-    fn command_lookup_accepts_explicit_executable_path() {
-        let dir = temp_path("command-path");
-        fs::create_dir_all(&dir).unwrap();
-        let executable = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
-        fs::write(&executable, b"").unwrap();
-        assert_eq!(
-            find_command_on_path(executable.to_str().unwrap()),
-            Some(executable)
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn command_lookup_uses_pathext_instead_of_extensionless_shims() {
-        let names = super::command_file_names("npm");
-        assert!(!names.iter().any(|name| name == "npm"));
-        assert!(names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case("npm.cmd")));
     }
 
     #[test]

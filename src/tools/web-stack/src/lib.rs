@@ -41,6 +41,10 @@ pub use deep_research::DeepResearchDepth;
 #[cfg(feature = "full")]
 pub use deep_research::DeepResearchRequest;
 #[cfg(feature = "full")]
+pub use egress::allow_hosts_from_config as browser_egress_allow_hosts_from_config;
+#[cfg(feature = "full")]
+pub use egress::assert_browser_egress_url;
+#[cfg(feature = "full")]
 pub use person_research::run_ctox_person_research_tool;
 #[cfg(feature = "full")]
 pub use person_research::PersonResearchRequest;

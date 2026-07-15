@@ -4665,7 +4665,7 @@ async fn browser_session_automation_with_database(
     let command_created_at_ms = now_ms() as u64;
     let manager = browser_runtime_manager();
     let session = manager
-        .ensure_session(root, request.dir, &session_id, 1920, 947)
+        .ensure_session(root, request.dir, &session_id, 1920, 947, "ctox", false)
         .await?;
     let mut output = manager
         .request(
@@ -5814,6 +5814,17 @@ async fn apply_browser_runtime_command(
         .or_else(|| document.get("updated_at_ms"))
         .and_then(Value::as_u64)
         .unwrap_or_else(|| now_ms() as u64);
+    let capability_token = document
+        .get("client_context")
+        .and_then(|context| context.get("capability_token"))
+        .and_then(Value::as_str)
+        .context("browser command capability token is required")?;
+    let (profile_owner, _) = store::verify_capability_actor(root, capability_token)
+        .context("browser command capability token is invalid")?;
+    let private_profile = payload
+        .get("profile_mode")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode == "private");
 
     let existing_session = find_browser_document(database, "browser_sessions", &session_id).await?;
     let existing_tab = find_browser_document(database, "browser_tabs", &tab_id).await?;
@@ -5899,6 +5910,8 @@ async fn apply_browser_runtime_command(
             &session_id,
             viewport_w,
             viewport_h,
+            &profile_owner,
+            private_profile,
         )
         .await
     {
