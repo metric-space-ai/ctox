@@ -10,6 +10,7 @@ const DOCUMENT_COLLECTION_NAMES = [
 export function createDocumentsFacade({
   db,
   openApp,
+  appId = 'documents',
   crypto: cryptoProvider = globalThis.crypto,
   now = () => Date.now(),
 } = {}) {
@@ -70,7 +71,7 @@ export function createDocumentsFacade({
           'The Business OS app launcher is unavailable.',
         );
       }
-      const launched = await openApp('documents', {
+      const launched = await openApp(requireId(appId, 'appId'), {
         args: {
           record,
           ...(version ? { version } : {}),

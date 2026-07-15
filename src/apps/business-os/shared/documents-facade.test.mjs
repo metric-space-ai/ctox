@@ -223,3 +223,24 @@ test('open rejects a missing Documents app instead of reporting false success', 
     (error) => error.code === 'DOCUMENTS_LAUNCH_UNAVAILABLE',
   );
 });
+
+test('open supports a resolved generic Documents workspace id', async () => {
+  const calls = [];
+  const documents = createDocumentsFacade({
+    db: createMemoryDb(),
+    appId: 'documents-workspace',
+    openApp: async (...args) => {
+      calls.push(args);
+      return 'window-documents-workspace';
+    },
+  });
+
+  assert.equal(
+    await documents.open({ documentId: 'doc_19' }),
+    'window-documents-workspace',
+  );
+  assert.deepEqual(calls, [[
+    'documents-workspace',
+    { args: { record: 'doc_19' } },
+  ]]);
+});

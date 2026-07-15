@@ -38,7 +38,7 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260715-responsive-shell-v78';
-import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v2';
+import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v3';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -52,7 +52,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260715-documents-mail-merge-v97';
+const APP_BUILD = '20260715-documents-mail-merge-v98';
 
 ensureShellStylesheets();
 
@@ -5111,6 +5111,18 @@ function moduleBasePath(mod) {
   return slash >= 0 ? entry.slice(0, slash) : `modules/${mod.id}`;
 }
 
+function documentsWorkspaceAppId() {
+  const required = ['documents', 'document_versions', 'document_blob_chunks'];
+  const candidates = (state.modules || []).filter((mod) => {
+    const collections = Array.isArray(mod?.collections) ? mod.collections : [];
+    return mod?.launch_kind === 'desktop-app'
+      && required.every((collection) => collections.includes(collection));
+  });
+  return candidates.find((mod) => mod.id === 'documents')?.id
+    || candidates[0]?.id
+    || 'documents';
+}
+
 // The object literal below IS the platform API every Business OS module (and
 // every agent-generated app) programs against — `mount(ctx)` receives it.
 // The field list is pinned by docs/business-os-module-context.md and
@@ -5140,7 +5152,11 @@ function createModuleContext(mod, overrides = {}) {
     left: overrides.left || els.leftContent,
     right: overrides.right || els.rightContent,
     db: moduleDb,
-    documents: createDocumentsFacade({ db: moduleDb, openApp: openDesktopApp }),
+    documents: createDocumentsFacade({
+      db: moduleDb,
+      openApp: openDesktopApp,
+      appId: documentsWorkspaceAppId(),
+    }),
     permissions: createModulePermissionFacade(mod),
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
