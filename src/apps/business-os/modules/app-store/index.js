@@ -926,6 +926,10 @@ async function installMarketplaceItem(item, { update = false } = {}) {
     moduleId: item.id,
     payload: {
       module_id: item.id,
+      source_kind: item.repo ? 'github' : 'url',
+      repo: item.repo || '',
+      git_ref: item.repo ? CTOX_BRANCH : '',
+      subpath: item.repo ? item.source_path : '',
       download_url: item.download_url,
       source_path: item.source_path,
       manifest_url: item.manifest_url,

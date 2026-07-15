@@ -75,6 +75,13 @@ test('marketplace discovery is explicit and not an automatic mount side effect',
   assert.match(source, /GitHub Discovery ist bereit und startet nur manuell/);
 });
 
+test('marketplace installs preserve GitHub provenance for first-party verification', () => {
+  assert.match(source, /source_kind: item\.repo \? 'github' : 'url'/);
+  assert.match(source, /repo: item\.repo \|\| ''/);
+  assert.match(source, /git_ref: item\.repo \? CTOX_BRANCH : ''/);
+  assert.match(source, /subpath: item\.repo \? item\.source_path : ''/);
+});
+
 test('scope matching keeps card badges and category counters aligned', () => {
   assert.equal(hooks.itemMatchesScope({ kind: 'marketplace', status: 'installed' }, 'installed'), true);
   assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'installed'), true);
