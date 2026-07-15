@@ -5432,6 +5432,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'appsec_assessments',
     'appsec_coverage',
     'appsec_findings',
+    'appsec_investigations',
     'appsec_pipeline_stages',
     'appsec_runs',
     'appsec_scanner_inventory',

@@ -63,6 +63,7 @@ const APPSEC_BUSINESS_OS_COLLECTIONS: &[&str] = &[
     "appsec_runs",
     "appsec_artifacts",
     "appsec_findings",
+    "appsec_investigations",
     "appsec_coverage",
     "appsec_pipeline_stages",
     "appsec_scanner_inventory",
@@ -37124,6 +37125,13 @@ fn appsec_business_command_requires_data_write(command_type: &str) -> bool {
             | "ctox.appsec.authz.preflight"
             | "ctox.appsec.authz.run"
             | "ctox.appsec.authz.build_matrix"
+            | "ctox.appsec.graph.build"
+            | "ctox.appsec.investigation.plan"
+            | "ctox.appsec.investigation.execute"
+            | "ctox.appsec.investigation.resolve"
+            | "ctox.appsec.investigation.refute"
+            | "ctox.appsec.replay.baseline"
+            | "ctox.appsec.replay.investigations"
             | "ctox.appsec.pipeline.rework"
             | "ctox.appsec.approval.request"
             | "ctox.appsec.approval.grant"
@@ -37162,6 +37170,127 @@ fn handle_appsec_business_command(
             {
                 args.push("--probe-versions".to_string());
             }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.graph.build" => {
+            args.extend(["graph", "build", "--json"].map(str::to_string));
+        }
+        "ctox.appsec.investigation.plan" => {
+            let id = appsec_payload_string(&command.payload, "investigation_id")
+                .or_else(|| appsec_payload_string(&command.payload, "candidate_id"))
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context("ctox.appsec.investigation.plan payload.investigation_id or payload.candidate_id is required")?;
+            args.extend(["investigate", "plan", "--id"].map(str::to_string));
+            args.push(id);
+            for (key, flag) in [
+                ("hypothesis", "--hypothesis"),
+                ("expected_signal", "--expected-signal"),
+                ("falsification_criterion", "--falsification-criterion"),
+                ("tool", "--tool"),
+                ("url", "--url"),
+                ("host", "--host"),
+                ("timeout", "--timeout"),
+                ("approval_id", "--approval-id"),
+            ] {
+                push_optional_appsec_string_arg(&command.payload, &mut args, key, flag);
+            }
+            if let Some(target) = appsec_payload_string(&command.payload, "target") {
+                let target = workspace_bound_path(root, &target, "target")?;
+                args.extend(["--target".to_string(), target.display().to_string()]);
+            }
+            if let Some(wordlist) = appsec_payload_string(&command.payload, "wordlist") {
+                let wordlist = workspace_bound_path(root, &wordlist, "wordlist")?;
+                args.extend(["--wordlist".to_string(), wordlist.display().to_string()]);
+            }
+            for raw_arg in appsec_payload_string_list(&command.payload, "raw_args") {
+                args.extend(["--raw-arg".to_string(), raw_arg]);
+            }
+            if command.payload.get("active").and_then(Value::as_bool) == Some(true) {
+                args.push("--active".to_string());
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.investigation.execute" => {
+            let id = appsec_payload_string(&command.payload, "investigation_id")
+                .or_else(|| appsec_payload_string(&command.payload, "candidate_id"))
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context(
+                    "ctox.appsec.investigation.execute payload.investigation_id is required",
+                )?;
+            args.extend(["investigate", "execute", "--id"].map(str::to_string));
+            args.push(id);
+            if command
+                .payload
+                .get("confirm_active")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                args.push("--confirm-active".to_string());
+            }
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.investigation.resolve" => {
+            let id = appsec_payload_string(&command.payload, "investigation_id")
+                .or_else(|| appsec_payload_string(&command.payload, "candidate_id"))
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context(
+                    "ctox.appsec.investigation.resolve payload.investigation_id is required",
+                )?;
+            let outcome = appsec_payload_string(&command.payload, "outcome")
+                .context("ctox.appsec.investigation.resolve payload.outcome is required")?;
+            let reason = appsec_payload_string(&command.payload, "reason")
+                .context("ctox.appsec.investigation.resolve payload.reason is required")?;
+            let artifact = appsec_payload_string(&command.payload, "artifact")
+                .context("ctox.appsec.investigation.resolve payload.artifact is required")?;
+            let artifact = workspace_bound_path(root, &artifact, "artifact")?;
+            args.extend(["investigate", "resolve", "--id"].map(str::to_string));
+            args.extend([
+                id,
+                "--outcome".to_string(),
+                outcome,
+                "--reason".to_string(),
+                reason,
+                "--artifact".to_string(),
+                artifact.display().to_string(),
+            ]);
+            push_optional_appsec_string_arg(
+                &command.payload,
+                &mut args,
+                "duplicate_of",
+                "--duplicate-of",
+            );
+            args.push("--json".to_string());
+        }
+        "ctox.appsec.investigation.refute" => {
+            let id = appsec_payload_string(&command.payload, "investigation_id")
+                .or_else(|| appsec_payload_string(&command.payload, "candidate_id"))
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context("ctox.appsec.investigation.refute payload.investigation_id is required")?;
+            let artifact = appsec_payload_string(&command.payload, "artifact")
+                .context("ctox.appsec.investigation.refute payload.artifact is required")?;
+            let artifact = workspace_bound_path(root, &artifact, "artifact")?;
+            args.extend(["investigate", "refute", "--id"].map(str::to_string));
+            args.extend([
+                id,
+                "--artifact".to_string(),
+                artifact.display().to_string(),
+                "--json".to_string(),
+            ]);
+        }
+        "ctox.appsec.replay.baseline" | "ctox.appsec.replay.investigations" => {
+            let assessment_id = appsec_payload_string(&command.payload, "assessment_id")
+                .or_else(|| appsec_payload_string(&command.payload, "id"))
+                .context("ctox.appsec.replay payload.assessment_id is required")?;
+            args.extend(["replay", "--assessment"].map(str::to_string));
+            args.push(assessment_id);
+            args.push(
+                if command.command_type == "ctox.appsec.replay.baseline" {
+                    "--baseline"
+                } else {
+                    "--investigations"
+                }
+                .to_string(),
+            );
             args.push("--json".to_string());
         }
         "ctox.appsec.assessment.create" => {
@@ -37731,6 +37860,7 @@ pub(crate) fn project_appsec_durable_state_to_business_os(
     project_appsec_runs(&core, &business, &state, &mut pairs)?;
     project_appsec_artifacts(&core, &business, &state, &mut pairs)?;
     project_appsec_findings(&core, &business, &state, &mut pairs)?;
+    project_appsec_investigations(&core, &business, &state, &mut pairs)?;
     project_appsec_coverage(&core, &business, &state, &mut pairs)?;
     project_appsec_pipeline_stages(&core, &business, &state, &mut pairs)?;
     project_appsec_scanner_inventory(&core, &business, &state, &mut pairs)?;
@@ -38121,6 +38251,99 @@ fn project_appsec_findings(
     Ok(())
 }
 
+fn project_appsec_investigations(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    let mut stmt = core.prepare(
+        "SELECT investigation_key, investigation_id, candidate_id, status, outcome, hypothesis, expected_signal,
+                falsification_criterion, evidence_artifact, graph_sha256, payload_json, updated_at
+         FROM appsec_investigations
+         WHERE state_dir = ?1
+         ORDER BY CAST(updated_at AS INTEGER) ASC, investigation_key ASC",
+    )?;
+    let rows = stmt.query_map(params![state], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, String>(11)?,
+        ))
+    })?;
+    for row in rows {
+        let (
+            key,
+            id,
+            candidate_id,
+            status,
+            outcome,
+            hypothesis,
+            expected_signal,
+            falsification_criterion,
+            evidence_artifact,
+            graph_sha256,
+            payload_json,
+            updated_at,
+        ) = row?;
+        let payload = sanitize_appsec_projection_json(parse_json_value(&payload_json));
+        let record = serde_json::json!({
+            "investigation_id": id,
+            "candidate_id": candidate_id,
+            "state_dir": state,
+            "status": status,
+            "outcome": outcome,
+            "hypothesis": hypothesis,
+            "expected_signal": expected_signal,
+            "falsification_criterion": falsification_criterion,
+            "evidence_artifact": evidence_artifact,
+            "graph_sha256": graph_sha256,
+            "trigger": payload.get("trigger").cloned().unwrap_or(Value::Null),
+            "candidate_binding": payload.get("candidate_binding").cloned().unwrap_or(Value::Null),
+            "work_order": payload.get("work_order").cloned().unwrap_or(Value::Null),
+            "work_order_sha256": payload.get("work_order_sha256").cloned().unwrap_or(Value::Null),
+            "execution": payload.get("execution").cloned().unwrap_or(Value::Null),
+            "resolution": payload.get("resolution").cloned().unwrap_or(Value::Null),
+            "refutation": payload.get("refutation").cloned().unwrap_or(Value::Null),
+            "next_action": appsec_investigation_next_action(&status, outcome.as_deref()),
+            "updated_at": updated_at,
+            "source": "ctox-appsec-core-projection",
+        });
+        let updated_at_ms = appsec_updated_at_ms(&updated_at);
+        upsert_business_record(
+            business,
+            "appsec_investigations",
+            &key,
+            updated_at_ms,
+            record,
+        )?;
+        pairs.push(("appsec_investigations", key));
+    }
+    Ok(())
+}
+
+fn appsec_investigation_next_action(status: &str, outcome: Option<&str>) -> &'static str {
+    match (status, outcome) {
+        ("planned", _) => "configure",
+        ("ready", _) => "execute",
+        ("evidence-ready", _) => "resolve",
+        ("resolved", Some("confirmed")) => "review-proof",
+        ("refutation-blocked", _) => "review-refutation",
+        ("blocked", _) => "review-blocker",
+        ("resolved", _) => "none",
+        _ => "review",
+    }
+}
+
 fn project_appsec_coverage(
     core: &Connection,
     business: &Connection,
@@ -38223,6 +38446,10 @@ fn project_appsec_pipeline_stages(
             "queue_task_id": queue_task_id,
             "queue_status": queue_status,
             "queue_updated_at": queue_updated_at,
+            "stage_kind": payload.get("stage_kind").cloned().unwrap_or(Value::Null),
+            "origin_id": payload.get("origin_id").cloned().unwrap_or(Value::Null),
+            "required": payload.get("required").cloned().unwrap_or(Value::Bool(true)),
+            "evidence_status": payload.get("evidence_status").cloned().unwrap_or(Value::Null),
             "resume_gate": payload.get("resume_gate").cloned().unwrap_or(Value::Null),
             "completion_gate": payload.get("completion_gate").cloned().unwrap_or(Value::Null),
             "updated_at": updated_at,
@@ -39362,6 +39589,41 @@ mod tests {
         let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
             .expect_err("unknown profile must be rejected before execution");
         assert!(error.to_string().contains("payload.profile"));
+        Ok(())
+    }
+
+    #[test]
+    fn appsec_investigation_and_replay_commands_are_typed_write_actions() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        for (command_type, expected_error) in [
+            (
+                "ctox.appsec.investigation.execute",
+                "payload.investigation_id",
+            ),
+            (
+                "ctox.appsec.investigation.refute",
+                "payload.investigation_id",
+            ),
+            ("ctox.appsec.replay.baseline", "payload.assessment_id"),
+            ("ctox.appsec.replay.investigations", "payload.assessment_id"),
+        ] {
+            assert!(appsec_business_command_requires_data_write(command_type));
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(format!("cmd_{}", command_type.replace('.', "_"))),
+                module: APPSEC_MODULE_ID.into(),
+                command_type: command_type.into(),
+                record_id: None,
+                payload: serde_json::json!({"state_dir": "runtime/appsec/test"}),
+                client_context: Value::Null,
+            };
+            let error = handle_appsec_business_command(root.path(), &chef_session(), &command)
+                .expect_err("typed command must reject its missing identifier");
+            assert!(
+                error.to_string().contains(expected_error),
+                "{command_type}: {error:#}"
+            );
+        }
         Ok(())
     }
 

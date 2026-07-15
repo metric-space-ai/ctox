@@ -119,6 +119,7 @@
         "appsec_runs",
         "appsec_artifacts",
         "appsec_findings",
+        "appsec_investigations",
         "appsec_coverage",
         "appsec_pipeline_stages",
         "appsec_scanner_inventory",

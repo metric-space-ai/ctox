@@ -1248,11 +1248,11 @@ fn build_appsec_forwarded_args(root: &Path, args: &[String]) -> Vec<String> {
 
 fn appsec_state_dir_for_args(root: &Path, args: &[String]) -> PathBuf {
     if let Some(state_dir) = arg_value(args, "--state-dir") {
-        return PathBuf::from(state_dir);
+        return resolve_appsec_cli_path(root, state_dir);
     }
     if let Ok(state_dir) = std::env::var("PENTEST_STATE_DIR") {
         if !state_dir.trim().is_empty() {
-            return PathBuf::from(state_dir);
+            return resolve_appsec_cli_path(root, state_dir);
         }
     }
     root.join("runtime/appsec/default")
@@ -5045,6 +5045,24 @@ mod tests {
                     .to_string_lossy()
                     .to_string()
             )
+        );
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn appsec_state_dir_normalizes_relative_workspace_paths() {
+        let root = unique_test_dir("appsec-relative-state");
+        let args = [
+            "--state-dir".to_string(),
+            "runtime/appsec/tests/example".to_string(),
+            "investigate".to_string(),
+            "plan".to_string(),
+        ];
+
+        assert_eq!(
+            super::appsec_state_dir_for_args(&root, &args),
+            root.join("runtime/appsec/tests/example")
         );
 
         cleanup_test_dir(&root);

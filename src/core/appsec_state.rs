@@ -32,6 +32,7 @@ pub fn project_cli_result(root: &Path, forwarded_args: &[String], output: &Value
     let assessment_count = project_assessments(&conn, &state_dir, &command, output, now)?;
     let run_count = project_runs(&conn, &state_dir, now)?;
     let finding_count = project_findings(&conn, &state_dir, now)?;
+    let investigation_count = project_investigations(&conn, &state_dir, now)?;
     let coverage_count = project_coverage(&conn, &state_dir, now)?;
     let pipeline_stage_count = project_pipeline_stages(&conn, &state_dir, now)?;
     let artifact_count = project_artifacts(&conn, &state_dir, output, now)?;
@@ -43,6 +44,7 @@ pub fn project_cli_result(root: &Path, forwarded_args: &[String], output: &Value
         "appsec_runs": run_count,
         "appsec_artifacts": artifact_count,
         "appsec_findings": finding_count,
+        "appsec_investigations": investigation_count,
         "appsec_coverage": coverage_count,
         "appsec_pipeline_stages": pipeline_stage_count,
         "appsec_scanner_inventory": inventory_count,
@@ -176,6 +178,7 @@ fn projected_counts(conn: &Connection, state_dir: &Path) -> Result<Value> {
         "appsec_runs": count_where(conn, "appsec_runs", &state)?,
         "appsec_artifacts": count_where(conn, "appsec_artifacts", &state)?,
         "appsec_findings": count_where(conn, "appsec_findings", &state)?,
+        "appsec_investigations": count_where(conn, "appsec_investigations", &state)?,
         "appsec_coverage": count_where(conn, "appsec_coverage", &state)?,
         "appsec_pipeline_stages": count_where(conn, "appsec_pipeline_stages", &state)?,
         "appsec_scanner_inventory": count_where(conn, "appsec_scanner_inventory", &state)?,
@@ -513,6 +516,21 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             payload_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS appsec_investigations (
+            investigation_key TEXT PRIMARY KEY,
+            investigation_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            state_dir TEXT NOT NULL,
+            status TEXT NOT NULL,
+            outcome TEXT,
+            hypothesis TEXT,
+            expected_signal TEXT,
+            falsification_criterion TEXT,
+            evidence_artifact TEXT,
+            graph_sha256 TEXT,
+            payload_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS appsec_coverage (
             coverage_id TEXT PRIMARY KEY,
             state_dir TEXT NOT NULL,
@@ -564,6 +582,12 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             ON appsec_runs(state_dir, status);
         CREATE INDEX IF NOT EXISTS idx_appsec_findings_state_status
             ON appsec_findings(state_dir, status);
+        CREATE INDEX IF NOT EXISTS idx_appsec_investigations_state_status
+            ON appsec_investigations(state_dir, status);
+        CREATE INDEX IF NOT EXISTS idx_appsec_investigations_candidate
+            ON appsec_investigations(candidate_id);
+        CREATE INDEX IF NOT EXISTS idx_appsec_investigations_id
+            ON appsec_investigations(investigation_id);
         CREATE INDEX IF NOT EXISTS idx_appsec_coverage_state_status
             ON appsec_coverage(state_dir, status);
         CREATE INDEX IF NOT EXISTS idx_appsec_pipeline_stages_state_status
@@ -848,6 +872,80 @@ fn project_findings(conn: &Connection, state_dir: &Path, now: u128) -> Result<us
     Ok(items.len())
 }
 
+fn project_investigations(conn: &Connection, state_dir: &Path, now: u128) -> Result<usize> {
+    let path = state_dir.join("investigations.json");
+    let investigations = read_json_optional(&path)?;
+    let items = investigations
+        .as_ref()
+        .and_then(|value| value.get("investigations"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for item in &items {
+        let candidate_id = item
+            .get("candidate_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                stable_id(
+                    "investigation",
+                    &format!("{}:{candidate_id}", path_json(state_dir)),
+                )
+            });
+        let key = stable_id("investigation", &format!("{}:{id}", path_json(state_dir)));
+        let evidence_artifact = item
+            .pointer("/resolution/evidence/artifact")
+            .or_else(|| item.pointer("/execution/artifact"))
+            .and_then(Value::as_str);
+        conn.execute(
+            r#"
+            INSERT INTO appsec_investigations
+                (investigation_key, investigation_id, candidate_id, state_dir, status, outcome, hypothesis,
+                 expected_signal, falsification_criterion, evidence_artifact, graph_sha256,
+                 payload_json, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(investigation_key) DO UPDATE SET
+                investigation_id=excluded.investigation_id,
+                candidate_id=excluded.candidate_id,
+                state_dir=excluded.state_dir,
+                status=excluded.status,
+                outcome=excluded.outcome,
+                hypothesis=excluded.hypothesis,
+                expected_signal=excluded.expected_signal,
+                falsification_criterion=excluded.falsification_criterion,
+                evidence_artifact=excluded.evidence_artifact,
+                graph_sha256=excluded.graph_sha256,
+                payload_json=excluded.payload_json,
+                updated_at=excluded.updated_at
+            "#,
+            params![
+                key,
+                id,
+                candidate_id,
+                path_json(state_dir),
+                item.get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("planned"),
+                item.pointer("/resolution/outcome").and_then(Value::as_str),
+                item.get("hypothesis").and_then(Value::as_str),
+                item.get("expected_signal").and_then(Value::as_str),
+                item.get("falsification_criterion").and_then(Value::as_str),
+                evidence_artifact,
+                item.pointer("/refutation/graph_sha256")
+                    .and_then(Value::as_str),
+                compact_json(item),
+                now.to_string(),
+            ],
+        )?;
+    }
+    Ok(items.len())
+}
+
 fn project_coverage(conn: &Connection, state_dir: &Path, now: u128) -> Result<usize> {
     let path = state_dir.join("coverage.json");
     let coverage = read_json_optional(&path)?;
@@ -965,8 +1063,28 @@ fn project_pipeline_stages(conn: &Connection, state_dir: &Path, now: u128) -> Re
             .get("active_required")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let stage_kind = pipeline_stage_kind(stage, phase);
+        let origin_id = stage
+            .get("origin_id")
+            .or_else(|| stage.get("investigation_id"))
+            .or_else(|| stage.get("candidate_id"))
+            .or_else(|| stage.get("finding_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&stage_id);
+        let required = stage
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let evidence_status = status_writeback
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or(status_value);
         let mut payload = stage.clone();
         if let Some(object) = payload.as_object_mut() {
+            object.insert("stage_kind".to_string(), json!(stage_kind));
+            object.insert("origin_id".to_string(), json!(origin_id));
+            object.insert("required".to_string(), json!(required));
+            object.insert("evidence_status".to_string(), json!(evidence_status));
             object.insert("status_writeback".to_string(), status_writeback.clone());
             if let Some(queue) = queue.as_ref() {
                 object.insert("queue_task".to_string(), queue.clone());
@@ -982,6 +1100,10 @@ fn project_pipeline_stages(conn: &Connection, state_dir: &Path, now: u128) -> Re
             "base_status": status_value,
             "status": projected_status,
             "coverage_status": coverage_status,
+            "stage_kind": stage_kind,
+            "origin_id": origin_id,
+            "required": required,
+            "evidence_status": evidence_status,
             "queue_task": queue,
             "run_evidence": run_evidence,
             "writeback": status_writeback,
@@ -1027,6 +1149,27 @@ fn project_pipeline_stages(conn: &Connection, state_dir: &Path, now: u128) -> Re
         write_pipeline_writeback(state_dir, writeback_stages, now)?;
     }
     Ok(count)
+}
+
+fn pipeline_stage_kind(stage: &Value, phase: Option<&str>) -> &'static str {
+    if let Some(kind) = stage.get("stage_kind").and_then(Value::as_str) {
+        return match kind {
+            "investigation" => "investigation",
+            "refutation" => "refutation",
+            "retest" => "retest",
+            _ => "baseline",
+        };
+    }
+    let phase = phase.unwrap_or_default().to_ascii_lowercase();
+    if phase.contains("refut") {
+        "refutation"
+    } else if phase.contains("retest") || phase.contains("fix-check") {
+        "retest"
+    } else if phase.contains("investig") {
+        "investigation"
+    } else {
+        "baseline"
+    }
 }
 
 fn write_pipeline_writeback(state_dir: &Path, stages: Vec<Value>, now: u128) -> Result<()> {
@@ -1707,6 +1850,11 @@ mod tests {
             r#"[{"id":"F-001","title":"Demo","severity":"high","category":"idor","status":"candidate","target":"https://example.test","evidence_artifact":"authz/demo.json"}]"#,
         )
         .unwrap();
+        fs::write(
+            state.join("investigations.json"),
+            r#"{"version":"ctox.deployment_audit.investigations.v1","investigations":[{"id":"investigation-001","candidate_id":"candidate-001","status":"resolved","hypothesis":"A different account can read the protected resource","expected_signal":"The foreign resource is returned","falsification_criterion":"The server rejects every foreign resource request","trigger":{"scanner":"semgrep","target":"src/api.rs"},"work_order":{"tool":"httpx","authorization":"Bearer secret"},"resolution":{"outcome":"confirmed","evidence":{"artifact":"authz/demo.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"refutation":{"status":"passed","graph_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}"#,
+        )
+        .unwrap();
         let issue_bundle = state.join("reports/issue-bundles/f-001-demo");
         fs::create_dir_all(&issue_bundle).unwrap();
         fs::write(
@@ -1779,6 +1927,7 @@ mod tests {
             "appsec_runs",
             "appsec_artifacts",
             "appsec_findings",
+            "appsec_investigations",
             "appsec_coverage",
             "appsec_pipeline_stages",
             "appsec_scanner_inventory",
@@ -1811,6 +1960,41 @@ mod tests {
             reproduce_count, 1,
             "reproduce.py must be projected as proof metadata"
         );
+        let investigation: (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT status, candidate_id, graph_sha256 FROM appsec_investigations WHERE investigation_id = 'investigation-001'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(investigation.0, "resolved");
+        assert_eq!(investigation.1, "candidate-001");
+        assert_eq!(
+            investigation.2.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        let pipeline_payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM appsec_pipeline_stages WHERE stage_id = 'stage-1-blackbox-map'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let pipeline_payload: Value = serde_json::from_str(&pipeline_payload).unwrap();
+        assert_eq!(
+            pipeline_payload.get("stage_kind").and_then(Value::as_str),
+            Some("baseline")
+        );
+        assert_eq!(
+            pipeline_payload.get("required").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            pipeline_payload
+                .get("evidence_status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
 
         let projected_finding = crate::business_os::store::pull_collection_record(
             root.path(),
@@ -1826,6 +2010,28 @@ mod tests {
         assert_eq!(
             projected_finding.get("title").and_then(Value::as_str),
             Some("Demo")
+        );
+        let projected_investigation = crate::business_os::store::pull_collection_record(
+            root.path(),
+            "appsec_investigations",
+            &stable_id(
+                "investigation",
+                &format!("{}:investigation-001", path_json(&state)),
+            ),
+        )
+        .unwrap()
+        .expect("AppSec investigation projected into Business OS records");
+        assert_eq!(
+            projected_investigation
+                .pointer("/work_order/authorization")
+                .and_then(Value::as_str),
+            Some("[redacted]")
+        );
+        assert_eq!(
+            projected_investigation
+                .get("next_action")
+                .and_then(Value::as_str),
+            Some("review-proof")
         );
     }
 
@@ -1892,6 +2098,32 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.appsec.durable_projection.v1")
         );
+    }
+
+    #[test]
+    fn investigation_projection_keys_are_scoped_per_test_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("runtime/appsec/tests/first");
+        let second = root.path().join("runtime/appsec/tests/second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let payload = r#"{"investigations":[{"id":"shared-id","candidate_id":"candidate-1","status":"planned"}]}"#;
+        fs::write(first.join("investigations.json"), payload).unwrap();
+        fs::write(second.join("investigations.json"), payload).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        project_investigations(&conn, &first, 1).unwrap();
+        project_investigations(&conn, &second, 2).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM appsec_investigations WHERE investigation_id = 'shared-id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]

@@ -1316,6 +1316,9 @@
       "state_dir": {
         "type": "string"
       },
+      "name": {
+        "type": "string"
+      },
       "target": {
         "type": "string"
       },
@@ -1323,6 +1326,24 @@
         "type": "string"
       },
       "status": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string"
+      },
+      "source_path": {
+        "type": "string"
+      },
+      "authz_subjects": {
+        "type": "string"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "approval_id": {
+        "type": "string"
+      },
+      "wordlist": {
         "type": "string"
       },
       "command": {
@@ -1512,6 +1533,115 @@
     ],
     "additionalProperties": true
   },
+  "appsec_investigations": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "investigation_id": {
+        "type": "string"
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "state_dir": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "outcome": {
+        "type": "string"
+      },
+      "hypothesis": {
+        "type": "string"
+      },
+      "expected_signal": {
+        "type": "string"
+      },
+      "falsification_criterion": {
+        "type": "string"
+      },
+      "evidence_artifact": {
+        "type": "string"
+      },
+      "graph_sha256": {
+        "type": "string"
+      },
+      "trigger": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "candidate_binding": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "work_order": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "work_order_sha256": {
+        "type": "string"
+      },
+      "execution": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "resolution": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "refutation": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "next_action": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "investigation_id",
+      "candidate_id",
+      "state_dir",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "investigation_id",
+      "candidate_id",
+      "state_dir",
+      "status",
+      "outcome",
+      [
+        "state_dir",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
   "appsec_pipeline_stages": {
     "version": 0,
     "primaryKey": "id",
@@ -1558,6 +1688,18 @@
         "type": "string"
       },
       "queue_updated_at": {
+        "type": "string"
+      },
+      "stage_kind": {
+        "type": "string"
+      },
+      "origin_id": {
+        "type": "string"
+      },
+      "required": {
+        "type": "boolean"
+      },
+      "evidence_status": {
         "type": "string"
       },
       "resume_gate": {},
