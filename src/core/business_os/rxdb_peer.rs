@@ -296,6 +296,10 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
+const SPREADSHEET_BLOB_CHUNK_SIZE: usize = 256_000;
+const SPREADSHEET_CSV_IMPORT_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
+const SPREADSHEET_CSV_IMPORT_MAX_ROWS: usize = 50_000;
+const SPREADSHEET_CSV_IMPORT_MAX_COLUMNS: usize = 512;
 const DESKTOP_FILE_CHUNK_DECODED_SIZE: u64 = (DESKTOP_FILE_CHUNK_SIZE as u64 / 4) * 3;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
@@ -10180,7 +10184,8 @@ async fn upsert_desktop_file_with_parent(
         .unwrap_or("")
         .to_string();
     let path_string = path.to_string_lossy().into_owned();
-    let display_path = virtual_path.unwrap_or_else(|| path_string.clone());
+    let display_path = virtual_path
+        .unwrap_or_else(|| format!("{}/{}", CTOX_DESKTOP_FOLDER_PATH, file_name.as_str()));
     let modified_at_ms = metadata_modified_at_ms(&metadata);
 
     // Change detection: the desktop-file index rescans every workspace root
@@ -10440,7 +10445,262 @@ async fn upsert_desktop_file_with_parent(
             .await?;
     }
 
+    if extension.eq_ignore_ascii_case("csv") {
+        if let Err(err) =
+            upsert_workspace_csv_spreadsheet(database, &path, &file_id, &display_path, now_u64)
+                .await
+        {
+            eprintln!(
+                "[business-os] published CSV to Files but skipped automatic Spreadsheet projection for {}: {err:#}",
+                path.display()
+            );
+        }
+    }
+
     Ok(())
+}
+
+async fn upsert_workspace_csv_spreadsheet(
+    database: &Arc<RxDatabase>,
+    path: &Path,
+    desktop_file_id: &str,
+    virtual_path: &str,
+    now: u64,
+) -> anyhow::Result<()> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to read CSV metadata {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.len() <= SPREADSHEET_CSV_IMPORT_LIMIT_BYTES,
+        "CSV is too large for automatic Spreadsheet import ({} bytes, limit {}): {}",
+        metadata.len(),
+        SPREADSHEET_CSV_IMPORT_LIMIT_BYTES,
+        path.display()
+    );
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read CSV for Spreadsheet import {}",
+            path.display()
+        )
+    })?;
+    let delimiter = detect_csv_delimiter(&bytes);
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(delimiter)
+        .from_reader(bytes.as_slice());
+    let mut rows = Vec::<Vec<String>>::new();
+    let mut column_count = 0usize;
+    for record in reader.records() {
+        let record = record.with_context(|| format!("failed to parse CSV {}", path.display()))?;
+        anyhow::ensure!(
+            record.len() <= SPREADSHEET_CSV_IMPORT_MAX_COLUMNS,
+            "CSV has too many columns for automatic Spreadsheet import ({} > {}): {}",
+            record.len(),
+            SPREADSHEET_CSV_IMPORT_MAX_COLUMNS,
+            path.display()
+        );
+        column_count = column_count.max(record.len());
+        rows.push(record.iter().map(str::to_string).collect());
+        anyhow::ensure!(
+            rows.len() <= SPREADSHEET_CSV_IMPORT_MAX_ROWS,
+            "CSV has too many rows for automatic Spreadsheet import (>{}): {}",
+            SPREADSHEET_CSV_IMPORT_MAX_ROWS,
+            path.display()
+        );
+    }
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "CSV is empty and cannot be imported into Spreadsheets: {}",
+        path.display()
+    );
+
+    let content_hash = hex_sha256(&bytes);
+    let path_hash = hex_sha256(path.to_string_lossy().as_bytes());
+    let spreadsheet_id = format!("sheet_ctox_{}", &path_hash[..40]);
+    let version_id = format!("{spreadsheet_id}_v_{}", &content_hash[..16]);
+    let blob_id = format!("{version_id}_blob");
+    let existing_spreadsheet =
+        find_rxdb_document_by_id(database, "spreadsheets", &spreadsheet_id, false).await?;
+    let existing_version_number = if let Some(current_version_id) = existing_spreadsheet
+        .as_ref()
+        .and_then(|record| record.get("current_version_id"))
+        .and_then(Value::as_str)
+    {
+        find_rxdb_document_by_id(database, "spreadsheet_versions", current_version_id, false)
+            .await?
+            .and_then(|version| version.get("version").and_then(Value::as_u64))
+            .unwrap_or_default()
+    } else {
+        0
+    };
+    let version_number = if existing_spreadsheet
+        .as_ref()
+        .and_then(|record| record.get("current_version_id"))
+        .and_then(Value::as_str)
+        == Some(version_id.as_str())
+    {
+        existing_version_number.max(1)
+    } else {
+        existing_version_number.saturating_add(1).max(1)
+    };
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("export.csv");
+    let title = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("CSV export")
+        .replace(['_', '-'], " ");
+    let columns = (0..column_count)
+        .map(|index| {
+            json!({
+                "type": "text",
+                "title": spreadsheet_column_label(index),
+                "width": "120px"
+            })
+        })
+        .collect::<Vec<_>>();
+    let model_json = json!({
+        "data": rows,
+        "columns": columns,
+        "nestedHeaders": Value::Null,
+        "mergeCells": Value::Null,
+        "style": Value::Null,
+    });
+    let index_text = model_json
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(10)
+        .filter_map(Value::as_array)
+        .map(|row| {
+            row.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let chunks = database
+        .collection("spreadsheet_blob_chunks")
+        .context("spreadsheet_blob_chunks collection is not registered")?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let encoded_chunks = if encoded.is_empty() {
+        vec![""]
+    } else {
+        encoded
+            .as_bytes()
+            .chunks(SPREADSHEET_BLOB_CHUNK_SIZE)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let total = encoded_chunks.len();
+    let chunk_documents = encoded_chunks
+        .into_iter()
+        .enumerate()
+        .map(|(idx, data)| {
+            json!({
+                "id": format!("{blob_id}_{idx}"),
+                "blob_id": blob_id,
+                "spreadsheet_id": spreadsheet_id,
+                "version_id": version_id,
+                "idx": idx,
+                "total": total,
+                "mime_type": "text/csv",
+                "encoding": "base64",
+                "data": data,
+                "created_at_ms": now,
+            })
+        })
+        .collect::<Vec<_>>();
+    bulk_upsert_or_error(
+        &chunks,
+        chunk_documents,
+        "upsert workspace CSV Spreadsheet chunks",
+    )
+    .await?;
+
+    database
+        .collection("spreadsheet_versions")
+        .context("spreadsheet_versions collection is not registered")?
+        .incremental_upsert(json!({
+            "id": version_id,
+            "spreadsheet_id": spreadsheet_id,
+            "version": version_number,
+            "source_kind": "workspace_csv",
+            "blob_id": blob_id,
+            "model_json": model_json,
+            "diagnostics": [],
+            "created_at_ms": now,
+            "updated_at_ms": now,
+        }))
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert workspace CSV Spreadsheet version: {err}"))?;
+    database
+        .collection("spreadsheets")
+        .context("spreadsheets collection is not registered")?
+        .incremental_upsert(json!({
+            "id": spreadsheet_id,
+            "title": title,
+            "filename": filename,
+            "mime_type": "text/csv",
+            "status": "Imported",
+            "spreadsheet_type": "jspreadsheet",
+            "owner_id": "ctox",
+            "current_version_id": version_id,
+            "source_sha256": content_hash,
+            "row_count": model_json.get("data").and_then(Value::as_array).map_or(0, Vec::len),
+            "col_count": column_count,
+            "diagnostics_count": 0,
+            "linked_records": [{
+                "collection": "desktop_files",
+                "record_id": desktop_file_id,
+                "path": virtual_path,
+            }],
+            "tags": ["ctox-export", "csv"],
+            "display_cache": {},
+            "index_text": format!("{title}\n{index_text}"),
+            "is_deleted": false,
+            "created_at_ms": existing_spreadsheet
+                .as_ref()
+                .and_then(|record| record.get("created_at_ms"))
+                .and_then(Value::as_u64)
+                .unwrap_or(now),
+            "updated_at_ms": now,
+        }))
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert workspace CSV Spreadsheet record: {err}"))?;
+    Ok(())
+}
+
+fn detect_csv_delimiter(bytes: &[u8]) -> u8 {
+    let first_line = bytes
+        .split(|byte| *byte == b'\n' || *byte == b'\r')
+        .find(|line| !line.iter().all(u8::is_ascii_whitespace))
+        .unwrap_or_default();
+    [b',', b';', b'\t']
+        .into_iter()
+        .max_by_key(|delimiter| {
+            first_line
+                .iter()
+                .filter(|byte| **byte == *delimiter)
+                .count()
+        })
+        .unwrap_or(b',')
+}
+
+fn spreadsheet_column_label(mut index: usize) -> String {
+    let mut label = String::new();
+    loop {
+        label.insert(0, char::from(b'A' + (index % 26) as u8));
+        if index < 26 {
+            return label;
+        }
+        index = (index / 26) - 1;
+    }
 }
 
 /// Phase 4: file-demand sources exposed to the browser. The request collection
@@ -16319,6 +16579,20 @@ mod tests {
             file.get("source").and_then(Value::as_str),
             Some("ctox-core")
         );
+        assert_eq!(
+            file.get("virtual_path").and_then(Value::as_str),
+            Some("/CTOX/artifact.md")
+        );
+        assert_eq!(
+            file.get("path").and_then(Value::as_str),
+            Some(
+                file_path
+                    .canonicalize()
+                    .expect("canonical desktop file path")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
 
         let chunk_json: Option<String> = conn
             .query_row(
@@ -16377,6 +16651,96 @@ mod tests {
             chunk.get("chunk_hash").and_then(Value::as_str),
             Some(hex_sha256(b"").as_str())
         );
+    }
+
+    #[test]
+    fn sync_workspace_csv_publishes_files_and_spreadsheet_records() {
+        let root = tempfile::tempdir().expect("temp root");
+        let workspace = root.path().join("csv-export-workspace");
+        fs::create_dir_all(&workspace).expect("create CSV workspace");
+        let file_path = workspace.join("measurements.csv");
+        fs::write(
+            &file_path,
+            "propeller;diameter_in;pitch_in;rpm;force_n;torque_nm\n9x5;9;5;12000;18,4;0,42\n",
+        )
+        .expect("write CSV export");
+
+        let indexed = sync_desktop_files_from_workspace_root(root.path(), &workspace)
+            .expect("sync CSV workspace");
+        assert_eq!(indexed, 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE json_extract(data, '$.name') = 'measurements.csv'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("CSV desktop file");
+        let file: Value = serde_json::from_str(&file_json).expect("CSV desktop file json");
+        assert_eq!(
+            file.get("virtual_path").and_then(Value::as_str),
+            Some("/CTOX/csv-export-workspace/measurements.csv")
+        );
+
+        let spreadsheet_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__spreadsheets__v0 WHERE json_extract(data, '$.filename') = 'measurements.csv'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("CSV Spreadsheet record");
+        let spreadsheet: Value =
+            serde_json::from_str(&spreadsheet_json).expect("CSV Spreadsheet json");
+        assert_eq!(
+            spreadsheet.get("row_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            spreadsheet.get("col_count").and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            spreadsheet
+                .pointer("/linked_records/0/path")
+                .and_then(Value::as_str),
+            Some("/CTOX/csv-export-workspace/measurements.csv")
+        );
+
+        let version_id = spreadsheet
+            .get("current_version_id")
+            .and_then(Value::as_str)
+            .expect("current CSV Spreadsheet version");
+        let version_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__spreadsheet_versions__v0 WHERE id = ?1",
+                [version_id],
+                |row| row.get(0),
+            )
+            .expect("CSV Spreadsheet version");
+        let version: Value =
+            serde_json::from_str(&version_json).expect("CSV Spreadsheet version json");
+        assert_eq!(
+            version
+                .pointer("/model_json/data/1/4")
+                .and_then(Value::as_str),
+            Some("18,4")
+        );
+        assert_eq!(
+            version
+                .pointer("/model_json/data/1/5")
+                .and_then(Value::as_str),
+            Some("0,42")
+        );
+
+        let chunk_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__spreadsheet_blob_chunks__v0 WHERE json_extract(data, '$.version_id') = ?1",
+                [version_id],
+                |row| row.get(0),
+            )
+            .expect("CSV Spreadsheet chunks");
+        assert!(chunk_count >= 1);
     }
 
     #[test]
@@ -19560,11 +19924,15 @@ mod tests {
         let nested = workspace.join("reports");
         fs::create_dir_all(&nested).expect("create workspace dirs");
         let file_path = nested.join("brief.md");
+        let pdf_path = nested.join("report.pdf");
+        let binary_path = nested.join("simulation.ctoxdata");
         fs::write(&file_path, b"# Brief\n\nvisible from Business OS\n").expect("write file");
+        fs::write(&pdf_path, b"%PDF-1.7\nworkspace report\n").expect("write PDF");
+        fs::write(&binary_path, b"opaque workspace payload").expect("write binary file");
 
         let indexed = sync_desktop_files_from_workspace_root(root.path(), &workspace)
             .expect("sync workspace root");
-        assert_eq!(indexed, 1);
+        assert_eq!(indexed, 3);
 
         let file_id = desktop_file_id(&file_path.canonicalize().expect("canonical file"));
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
@@ -19597,6 +19965,29 @@ mod tests {
             )
             .expect("chunks count");
         assert_eq!(chunks, 1);
+
+        for (path, expected_state) in [(&pdf_path, "available"), (&binary_path, "lazy")] {
+            let id = desktop_file_id(&path.canonicalize().expect("canonical output file"));
+            let json: String = conn
+                .query_row(
+                    "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("generic workspace file row");
+            let record: Value = serde_json::from_str(&json).expect("generic file json");
+            assert_eq!(
+                record.get("content_state").and_then(Value::as_str),
+                Some(expected_state)
+            );
+            assert!(
+                record
+                    .get("virtual_path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.starts_with("/CTOX/agent-workspace/reports/")),
+                "every workspace file has a user-visible CTOX path"
+            );
+        }
     }
 
     #[tokio::test]

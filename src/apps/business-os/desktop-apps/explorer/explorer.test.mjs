@@ -43,6 +43,28 @@ describe('Explorer app helpers', () => {
     ]);
   });
 
+  it('keeps the CTOX-published file area visible at the Files root', async () => {
+    const upserts = [];
+    const db = {
+      collection(name) {
+        if (name !== 'desktop_files') return null;
+        return {
+          findOne: () => ({ exec: async () => null }),
+          upsert: async (doc) => { upserts.push(doc); },
+        };
+      },
+    };
+
+    await explorer.ensureFileSystem(db);
+
+    assert.ok(upserts.some((doc) => (
+      doc.id === 'fs_ctox'
+      && doc.parent_id === 'fs_root'
+      && doc.path === '/CTOX'
+      && doc.name === 'CTOX'
+    )));
+  });
+
   it('validates new folder and rename inputs before persistence', () => {
     const existing = new Set(['reports']);
 
@@ -60,6 +82,14 @@ describe('Explorer app helpers', () => {
   it('keeps grid rows inside the visible explorer main column', () => {
     assert.match(bundledSource, /\.app-explorer-grid \{[\s\S]*min-width: 0;/);
     assert.match(bundledSource, /\.app-explorer-row \{[\s\S]*min-width: 0;/);
+  });
+
+  it('offers a direct Files download action independent of the file viewer', () => {
+    assert.match(bundledSource, /data-preview-download/);
+    assert.match(bundledSource, /anchor\.download\s*=\s*row\.label/);
+    assert.match(bundledSource, /Herunterladen/);
+    assert.match(bundledSource, /Download fehlgeschlagen/);
+    assert.match(bundledSource, /reportFileIntegrityError/);
   });
 
   it('stores uploaded file chunks in one bulk write without DataURL materialization', async () => {

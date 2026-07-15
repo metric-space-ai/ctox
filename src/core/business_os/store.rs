@@ -36320,6 +36320,7 @@ fn create_ctox_queue_task(
         .unwrap_or("normal")
         .to_string();
     let thread_key = command_queue_thread_key(command_id, command);
+    let workspace_root = business_os_command_workspace_root(root, command_id)?;
     let claimed = channels::claim_business_command_with_queue(
         root,
         business_command_core_claim(command_id, command)?,
@@ -36327,7 +36328,7 @@ fn create_ctox_queue_task(
             title,
             prompt,
             thread_key,
-            workspace_root: Some(root.display().to_string()),
+            workspace_root: Some(workspace_root.display().to_string()),
             priority,
             suggested_skill: suggested_skill_for_command(command),
             parent_message_key: None,
@@ -36345,6 +36346,55 @@ fn create_ctox_queue_task(
         },
     )?;
     Ok(Some(claimed.task))
+}
+
+fn business_os_command_workspace_root(root: &Path, command_id: &str) -> anyhow::Result<PathBuf> {
+    let command_leaf = sanitize_business_os_workspace_component(command_id);
+    let base = business_os_external_workspace_base(root);
+    let path = base.join(command_leaf);
+    fs::create_dir_all(&path).with_context(|| {
+        format!(
+            "failed to create Business OS command workspace {}",
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+fn business_os_external_workspace_base(root: &Path) -> PathBuf {
+    if let Some(home) = home_dir_from_ctox_runtime_root(root) {
+        return home.join("ctox-workspaces").join("business-os");
+    }
+    root.join("business-os-workspaces")
+}
+
+fn home_dir_from_ctox_runtime_root(root: &Path) -> Option<PathBuf> {
+    for ancestor in root.ancestors() {
+        if ancestor.file_name().and_then(|name| name.to_str()) == Some(".local") {
+            return ancestor.parent().map(Path::to_path_buf);
+        }
+    }
+    None
+}
+
+fn sanitize_business_os_workspace_component(value: &str) -> String {
+    let mut output = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    output.truncate(96);
+    let output = output.trim_matches(['.', '_', '-']).to_string();
+    if output.is_empty() {
+        "command".to_string()
+    } else {
+        output
+    }
 }
 
 fn command_queue_thread_key(command_id: &str, command: &BusinessCommand) -> String {
@@ -42317,6 +42367,28 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn business_os_command_workspace_escapes_internal_ctox_state_root() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let runtime_root = temp.path().join(".local/state/ctox");
+        fs::create_dir_all(&runtime_root)?;
+
+        let workspace =
+            business_os_command_workspace_root(&runtime_root, "cmd/export measurements:816")?;
+
+        assert!(workspace.is_dir());
+        assert!(
+            !workspace.starts_with(&runtime_root),
+            "Business OS chat artifacts must not be written inside internal CTOX state"
+        );
+        assert!(workspace.ends_with("cmd_export_measurements_816"));
+        assert!(workspace
+            .display()
+            .to_string()
+            .contains("ctox-workspaces/business-os"));
         Ok(())
     }
 

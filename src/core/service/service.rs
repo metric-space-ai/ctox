@@ -6208,7 +6208,7 @@ fn start_prompt_worker(
                 shared.last_progress_epoch_secs = current_epoch_secs();
                 worker_activity.release_leased_keys_locked(&mut shared);
                 match result {
-                    Ok(reply) => {
+                    Ok(mut reply) => {
                         let founder_reply_key =
                             founder_email_reply_message_key(&job).map(ToOwned::to_owned);
                         let mut founder_send_error: Option<String> = None;
@@ -6276,6 +6276,11 @@ fn start_prompt_worker(
                         };
                         for event in sync_events {
                             push_event_locked(&mut shared, event);
+                        }
+                        if is_business_os_chat_queue_job(&root, &job)
+                            && workspace_files_are_published_to_business_os(&root, &job)
+                        {
+                            reply = append_business_os_file_delivery_notice(&reply, &job);
                         }
                         if app_validation_should_run {
                             match business_os_app_module_validation_feedback(&root, &job) {
@@ -8720,7 +8725,7 @@ fn assurance_conversation_id_for_job(root: &Path, job: &QueuedPrompt) -> i64 {
 
 fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     format!(
-        "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
+        "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- If the user asks you to create, export, save, or convert a file, write that file inside the current workspace root only. CTOX will publish every workspace file to Business OS Files after the task completes.\n- For created files, name each file in the final answer and tell the user it is available in Files. CSV exports are also published as editable records in Spreadsheets. Do not mention server-local absolute paths.\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, internal file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Never write Business OS SQLite files or RxDB tables directly. If the canonical command context contains an explicit `writeback_contract`, fulfill only that bounded contract through the policy-gated Business OS MCP or an allowed typed Business OS command, then verify the readback. Without an explicit contract, do not mutate Business OS records.\n- Do not update queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
 }
@@ -11970,6 +11975,72 @@ fn sync_workspace_root_to_business_os(root: &Path, job: &QueuedPrompt) -> Vec<St
             clip_text(&err.to_string(), 180)
         )],
     }
+}
+
+fn workspace_files_are_published_to_business_os(root: &Path, job: &QueuedPrompt) -> bool {
+    let Some(workspace_root) = job
+        .workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Ok(workspace_root) = Path::new(workspace_root).canonicalize() else {
+        return false;
+    };
+    let database_path = crate::business_os::store::rxdb_store_path(root);
+    let Ok(connection) = Connection::open(database_path) else {
+        return false;
+    };
+    let prefix = format!("{}%", workspace_root.to_string_lossy());
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM ctox_business_os__desktop_files__v0 WHERE COALESCE(json_extract(data, '$.is_deleted'), 0) = 0 AND json_extract(data, '$.local_path') LIKE ?1)",
+            [prefix],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .unwrap_or(false)
+}
+
+fn append_business_os_file_delivery_notice(reply: &str, job: &QueuedPrompt) -> String {
+    let trimmed = reply.trim_end();
+    let csv_published = job
+        .workspace_root
+        .as_deref()
+        .is_some_and(|path| workspace_tree_contains_extension(Path::new(path), "csv"));
+    let notice = if csv_published {
+        "Die erzeugten Dateien stehen im Ordner **CTOX** der Files-App zum Öffnen und Herunterladen bereit. CSV-Ergebnisse sind zusätzlich in **Spreadsheets** verfügbar."
+    } else {
+        "Die erzeugten Dateien stehen im Ordner **CTOX** der Files-App zum Öffnen und Herunterladen bereit."
+    };
+    if trimmed.contains(notice) {
+        trimmed.to_string()
+    } else if trimmed.is_empty() {
+        notice.to_string()
+    } else {
+        format!("{trimmed}\n\n{notice}")
+    }
+}
+
+fn workspace_tree_contains_extension(root: &Path, expected: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        if entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            workspace_tree_contains_extension(&path, expected)
+        } else {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+        }
+    })
 }
 
 fn should_sync_full_workspace_root_to_business_os(job: &QueuedPrompt) -> bool {
@@ -39264,6 +39335,60 @@ Im Workspace muss synthesis/helper-run.json existieren."
         };
 
         assert_eq!(artifact_first_execution_prompt(&job), job.prompt);
+    }
+
+    #[test]
+    fn business_os_chat_prompt_routes_created_files_through_files_app() {
+        let job = QueuedPrompt {
+            prompt: "Erzeuge aus allen 816 Messungen eine CSV-Datei.".to_string(),
+            goal: "csv export".to_string(),
+            preview: "csv export".to_string(),
+            source_label: "business-os".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:business-os-chat".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/chat/example".to_string()),
+            workspace_root: Some("/home/ctox/ctox-workspaces/business-os/cmd-export".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = business_os_chat_execution_prompt(&job);
+
+        assert!(prompt.contains("write that file inside the current workspace root only"));
+        assert!(prompt.contains("publish every workspace file"));
+        assert!(prompt.contains("available in Files"));
+        assert!(prompt.contains("editable records in Spreadsheets"));
+        assert!(prompt.contains("Do not mention server-local absolute paths"));
+    }
+
+    #[test]
+    fn business_os_file_delivery_notice_is_deterministic_and_hides_local_paths() {
+        let root = tempfile::tempdir().expect("workspace");
+        let nested = root.path().join("exports");
+        std::fs::create_dir_all(&nested).expect("nested export dir");
+        std::fs::write(nested.join("measurements.csv"), b"rpm;force_n\n1;2\n").expect("CSV export");
+        let job = QueuedPrompt {
+            prompt: "Exportiere die Daten.".to_string(),
+            goal: "export".to_string(),
+            preview: "export".to_string(),
+            source_label: "business-os".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some(root.path().to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let reply = append_business_os_file_delivery_notice("Export abgeschlossen.", &job);
+
+        assert!(reply.contains("Ordner **CTOX** der Files-App"));
+        assert!(reply.contains("**Spreadsheets**"));
+        assert!(!reply.contains(root.path().to_string_lossy().as_ref()));
     }
 
     #[test]

@@ -314,20 +314,20 @@
   z-index: 6;
   display: grid;
   justify-items: center;
-  gap: 7px;
+  gap: 5px;
   transform: translateY(-50%);
 }
 
 .research-graph-tool {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 28px;
+  height: 28px;
   border: 1px solid #2b3540;
-  border-radius: 999px;
+  border-radius: 3px;
   background: #171b25;
   color: #dce4e8;
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 720;
   cursor: pointer;
 }
@@ -340,19 +340,19 @@
 }
 
 .research-graph-dimension {
-  font-size: 14px;
-  letter-spacing: -0.03em;
+  font-size: 10px;
+  letter-spacing: 0;
 }
 
 .research-graph-limit {
   display: grid;
   justify-items: center;
   gap: 5px;
-  width: 48px;
-  height: 154px;
+  width: 32px;
+  height: 120px;
   border: 1px solid #2b3540;
-  border-radius: 999px;
-  padding: 9px 0;
+  border-radius: 3px;
+  padding: 6px 0;
   background: #171b25;
   color: #aeb9bf;
   font-size: 9px;
@@ -360,8 +360,8 @@
 }
 
 .research-graph-limit input {
-  width: 16px;
-  height: 112px;
+  width: 14px;
+  height: 86px;
   margin: 0;
   accent-color: #8cb8d5;
   direction: rtl;
@@ -1382,6 +1382,17 @@
     min-width: 34px;
     justify-content: center;
     padding: 6px;
+  }
+}
+
+@media (pointer: coarse) {
+  .research-graph-tool {
+    width: 44px;
+    height: 44px;
+  }
+
+  .research-graph-limit {
+    width: 44px;
   }
 }
 

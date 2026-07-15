@@ -333,6 +333,7 @@ export async function mount(container, ctx) {
       if (row.sourceId === FILE_SOURCE.id) {
         actions.push(
           { type: 'separator' },
+          ...(!row.isFolder ? [{ label: 'Herunterladen', icon: '↓', action: () => downloadRow(row) }] : []),
           { label: 'Umbenennen', icon: '✎', action: () => renameFileRow(row) },
           { label: 'In Papierkorb', icon: '⌫', action: () => trashFileRow(row) }
         );
@@ -373,8 +374,10 @@ export async function mount(container, ctx) {
         <dt>ID</dt><dd>${escapeHtml(row.id)}</dd>
       </dl>
       <button type="button" data-preview-open>${row.sourceId === FILE_SOURCE.id ? 'Öffnen' : 'Im Modul öffnen'}</button>
+      ${row.sourceId === FILE_SOURCE.id && !row.isFolder ? '<button type="button" data-preview-download>Herunterladen</button>' : ''}
     `;
     refs.preview.querySelector('[data-preview-open]')?.addEventListener('click', () => openRow(row));
+    refs.preview.querySelector('[data-preview-download]')?.addEventListener('click', () => downloadRow(row));
     if (row.sourceId === FILE_SOURCE.id && !row.isFolder) renderStoredFilePreview(row);
   }
 
@@ -462,6 +465,32 @@ export async function mount(container, ctx) {
       return;
     }
     if (row?.moduleId) location.hash = `#${encodeURIComponent(row.moduleId)}?record=${encodeURIComponent(row.id)}`;
+  }
+
+  async function downloadRow(row) {
+    if (row.sourceId !== FILE_SOURCE.id || row.isFolder) return;
+    try {
+      const blob = await readStoredFile(ctx, row.id, row.mimeType, row);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = row.label;
+      anchor.rel = 'noopener';
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      ctx.reportFileIntegrityError?.(error, {
+        fileId: row.id,
+        mimeType: row.mimeType,
+        contentState: row.contentState,
+        contentGenerationId: row.contentGenerationId,
+        contentHashScheme: row.contentHashScheme,
+      });
+      const body = refs.preview.querySelector('[data-preview-body]');
+      if (body) {
+        body.innerHTML = `<p class="app-explorer-message is-error">Download fehlgeschlagen: ${escapeHtml(error?.message || error)}</p>`;
+      }
+    }
   }
 
   async function goUp() {
@@ -666,6 +695,7 @@ async function ensureFileSystem(db) {
     { id: 'fs_documents', parent_id: ROOT_ID, path: '/Documents', name: 'Documents', kind: 'folder', sort_index: 20 },
     { id: 'fs_spreadsheets', parent_id: ROOT_ID, path: '/Spreadsheets', name: 'Spreadsheets', kind: 'folder', sort_index: 25 },
     { id: 'fs_downloads', parent_id: ROOT_ID, path: '/Downloads', name: 'Downloads', kind: 'folder', sort_index: 30 },
+    { id: 'fs_ctox', parent_id: ROOT_ID, path: '/CTOX', name: 'CTOX', kind: 'folder', sort_index: 40 },
   ];
   for (const seed of seeds) {
     const existing = await files.findOne(seed.id).exec();
@@ -1557,6 +1587,7 @@ function escapeHtml(value) {
 export const __explorerTestHooks = {
   FILE_SOURCE,
   SOURCES,
+  ensureFileSystem,
   formatBytes,
   joinPath,
   mimeFromName,
