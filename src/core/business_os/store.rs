@@ -55,16 +55,7 @@ const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
-const CORE_MODULE_IDS: &[&str] = &[
-    "ctox",
-    "appsec-pentest",
-    "knowledge",
-    "app-store",
-    "desktop",
-    "reports",
-    "tickets",
-    "threads",
-];
+const SYSTEM_APPS_JSON: &str = include_str!("../../apps/business-os/system-apps.json");
 
 const APPSEC_MODULE_ID: &str = "appsec-pentest";
 const APPSEC_BUSINESS_OS_COLLECTIONS: &[&str] = &[
@@ -77,32 +68,6 @@ const APPSEC_BUSINESS_OS_COLLECTIONS: &[&str] = &[
     "appsec_scanner_inventory",
     "appsec_approvals",
 ];
-const STARTER_MODULE_IDS: &[&str] = &[
-    // Generic productivity apps shipped on every instance.
-    "documents",
-    "spreadsheets",
-    "calendar",
-    "notes",
-    "research",
-    // Recruiting / ATS app set. Shipped as starter so a provisioned instance comes up
-    // with the full pipeline visible without per-instance scope patching that a release
-    // re-extraction would wipe.
-    "matching",
-    "cv-print-builder",
-    "intake",
-    "submissions",
-    "placements",
-    "interviews",
-    "nachweise",
-    "consent",
-    "esign",
-    "buchhaltung",
-    "customers",
-    "shiftflow",
-    "credentials",
-];
-const STARTER_DATA_GRANT_MODULE_IDS: &[&str] = &["cv-print-builder"];
-const STARTER_DATA_GRANT_ROLES: &[&str] = &["user", "founder"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -1561,70 +1526,22 @@ pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
             ids.push(id.to_owned());
         }
     }
+    for id in system_module_ids() {
+        if seen.insert(id.clone()) {
+            ids.push(id.clone());
+        }
+    }
     ids
 }
 
-const PROVISIONING_MODE_KEY: &str = "CTOX_BUSINESS_OS_PROVISIONING_MODE";
+// Compatibility-only state for older `ctox.module.set_visible` commands.
+// Visibility is no longer an installation mechanism: static core manifests,
+// runtime installed-modules/, and runtime local-modules/ are the three sources
+// of truth.
 const VISIBLE_MODULES_KEY: &str = "CTOX_BUSINESS_OS_VISIBLE_MODULES";
 
-/// Provisioning mode for this instance: `"base"` (a fresh instance comes up with
-/// only the core base set as tabs; everything else is installable from the app
-/// store) or `"legacy"` (every shipped module is a tab — the historical
-/// behaviour). Determined once, lazily, and persisted in the runtime store.
-///
-/// The determination ERRS TO `"legacy"`: any sign the instance has already been
-/// used (installed modules, more than a bootstrap user, module ACLs or recorded
-/// versions) classifies it legacy, so an upgrade never hides a live instance's
-/// apps. Only a genuinely empty, brand-new instance provisions as `"base"`.
-fn business_os_provisioning_mode(root: &Path, installed_app_root: &Path) -> String {
-    if let Some(mode) =
-        crate::inference::runtime_env::get_runtime_env_value(root, PROVISIONING_MODE_KEY)
-    {
-        let mode = mode.trim().to_ascii_lowercase();
-        if mode == "base" || mode == "legacy" {
-            return mode;
-        }
-    }
-    let mode = if instance_is_fresh(root, installed_app_root) {
-        "base"
-    } else {
-        "legacy"
-    };
-    let _ = crate::inference::runtime_env::set_runtime_env_value(root, PROVISIONING_MODE_KEY, mode);
-    mode.to_owned()
-}
-
-/// True only for an empty, never-used instance. Any error or any content errs to
-/// `false` (legacy), so the base-set reduction can never strip a used instance.
-fn instance_is_fresh(root: &Path, installed_app_root: &Path) -> bool {
-    if let Ok(entries) = fs::read_dir(installed_app_root.join("installed-modules")) {
-        for entry in entries.flatten() {
-            if entry.path().join("module.json").is_file() {
-                return false;
-            }
-        }
-    }
-    let Ok(conn) = open_store(root) else {
-        return false;
-    };
-    let users: i64 = conn
-        .query_row("SELECT COUNT(*) FROM business_users", [], |row| row.get(0))
-        .unwrap_or(1);
-    let acls: i64 = conn
-        .query_row("SELECT COUNT(*) FROM business_module_acl", [], |row| {
-            row.get(0)
-        })
-        .unwrap_or(1);
-    let versions: i64 = conn
-        .query_row("SELECT COUNT(*) FROM business_module_versions", [], |row| {
-            row.get(0)
-        })
-        .unwrap_or(1);
-    users <= 1 && acls == 0 && versions == 0
-}
-
-/// The set of non-core module ids this instance has explicitly installed as
-/// tabs (only meaningful in `"base"` mode; core modules are always tabs).
+/// Legacy tab-visibility state retained only so in-flight old commands can be
+/// completed idempotently during an upgrade.
 fn business_os_visible_modules(root: &Path) -> std::collections::BTreeSet<String> {
     let mut set = std::collections::BTreeSet::new();
     if let Some(raw) =
@@ -1657,43 +1574,18 @@ fn business_os_set_module_visible(
     Ok(())
 }
 
-/// Fold per-instance tab visibility into each projected module. A module is a
-/// tab when it is core, runtime-installed, explicitly installed (visible set),
-/// or the instance is legacy (show all). Non-visible modules still appear in the
-/// app store — they are just not launcher tabs.
+/// Every module that reaches the installed catalog is visible. Static non-core
+/// modules never reach this list; they stay in the marketplace until installed
+/// into `installed-modules/`. Operator-owned `local-modules/` are installed by
+/// directory presence. This makes filesystem placement the installation truth.
 fn augment_modules_with_instance_visibility(
-    root: &Path,
-    installed_app_root: &Path,
+    _root: &Path,
+    _installed_app_root: &Path,
     modules: &mut [Value],
 ) {
-    let mode = business_os_provisioning_mode(root, installed_app_root);
-    let legacy = mode != "base";
-    let visible_set = if legacy {
-        std::collections::BTreeSet::new()
-    } else {
-        business_os_visible_modules(root)
-    };
     for module in modules.iter_mut() {
-        let id = module
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let runtime_installed = module
-            .get("lifecycle")
-            .and_then(|lifecycle| lifecycle.get("runtime_installed"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        // Local (git-ignored, operator-placed) modules are always visible on
-        // their own instance: dropping the directory in place IS the install.
-        let local_module = module.get("source").and_then(Value::as_str) == Some("local");
-        let visible = legacy
-            || is_core_module(&id)
-            || runtime_installed
-            || local_module
-            || visible_set.contains(&id);
         if let Some(object) = module.as_object_mut() {
-            object.insert("instance_visible".to_owned(), Value::Bool(visible));
+            object.insert("instance_visible".to_owned(), Value::Bool(true));
         }
     }
 }
@@ -3801,6 +3693,12 @@ fn module_is_runtime_installed(manifest: &ModuleManifest) -> bool {
         || manifest.entry.trim().starts_with("installed-modules/")
 }
 
+fn module_is_local(manifest: &ModuleManifest) -> bool {
+    manifest.source == "local"
+        || manifest.install_scope == "local"
+        || manifest.entry.trim().starts_with("local-modules/")
+}
+
 fn lifecycle_declared_string(module: &Value, key: &str) -> Option<String> {
     module
         .get("lifecycle")
@@ -3839,73 +3737,6 @@ fn legacy_preview_audience_grant_id(module_id: &str, user_id: &str) -> String {
         .collect::<String>();
     let module_slug = source_sanitize_slug(module_id);
     format!("legacy_preview_app_view_{module_slug}_{suffix}")
-}
-
-fn is_starter_data_grant_module(id: &str) -> bool {
-    STARTER_DATA_GRANT_MODULE_IDS
-        .iter()
-        .any(|module_id| id == *module_id)
-}
-
-fn starter_data_grant_id(module_id: &str, role: &str, permission: BusinessOsPermission) -> String {
-    let module_slug = source_sanitize_slug(module_id);
-    let permission_slug = permission.as_str().replace('.', "_");
-    format!("starter_data_{module_slug}_{role}_{permission_slug}")
-}
-
-fn backfill_starter_module_data_grants(
-    root: &Path,
-    modules: &[ModuleManifest],
-) -> anyhow::Result<usize> {
-    let conn = open_store(root)?;
-    let now = now_ms() as i64;
-    let mut inserted = 0usize;
-
-    for manifest in modules {
-        if !is_starter_data_grant_module(&manifest.id)
-            || module_is_runtime_installed(manifest)
-            || manifest.install_scope.trim() != "starter"
-            || manifest.collections.is_empty()
-        {
-            continue;
-        }
-        let module_id = manifest.id.trim();
-        for role in STARTER_DATA_GRANT_ROLES {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                let grant_id = starter_data_grant_id(module_id, role, permission);
-                inserted += conn.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
-                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
-                         active, reason, created_by, created_at_ms, updated_at_ms)
-                     SELECT ?1, 'role', ?2, ?3, 'module', ?4, 1, ?5, ?6, ?7, ?7
-                     WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM business_permission_grants
-                        WHERE active = 1
-                          AND subject_type = 'role'
-                          AND subject_id = ?2
-                          AND permission = ?3
-                          AND scope_type = 'module'
-                          AND scope_id = ?4
-                     )",
-                    params![
-                        grant_id,
-                        *role,
-                        permission.as_str(),
-                        module_id,
-                        "Packaged starter module data access for CV Print Builder",
-                        "ctox.starter_module.data_access.backfill",
-                        now
-                    ],
-                )?;
-            }
-        }
-    }
-
-    Ok(inserted)
 }
 
 fn backfill_manifest_preview_audience_grants(
@@ -4068,6 +3899,7 @@ fn projected_module_lifecycle(
 ) -> Value {
     let module_id = manifest.id.as_str();
     let runtime_installed = module_is_runtime_installed(manifest);
+    let local_module = module_is_local(manifest);
     let semver_major = parse_business_app_semver_major(&manifest.version);
     let valid_semver = semver_major.is_some();
     let explicit_state =
@@ -4197,7 +4029,8 @@ fn projected_module_lifecycle(
         "release_channel": release_channel,
         "current_semver": if valid_semver { Value::String(manifest.version.trim().to_owned()) } else { Value::Null },
         "runtime_installed": runtime_installed,
-        "public": !runtime_installed || visibility_state == "team",
+        "local_module": local_module,
+        "public": !local_module && (!runtime_installed || visibility_state == "team"),
         "creator_user_id": creator_user_id,
         "responsible_user_ids": responsible_user_ids,
         "preview_grant_ids": preview_grant_ids,
@@ -6385,7 +6218,6 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let modules = load_module_manifests(&app_root, &installed_app_root)?;
     backfill_manifest_preview_audience_grants(root, &modules)?;
-    backfill_starter_module_data_grants(root, &modules)?;
     backfill_semver_public_release_records(root, &modules)?;
     let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
@@ -10401,36 +10233,62 @@ fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
     format!("{base}-{}", Uuid::new_v4())
 }
 
-fn is_core_module(id: &str) -> bool {
-    CORE_MODULE_IDS.iter().any(|core| id == *core)
+pub(super) fn is_core_module(id: &str) -> bool {
+    system_module_ids().iter().any(|core| id == core)
 }
 
-fn is_starter_module(id: &str) -> bool {
-    STARTER_MODULE_IDS.iter().any(|starter| id == *starter)
+fn system_module_ids() -> &'static [String] {
+    static IDS: OnceLock<Vec<String>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        let value: Value = serde_json::from_str(SYSTEM_APPS_JSON)
+            .expect("embedded Business OS system app manifest must be valid JSON");
+        let ids = value
+            .get("apps")
+            .and_then(Value::as_array)
+            .expect("embedded Business OS system app manifest must contain an apps array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .expect("embedded Business OS system app ids must be non-empty strings")
+            })
+            .collect::<Vec<_>>();
+        let unique = ids.iter().collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "embedded Business OS system app ids must be unique"
+        );
+        ids
+    })
 }
 
 fn module_install_scope(manifest: &ModuleManifest) -> String {
     let explicit = manifest.install_scope.trim().to_ascii_lowercase();
-    if is_starter_module(&manifest.id) && explicit == "store" {
-        return "starter".to_owned();
+    // System membership is defined only by the embedded canonical manifest.
+    // A module cannot promote itself to system status through module.json.
+    if is_core_module(&manifest.id) {
+        return "core".to_owned();
+    }
+    // `starter` is a retired compatibility value. Treat old manifests as
+    // marketplace apps instead of silently installing them on every instance.
+    if matches!(explicit.as_str(), "core" | "starter") {
+        return "store".to_owned();
     }
     if matches!(
         explicit.as_str(),
-        "core" | "starter" | "store" | "internal" | "installed"
+        "store" | "internal" | "installed" | "local"
     ) {
         return explicit;
     }
-    if is_core_module(&manifest.id) {
-        "core".to_owned()
-    } else if is_starter_module(&manifest.id) {
-        "starter".to_owned()
-    } else {
-        "store".to_owned()
-    }
+    "store".to_owned()
 }
 
 fn module_ships_on_first_install(scope: &str) -> bool {
-    matches!(scope, "core" | "starter" | "internal")
+    matches!(scope, "core" | "internal")
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
@@ -43353,28 +43211,23 @@ mod tests {
     }
 
     #[test]
-    fn instance_visibility_base_then_install() -> anyhow::Result<()> {
+    fn installed_catalog_visibility_does_not_depend_on_instance_history() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let _conn = open_store(root)?;
         let installed_app_root = resolve_business_os_installed_app_root(root);
-
-        // An empty, brand-new instance provisions as the minimal base set.
-        assert_eq!(
-            business_os_provisioning_mode(root, &installed_app_root),
-            "base"
-        );
 
         let mut modules = vec![
             serde_json::json!({"id": "ctox", "lifecycle": {"runtime_installed": false}}),
             serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}}),
         ];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
-        assert_eq!(modules[0]["instance_visible"], Value::Bool(true)); // core base set
-        assert_eq!(modules[1]["instance_visible"], Value::Bool(false)); // non-core, not installed
+        assert_eq!(modules[0]["instance_visible"], Value::Bool(true));
+        assert_eq!(modules[1]["instance_visible"], Value::Bool(true));
 
-        // Installing a catalog module as a tab makes it visible.
-        business_os_set_module_visible(root, "matching", true)?;
+        // Old visibility commands are compatibility-only and cannot change the
+        // filesystem-backed installed catalog.
+        business_os_set_module_visible(root, "matching", false)?;
         let mut after =
             vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut after);
@@ -43383,26 +43236,77 @@ mod tests {
     }
 
     #[test]
-    fn instance_with_content_stays_legacy() -> anyhow::Result<()> {
-        let temp = tempdir()?;
-        let root = temp.path();
-        let conn = open_store(root)?;
-        // A used instance (more than a bootstrap user) must keep every app.
-        conn.execute(
-            "INSERT INTO business_users
-                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
-             VALUES ('a','A','admin',1,1,1), ('b','B','user',1,1,1)",
-            [],
-        )?;
-        let installed_app_root = resolve_business_os_installed_app_root(root);
-        assert_eq!(
-            business_os_provisioning_mode(root, &installed_app_root),
-            "legacy"
+    fn local_module_lifecycle_is_instance_private_not_packaged_public() -> anyhow::Result<()> {
+        let manifest: ModuleManifest = serde_json::from_value(serde_json::json!({
+            "id": "thesen-outbound",
+            "title": "THESEN Outbound",
+            "version": "0.3.12",
+            "source": "local",
+            "install_scope": "local",
+            "entry": "local-modules/thesen-outbound/index.html"
+        }))?;
+        let module_value = serde_json::to_value(&manifest)?;
+        let lifecycle = projected_module_lifecycle(
+            &manifest,
+            &module_value,
+            &ModuleLifecycleProjectionContext::default(),
+            &serde_json::json!({}),
         );
-        let mut modules =
-            vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
-        augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
-        assert_eq!(modules[0]["instance_visible"], Value::Bool(true));
+        assert_eq!(
+            lifecycle.get("visibility_state").and_then(Value::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            lifecycle.get("audience").and_then(Value::as_str),
+            Some("instance")
+        );
+        assert_eq!(
+            lifecycle.get("local_module").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            lifecycle.get("public").and_then(Value::as_bool),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_core_manifests_match_canonical_system_app_manifest() -> anyhow::Result<()> {
+        let modules_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/apps/business-os/modules");
+        let mut manifest_ids = BTreeSet::new();
+        for entry in fs::read_dir(&modules_root)? {
+            let path = entry?.path().join("module.json");
+            if !path.is_file() {
+                continue;
+            }
+            let manifest: ModuleManifest = serde_json::from_slice(&fs::read(path)?)?;
+            if module_install_scope(&manifest) == "core" {
+                manifest_ids.insert(manifest.id);
+            }
+        }
+        let canonical_ids = system_module_ids().iter().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(canonical_ids.len(), 10);
+        assert_eq!(manifest_ids, canonical_ids);
+        let marketplace = load_marketplace_module_manifests(
+            modules_root.parent().context("Business OS source root")?,
+        )?;
+        assert_eq!(marketplace.len(), 24);
+        let invalid_marketplace = marketplace
+            .iter()
+            .filter(|module| {
+                module.get("install_scope").and_then(Value::as_str) != Some("store")
+                    || module
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| canonical_ids.contains(id))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            invalid_marketplace.is_empty(),
+            "invalid marketplace entries: {invalid_marketplace:#?}"
+        );
         Ok(())
     }
 
@@ -56869,7 +56773,7 @@ mod tests {
     }
 
     #[test]
-    fn module_catalog_projection_includes_packaged_research() -> anyhow::Result<()> {
+    fn module_catalog_keeps_uninstalled_research_in_marketplace() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");
@@ -56894,18 +56798,24 @@ mod tests {
             |row| row.get(0),
         )?;
         let catalog: Value = serde_json::from_str(&catalog_json)?;
-        let research = catalog
+        assert!(!catalog
             .get("modules")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        let research = catalog
+            .get("marketplace")
             .and_then(Value::as_array)
             .and_then(|modules| {
                 modules
                     .iter()
                     .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
             })
-            .expect("packaged research module missing from projected catalog");
+            .expect("research store app missing from projected marketplace");
         assert_eq!(
             research.get("install_scope").and_then(Value::as_str),
-            Some("starter")
+            Some("store")
         );
         assert_eq!(
             research.get("entry").and_then(Value::as_str),
@@ -56919,12 +56829,12 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");
-        let module_dir = app_root.join("modules/research");
+        let module_dir = app_root.join("modules/ctox");
         fs::create_dir_all(&module_dir)?;
         fs::write(app_root.join("index.html"), "<!doctype html>")?;
         fs::write(
             module_dir.join("module.json"),
-            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"store"}"#,
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core","launch_kind":"desktop-app","presentation":{"default_mode":"window","supported_modes":["window","maximized","focus"],"initial_size":{"width":1280,"height":820},"minimum_size":{"width":640,"height":480},"multi_instance":false,"auto_restore":false}}"#,
         )?;
         fs::write(module_dir.join("index.js"), "export const marker = 'one';")?;
 
@@ -56935,9 +56845,9 @@ mod tests {
             .and_then(|modules| {
                 modules
                     .iter()
-                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("ctox"))
             })
-            .context("first research module projection")?;
+            .context("first ctox module projection")?;
         let first_revision = first_module
             .get("asset_revision")
             .and_then(Value::as_str)
@@ -56948,6 +56858,18 @@ mod tests {
             .and_then(Value::as_str)
             .context("manifest sha")?
             .to_owned();
+        assert_eq!(
+            first_module.get("launch_kind").and_then(Value::as_str),
+            Some("desktop-app")
+        );
+        assert_eq!(
+            first_module
+                .get("presentation")
+                .and_then(|value| value.get("minimum_size"))
+                .and_then(|value| value.get("width"))
+                .and_then(Value::as_u64),
+            Some(640)
+        );
 
         fs::write(module_dir.join("index.js"), "export const marker = 'two';")?;
 
@@ -56958,9 +56880,9 @@ mod tests {
             .and_then(|modules| {
                 modules
                     .iter()
-                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("ctox"))
             })
-            .context("second research module projection")?;
+            .context("second ctox module projection")?;
         let second_revision = second_module
             .get("asset_revision")
             .and_then(Value::as_str)
@@ -56975,7 +56897,7 @@ mod tests {
     }
 
     #[test]
-    fn module_catalog_backfills_cv_print_builder_starter_data_grants() -> anyhow::Result<()> {
+    fn module_catalog_does_not_install_or_grant_uninstalled_store_apps() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");
@@ -56996,16 +56918,18 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        let cv_print_builder = modules
-            .iter()
-            .find(|module| module.get("id").and_then(Value::as_str) == Some("cv-print-builder"))
-            .context("cv-print-builder module projection")?;
-        assert_eq!(
-            cv_print_builder
-                .get("install_scope")
-                .and_then(Value::as_str),
-            Some("starter")
-        );
+        assert!(!modules.iter().any(|module| {
+            module.get("id").and_then(Value::as_str) == Some("cv-print-builder")
+        }));
+        assert!(catalog
+            .get("marketplace")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|module| {
+                module.get("id").and_then(Value::as_str) == Some("cv-print-builder")
+                    && module.get("install_scope").and_then(Value::as_str) == Some("store")
+            }));
 
         let conn = open_store(root)?;
         let count: i64 = conn.query_row(
@@ -57023,7 +56947,7 @@ mod tests {
             ],
             |row| row.get(0),
         )?;
-        assert_eq!(count, 4);
+        assert_eq!(count, 0);
         drop(conn);
 
         let catalog_again = module_catalog_for_rxdb(root)?;
@@ -57043,17 +56967,14 @@ mod tests {
             ],
             |row| row.get(0),
         )?;
-        assert_eq!(count_again, 4);
+        assert_eq!(count_again, 0);
 
         let explicit_grants = catalog_again
             .pointer("/governance/permission_model/explicit_grants")
             .and_then(Value::as_array)
             .context("explicit grants projection")?;
-        assert!(explicit_grants.iter().any(|grant| {
+        assert!(!explicit_grants.iter().any(|grant| {
             grant.get("subject_type").and_then(Value::as_str) == Some("role")
-                && grant.get("subject_id").and_then(Value::as_str) == Some("founder")
-                && grant.get("permission").and_then(Value::as_str)
-                    == Some(BusinessOsPermission::DataWrite.as_str())
                 && grant.get("scope_type").and_then(Value::as_str) == Some("module")
                 && grant.get("scope_id").and_then(Value::as_str) == Some("cv-print-builder")
         }));

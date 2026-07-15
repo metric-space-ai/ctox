@@ -76,11 +76,19 @@ struct ModuleManifest {
     #[serde(default)]
     store: Value,
     #[serde(default)]
+    install_scope: String,
+    #[serde(default)]
+    default_installed: bool,
+    #[serde(default)]
     entry: String,
     #[serde(default)]
     collections: Vec<String>,
     #[serde(default)]
     layout: Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    launch_kind: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    presentation: Value,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     icon: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1812,36 +1820,50 @@ fn load_module_manifests(
     let app_root = source_app_root;
     let modules_root = app_root.join("modules");
     let mut manifests = Vec::new();
-    if !modules_root.is_dir() {
-        return load_installed_module_manifests(installed_app_root);
-    }
-    for entry in fs::read_dir(&modules_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
+    if modules_root.is_dir() {
+        for entry in fs::read_dir(&modules_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("module.json");
+            if !path.is_file() {
+                continue;
+            }
+            let text = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+            let mut manifest: ModuleManifest = serde_json::from_str(&text)
+                .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+            manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+            manifest.local_manifest_path = path.display().to_string();
+            backfill_local_module_icon(&mut manifest, &entry.path());
+            if manifest.entry.is_empty() {
+                manifest.entry = format!("modules/{}/index.html", manifest.id);
+            }
+            let declared_scope = manifest.install_scope.trim().to_ascii_lowercase();
+            let scope = match (store::is_core_module(&manifest.id), declared_scope.as_str()) {
+                (true, _) => "core",
+                (false, "internal") => "internal",
+                // `starter` is retired; old manifests remain marketplace apps.
+                _ => continue,
+            };
+            let core = scope == "core";
+            manifest.install_scope = scope.to_owned();
+            manifest.default_installed = true;
+            manifest.source = scope.to_owned();
+            manifest.core = core;
+            manifest.editable = true;
+            manifest.deletable = !core;
+            manifests.push(manifest);
         }
-        let path = entry.path().join("module.json");
-        if !path.is_file() {
-            continue;
-        }
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read module manifest {}", path.display()))?;
-        let mut manifest: ModuleManifest = serde_json::from_str(&text)
-            .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
-        manifest.manifest_sha256 = hex_sha256(text.as_bytes());
-        manifest.local_manifest_path = path.display().to_string();
-        backfill_local_module_icon(&mut manifest, &entry.path());
-        if manifest.entry.is_empty() {
-            manifest.entry = format!("modules/{}/index.html", manifest.id);
-        }
-        let core = is_core_module(&manifest.id);
-        manifest.source = if core { "core" } else { "local" }.to_owned();
-        manifest.core = core;
-        manifest.editable = true;
-        manifest.deletable = !core;
-        manifests.push(manifest);
     }
     for manifest in load_installed_module_manifests(installed_app_root)? {
+        if manifests.iter().any(|existing| existing.id == manifest.id) {
+            continue;
+        }
+        manifests.push(manifest);
+    }
+    for manifest in load_local_module_manifests(installed_app_root)? {
         if manifests.iter().any(|existing| existing.id == manifest.id) {
             continue;
         }
@@ -1878,16 +1900,55 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
         manifest.manifest_sha256 = hex_sha256(text.as_bytes());
         manifest.local_manifest_path = path.display().to_string();
         backfill_local_module_icon(&mut manifest, &entry.path());
-        if is_core_module(&manifest.id) {
+        if store::is_core_module(&manifest.id) {
             continue;
         }
         if manifest.entry.is_empty() {
             manifest.entry = format!("installed-modules/{}/index.html", manifest.id);
         }
         manifest.source = "installed".to_owned();
+        manifest.install_scope = "installed".to_owned();
+        manifest.default_installed = false;
         manifest.core = false;
         manifest.editable = true;
         manifest.deletable = true;
+        manifests.push(manifest);
+    }
+    Ok(manifests)
+}
+
+fn load_local_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+    let modules_root = app_root.join("local-modules");
+    let mut manifests = Vec::new();
+    if !modules_root.is_dir() {
+        return Ok(manifests);
+    }
+    for entry in fs::read_dir(&modules_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("module.json");
+        if !path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+        let mut manifest: ModuleManifest = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.local_manifest_path = path.display().to_string();
+        backfill_local_module_icon(&mut manifest, &entry.path());
+        if store::is_core_module(&manifest.id) {
+            continue;
+        }
+        manifest.entry = format!("local-modules/{}/index.html", manifest.id);
+        manifest.source = "local".to_owned();
+        manifest.install_scope = "local".to_owned();
+        manifest.default_installed = false;
+        manifest.core = false;
+        manifest.editable = true;
+        manifest.deletable = false;
         manifests.push(manifest);
     }
     Ok(manifests)
@@ -2073,7 +2134,7 @@ fn upsert_module_manifest(
     if title.is_empty() {
         anyhow::bail!("module title is required");
     }
-    let is_core = is_core_module(&module_id);
+    let is_core = store::is_core_module(&module_id);
     let target = if is_core {
         source_app_root.join("modules").join(&module_id)
     } else {
@@ -2137,7 +2198,7 @@ fn delete_installed_module(
     if module_id.is_empty() {
         anyhow::bail!("module id is required");
     }
-    if is_core_module(&module_id) {
+    if store::is_core_module(&module_id) {
         anyhow::bail!("core modules cannot be deleted");
     }
     let target = app_root.join("installed-modules").join(&module_id);
@@ -2916,25 +2977,32 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         let html = String::from_utf8(bytes).context("Business OS index.html is not UTF-8")?;
         bytes = inject_launch_context(html, &session, sync_config.as_ref())?.into_bytes();
     }
-    // Cache policy. index.html carries per-session injected launch context
-    // and must never be cached. Every other static asset is immutable per
-    // URL: the shell imports JS/CSS through `?v=` cache-busters and bumps
-    // them on change, so versioned URLs can be cached forever. Blanket
-    // `no-store` here forced the browser to re-download the entire module
-    // import graph on every app/module switch — behind a managed edge with
-    // ~2s TTFB per request that turned every switch into multiple seconds.
-    let cache_control = if is_index {
-        "no-store"
-    } else if request.url().contains("?v=") || request.url().contains("&v=") {
-        "public, max-age=31536000, immutable"
-    } else {
-        // Unversioned asset fetches (locale JSON, favicons, direct GETs):
-        // short-lived cache with background revalidation keeps switches
-        // local while hot-deploys still land within minutes.
-        "public, max-age=300, stale-while-revalidate=86400"
-    };
+    let cache_control = business_os_static_cache_control(is_index, &rel, request.url());
     respond_static_success(request, &bytes, mime, cache_control)?;
     Ok(())
+}
+
+fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str) -> &'static str {
+    if is_index {
+        return "no-store";
+    }
+
+    // Runtime apps are replaced atomically at a stable tenant-local path.
+    // Their revision query changes for a new catalog, but an already-open
+    // shell can still request the previous URL. Revalidation prevents that
+    // shell from mixing a cached old entry module with the new dependency
+    // tree after a release.
+    if rel.starts_with("installed-modules/") || rel.starts_with("local-modules/") {
+        return "no-cache, must-revalidate";
+    }
+
+    // Packaged shell assets are immutable per URL: their `?v=` cache-buster
+    // is changed with the release.
+    if request_url.contains("?v=") || request_url.contains("&v=") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=300, stale-while-revalidate=86400"
+    }
 }
 
 fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
@@ -3170,6 +3238,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bootstrap_module_loader_uses_system_installed_and_local_sources_only() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let source_root = temp.path().join("source");
+        let runtime_root = temp.path().join("runtime");
+        for (id, scope) in [
+            ("ctox", "store"),
+            ("research", "store"),
+            ("rogue-system", "core"),
+        ] {
+            let dir = source_root.join("modules").join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id,
+                    "title": id,
+                    "install_scope": scope
+                }))?,
+            )?;
+        }
+        for (directory, id, scope) in [
+            ("installed-modules", "public-addon", "installed"),
+            ("local-modules", "private-addon", "local"),
+        ] {
+            let dir = runtime_root.join(directory).join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id,
+                    "title": id,
+                    "install_scope": scope
+                }))?,
+            )?;
+        }
+
+        let modules = load_module_manifests(&source_root, &runtime_root)?;
+        let by_id = modules
+            .into_iter()
+            .map(|module| (module.id.clone(), module))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            by_id
+                .get("ctox")
+                .map(|module| module.install_scope.as_str()),
+            Some("core")
+        );
+        assert_eq!(
+            by_id
+                .get("public-addon")
+                .map(|module| module.install_scope.as_str()),
+            Some("installed")
+        );
+        assert_eq!(
+            by_id
+                .get("private-addon")
+                .map(|module| module.install_scope.as_str()),
+            Some("local")
+        );
+        assert!(!by_id.contains_key("research"));
+        assert!(!by_id.contains_key("rogue-system"));
+        Ok(())
+    }
+
+    #[test]
     fn local_dev_session_host_gate_is_loopback_only() {
         assert!(host_header_allows_local_dev_session("localhost:8765"));
         assert!(host_header_allows_local_dev_session("dev.localhost:8765"));
@@ -3333,6 +3467,34 @@ mod tests {
         assert!(raw.contains("\r\nContent-Length: 18\r\n"));
         assert!(raw.contains("\r\nConnection: close\r\n"));
         assert!(raw.ends_with("\r\n\r\nconsole.log('ok');"));
+    }
+
+    #[test]
+    fn tenant_runtime_module_assets_are_revalidated_across_releases() {
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "installed-modules/sellify/index.js",
+                "/installed-modules/sellify/index.js?v=shell_0.4.27"
+            ),
+            "no-cache, must-revalidate"
+        );
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "local-modules/thesen-outbound/core/view.js",
+                "/local-modules/thesen-outbound/core/view.js?v=0.3.17"
+            ),
+            "no-cache, must-revalidate"
+        );
+        assert_eq!(
+            business_os_static_cache_control(
+                false,
+                "modules/calendar/index.js",
+                "/modules/calendar/index.js?v=shell-release"
+            ),
+            "public, max-age=31536000, immutable"
+        );
     }
 
     #[test]

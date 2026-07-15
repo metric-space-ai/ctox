@@ -10,7 +10,6 @@
     "credentials",
     "app-store",
     "creator",
-    "reports",
-    "appsec-pentest"
+    "reports"
   ]
 }

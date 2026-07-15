@@ -52,7 +52,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260715-documents-mail-merge-v98';
+const APP_BUILD = '20260715-app-lifecycle-v99';
 
 ensureShellStylesheets();
 
@@ -8780,6 +8780,32 @@ function isSystemModule(mod) {
   return mod?.core === true || String(mod?.install_scope || '').trim() === 'core';
 }
 
+let canonicalSystemModuleIdsPromise = null;
+
+async function loadCanonicalSystemModuleIds() {
+  if (!canonicalSystemModuleIdsPromise) {
+    canonicalSystemModuleIdsPromise = fetch(`system-apps.json?v=${APP_BUILD}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`system app manifest request failed (${response.status})`);
+        }
+        const manifest = await response.json();
+        const ids = Array.isArray(manifest?.apps)
+          ? manifest.apps.map((id) => String(id || '').trim()).filter(Boolean)
+          : [];
+        if (!ids.length || new Set(ids).size !== ids.length) {
+          throw new Error('system app manifest must contain unique app ids');
+        }
+        return new Set(ids);
+      })
+      .catch((error) => {
+        canonicalSystemModuleIdsPromise = null;
+        throw error;
+      });
+  }
+  return canonicalSystemModuleIdsPromise;
+}
+
 function moduleBelongsInInstalledCatalog(mod, canonicalSystemIds = null) {
   const id = String(mod?.id || '').trim();
   const scope = String(mod?.install_scope || '').trim();
@@ -9508,6 +9534,7 @@ function getOfflineFallbackCatalog() {
 
 async function loadPackagedModuleCatalog() {
   const exposeCompleteQaCatalog = allowsCompleteQaModuleCatalog();
+  const canonicalSystemIds = await loadCanonicalSystemModuleIds();
   try {
     const response = await fetch(`modules/registry.json?v=${APP_BUILD}`, { cache: 'no-store' });
     if (response.ok) {
@@ -9519,7 +9546,7 @@ async function loadPackagedModuleCatalog() {
           ok: catalog.ok !== false,
           modules: await withPackagedModuleAssetRevisions(
             catalog.modules
-              .filter((mod) => exposeCompleteQaCatalog || isSystemModule(mod))
+              .filter((mod) => exposeCompleteQaCatalog || canonicalSystemIds.has(String(mod?.id || '').trim()))
               .map((mod) => exposeCompleteQaCatalog ? {
                 ...mod,
                 runtime_installed: true,
@@ -9541,7 +9568,7 @@ async function loadPackagedModuleCatalog() {
     ...fallback,
     modules: await withPackagedModuleAssetRevisions(
       fallback.modules
-        .filter((mod) => exposeCompleteQaCatalog || isSystemModule(mod))
+        .filter((mod) => exposeCompleteQaCatalog || canonicalSystemIds.has(String(mod?.id || '').trim()))
         .map((mod) => exposeCompleteQaCatalog ? {
           ...mod,
           runtime_installed: true,
