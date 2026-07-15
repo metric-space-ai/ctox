@@ -89,6 +89,27 @@ test('settings appearance tab renders admin branding controls', () => {
   assert.match(html, /Acme Corporate/);
 });
 
+test('compact settings tabs expose their complete labels on hover and to assistive technology', () => {
+  const html = baseTemplate({ tab: 'runtime' });
+  const expectedTabs = [
+    ['runtime', 'Runtime'],
+    ['channels', 'Channels'],
+    ['sync', 'Sync'],
+    ['appearance', 'Design'],
+    ['mcp', 'MCP'],
+    ['users', 'Nutzer'],
+    ['activity', 'Aktivität'],
+    ['admin', 'Module'],
+  ];
+
+  for (const [id, label] of expectedTabs) {
+    assert.match(
+      html,
+      new RegExp(`data-settings-tab="${id}" title="${label}" aria-label="${label}"`),
+    );
+  }
+});
+
 test('settings appearance tab hides when branding permission is absent', () => {
   const html = baseTemplate({
     tab: 'runtime',

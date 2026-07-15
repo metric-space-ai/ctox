@@ -1930,7 +1930,8 @@ function settingsCommand(type, root, { syncConfig }) {
 }
 
 function tabButton(id, label, active) {
-  return `<button type="button" data-settings-tab="${escapeAttr(id)}" ${id === active ? 'aria-current="page"' : ''}>${escapeHtml(label)}</button>`;
+  const accessibleLabel = escapeAttr(label);
+  return `<button type="button" data-settings-tab="${escapeAttr(id)}" title="${accessibleLabel}" aria-label="${accessibleLabel}" ${id === active ? 'aria-current="page"' : ''}>${escapeHtml(label)}</button>`;
 }
 
 function option(value, label, selected) {
