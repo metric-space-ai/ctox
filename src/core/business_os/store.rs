@@ -37282,7 +37282,7 @@ fn handle_appsec_business_command(
     push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
     match command.command_type.as_str() {
         "ctox.appsec.state.sync" => {
-            args.extend(["state", "status", "--sync", "--json"].map(str::to_string));
+            args.extend(["review", "--json"].map(str::to_string));
         }
         "ctox.appsec.review" => {
             args.extend(["review", "--json"].map(str::to_string));

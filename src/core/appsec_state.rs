@@ -714,6 +714,7 @@ fn project_artifacts(
     now: u128,
 ) -> Result<usize> {
     let mut paths = list_json_files_recursive(state_dir)?;
+    paths.extend(list_issue_bundle_files(state_dir)?);
     collect_output_artifact_paths(output, &mut paths);
     paths.sort();
     paths.dedup();
@@ -765,6 +766,37 @@ fn project_artifacts(
         count += 1;
     }
     Ok(count)
+}
+
+fn list_issue_bundle_files(state_dir: &Path) -> Result<Vec<PathBuf>> {
+    let root = state_dir.join("reports").join("issue-bundles");
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    const ALLOWED: &[&str] = &[
+        "reproduce.py",
+        "github-issue.md",
+        "README.md",
+        "requirements.txt",
+    ];
+    let mut files = Vec::new();
+    for entry in
+        fs::read_dir(&root).with_context(|| format!("failed to read {}", root.display()))?
+    {
+        let entry = entry?;
+        let bundle = entry.path();
+        if !bundle.is_dir() {
+            continue;
+        }
+        for name in ALLOWED {
+            let path = bundle.join(name);
+            if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn project_findings(conn: &Connection, state_dir: &Path, now: u128) -> Result<usize> {
@@ -1675,6 +1707,14 @@ mod tests {
             r#"[{"id":"F-001","title":"Demo","severity":"high","category":"idor","status":"candidate","target":"https://example.test","evidence_artifact":"authz/demo.json"}]"#,
         )
         .unwrap();
+        let issue_bundle = state.join("reports/issue-bundles/f-001-demo");
+        fs::create_dir_all(&issue_bundle).unwrap();
+        fs::write(
+            issue_bundle.join("reproduce.py"),
+            "print('bounded proof')\n",
+        )
+        .unwrap();
+        fs::write(issue_bundle.join("github-issue.md"), "# Demo\n").unwrap();
         fs::write(
             state.join("tool-inventory.json"),
             r#"{"version":"ctox.appsec_pentest.tools.v1","profile":"standard","tools":[{"id":"httpx","available":true,"status":"available","path":"/tmp/httpx","detected_version":"v1"}]}"#,
@@ -1760,6 +1800,17 @@ mod tests {
             .optional()
             .unwrap();
         assert!(sha.is_some_and(|value| value.len() == 64));
+        let reproduce_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM appsec_artifacts WHERE artifact_path LIKE '%reproduce.py'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            reproduce_count, 1,
+            "reproduce.py must be projected as proof metadata"
+        );
 
         let projected_finding = crate::business_os::store::pull_collection_record(
             root.path(),
