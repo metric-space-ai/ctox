@@ -10,6 +10,7 @@ const state = {
   appArchetype: 'record-workbench',
   appLayout: '',
   appCollections: [],
+  inspirationUrls: [],
   appVersion: '0.1.0',
   contextMenu: null,
   contextMenuCleanup: null,
@@ -21,6 +22,59 @@ const state = {
   creatorRequests: [],
   isDeploying: false
 };
+
+export const CREATOR_PROMPT_EXAMPLES = Object.freeze([
+  {
+    id: 'crm',
+    de: { title: 'Kunden & Kontakte', hint: 'CRM mit Suche, Status und Aktivitäten', prompt: 'Erstelle eine schlanke CRM-App für Kunden und Kontakte. Links stehen Suche, Statusfilter und Kundenliste. In der Hauptansicht sehe und bearbeite ich Kontaktdaten, Notizen, nächste Schritte und den aktuellen Status. Ergänze eine Aktivitätschronik und eine klare Aktion „Follow-up an CTOX delegieren“.' },
+    en: { title: 'Customers & contacts', hint: 'CRM with search, status, and activity', prompt: 'Create a focused CRM app for customers and contacts. Put search, status filters, and the customer list on the left. The main view should show and edit contact details, notes, next steps, and current status. Add an activity timeline and one clear action to delegate a follow-up to CTOX.' },
+  },
+  {
+    id: 'support',
+    de: { title: 'Support Desk', hint: 'Tickets priorisieren und bearbeiten', prompt: 'Erstelle eine Support-Desk-App. Links brauche ich Ticketliste, Suche sowie Filter für offen, wartend und gelöst. Die Hauptansicht zeigt Beschreibung, Kunde, Priorität, Verlauf und Antwortentwurf. Ergänze Statuswechsel, Zuweisung und eine Aktion, mit der CTOX eine Antwort vorbereitet.' },
+    en: { title: 'Support desk', hint: 'Prioritize and resolve tickets', prompt: 'Create a support desk app. The left side needs a ticket list, search, and filters for open, waiting, and resolved. The main view should show description, customer, priority, history, and reply draft. Add status changes, assignment, and an action for CTOX to prepare a reply.' },
+  },
+  {
+    id: 'inventory',
+    de: { title: 'Lager & Bestand', hint: 'Artikel, Mengen und Warnungen', prompt: 'Erstelle eine Lager-App für Artikel und Bestände. Links stehen Artikelsuche, Kategorien und Filter für niedrigen Bestand. In der Hauptansicht sehe ich Bestand, Lagerort, Mindestmenge und letzte Bewegungen. Ermögliche Zu- und Abgänge, CSV-Import und eine Warnung bei Unterschreitung.' },
+    en: { title: 'Inventory', hint: 'Items, quantities, and alerts', prompt: 'Create an inventory app for items and stock. Put item search, categories, and low-stock filters on the left. The main view should show stock, location, minimum quantity, and recent movements. Support stock adjustments, CSV import, and low-stock warnings.' },
+  },
+  {
+    id: 'projects',
+    de: { title: 'Projekt-Cockpit', hint: 'Aufgaben, Termine und Fortschritt', prompt: 'Erstelle ein Projekt-Cockpit. Links stehen Projekte und Filter nach Status. Die Hauptansicht zeigt Aufgaben, Meilensteine, Verantwortliche, Fälligkeiten und Fortschritt. Ergänze eine kompakte Timeline, überfällige Hinweise und eine Aktion, mit der CTOX die nächsten Schritte plant.' },
+    en: { title: 'Project cockpit', hint: 'Tasks, dates, and progress', prompt: 'Create a project cockpit. Put projects and status filters on the left. The main view should show tasks, milestones, owners, due dates, and progress. Add a compact timeline, overdue indicators, and an action for CTOX to plan the next steps.' },
+  },
+  {
+    id: 'recruiting',
+    de: { title: 'Bewerber-Pipeline', hint: 'Kandidaten durch Phasen führen', prompt: 'Erstelle eine Recruiting-App mit Kandidaten-Pipeline. Links stehen Stellen, Suche und Phasenfilter. Die Hauptansicht zeigt Profil, Bewertung, Notizen, Dokumente und Gesprächsverlauf. Kandidaten lassen sich in die nächste Phase bewegen; CTOX kann einen Interviewleitfaden erstellen.' },
+    en: { title: 'Hiring pipeline', hint: 'Move candidates through stages', prompt: 'Create a recruiting app with a candidate pipeline. Put jobs, search, and stage filters on the left. The main view should show profile, score, notes, documents, and interview history. Candidates can move to the next stage, and CTOX can prepare an interview guide.' },
+  },
+  {
+    id: 'expenses',
+    de: { title: 'Ausgaben-Freigabe', hint: 'Belege prüfen und genehmigen', prompt: 'Erstelle eine App zur Ausgabenfreigabe. Links stehen offene, genehmigte und abgelehnte Belege mit Suche. Die Hauptansicht zeigt Betrag, Kategorie, Kostenstelle, Belegvorschau und Prüfhinweise. Ergänze Genehmigen, Ablehnen und Rückfrage sowie einen vollständigen Entscheidungsverlauf.' },
+    en: { title: 'Expense approval', hint: 'Review and approve receipts', prompt: 'Create an expense approval app. Put searchable open, approved, and rejected receipts on the left. The main view should show amount, category, cost center, receipt preview, and review notes. Add approve, reject, and request-info actions with a complete decision history.' },
+  },
+  {
+    id: 'content',
+    de: { title: 'Content-Kalender', hint: 'Ideen planen und veröffentlichen', prompt: 'Erstelle einen Content-Kalender. Links stehen Kanäle, Suche und Statusfilter. Die Hauptansicht zeigt Inhalt, Veröffentlichungsdatum, Verantwortliche, Assets und Freigabestatus. Ergänze Kalender- und Listenansicht sowie eine Aktion, mit der CTOX einen Entwurf oder Varianten erstellt.' },
+    en: { title: 'Content calendar', hint: 'Plan ideas and publishing', prompt: 'Create a content calendar. Put channels, search, and status filters on the left. The main view should show content, publish date, owner, assets, and approval status. Add calendar and list views plus an action for CTOX to draft content or variants.' },
+  },
+  {
+    id: 'contracts',
+    de: { title: 'Verträge & Fristen', hint: 'Dokumente und Termine im Blick', prompt: 'Erstelle eine Vertragsverwaltung. Links stehen Vertragspartner, Suche und Filter für aktive, auslaufende und beendete Verträge. Die Hauptansicht zeigt Eckdaten, Dokumente, Laufzeit, Kündigungsfrist und Verantwortliche. Warne vor Fristen und lasse CTOX eine Verlängerung oder Kündigung vorbereiten.' },
+    en: { title: 'Contracts & deadlines', hint: 'Track documents and dates', prompt: 'Create a contract management app. Put counterparties, search, and filters for active, expiring, and ended contracts on the left. The main view should show key terms, documents, duration, notice period, and owner. Warn about deadlines and let CTOX prepare a renewal or termination.' },
+  },
+  {
+    id: 'field-service',
+    de: { title: 'Außendienst-Aufträge', hint: 'Einsätze planen und dokumentieren', prompt: 'Erstelle eine Außendienst-App. Links stehen heutige, geplante und abgeschlossene Einsätze mit Suche. Die Hauptansicht zeigt Kunde, Adresse, Termin, Checkliste, Fotos und Arbeitsbericht. Ergänze Statuswechsel, Zeiterfassung und eine mobile, schmale Darstellung.' },
+    en: { title: 'Field service', hint: 'Plan and document visits', prompt: 'Create a field service app. Put today’s, planned, and completed visits with search on the left. The main view should show customer, address, appointment, checklist, photos, and work report. Add status changes, time tracking, and a compact mobile layout.' },
+  },
+  {
+    id: 'research',
+    de: { title: 'Research-Bibliothek', hint: 'Quellen sammeln und bewerten', prompt: 'Erstelle eine Research-Bibliothek. Links stehen Themen, Suche und Quellenfilter. Die Hauptansicht zeigt Zusammenfassung, Quelle, Autor, Datum, Tags, Vertrauensbewertung und Notizen. Ergänze URL-Import, Duplikaterkennung und eine Aktion, mit der CTOX Quellen zusammenfasst und vergleicht.' },
+    en: { title: 'Research library', hint: 'Collect and evaluate sources', prompt: 'Create a research library. Put topics, search, and source filters on the left. The main view should show summary, source, author, date, tags, confidence score, and notes. Add URL import, duplicate detection, and an action for CTOX to summarize and compare sources.' },
+  },
+]);
 
 export function normalizeModuleId(value) {
   return String(value || '')
@@ -66,6 +120,19 @@ export function validateCreatorSpec({ appId, appTitle, appDesc, appCollections }
   const collections = Array.isArray(appCollections) ? appCollections.map(normalizeCollectionName).filter(Boolean) : [];
   if (collections.length > 6) errors.push('Zu viele Datentabellen als Vorgabe.');
   return errors;
+}
+
+export function normalizeInspirationUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
 }
 
 export function computeCreatorActionState({ request, appId, appTitle, appDesc, appCollections, isDeploying = false }) {
@@ -141,6 +208,14 @@ export function normalizeCreatorRequestSuggestions(commands, limit = 5) {
 export async function mount(ctx) {
   const streamGeneration = ++state.streamGeneration;
   state.ctx = ctx;
+  state.appId = '';
+  state.appTitle = '';
+  state.appDesc = '';
+  state.appCategory = '';
+  state.appArchetype = 'record-workbench';
+  state.appLayout = 'windowed';
+  state.appCollections = [];
+  state.inspirationUrls = [];
 
   // 1. Inject module scoped stylesheet dynamically
   await ensureStyles();
@@ -193,62 +268,8 @@ async function ensureStyles() {
   document.head.append(link);
 }
 
-function setupResizers(host) {
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handles in
-  // index.html declaratively (drag + keyboard + per-module localStorage). We must
-  // NOT DIY-wire them here or each handle gets double-wired. Return a no-op teardown;
-  // the mount() call site keeps a valid cleanup reference.
+function setupResizers() {
   return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  const containerEl = host.querySelector('[data-creator-root]') || host;
-  const resizers = [];
-  const configs = [
-    {
-      side: 'left',
-      selector: '[data-resizer="left"]',
-      cssVar: '--creator-left-width',
-      storageKey: 'ctox.creator.layout.leftWidth',
-      defaultWidth: 320,
-      minWidth: 260,
-      maxWidth: 550,
-    },
-    {
-      side: 'right',
-      selector: '[data-resizer="right"]',
-      cssVar: '--creator-right-width',
-      storageKey: 'ctox.creator.layout.rightWidth',
-      defaultWidth: 300,
-      minWidth: 240,
-      maxWidth: 520,
-    },
-  ];
-
-  for (const config of configs) {
-    const resizerEl = host.querySelector(config.selector);
-    if (!resizerEl) continue;
-
-    const savedWidth = parseInt(localStorage.getItem(config.storageKey) || '', 10);
-    const initialWidth = Number.isFinite(savedWidth) ? savedWidth : config.defaultWidth;
-    containerEl.style.setProperty(config.cssVar, `${initialWidth}px`);
-
-    resizers.push(new CtoxResizer({
-      resizerEl,
-      containerEl,
-      cssVar: config.cssVar,
-      side: config.side,
-      minWidth: config.minWidth,
-      maxWidth: config.maxWidth,
-      onResize: (width) => {
-        localStorage.setItem(config.storageKey, String(Math.round(width)));
-      }
-    }));
-  }
-
-  return () => {
-    for (const resizer of resizers) resizer.destroy();
-  };
 }
 
 async function startCreatorDataStreams(ctx, host, streamGeneration) {
@@ -389,25 +410,16 @@ function wireUi(host) {
   const btnDeploy = host.querySelector('#btn-deploy-app');
   const inputRequest = host.querySelector('#app-request-input');
   const requestDiagnostics = host.querySelector('#creator-request-diagnostics');
+  const inspirationInput = host.querySelector('#creator-inspiration-url');
+  const addInspirationButton = host.querySelector('#btn-add-inspiration');
+  const inspirationList = host.querySelector('[data-inspiration-list]');
+  const exampleList = host.querySelector('[data-example-prompts]');
   const syncDot = host.querySelector('#deploy-sync-dot');
   const syncText = host.querySelector('#deploy-sync-text');
   state.isDeploying = false;
 
-  // Accordion Expand/Collapse Trigger
-  const accordionTrigger = host.querySelector('#expert-accordion-btn');
-  const accordionContent = host.querySelector('#expert-accordion-content');
-  const accordionChevron = host.querySelector('.accordion-chevron');
-  accordionTrigger.addEventListener('click', () => {
-    const isCollapsed = accordionContent.classList.contains('is-collapsed');
-    accordionTrigger.setAttribute('aria-expanded', String(isCollapsed));
-    if (isCollapsed) {
-      accordionContent.classList.remove('is-collapsed');
-      accordionChevron.style.transform = 'rotate(180deg)';
-    } else {
-      accordionContent.classList.add('is-collapsed');
-      accordionChevron.style.transform = 'rotate(0deg)';
-    }
-  });
+  renderPromptExamples();
+  renderInspirationUrls();
 
   const syncStateFromInputs = () => {
     state.appId = normalizeModuleId(inputId.value);
@@ -450,6 +462,31 @@ function wireUi(host) {
 
   inputRequest.addEventListener('input', () => {
     updateCreatorActionState();
+  });
+
+  addInspirationButton.addEventListener('click', addInspirationUrl);
+  inspirationInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    addInspirationUrl();
+  });
+  inspirationList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-inspiration]');
+    if (!button) return;
+    state.inspirationUrls.splice(Number(button.dataset.removeInspiration), 1);
+    renderInspirationUrls();
+  });
+  exampleList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-example-id]');
+    if (!button) return;
+    const example = CREATOR_PROMPT_EXAMPLES.find((item) => item.id === button.dataset.exampleId);
+    if (!example) return;
+    const locale = state.ctx?.locale === 'en' ? 'en' : 'de';
+    inputRequest.value = example[locale].prompt;
+    if (!inputTitle.value.trim()) inputTitle.value = example[locale].title;
+    syncStateFromInputs();
+    inputRequest.focus();
+    inputRequest.setSelectionRange(inputRequest.value.length, inputRequest.value.length);
   });
 
   [inputId, inputTitle, inputDesc, selectCategory, selectArchetype, selectLayout].forEach(el => {
@@ -535,6 +572,41 @@ function wireUi(host) {
   renderCollectionsList(host);
   updateCreatorActionState();
 
+  function addInspirationUrl() {
+    const url = normalizeInspirationUrl(inspirationInput.value);
+    if (!url) {
+      state.ctx.notifications?.show?.({
+        type: 'warning',
+        title: state.t('invalidUrlTitle', 'URL prüfen'),
+        message: state.t('invalidUrlMessage', 'Bitte füge eine vollständige http- oder https-URL ein.'),
+      });
+      inspirationInput.focus();
+      return;
+    }
+    if (!state.inspirationUrls.includes(url)) state.inspirationUrls.push(url);
+    inspirationInput.value = '';
+    renderInspirationUrls();
+  }
+
+  function renderInspirationUrls() {
+    inspirationList.innerHTML = state.inspirationUrls.map((url, index) => `
+      <span class="creator-url-chip">
+        <span title="${escapeHtml(url)}">${escapeHtml(url)}</span>
+        <button type="button" data-remove-inspiration="${index}" aria-label="${escapeHtml(state.t('removeInspiration', 'URL entfernen'))}">×</button>
+      </span>
+    `).join('');
+  }
+
+  function renderPromptExamples() {
+    const locale = state.ctx?.locale === 'en' ? 'en' : 'de';
+    exampleList.innerHTML = CREATOR_PROMPT_EXAMPLES.map((example) => `
+      <button class="creator-example" type="button" data-example-id="${escapeHtml(example.id)}">
+        <strong>${escapeHtml(example[locale].title)}</strong>
+        <span>${escapeHtml(example[locale].hint)}</span>
+      </button>
+    `).join('');
+  }
+
   // Install / Deploy Button
   btnDeploy.addEventListener('click', async () => {
     try {
@@ -565,19 +637,11 @@ function wireUi(host) {
         appLayout: selectLayout.value,
         appCollections: state.appCollections,
         appVersion: state.appVersion,
+        inspirationUrls: state.inspirationUrls,
         instruction: currentRequest,
         actor: null,
       });
-      const confirmed = await showBusinessConfirm(`CTOX soll die App "${previewCommand.payload.app_title}" (${previewCommand.payload.module_id}) jetzt bauen? Die App wird als runtime-installed Business-OS-Modul erstellt.`, {
-        title: 'App-Erstellung starten',
-        confirmLabel: 'Starten',
-        cancelLabel: 'Abbrechen'
-      });
-      if (!confirmed) {
-        addConsoleLog('[INFO] App-Erstellung abgebrochen. Es wurde kein CTOX-Auftrag angelegt.', 'info');
-        return;
-      }
-
+      addConsoleLog(`[INFO] Erstelle '${previewCommand.payload.app_title}' als ${previewCommand.payload.archetype}.`, 'info');
       await triggerAppDeployment(host, updateCreatorActionState);
     } catch (e) {
       console.error('[ERROR] triggerAppDeployment failed:', e);
@@ -648,6 +712,7 @@ export function buildAppCreateCommand({
   appLayout,
   appCollections,
   appVersion,
+  inspirationUrls = [],
   instruction,
   actor,
   now = Date.now(),
@@ -663,6 +728,9 @@ export function buildAppCreateCommand({
     : '0.1.0';
   const title = String(appTitle || titleFromModuleId(moduleId)).trim();
   const description = String(appDesc || request.slice(0, 220)).trim();
+  const references = [...new Set((Array.isArray(inspirationUrls) ? inspirationUrls : [])
+    .map(normalizeInspirationUrl)
+    .filter(Boolean))];
 
   return {
     command_id: `app-create-${moduleId}-${now}`,
@@ -689,6 +757,7 @@ export function buildAppCreateCommand({
       },
       collections_hint: collections,
       desired_version: version,
+      inspiration_urls: references,
       install_target: 'runtime-installed-module',
       target: 'app',
       mode: 'app',
@@ -703,6 +772,7 @@ export function buildAppCreateCommand({
       archetype: String(appArchetype || 'record-workbench').trim(),
       install_target: 'runtime-installed-module',
       actor: actor || null,
+      inspiration_urls: references,
     },
   };
 }
@@ -762,25 +832,26 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
       appLayout,
       appCollections: collections,
       appVersion,
+      inspirationUrls: state.inspirationUrls,
       instruction: request,
       actor: actorContext(state.ctx.session),
     });
 
     addConsoleLog(`[QUEUE] Sende ${command.command_type} für ${command.payload.module_id}...`, 'info');
-    const result = await state.ctx.commandBus.dispatch(command);
+    const result = await state.ctx.commandBus.dispatch(command, { until: 'terminal' });
 
     addConsoleLog('==================================================', 'success');
     addConsoleLog(`[SUCCESS] CTOX App-Erstellung für '${command.payload.app_title}' wurde gestartet.`, 'success');
     if (result?.task_id) addConsoleLog(`[TASK] ${result.task_id}`, 'info');
 
     state.ctx.notifications.show({
-      title: 'App-Erstellung gestartet',
-      message: `CTOX baut '${command.payload.app_title}' jetzt als Business-OS-App.`,
+      title: 'App erstellt',
+      message: `'${command.payload.app_title}' ist jetzt als Business-OS-App verfügbar.`,
       type: 'success'
     });
 
     syncDot.className = 'sync-dot';
-    syncText.textContent = state.t('deployInstalled', 'CTOX-Auftrag angelegt');
+    syncText.textContent = state.t('deployInstalled', 'App erstellt');
     state.isDeploying = false;
     updateCreatorActionState();
 

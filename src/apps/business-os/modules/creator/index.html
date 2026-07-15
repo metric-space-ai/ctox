@@ -1,171 +1,142 @@
-<main class="creator-module" data-creator-root data-resize-frame>
-  <section class="creator-pane creator-left" aria-label="App request configuration">
-    <div class="creator-sidebar-content">
-      <header class="ctox-pane-header ctox-pane-band">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" data-t="kicker">CTOX</span>
-            <h2 class="ctox-pane-title" data-t="title">App Creator</h2>
+<main class="creator-module" data-creator-root>
+  <section class="creator-workspace" aria-label="App creation workspace">
+    <header class="creator-intro">
+      <span class="os-kicker" data-t="centerKicker">CTOX App Creator</span>
+      <h1 class="os-title" data-t="centerTitle">Was möchtest du bauen?</h1>
+      <p class="os-subtitle" data-t="centerSubtitle">Beschreibe die Aufgabe. Beispiele und Referenzseiten helfen dir beim Start.</p>
+    </header>
+
+    <section class="creator-composer" aria-labelledby="creator-request-label">
+      <label class="ctox-field-label" id="creator-request-label" for="app-request-input" data-t="requestLabel">Deine App-Idee</label>
+      <textarea id="app-request-input" class="ctox-textarea creator-request-textarea" placeholder="Zum Beispiel: Erstelle eine einfache CRM-App mit Kundenliste, Suche, Status und Detailansicht." data-t-placeholder="requestPlaceholder"></textarea>
+
+      <div class="creator-inspiration">
+        <div class="creator-section-heading">
+          <div>
+            <strong data-t="inspirationTitle">Websites als Inspiration</strong>
+            <span data-t="inspirationHint">Optional: Füge Produktseiten oder Apps hinzu, an denen CTOX sich orientieren soll.</span>
           </div>
         </div>
-      </header>
+        <div class="creator-url-row">
+          <input class="ctox-input" id="creator-inspiration-url" type="url" inputmode="url" autocomplete="url" placeholder="https://linear.app" data-t-placeholder="inspirationPlaceholder">
+          <button class="ctox-button" id="btn-add-inspiration" type="button" data-t="addInspiration">Hinzufügen</button>
+        </div>
+        <div class="creator-url-list" data-inspiration-list aria-live="polite"></div>
+      </div>
 
-      <div class="creator-sidebar-body">
+      <p class="creator-request-diagnostics" id="creator-request-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Beschreibe zuerst kurz deine App.</p>
+    </section>
+
+    <section class="creator-examples" aria-labelledby="creator-examples-title">
+      <div class="creator-section-heading">
+        <div>
+          <strong id="creator-examples-title" data-t="examplesTitle">Oder starte mit einem Beispiel</strong>
+          <span data-t="examplesHint">Ein Klick übernimmt den vollständigen Prompt. Danach kannst du ihn frei ändern.</span>
+        </div>
+      </div>
+      <div class="creator-example-grid" data-example-prompts></div>
+    </section>
+
+    <details class="creator-options">
+      <summary data-t="advancedSettings">Optionale technische Einstellungen</summary>
+      <div class="creator-options-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="ctox-field-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
+            <input type="text" id="input-app-title" class="ctox-input" placeholder="Optional, z. B. Kundenakte">
+          </div>
+          <div class="form-group">
+            <label class="ctox-field-label" for="input-app-id" data-t="fieldModuleId">Modul-ID</label>
+            <input type="text" id="input-app-id" class="ctox-input" placeholder="Optional, z. B. kundenakte" pattern="[a-z0-9\-]+">
+          </div>
+        </div>
+
         <div class="form-group">
-          <label class="ctox-field-label" for="app-request-input" data-t="requestLabel">App-Auftrag</label>
-          <textarea id="app-request-input" class="ctox-textarea creator-request-textarea" placeholder="Beschreibe deine Anwendung oder bitte CTOX, eine standalone HTML/JS App in Business OS zu portieren." data-t-placeholder="requestPlaceholder"></textarea>
-          <p class="creator-request-diagnostics" id="creator-request-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Auftrag fehlt. Beschreibe zuerst die App.</p>
+          <label class="ctox-field-label" for="input-app-desc" data-t="fieldDescription">Kurzbeschreibung</label>
+          <input type="text" id="input-app-desc" class="ctox-input" placeholder="Optional">
         </div>
 
-        <!-- 3. Advanced Settings Accordion -->
-        <div class="expert-accordion">
-          <button type="button" class="accordion-trigger" id="expert-accordion-btn" aria-expanded="false" aria-controls="expert-accordion-content">
-            <span class="accordion-label">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
-              <span data-t="advancedSettings">Erweiterte Einstellungen</span>
-            </span>
-            <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-          </button>
+        <div class="form-grid creator-options-grid">
+          <div class="form-group">
+            <label class="ctox-field-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
+            <select id="select-app-category" class="ctox-select">
+              <option value="" selected data-t="optionalChoice">Optional</option>
+              <option value="Productivity">Productivity</option>
+              <option value="Management">Management</option>
+              <option value="Finance">Finance</option>
+              <option value="Utilities">Utilities</option>
+              <option value="Development">Development</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="ctox-field-label" for="select-app-archetype" data-t="fieldArchetype">Grundstruktur</label>
+            <select id="select-app-archetype" class="ctox-select">
+              <option value="record-workbench" selected data-t="archetypeRecordWorkbench">Liste &amp; Details</option>
+              <option value="queue-workflow" data-t="archetypeQueueWorkflow">Warteschlange &amp; Workflow</option>
+              <option value="editor-document" data-t="archetypeEditorDocument">Editor &amp; Dokument</option>
+              <option value="automation" data-t="archetypeAutomation">Automatisierung</option>
+              <option value="timeline-thread" data-t="archetypeTimelineThread">Verlauf &amp; Thread</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="ctox-field-label" for="select-app-layout" data-t="fieldLayout">Fenster</label>
+            <select id="select-app-layout" class="ctox-select">
+              <option value="windowed" selected data-t="layoutWindowed">Standard-App-Fenster</option>
+              <option value="full-workspace" data-t="layoutFull">Ganze Arbeitsfläche</option>
+            </select>
+          </div>
+        </div>
 
-          <div class="accordion-content is-collapsed" id="expert-accordion-content">
-            <div class="form-grid">
-              <div class="form-group">
-                <label class="ctox-field-label" for="input-app-id" data-t="fieldModuleId">Modul ID (Slug)</label>
-                <input type="text" id="input-app-id" class="ctox-input" placeholder="Optional, z.B. lagerverwaltung" value="" pattern="[a-z0-9\-]+">
-              </div>
-
-              <div class="form-group">
-                <label class="ctox-field-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
-                <input type="text" id="input-app-title" class="ctox-input" placeholder="Optional, z.B. Lagerverwaltung" value="">
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="ctox-field-label" for="input-app-desc" data-t="fieldDescription">Beschreibung</label>
-              <input type="text" id="input-app-desc" class="ctox-input" placeholder="Optionaler Kurztext..." value="">
-            </div>
-
-            <div class="form-grid">
-              <div class="form-group">
-                <label class="ctox-field-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
-                <select id="select-app-category" class="ctox-select">
-                  <option value="" selected data-t="optionalChoice">Optional</option>
-                  <option value="Productivity">Productivity</option>
-                  <option value="Management">Management</option>
-                  <option value="Finance">Finance</option>
-                  <option value="Utilities">Utilities</option>
-                  <option value="Development">Development</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label class="ctox-field-label" for="select-app-archetype" data-t="fieldArchetype">App-Archetyp</label>
-                <select id="select-app-archetype" class="ctox-select">
-                  <option value="record-workbench" selected data-t="archetypeRecordWorkbench">Datensätze</option>
-                  <option value="queue-workflow" data-t="archetypeQueueWorkflow">Warteschlange / Workflow</option>
-                  <option value="editor-document" data-t="archetypeEditorDocument">Editor / Dokument</option>
-                  <option value="automation" data-t="archetypeAutomation">Automatisierung</option>
-                  <option value="timeline-thread" data-t="archetypeTimelineThread">Verlauf / Thread</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="form-grid">
-              <div class="form-group">
-                <label class="ctox-field-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
-                <select id="select-app-layout" class="ctox-select">
-                  <option value="windowed" selected data-t="layoutWindowed">Responsives App-Fenster</option>
-                  <option value="full-workspace" data-t="layoutFull">Legacy Vollfläche</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="ctox-field-label" data-t="fieldCollections">Datentabellen</label>
-              <div class="collections-editor">
-                <div id="collections-list">
-                  <!-- Dynamically populated collection rows -->
-                </div>
-                <div class="collection-row" style="margin-top: 8px;">
-                  <input type="text" id="input-new-collection" class="ctox-input" placeholder="Neue Datentabelle..." data-t-placeholder="newCollectionPlaceholder" style="flex: 1;">
-                  <button type="button" id="btn-add-collection" class="ctox-icon-button" title="Datentabelle hinzufügen" data-t-title="addCollection" aria-label="Datentabelle hinzufügen" data-t-aria="addCollection">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-                  </button>
-                </div>
-              </div>
+        <div class="form-group">
+          <label class="ctox-field-label" data-t="fieldCollections">Datentabellen</label>
+          <div class="collections-editor">
+            <div id="collections-list"></div>
+            <div class="collection-row">
+              <input type="text" id="input-new-collection" class="ctox-input" placeholder="Neue Datentabelle…" data-t-placeholder="newCollectionPlaceholder">
+              <button type="button" id="btn-add-collection" class="ctox-icon-button" title="Datentabelle hinzufügen" data-t-title="addCollection" aria-label="Datentabelle hinzufügen" data-t-aria="addCollection">+</button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </details>
+
+    <footer class="creator-submit">
+      <div class="sync-status">
+        <span class="sync-dot is-blocked" id="deploy-sync-dot"></span>
+        <span id="deploy-sync-text" data-t="requestMissing">Beschreibe zuerst kurz deine App.</span>
+      </div>
+      <button type="button" id="btn-deploy-app" class="ctox-button ctox-run-control" disabled>
+        <span data-t="deployButton">App erstellen</span>
+        <span aria-hidden="true">→</span>
+      </button>
+    </footer>
+
+    <details class="creator-status-details">
+      <summary data-t="terminalTitle">Technischer Status</summary>
+      <div id="console-logs-container" class="console-logs os-scrollbar" aria-live="polite">
+        <div class="console-log-entry info">[SYSTEM] App Creator bereit.</div>
+      </div>
+    </details>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--creator-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen" data-t-aria="resizeLeft"></button>
-
-  <section class="creator-pane creator-center" aria-label="App creation workbench">
-    <div class="creator-card">
-      <header class="creator-card-header">
-        <span class="os-kicker" data-t="centerKicker">CTOX App Creator</span>
-        <h2 class="os-title" data-t="centerTitle">Neue App beschreiben &amp; installieren</h2>
-        <p class="os-subtitle" data-t="centerSubtitle">Beschreibe die App oder den Port einer standalone Anwendung. CTOX legt einen Business-OS-App-Auftrag an und baut das Modul im Installationsbereich.</p>
-      </header>
-
-      <div class="creator-card-body">
-        <div class="deploy-action-section">
-          <button type="button" id="btn-deploy-app" class="ctox-button ctox-run-control" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            <span data-t="deployButton">App-Erstellung starten</span>
-          </button>
-
-          <div class="sync-status">
-            <div class="sync-dot" id="deploy-sync-dot"></div>
-            <span id="deploy-sync-text" data-t="deployReady">System bereit</span>
-          </div>
-        </div>
-      </div>
-
-      <footer class="creator-card-footer">
-        <div class="terminal-header">
-          <div class="terminal-dots">
-            <span class="t-dot"></span>
-            <span class="t-dot"></span>
-            <span class="t-dot"></span>
-          </div>
-          <span class="terminal-title" data-t="terminalTitle">Auftragsstatus</span>
-        </div>
-        <div id="console-logs-container" class="console-logs os-scrollbar">
-          <div class="console-log-entry info">[SYSTEM] App Creator bereit.</div>
-        </div>
-      </footer>
-    </div>
-  </section>
-
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen" data-t-aria="resizeRight"></button>
-
-  <section class="creator-pane creator-right" aria-label="Installed custom apps and CTOX app requests">
-    <header class="ctox-pane-header ctox-pane-band">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="rightKicker">Installiert</span>
-          <h2 class="ctox-pane-title" data-t="rightTitle">Custom-Apps</h2>
-        </div>
-      </div>
+  <aside class="creator-library" aria-label="Existing apps and recent requests">
+    <header class="creator-library-header">
+      <span class="ctox-pane-kicker" data-t="rightKicker">Deine Apps</span>
+      <h2 class="ctox-pane-title" data-t="rightTitle">Weiterarbeiten</h2>
     </header>
     <div class="creator-right-body" data-creator-right-body>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker" data-creator-installed-heading data-t="installedHeading">Bestehende Apps</span>
+        <div class="creator-section-heading creator-section-heading--compact">
+          <strong data-creator-installed-heading data-t="installedHeading">Bestehende Apps</strong>
+        </div>
         <div class="creator-right-list" data-creator-installed-list></div>
-        <div class="creator-right-empty" data-creator-installed-empty data-t="installedEmpty">
-          Noch keine eigenen Apps installiert. Sobald CTOX eine App erstellt hat, erscheint sie hier zum erneuten Öffnen oder Upgrade.
-        </div>
+        <div class="creator-right-empty" data-creator-installed-empty data-t="installedEmpty">Noch keine eigenen Apps.</div>
       </section>
-      <section class="creator-right-block">
-        <span class="ctox-pane-kicker" data-creator-requests-heading data-t="requestsHeading">CTOX-App-Aufträge</span>
+      <details class="creator-requests-details">
+        <summary data-t="requestsHeading">Letzte App-Aufträge</summary>
         <div class="creator-right-list" data-creator-requests-list></div>
-        <div class="creator-right-empty" data-creator-requests-empty data-t="requestsEmpty">
-          App-Aufträge aus Chat und Creator erscheinen hier zur Weiterarbeit.
-        </div>
-      </section>
+        <div class="creator-right-empty" data-creator-requests-empty data-t="requestsEmpty">Noch keine App-Aufträge.</div>
+      </details>
     </div>
-  </section>
+  </aside>
 </main>

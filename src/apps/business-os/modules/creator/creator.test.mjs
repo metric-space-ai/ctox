@@ -4,12 +4,14 @@ import { readFile } from 'node:fs/promises';
 
 const {
   buildAppCreateCommand,
+  CREATOR_PROMPT_EXAMPLES,
   computeCreatorActionState,
   deriveModuleIdFromRequest,
   titleFromModuleId,
   normalizeCreatorInstalledApps,
   normalizeCreatorRequestSuggestions,
   normalizeCollectionName,
+  normalizeInspirationUrl,
   normalizeModuleId,
   validateCreatorSpec,
 } = await import('./index.js');
@@ -82,6 +84,24 @@ test('slug and collection normalization reject unsafe names', () => {
   );
 });
 
+test('creator offers a broad set of editable app prompt examples', () => {
+  assert.ok(CREATOR_PROMPT_EXAMPLES.length >= 10);
+  assert.equal(new Set(CREATOR_PROMPT_EXAMPLES.map((item) => item.id)).size, CREATOR_PROMPT_EXAMPLES.length);
+  for (const example of CREATOR_PROMPT_EXAMPLES) {
+    assert.ok(example.de.title);
+    assert.ok(example.de.prompt.length > 100);
+    assert.ok(example.en.title);
+    assert.ok(example.en.prompt.length > 100);
+  }
+});
+
+test('inspiration URLs accept only normalized web references', () => {
+  assert.equal(normalizeInspirationUrl('https://linear.app/#features'), 'https://linear.app/');
+  assert.equal(normalizeInspirationUrl('http://example.com/path'), 'http://example.com/path');
+  assert.equal(normalizeInspirationUrl('javascript:alert(1)'), '');
+  assert.equal(normalizeInspirationUrl('linear.app'), '');
+});
+
 test('creator right rail only treats installed modules as custom apps', () => {
   const apps = normalizeCreatorInstalledApps({
     modules: [
@@ -116,6 +136,7 @@ test('creator builds an app create command instead of writing module source dire
     appLayout: 'windowed',
     appCollections: ['items', 'stock events'],
     appVersion: '0.2.0',
+    inspirationUrls: ['https://linear.app/#product', 'https://linear.app/'],
     instruction: 'Baue eine Inventar App.',
     actor: { id: 'admin' },
     now: 1234,
@@ -129,6 +150,7 @@ test('creator builds an app create command instead of writing module source dire
   assert.equal(command.payload.target, 'app');
   assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
   assert.deepEqual(command.payload.collections_hint, ['items', 'stock_events']);
+  assert.deepEqual(command.payload.inspiration_urls, ['https://linear.app/']);
   assert.equal(command.payload.layout_hint, 'windowed');
   assert.equal(command.payload.archetype, 'queue-workflow');
   assert.equal(command.payload.presentation.default_mode, 'window');
@@ -137,6 +159,7 @@ test('creator builds an app create command instead of writing module source dire
   assert.equal(command.client_context.source, 'business-os-creator');
   assert.equal(command.client_context.install_target, 'runtime-installed-module');
   assert.equal(command.client_context.archetype, 'queue-workflow');
+  assert.deepEqual(command.client_context.inspiration_urls, ['https://linear.app/']);
 });
 
 test('creator command keeps app structure agent-led when only a request is provided', () => {
@@ -162,9 +185,10 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
   assert.doesNotMatch(presentationSource, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
   assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix|var\(--panel-shadow\))/);
-  assert.match(css, /grid-template-columns: var\(--creator-left-width, 320px\) 6px minmax\(0, 1fr\) 6px var\(--creator-right-width, 300px\)/);
-  assert.match(css, /@container business-app-window \(max-width: 980px\)/);
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) minmax\(240px, 290px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 820px\)/);
   assert.match(css, /@container business-app-window \(max-width: 560px\)/);
-  assert.match(html, /data-resizer-var="--creator-left-width"/);
-  assert.match(html, /data-resizer-var="--creator-right-width"/);
+  assert.match(html, /data-example-prompts/);
+  assert.match(html, /id="creator-inspiration-url"/);
+  assert.doesNotMatch(html, /data-resizer-var=/);
 });

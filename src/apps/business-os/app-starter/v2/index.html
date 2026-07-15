@@ -21,9 +21,13 @@
   <main class="ctox-pane ctox-starter__main" data-starter-main>
     <header class="ctox-action-strip">
       <span class="ctox-action-strip__group">
+        <button class="ctox-button ctox-button--sm is-primary" type="button" data-action="create-record" data-copy="new">New</button>
         <button class="ctox-button ctox-button--sm" type="button" data-action="import" data-copy="import">Import</button>
+        <button class="ctox-button ctox-button--sm" type="button" data-action="export" data-copy="export">Export</button>
         <button class="ctox-button ctox-button--sm" type="button" data-action="sort" data-copy="sort">Sort</button>
         <button class="ctox-button ctox-button--sm" type="button" data-action="edit" data-copy="edit">Edit</button>
+        <button class="ctox-button ctox-button--sm" type="button" data-action="toggle-status" data-copy="mark_done">Mark done</button>
+        <button class="ctox-button ctox-button--sm is-danger" type="button" data-action="delete" data-copy="delete">Delete</button>
       </span>
       <span class="ctox-action-strip__group">
         <span class="ctox-badge" data-run-status aria-live="polite">Ready</span>
@@ -49,6 +53,7 @@
       <div class="ctox-empty" data-empty-state>
         <strong data-copy="no_selection">No record selected</strong>
         <span data-copy="no_selection_hint">Create or select a record to begin.</span>
+        <button class="ctox-button is-primary" type="button" data-action="create-record" data-copy="create_first">Create first record</button>
       </div>
       <article class="ctox-starter__preview" data-record-preview hidden>
         <header class="ctox-starter__form-head">
@@ -73,6 +78,11 @@
         <input class="ctox-input" id="starter-title" name="title" required autocomplete="off">
         <label class="ctox-field-label" for="starter-notes" data-copy="field_notes">Notes</label>
         <textarea class="ctox-textarea" id="starter-notes" name="notes" rows="8"></textarea>
+        <label class="ctox-field-label" for="starter-status" data-copy="field_status">Status</label>
+        <select class="ctox-select" id="starter-status" name="status">
+          <option value="open" data-copy="status_open">Open</option>
+          <option value="done" data-copy="status_done">Done</option>
+        </select>
         <div class="ctox-starter__form-actions">
           <button class="ctox-button" type="button" data-action="cancel-edit" data-copy="cancel">Cancel</button>
           <button class="ctox-button is-primary" type="submit" data-copy="save">Save</button>

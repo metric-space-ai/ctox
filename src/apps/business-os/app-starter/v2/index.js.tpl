@@ -21,6 +21,9 @@ export async function mount(ctx) {
   const statusFilter = root.querySelector('[data-status-filter]');
   const runStatus = root.querySelector('[data-run-status]');
   const runButton = root.querySelector('[data-action="run-signature"]');
+  const editButton = root.querySelector('[data-action="edit"]');
+  const toggleStatusButton = root.querySelector('[data-action="toggle-status"]');
+  const deleteButton = root.querySelector('[data-action="delete"]');
   const saveState = root.querySelector('[data-save-state]');
   const stateStack = root.querySelector('[data-state-stack]');
   const offlineState = root.querySelector('[data-offline-state]');
@@ -36,8 +39,10 @@ export async function mount(ctx) {
   search.setAttribute('aria-label', copy.search);
   runStatus.textContent = copy.ready;
   saveState.textContent = copy.saved;
-  root.querySelector('[data-action="create-record"]').disabled = !canWrite;
-  root.querySelector('[data-action="edit"]').disabled = !canWrite;
+  for (const button of root.querySelectorAll('[data-action="create-record"]')) button.disabled = !canWrite;
+  editButton.disabled = true;
+  toggleStatusButton.disabled = true;
+  deleteButton.disabled = true;
   permissionState.hidden = canWrite;
   updateOnlineState();
   updateStateStack();
@@ -60,6 +65,9 @@ export async function mount(ctx) {
       render();
     }
     if (action === 'import') await importRecords();
+    if (action === 'export') exportRecords();
+    if (action === 'toggle-status') await toggleSelectedStatus();
+    if (action === 'delete') await deleteSelectedRecord();
     if (action === 'run-signature') await runSignature();
     if (action === 'request-permission') await requestPermission();
   };
@@ -77,6 +85,7 @@ export async function mount(ctx) {
       ...existing,
       title: data.get('title'),
       notes: data.get('notes'),
+      status: data.get('status'),
       updated_at_ms: Date.now()
     });
     saveState.textContent = copy.saving;
@@ -153,7 +162,7 @@ export async function mount(ctx) {
       button.dataset.contextRecordId = record.id;
       button.dataset.contextRecordType = 'record';
       button.dataset.contextLabel = record.title;
-      button.innerHTML = `<strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.status)}</small>`;
+      button.innerHTML = `<strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(statusLabel(record.status))}</small>`;
       list.append(button);
     }
     renderInspector();
@@ -167,17 +176,24 @@ export async function mount(ctx) {
     if (!record) {
       inspector.replaceChildren();
       runButton.disabled = true;
+      editButton.disabled = true;
+      toggleStatusButton.disabled = true;
+      deleteButton.disabled = true;
       return;
     }
     runButton.disabled = false;
+    editButton.disabled = !canWrite;
+    toggleStatusButton.disabled = !canWrite;
+    toggleStatusButton.textContent = record.status === 'done' ? copy.reopen : copy.mark_done;
+    deleteButton.disabled = !canWrite;
     preview.querySelector('[data-workbench-preview-title]').textContent = (locale === 'de' ? ARCHETYPE.de?.workbench : ARCHETYPE.workbench) || ARCHETYPE.workbench;
     preview.querySelector('[data-preview-title]').textContent = record.title;
-    preview.querySelector('[data-preview-status]').textContent = record.status;
+    preview.querySelector('[data-preview-status]').textContent = statusLabel(record.status);
     preview.querySelector('[data-preview-notes]').textContent = record.notes || '—';
     preview.querySelector('[data-preview-updated]').textContent = `${copy.updated}: ${new Date(record.updated_at_ms).toLocaleString(locale)}`;
     inspector.innerHTML = `
-      <dt>Title</dt><dd>${escapeHtml(record.title)}</dd>
-      <dt>Status</dt><dd><span class="ctox-badge">${escapeHtml(record.status)}</span></dd>
+      <dt>${escapeHtml(copy.field_title)}</dt><dd>${escapeHtml(record.title)}</dd>
+      <dt>${escapeHtml(copy.field_status)}</dt><dd><span class="ctox-badge">${escapeHtml(statusLabel(record.status))}</span></dd>
       <dt>${escapeHtml(copy.updated)}</dt><dd>${escapeHtml(new Date(record.updated_at_ms).toLocaleString(locale))}</dd>
     `;
   }
@@ -198,6 +214,7 @@ export async function mount(ctx) {
     form.hidden = false;
     form.elements.title.value = record?.title || '';
     form.elements.notes.value = record?.notes || '';
+    form.elements.status.value = record?.status || 'open';
     root.querySelector('[data-form-heading]').textContent = record
       ? interpolate(copy.edit_record, { title: record.title })
       : copy.new_record;
@@ -248,6 +265,45 @@ export async function mount(ctx) {
       }
     }, { once: true });
     input.click();
+  }
+
+  function exportRecords() {
+    const records = visibleRecords(state.records, '', '');
+    const blob = new Blob([`${JSON.stringify({ records }, null, 2)}\n`], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${MODULE_ID}-records.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    ctx.notifications?.show?.({ type: 'success', title: copy.exported, message: interpolate(copy.exported_message, { count: records.length }) });
+  }
+
+  async function toggleSelectedStatus() {
+    if (!canWrite) return showPermissionState();
+    const record = selectedRecord();
+    if (!record) return;
+    await writeRecord(normalizeRecord({
+      ...record,
+      status: record.status === 'done' ? 'open' : 'done',
+      updated_at_ms: Date.now()
+    }));
+    clearError();
+  }
+
+  async function deleteSelectedRecord() {
+    if (!canWrite) return showPermissionState();
+    const record = selectedRecord();
+    if (!record) return;
+    if (!window.confirm(interpolate(copy.delete_confirm, { title: record.title }))) return;
+    await writeRecord(normalizeRecord({ ...record, is_deleted: true, updated_at_ms: Date.now() }));
+    state.selectedId = '';
+    clearError();
+    render();
+  }
+
+  function statusLabel(status) {
+    return status === 'done' ? copy.status_done : copy.status_open;
   }
 
   function registerContextTargets() {

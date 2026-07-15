@@ -21,6 +21,7 @@
     "qa:visual-baseline": "node scripts/assert-visual-diff.mjs --update-baseline",
     "qa:accessibility": "node scripts/assert-accessibility-contract.mjs",
     "qa:app-starter-browser": "node scripts/assert-app-starter-browser.mjs",
+    "qa:creator-browser": "node scripts/assert-creator-browser.mjs",
     "audit:app-quality": "node scripts/audit-app-quality.mjs",
     "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
     "test:shared": "node --test shared/*.test.mjs",

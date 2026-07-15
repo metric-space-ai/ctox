@@ -82,13 +82,16 @@ try {
           assert.ok(snapshot.namedControls.every((control) => control.name), `${archetype} has an unnamed control`);
 
           if (width === 960 && theme === 'light' && locale === 'de') {
-            await page.locator('[data-action="create-record"]').click();
+            await page.locator('[data-empty-state] [data-action="create-record"]').click();
             await page.locator('input[name="title"]').fill(`Browser ${archetype}`);
             await page.locator('textarea[name="notes"]').fill('Persistenter Browservertrag');
             await page.locator('[data-record-form] button[type="submit"]').click();
             const record = page.locator('[data-record-id]').first();
             await record.waitFor();
             await record.click();
+            await page.locator('[data-action="toggle-status"]').click();
+            const statusAfterToggle = await page.evaluate(() => globalThis.__starter.records()[0]?.status);
+            assert.equal(statusAfterToggle, 'done');
             await page.locator('[data-action="run-signature"]').click();
             const behavior = await page.evaluate(() => ({
               records: globalThis.__starter.records(),

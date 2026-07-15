@@ -3,6 +3,12 @@ import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260712-single-click-v2';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
+import {
+  buildQuickAppCreateCommand,
+  isRuntimeInstalledApp,
+  moduleRenamePayload,
+  nextQuickAppIdentity,
+} from './appCommands.js';
 
 const STYLE_BUILD = '20260706-kit-tokens1';
 const LAYOUT_DOC_ID = 'layout';
@@ -30,6 +36,13 @@ const FALLBACK_LABELS = {
     askCtox: 'Frage stellen',
     workWithData: 'Daten ändern',
     modifyApp: 'App ändern',
+    createApp: 'Neue App erstellen',
+    createAppStarted: 'App wurde erstellt',
+    createAppStartedDetail: '{title} ist bereit und erscheint gleich auf dem Desktop.',
+    createAppFailed: 'App konnte nicht erstellt werden',
+    renameApp: 'App umbenennen',
+    renameAppDone: 'App umbenannt',
+    renameAppFailed: 'App konnte nicht umbenannt werden',
     chatContextLabel: 'Desktop-Kontext',
     pinToTaskbar: 'An Bar anheften',
     unpinFromTaskbar: 'Von Bar lösen',
@@ -59,6 +72,13 @@ const FALLBACK_LABELS = {
     askCtox: 'Ask question',
     workWithData: 'Change data',
     modifyApp: 'Modify app',
+    createApp: 'Create new app',
+    createAppStarted: 'App created',
+    createAppStartedDetail: '{title} is ready and will appear on the desktop shortly.',
+    createAppFailed: 'App could not be created',
+    renameApp: 'Rename app',
+    renameAppDone: 'App renamed',
+    renameAppFailed: 'App could not be renamed',
     chatContextLabel: 'Desktop context',
     pinToTaskbar: 'Pin to bar',
     unpinFromTaskbar: 'Unpin from bar',
@@ -483,6 +503,7 @@ export async function mount(ctx) {
     if (event.target.closest('.desktop-icon')) return;
     if (!ctx.contextMenu) return;
     ctx.contextMenu.show(event, [
+      { label: t('createApp', 'Neue App erstellen'), icon: '+', action: safeAction(createQuickApp) },
       { label: t('chatWithCtox', 'Mit CTOX chatten'), icon: '◆', action: safeAction(chatWithCtoxAboutDesktop) },
       { type: 'separator' },
       { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), action: () => launcher.open('explorer') },
@@ -501,6 +522,8 @@ export async function mount(ctx) {
     event.stopPropagation();
     if (!ctx.contextMenu) return;
     const pinned = isPinnedTarget(doc.target_module);
+    const app = moduleForDesktopTarget(doc.target_module);
+    const canRenameApp = isRuntimeInstalledApp(app);
     ctx.contextMenu.show(event, [
       { label: t('openInModule', 'Öffnen'), icon: '↗', action: () => launcher.open(doc.target_module) },
       {
@@ -511,6 +534,9 @@ export async function mount(ctx) {
       { label: t('askCtox', 'Frage stellen'), icon: '?', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'ask')) },
       { label: t('workWithData', 'Daten ändern'), icon: '◇', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'data')) },
       { label: t('modifyApp', 'App ändern'), icon: '✦', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'app')) },
+      ...(canRenameApp ? [
+        { label: t('renameApp', 'App umbenennen'), icon: '✎', action: safeAction(() => renameApp(doc, app)) },
+      ] : []),
       { label: t('renameIcon', 'Icon umbenennen'), icon: '✎', action: safeAction(() => renameIcon(doc)) },
       { type: 'separator' },
       { label: t('deleteIcon', 'Icon entfernen'), icon: '−', action: safeAction(() => deleteIcon(doc.id)) },
@@ -523,6 +549,106 @@ export async function mount(ctx) {
         .then(action)
         .catch((error) => console.error('[desktop] context menu action failed:', error));
     };
+  }
+
+  async function createQuickApp() {
+    if (!ctx.commandBus?.dispatch) throw new Error('Business OS command runtime is not ready.');
+    const identity = nextQuickAppIdentity(currentModules(), ctx.locale, Date.now());
+    const command = buildQuickAppCreateCommand({
+      moduleId: identity.id,
+      title: identity.title,
+      actor: actorContext(),
+    });
+    try {
+      await ctx.commandBus.dispatch(command, { until: 'terminal' });
+      notify({
+        type: 'success',
+        title: t('createAppStarted', 'App wurde erstellt'),
+        message: formatMessage(
+          t('createAppStartedDetail', '{title} ist bereit und erscheint gleich auf dem Desktop.'),
+          { title: identity.title },
+        ),
+      });
+    } catch (error) {
+      notify({
+        type: 'error',
+        title: t('createAppFailed', 'App konnte nicht erstellt werden'),
+        message: String(error?.message || error),
+      });
+      throw error;
+    }
+  }
+
+  async function renameApp(doc, app) {
+    if (!ctx.commandBus?.dispatch) throw new Error('Business OS command runtime is not ready.');
+    const current = String(app?.title || titleForModule(doc.target_module) || '').trim();
+    const next = await showBusinessPrompt(t('renameApp', 'App umbenennen'), {
+      title: t('renameApp', 'App umbenennen'),
+      defaultValue: current,
+    });
+    const title = String(next || '').trim();
+    if (!title || title === current) return;
+    const payload = moduleRenamePayload(app, title);
+    const commandId = `cmd_module_rename_${crypto.randomUUID?.() || Date.now()}`;
+    try {
+      await ctx.commandBus.dispatch({
+        id: commandId,
+        command_id: commandId,
+        module: 'ctox',
+        command_type: 'ctox.module.save',
+        record_id: app.id,
+        payload,
+        client_context: {
+          source: 'desktop-app-context-menu',
+          action: 'app.rename',
+          module_id: app.id,
+          app_id: app.id,
+          actor: actorContext(),
+        },
+      }, { until: 'terminal' });
+      const existing = iconsCollection ? await iconsCollection.findOne(doc.id).exec() : null;
+      if (existing) {
+        await existing.incrementalPatch({ label: title, updated_at_ms: Date.now() });
+      }
+      notify({ type: 'success', title: t('renameAppDone', 'App umbenannt'), message: title });
+    } catch (error) {
+      notify({
+        type: 'error',
+        title: t('renameAppFailed', 'App konnte nicht umbenannt werden'),
+        message: String(error?.message || error),
+      });
+      throw error;
+    }
+  }
+
+  function currentModules() {
+    const modules = typeof ctx.getModules === 'function' ? ctx.getModules() : ctx.modules;
+    return Array.isArray(modules) ? modules : [];
+  }
+
+  function moduleForDesktopTarget(moduleId) {
+    // Renaming must use the complete shell module manifest so collections and
+    // layout survive the ctox.module.save round-trip. Launcher entries can be
+    // intentionally reduced and are therefore not safe mutation inputs.
+    return currentModules().find((module) => module?.id === moduleId) || null;
+  }
+
+  function actorContext() {
+    const user = ctx.session?.user || {};
+    return {
+      id: user.id || user.user_id || '',
+      display_name: user.display_name || user.name || user.id || '',
+      role: user.role || 'user',
+      is_admin: Boolean(user.is_admin),
+    };
+  }
+
+  function notify(notification) {
+    ctx.notifications?.show?.(notification);
+  }
+
+  function formatMessage(template, values) {
+    return String(template || '').replace(/\{(\w+)\}/g, (_, key) => String(values?.[key] ?? ''));
   }
 
   async function renameIcon(doc) {
