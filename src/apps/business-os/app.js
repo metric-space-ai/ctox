@@ -50,7 +50,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260715-browser-navigation-v63';
+const APP_BUILD = '20260715-browser-profile-handoff-v93';
 
 ensureShellStylesheets();
 
@@ -5370,9 +5370,18 @@ function createLiveSyncFacade({ host = null } = {}) {
     get mode() { return state.sync?.mode; },
     get config() { return state.sync?.config; },
     get diagnostics() { return state.sync?.diagnostics; },
-    startCollection: (...args) => {
+    startCollection: (collection, options = {}) => {
       assertActive();
-      return state.sync?.startCollection?.(...args);
+      return state.sync?.startCollection?.(collection, { ...options, pin: false });
+    },
+    leaseCollection: async (...args) => {
+      assertActive();
+      const lease = await state.sync?.leaseCollection?.(...args);
+      if (host && !host.isConnected) {
+        await lease?.release?.().catch?.(() => null);
+        assertActive();
+      }
+      return lease;
     },
     stopCollection: (...args) => state.sync?.stopCollection?.(...args),
     restartCollection: (...args) => {

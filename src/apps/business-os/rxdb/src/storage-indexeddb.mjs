@@ -130,14 +130,17 @@ export class CtoxIndexedDbCollection {
           }),
         });
         await this.acknowledgePersistedMasterRecovery();
-        await this.recoveryJournal.replayRegisteredCollections();
+        await this.recoveryJournal.replayRegisteredCollections(this.name);
       })();
     }
     return this.recoveryReady;
   }
 
   async acknowledgePersistedMasterRecovery() {
-    const batches = await this.recoveryJournal?.listBatches?.('pending') || [];
+    // This runs on the foreground path before the collection's first write.
+    // Use the compound state+collection index; scanning every pending batch
+    // for every collection can stall command insertion on mature profiles.
+    const batches = await this.recoveryJournal?.listBatches?.('pending', this.name) || [];
     const ids = [...new Set(batches
       .filter((batch) => batch.collection === this.name)
       .flatMap((batch) => batch.documentIds || []))];

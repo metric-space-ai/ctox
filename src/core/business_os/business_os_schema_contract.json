@@ -1748,13 +1748,25 @@
     "additionalProperties": true
   },
   "browser_frames": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
       "id": {
         "type": "string",
         "maxLength": 220
+      },
+      "tenant_id": {
+        "type": "string"
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "allowed_observer_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "session_id": {
         "type": "string"
@@ -1795,6 +1807,12 @@
       "frame_hash": {
         "type": "string"
       },
+      "frame_kind": {
+        "type": "string"
+      },
+      "base_frame_id": {
+        "type": "string"
+      },
       "captured_at_ms": {
         "type": "number"
       },
@@ -1833,18 +1851,32 @@
       [
         "tab_id",
         "seq"
+      ],
+      [
+        "tenant_id",
+        "owner_user_id",
+        "seq"
       ]
     ],
     "additionalProperties": true
   },
   "browser_input_events": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
       "id": {
         "type": "string",
         "maxLength": 220
+      },
+      "tenant_id": {
+        "type": "string"
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "controller_user_id": {
+        "type": "string"
       },
       "session_id": {
         "type": "string"
@@ -1854,6 +1886,24 @@
       },
       "seq": {
         "type": "number"
+      },
+      "client_seq": {
+        "type": "number"
+      },
+      "frame_seq": {
+        "type": "number"
+      },
+      "lease_id": {
+        "type": "string"
+      },
+      "ack_status": {
+        "type": "string"
+      },
+      "ack_at_ms": {
+        "type": "number"
+      },
+      "error_code": {
+        "type": "string"
       },
       "type": {
         "type": "string"
@@ -1934,12 +1984,18 @@
       [
         "status",
         "created_at_ms"
+      ],
+      [
+        "tenant_id",
+        "owner_user_id",
+        "status",
+        "seq"
       ]
     ],
     "additionalProperties": true
   },
   "browser_sessions": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -1947,10 +2003,31 @@
         "type": "string",
         "maxLength": 160
       },
+      "tenant_id": {
+        "type": "string"
+      },
       "owner_user_id": {
         "type": "string"
       },
       "controller_user_id": {
+        "type": "string"
+      },
+      "controller_lease_id": {
+        "type": "string"
+      },
+      "controller_lease_expires_at_ms": {
+        "type": "number"
+      },
+      "allowed_observer_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "profile_mode": {
+        "type": "string"
+      },
+      "security_status": {
         "type": "string"
       },
       "status": {
@@ -2017,12 +2094,17 @@
       [
         "status",
         "updated_at_ms"
+      ],
+      [
+        "tenant_id",
+        "owner_user_id",
+        "updated_at_ms"
       ]
     ],
     "additionalProperties": true
   },
   "browser_tabs": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -2030,8 +2112,29 @@
         "type": "string",
         "maxLength": 180
       },
+      "tenant_id": {
+        "type": "string"
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "allowed_observer_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "session_id": {
         "type": "string"
+      },
+      "opener_tab_id": {
+        "type": "string"
+      },
+      "position": {
+        "type": "number"
+      },
+      "oauth_popup": {
+        "type": "boolean"
       },
       "title": {
         "type": "string"
@@ -2088,6 +2191,11 @@
       "session_id",
       [
         "session_id",
+        "updated_at_ms"
+      ],
+      [
+        "tenant_id",
+        "owner_user_id",
         "updated_at_ms"
       ]
     ],
@@ -3573,7 +3681,7 @@
     "additionalProperties": true
   },
   "ctox_queue_tasks": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -3604,21 +3712,6 @@
       },
       "updated_at_ms": {
         "type": "number"
-      },
-      "route_status": {
-        "type": "string"
-      },
-      "priority": {
-        "type": "string"
-      },
-      "thread_key": {
-        "type": "string"
-      },
-      "prompt": {
-        "type": "string"
-      },
-      "workspace_root": {
-        "type": "string"
       }
     },
     "required": [
@@ -10520,7 +10613,7 @@
     "additionalProperties": true
   },
   "user_thread_messages": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -10548,6 +10641,27 @@
       },
       "kind": {
         "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "actor_type": {
+        "type": "string"
+      },
+      "actor_id": {
+        "type": "string"
+      },
+      "parent_event_id": {
+        "type": "string"
+      },
+      "execution_status": {
+        "type": "string"
+      },
+      "evidence_refs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "author_user_id": {
         "type": "string"
@@ -10613,8 +10727,89 @@
     ],
     "additionalProperties": true
   },
-  "user_threads": {
+  "user_thread_states": {
     "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "unread_count": {
+        "type": "number"
+      },
+      "last_seen_at_ms": {
+        "type": "number"
+      },
+      "pinned": {
+        "type": "boolean"
+      },
+      "snoozed_until_ms": {
+        "type": "number"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "follow_up_at_ms": {
+        "type": "number"
+      },
+      "attention_score": {
+        "type": "number"
+      },
+      "attention_reasons": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "notification_preferences": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "thread_id",
+      "user_id"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "thread_id",
+      "user_id",
+      "attention_score",
+      [
+        "user_id",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "user_threads": {
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -10666,6 +10861,19 @@
       },
       "assigned_user_id": {
         "type": "string"
+      },
+      "team_id": {
+        "type": "string"
+      },
+      "due_at_ms": {
+        "type": "number"
+      },
+      "next_step": {
+        "type": "string"
+      },
+      "ai_state": {
+        "type": "object",
+        "additionalProperties": true
       },
       "source_module": {
         "type": "string"

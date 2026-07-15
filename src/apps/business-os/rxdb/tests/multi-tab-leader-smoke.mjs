@@ -10,11 +10,21 @@ await delay(80);
 assert(first.isLeader(), 'deterministic lower tab id must retain the fallback lease');
 assert(!second.isLeader(), 'only one tab may own the sync line');
 let dirty = null;
-const unsubscribe = first.onDirty((message) => { dirty = message; });
+let pushFinished = false;
+const unsubscribe = first.onDirty(async (message) => {
+  dirty = message;
+  await delay(10);
+  pushFinished = true;
+});
 second.notifyDirty('tickets', ['ticket-1']);
 await delay(30);
 assert(dirty?.collection === 'tickets', 'follower dirty collection must reach the leader');
 assert(dirty?.ids?.[0] === 'ticket-1', 'follower dirty ids must reach the leader');
+pushFinished = false;
+const acknowledgement = await second.notifyDirtyAndWait('business_commands', ['command-1']);
+assert(acknowledgement?.ok === true, 'follower must receive a positive leader push acknowledgement');
+assert(dirty?.collection === 'business_commands', 'acknowledged dirty collection must reach the leader');
+assert(pushFinished, 'leader acknowledgement must wait until async push listeners finish');
 
 unsubscribe();
 await second.close();

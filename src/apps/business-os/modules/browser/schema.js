@@ -1,11 +1,17 @@
 const browserSessionSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
     id: { type: 'string', maxLength: 160 },
+    tenant_id: { type: 'string' },
     owner_user_id: { type: 'string' },
     controller_user_id: { type: 'string' },
+    controller_lease_id: { type: 'string' },
+    controller_lease_expires_at_ms: { type: 'number' },
+    allowed_observer_user_ids: { type: 'array', items: { type: 'string' } },
+    profile_mode: { type: 'string' },
+    security_status: { type: 'string' },
     status: { type: 'string' },
     runtime_status: { type: 'string' },
     current_tab_id: { type: 'string' },
@@ -28,17 +34,24 @@ const browserSessionSchema = {
   indexes: [
     'updated_at_ms',
     ['status', 'updated_at_ms'],
+    ['tenant_id', 'owner_user_id', 'updated_at_ms'],
   ],
   additionalProperties: true,
 };
 
 const browserTabSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
     id: { type: 'string', maxLength: 180 },
+    tenant_id: { type: 'string' },
+    owner_user_id: { type: 'string' },
+    allowed_observer_user_ids: { type: 'array', items: { type: 'string' } },
     session_id: { type: 'string' },
+    opener_tab_id: { type: 'string' },
+    position: { type: 'number' },
+    oauth_popup: { type: 'boolean' },
     title: { type: 'string' },
     url: { type: 'string' },
     status: { type: 'string' },
@@ -58,16 +71,20 @@ const browserTabSchema = {
   indexes: [
     'session_id',
     ['session_id', 'updated_at_ms'],
+    ['tenant_id', 'owner_user_id', 'updated_at_ms'],
   ],
   additionalProperties: true,
 };
 
 const browserFrameSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
     id: { type: 'string', maxLength: 220 },
+    tenant_id: { type: 'string' },
+    owner_user_id: { type: 'string' },
+    allowed_observer_user_ids: { type: 'array', items: { type: 'string' } },
     session_id: { type: 'string' },
     tab_id: { type: 'string' },
     seq: { type: 'number' },
@@ -81,6 +98,8 @@ const browserFrameSchema = {
     quality: { type: 'number' },
     size_bytes: { type: 'number' },
     frame_hash: { type: 'string' },
+    frame_kind: { type: 'string' },
+    base_frame_id: { type: 'string' },
     captured_at_ms: { type: 'number' },
     expires_at_ms: { type: 'number' },
     updated_at_ms: { type: 'number' },
@@ -105,19 +124,29 @@ const browserFrameSchema = {
     ['session_id', 'seq'],
     ['session_id', 'expires_at_ms'],
     ['tab_id', 'seq'],
+    ['tenant_id', 'owner_user_id', 'seq'],
   ],
   additionalProperties: true,
 };
 
 const browserInputEventSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
     id: { type: 'string', maxLength: 220 },
+    tenant_id: { type: 'string' },
+    owner_user_id: { type: 'string' },
+    controller_user_id: { type: 'string' },
     session_id: { type: 'string' },
     tab_id: { type: 'string' },
     seq: { type: 'number' },
+    client_seq: { type: 'number' },
+    frame_seq: { type: 'number' },
+    lease_id: { type: 'string' },
+    ack_status: { type: 'string' },
+    ack_at_ms: { type: 'number' },
+    error_code: { type: 'string' },
     type: { type: 'string' },
     status: { type: 'string' },
     x: { type: 'number' },
@@ -142,6 +171,7 @@ const browserInputEventSchema = {
     ['session_id', 'seq'],
     ['session_id', 'status', 'seq'],
     ['status', 'created_at_ms'],
+    ['tenant_id', 'owner_user_id', 'status', 'seq'],
   ],
   additionalProperties: true,
 };
@@ -151,4 +181,13 @@ export const collections = {
   browser_tabs: browserTabSchema,
   browser_frames: browserFrameSchema,
   browser_input_events: browserInputEventSchema,
+};
+
+const retainV0BrowserDocument = (oldDoc) => ({ ...oldDoc });
+
+export const migrationStrategies = {
+  browser_sessions: { 1: retainV0BrowserDocument },
+  browser_tabs: { 1: retainV0BrowserDocument },
+  browser_frames: { 1: retainV0BrowserDocument },
+  browser_input_events: { 1: retainV0BrowserDocument },
 };

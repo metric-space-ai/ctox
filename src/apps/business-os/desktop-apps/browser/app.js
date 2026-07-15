@@ -1,5 +1,3 @@
-import { mount as mountBrowserModule } from '../../modules/browser/index.js?v=20260605-rxdb-cancel1';
-
 export const manifest = {
   id: 'browser',
   title: 'Browser',
@@ -9,6 +7,12 @@ export const manifest = {
 };
 
 export async function mount(container, ctx = {}) {
+  // The desktop-app wrapper is loaded with the shell's APP_BUILD query. Carry
+  // that revision into the real browser module so a release cannot keep
+  // executing an older cached Browser implementation indefinitely.
+  const browserModuleUrl = new URL('../../modules/browser/index.js', import.meta.url);
+  browserModuleUrl.search = new URL(import.meta.url).search;
+  const { mount: mountBrowserModule } = await import(browserModuleUrl.href);
   return mountBrowserModule({
     ...ctx,
     host: container,

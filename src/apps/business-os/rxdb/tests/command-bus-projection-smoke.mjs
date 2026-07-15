@@ -147,10 +147,13 @@ const assert = (condition, message) => {
     },
   });
   assert(result.ok === true, 'materialize command: completed ack is success');
-  assert(events.includes('start:desktop_files'), 'materialize command: desktop_files started');
+  assert(events.some((event) => event.startsWith('lease:desktop_files:command-dependency:')),
+    'materialize command: desktop_files leased');
   assert(events.includes('flush:desktop_files'), 'materialize command: desktop_files flushed');
-  assert(!events.includes('start:desktop_file_chunks'), 'materialize command: desktop_file_chunks not started');
+  assert(!events.some((event) => event.startsWith('lease:desktop_file_chunks:')),
+    'materialize command: desktop_file_chunks not leased');
   assert(!events.includes('flush:desktop_file_chunks'), 'materialize command: desktop_file_chunks not flushed');
+  assert(events.includes('release:desktop_files'), 'materialize command: desktop_files lease released');
 }
 
 // --- 4. direct coding-agent status outcome is success ---------------------

@@ -161,6 +161,19 @@ test('command bus pulls projections without restarting the shared room', () => {
   assert.match(source, /subscribe\(commandId, observer\)/);
 });
 
+test('command bus rejects conflicting legacy and canonical command types', async () => {
+  const bus = createCommandBus({ db: { raw: {} } });
+  await assert.rejects(
+    bus.submit({
+      id: 'cmd-conflicting-type',
+      module: 'test',
+      type: 'business_os.command',
+      command_type: 'business_os.chat.task',
+    }),
+    (error) => error?.code === 'invalid_command_contract' && error?.retryable === false,
+  );
+});
+
 test('command bus returns direct control-command result after projection pull', async () => {
   let stored = null;
   const collection = {
@@ -301,7 +314,257 @@ test('submit can push a new command before historical command pull is complete',
   assert.equal(receipt.command_id, 'cmd_cold_history_push');
   assert.equal(stored.id, 'cmd_cold_history_push');
   assert.equal(initialReplicationAwaited, false);
-  assert.equal(pushCount, 2);
+  assert.equal(pushCount, 1);
+});
+
+test('submit waits for the negotiated collection peer before inserting the command', async () => {
+  let stored = null;
+  let peerStates = new Map();
+  const listeners = new Set();
+  const peerStates$ = {
+    getValue: () => peerStates,
+    subscribe(listener) {
+      listeners.add(listener);
+      listener(peerStates);
+      return { unsubscribe: () => listeners.delete(listener) };
+    },
+  };
+  const collection = {
+    async insert(doc) {
+      assert.equal(peerStates.size, 1);
+      stored = { ...doc };
+    },
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const state = {
+    peerStates$,
+    getTransportStatus() {
+      return { activePeerCount: peerStates.size };
+    },
+    async pushToRemotePeers() {},
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection() {
+        return { state };
+      },
+    },
+  });
+
+  const submission = bus.submit({
+    id: 'cmd-waits-for-collection-peer',
+    command_type: 'business_os.chat.task',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stored, null);
+  peerStates = new Map([['native-peer', {}]]);
+  listeners.forEach((listener) => listener(peerStates));
+
+  const receipt = await submission;
+  assert.equal(receipt.command_id, 'cmd-waits-for-collection-peer');
+  assert.equal(stored.id, 'cmd-waits-for-collection-peer');
+  assert.equal(listeners.size, 0);
+});
+
+test('submit recognizes the transport channelState emitted by CTOX Sync Engine', async () => {
+  let inserted = false;
+  const collection = {
+    async insert() { inserted = true; },
+    findOne() { return { async exec() { return null; } }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection() {
+        return {
+          state: {
+            getTransportStatus() {
+              return {
+                connectionStates: [{ channelState: 'open', peerConnectionState: 'connected' }],
+              };
+            },
+            async pushToRemotePeers() {},
+          },
+        };
+      },
+    },
+  });
+
+  await bus.submit({
+    id: 'cmd-channel-state-ready',
+    command_type: 'business_os.chat.task',
+  });
+  assert.equal(inserted, true);
+});
+
+test('submit does not block on the native queue projection peer', async () => {
+  let inserted = false;
+  const collection = {
+    async insert() { inserted = true; },
+    findOne() { return { async exec() { return null; } }; },
+  };
+  const commandState = {
+    getTransportStatus() {
+      return {
+        connectionStates: [{ channelState: 'open', peerConnectionState: 'connected' }],
+      };
+    },
+    async pushToRemotePeers() {},
+  };
+  const queueState = {
+    getTransportStatus() {
+      return { activePeerCount: 1, connectionCount: 1 };
+    },
+    async pushToRemotePeers() {
+      assert.fail('the browser must not push the native queue projection during submit');
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection(collectionName) {
+        return {
+          collection: collectionName,
+          state: collectionName === 'business_commands' ? commandState : queueState,
+        };
+      },
+    },
+  });
+
+  const receipt = await bus.submit({
+    id: 'cmd-queue-projection-not-ready',
+    command_type: 'business_os.chat.task',
+    sync_ready_timeout_ms: 25,
+  });
+
+  assert.equal(receipt.command_id, 'cmd-queue-projection-not-ready');
+  assert.equal(inserted, true);
+});
+
+test('submit reports the blocked collection and observed peer state precisely', async () => {
+  const collection = {
+    async insert() { assert.fail('command must not be inserted without a collection peer'); },
+    findOne() { return { async exec() { return null; } }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection(collectionName) {
+        return {
+          collection: collectionName,
+          state: {
+            getTransportStatus() {
+              return { activePeerCount: 0, connectionCount: 0 };
+            },
+            async pushToRemotePeers() {},
+          },
+        };
+      },
+    },
+  });
+
+  await assert.rejects(
+    bus.submit({
+      id: 'cmd-no-collection-peer',
+      command_type: 'business_os.chat.task',
+      sync_ready_timeout_ms: 25,
+    }),
+    (error) => error?.code === 'native_unavailable'
+      && error?.retryable === true
+      && /business_commands/.test(error.message)
+      && /active peers: 0/.test(error.message),
+  );
+});
+
+test('dispatch returns native command and queue task ids after acceptance', async () => {
+  let stored = null;
+  const listeners = new Set();
+  const collection = {
+    async insert(doc) { stored = { ...doc }; },
+    findOne(id) {
+      return {
+        $: {
+          subscribe(listener) {
+            listeners.add(listener);
+            if (stored?.id === id) listener({ toJSON: () => ({ ...stored }) });
+            return { unsubscribe: () => listeners.delete(listener) };
+          },
+        },
+        async exec() {
+          return stored?.id === id ? { toJSON: () => ({ ...stored }) } : null;
+        },
+      };
+    },
+  };
+  const state = {
+    demandStatus: { peerConnected: true },
+    async pushToRemotePeers() {
+      if (!stored || stored.status === 'accepted') return;
+      stored = {
+        ...stored,
+        status: 'accepted',
+        replication_phase: 'native_observed',
+        execution_task_id: 'queue-real-7',
+      };
+      listeners.forEach((listener) => listener({ toJSON: () => ({ ...stored }) }));
+    },
+    async pullFromRemotePeers() {},
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: { async startCollection() { return { state }; } },
+  });
+
+  const receipt = await bus.dispatch({
+    id: 'cmd-native-accepted',
+    command_type: 'business_os.chat.task',
+  });
+
+  assert.equal(receipt.command_id, 'cmd-native-accepted');
+  assert.equal(receipt.task_id, 'queue-real-7');
+  assert.equal(receipt.execution_task_id, 'queue-real-7');
+  assert.equal(receipt.transport, 'rxdb-command-bus');
+});
+
+test('control command can skip the unrelated queue projection bridge', async () => {
+  const startedCollections = [];
+  const pushedCollections = [];
+  const collection = {
+    async insert() {},
+    findOne() {
+      return { async exec() { return null; } };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+    sync: {
+      async startCollection(collectionName) {
+        startedCollections.push(collectionName);
+        return {
+          state: {
+            getTransportStatus() {
+              return { demandLoading: { peerConnected: true } };
+            },
+            async pushToRemotePeers() {
+              pushedCollections.push(collectionName);
+            },
+          },
+        };
+      },
+    },
+  });
+
+  await bus.submit({
+    id: 'cmd-control-without-queue',
+    command_type: 'outbound.research_source.auth_assist',
+    sync_queue_tasks: false,
+  });
+
+  assert.deepEqual(startedCollections, ['business_commands']);
+  assert.deepEqual(pushedCollections, ['business_commands']);
 });
 
 test('duplicate command id rejects a changed immutable payload without regressing state', async () => {

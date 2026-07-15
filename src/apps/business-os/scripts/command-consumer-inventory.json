@@ -35,6 +35,7 @@
   "projection_readers": [
     "app.js",
     "desktop-apps/file-viewer/app.js",
+    "modules/appsec-pentest/index.js",
     "modules/conversations/index.js",
     "modules/credentials/index.js",
     "modules/customers/index.js",

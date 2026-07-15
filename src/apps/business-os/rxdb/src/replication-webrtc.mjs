@@ -825,6 +825,7 @@ class CtoxWebRtcReplicationState {
     // so a transport blip does not force a from-scratch resync.
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
+    this.localCheckpointValidityKey = '';
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -970,9 +971,16 @@ class CtoxWebRtcReplicationState {
     // the catch-up pull/push below then resumes incrementally instead of
     // re-reading everything from a null checkpoint after each reconnect.
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
+    const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    const localValidityKey = localCheckpointValidityKey(localCheckpoint);
+    this.localCheckpointValidityKey = localValidityKey;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey) {
+      if (
+        retained.validityKey === validityKey
+        && retained.localValidityKey
+        && retained.localValidityKey === localValidityKey
+      ) {
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -1104,7 +1112,7 @@ class CtoxWebRtcReplicationState {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
-      this.persistCheckpointsForPeer(activePeerId);
+      await this.persistCheckpointsForPeer(activePeerId);
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -1205,12 +1213,12 @@ class CtoxWebRtcReplicationState {
         ) {
           checkpoint = nextCheckpoint;
           this.pushCheckpointsByPeer.set(peerId, checkpoint);
-          this.persistCheckpointsForPeer(peerId);
+          await this.persistCheckpointsForPeer(peerId);
           continue;
         }
         checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
-        this.persistCheckpointsForPeer(peerId);
+        await this.persistCheckpointsForPeer(peerId);
         break;
       }
       let rows = documents.map((doc) => ({
@@ -1259,7 +1267,7 @@ class CtoxWebRtcReplicationState {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
-      this.persistCheckpointsForPeer(peerId);
+      await this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
     }
   }
@@ -1608,8 +1616,13 @@ class CtoxWebRtcReplicationState {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
-    if (validityKey && (retainedPull || retainedPush)) {
-      this.retainedCheckpoints = { validityKey, pull: retainedPull, push: retainedPush };
+    if (validityKey && this.localCheckpointValidityKey && (retainedPull || retainedPush)) {
+      this.retainedCheckpoints = {
+        validityKey,
+        localValidityKey: this.localCheckpointValidityKey,
+        pull: retainedPull,
+        push: retainedPush,
+      };
       writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
     }
     peerStates.delete(peerId);
@@ -1636,11 +1649,16 @@ class CtoxWebRtcReplicationState {
     return checkpointValidityKeyFromProtocol(remoteProtocol);
   }
 
-  persistCheckpointsForPeer(peerId) {
+  async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     if (!validityKey) return;
+    const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    const localValidityKey = localCheckpointValidityKey(localCheckpoint);
+    if (!localValidityKey) return;
+    this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
+      localValidityKey,
       pull: this.pullCheckpointsByPeer.get(peerId) || null,
       push: this.pushCheckpointsByPeer.get(peerId) || null,
       collection: this.collection.name,
@@ -1871,6 +1889,16 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+
+function localCheckpointValidityKey(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== 'object') return '';
+  const epoch = typeof checkpoint.epoch === 'string' ? checkpoint.epoch.trim() : '';
+  const schemaHashValue = typeof checkpoint.schemaHash === 'string'
+    ? checkpoint.schemaHash.trim()
+    : '';
+  if (!epoch) return '';
+  return `${epoch}|${schemaHashValue}`;
 }
 
 function persistentCheckpointStorageKey(topic, collection) {

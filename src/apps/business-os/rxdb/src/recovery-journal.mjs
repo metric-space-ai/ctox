@@ -4,8 +4,9 @@ import {
   sha256Json,
 } from './recovery-crypto.mjs';
 
-const JOURNAL_VERSION = 2;
+const JOURNAL_VERSION = 3;
 const BATCH_STORE = 'batches';
+const BATCH_STATE_COLLECTION_INDEX = 'stateCollection';
 const CONFLICT_STORE = 'conflicts';
 const META_STORE = 'meta';
 const ACKED_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -69,7 +70,7 @@ export class CtoxRecoveryJournal {
   }
 
   async markMasterAcknowledged(collection, documents = {}) {
-    const batches = await this.listBatches('pending');
+    const batches = await this.listBatches('pending', collection);
     for (const batch of batches) {
       if (batch.collection !== collection) continue;
       const acked = new Set(batch.ackedIds || []);
@@ -90,10 +91,14 @@ export class CtoxRecoveryJournal {
     await this.publishStatus();
   }
 
-  async replayRegisteredCollections() {
-    const batches = await this.listBatches('pending');
+  async replayRegisteredCollections(collection = null) {
+    const batches = await this.listBatches('pending', collection);
     const outcomes = [];
     for (const batch of batches) {
+      // A primary-committed batch is durable already and only waits for the
+      // native peer acknowledgement. Replaying it on every collection
+      // registration multiplied startup work by collections × journal size.
+      if (Number(batch.primaryCommittedAtMs || 0) > 0) continue;
       const replayer = this.replayers.get(batch.collection);
       if (!replayer) continue;
       if (batch.schemaHash && replayer.schemaHash && batch.schemaHash !== replayer.schemaHash) {
@@ -290,10 +295,12 @@ export class CtoxRecoveryJournal {
     return { imported: true, replay };
   }
 
-  async listBatches(state = null) {
-    const rows = (await getAllRecords(this.db, BATCH_STORE))
+  async listBatches(state = null, collection = null) {
+    const rows = (state && collection
+      ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection])
+      : await getAllRecords(this.db, BATCH_STORE))
       .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
-    return state ? rows.filter((row) => row.state === state) : rows;
+    return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
 
   async gc(now = Date.now()) {
@@ -343,7 +350,12 @@ function openJournalDatabase(name) {
     const request = indexedDB.open(name, JOURNAL_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(BATCH_STORE)) db.createObjectStore(BATCH_STORE, { keyPath: 'batchId' });
+      const batches = db.objectStoreNames.contains(BATCH_STORE)
+        ? request.transaction.objectStore(BATCH_STORE)
+        : db.createObjectStore(BATCH_STORE, { keyPath: 'batchId' });
+      if (!batches.indexNames.contains(BATCH_STATE_COLLECTION_INDEX)) {
+        batches.createIndex(BATCH_STATE_COLLECTION_INDEX, ['state', 'collection'], { unique: false });
+      }
       if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: 'conflictId' });
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: 'key' });
     };
@@ -417,6 +429,10 @@ function getRecord(db, storeName, key) {
 
 function getAllRecords(db, storeName) {
   return transact(db, storeName, 'readonly', (store) => requestResult(store.getAll()));
+}
+
+function getAllRecordsByIndex(db, storeName, indexName, key) {
+  return transact(db, storeName, 'readonly', (store) => requestResult(store.index(indexName).getAll(key)));
 }
 
 function deleteRecord(db, storeName, key) {

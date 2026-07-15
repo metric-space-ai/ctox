@@ -2,7 +2,7 @@ import { withTimeout } from './async-timeout.js';
 import { CTOX_COMMAND_AUTHORIZATION } from './command-lifecycle.generated.js';
 
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
-const COMMAND_SYNC_READY_TIMEOUT_MS = 15000;
+const COMMAND_SYNC_READY_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
 const COMMAND_CAPABILITY_TIMEOUT_MS = 5000;
 const COMMAND_CAPABILITY_NEGATIVE_CACHE_MS = 10000;
@@ -47,6 +47,7 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
       const cancellation = {
         id: `cmd_cancel_${crypto.randomUUID()}`,
         module: 'ctox',
+        command_type: 'ctox.command.cancel',
         type: 'ctox.command.cancel',
         record_id: targetCommandId,
         payload: {
@@ -65,7 +66,10 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
       });
     },
     async dispatch(command, options = {}) {
+      const commandId = command.id || '';
+      emitCommandLifecycle(commandId, command.command_type || command.type, 'dispatch_started');
       const receipt = await submitRxdbCommand({ db, sync, session, command });
+      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'local_receipt');
       const until = options.until || command?.until || 'accepted';
       if (until === 'local') return receipt;
       if (until === 'terminal') {
@@ -83,13 +87,15 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
           retryable: false,
         });
       }
-      return waitForCommandState({
+      const accepted = await waitForCommandState({
         db,
         sync,
         commandId: receipt.command_id,
         until,
         options: { ...command, ...options },
       });
+      emitCommandLifecycle(receipt.command_id, command.command_type || command.type, 'accepted');
+      return accepted;
     },
   };
 }
@@ -151,7 +157,8 @@ export async function getBusinessOsCapabilityToken({
     }
     rememberCapabilityFailure(now, 'capability_missing');
   } catch (error) {
-    // control plane unreachable — degrade to the legacy path
+    // Control plane unreachable. Remember the failure briefly; command
+    // submission remains fail-closed and never falls back to a direct write.
     rememberCapabilityFailure(now, String(error?.code || 'capability_unavailable'));
   }
   return null;
@@ -200,6 +207,7 @@ async function submitRxdbCommand({ db, sync, session, command }) {
   const submitStartedAt = Date.now();
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
   const capabilityToken = await getBusinessOsCapabilityToken();
+  emitCommandLifecycle(commandId, command.command_type || command.type, 'capability_resolved', submitStartedAt);
   // Every Business OS command mutates native/domain state. Offline reads stay
   // local-first, but mutation intent without a current server-issued actor
   // capability would be immutable and can never become authorized later.
@@ -222,16 +230,20 @@ async function submitRxdbCommand({ db, sync, session, command }) {
     capabilityToken,
   );
   const currentDb = await resolveCommandDb(db);
+  emitCommandLifecycle(commandId, command.command_type || command.type, 'database_resolved', submitStartedAt);
   const collection = currentDb?.raw?.business_commands;
   if (!collection) throw commandError(commandId, 'business_commands collection is required.');
 
   const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
+  emitCommandLifecycle(commandId, command.command_type || command.type, 'sync_ready', submitStartedAt);
   try {
     await flushSyncBridges(syncPlan.beforeCommand);
     const localWriteStartedAt = Date.now();
     await insertOrPatchCommandDocument(collection, commandId, doc);
+    emitCommandLifecycle(commandId, command.command_type || command.type, 'local_inserted', submitStartedAt);
     recordCommandMetric(sync, 'local_submit', commandId, Date.now() - localWriteStartedAt);
-    await flushSyncBridges(syncPlan.afterCommand);
+    await flushSyncBridges(syncPlan.submitBridges);
+    emitCommandLifecycle(commandId, command.command_type || command.type, 'push_confirmed', submitStartedAt);
     recordCommandMetric(sync, 'submit_receipt', commandId, Date.now() - submitStartedAt);
     return {
       ok: true,
@@ -242,6 +254,17 @@ async function submitRxdbCommand({ db, sync, session, command }) {
   } finally {
     await releaseSyncPlan(syncPlan);
   }
+}
+
+function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0) {
+  const detail = {
+    command_id: String(commandId || '').slice(0, 120),
+    command_type: String(commandType || '').slice(0, 120),
+    phase: String(phase || '').slice(0, 80),
+    elapsed_ms: startedAt ? Math.max(0, Date.now() - Number(startedAt)) : 0,
+  };
+  globalThis.dispatchEvent?.(new CustomEvent('ctox-business-command-lifecycle', { detail }));
+  console.info('[command-bus]', JSON.stringify(detail));
 }
 
 async function commandDocument(command, commandId, actor, capabilityToken = null) {
@@ -257,7 +280,15 @@ async function commandDocument(command, commandId, actor, capabilityToken = null
       || commandClientContext.source_module
       || 'ctox',
   ).trim() || 'ctox';
-  const commandType = String(command.type || command.command_type || 'business_os.chat.task').trim();
+  const canonicalCommandType = String(command.command_type || '').trim();
+  const legacyCommandType = String(command.type || '').trim();
+  if (canonicalCommandType && legacyCommandType && canonicalCommandType !== legacyCommandType) {
+    throw commandError(commandId, 'type and command_type must identify the same command.', {
+      code: 'invalid_command_contract',
+      retryable: false,
+    });
+  }
+  const commandType = canonicalCommandType || legacyCommandType || 'business_os.chat.task';
   const inboundChannel = String(command.inbound_channel || command.client_context?.inbound_channel || moduleId).trim();
   if (!commandType) throw commandError(commandId, 'command_type is required.');
   const recordId = command.record_id || '';
@@ -455,6 +486,8 @@ async function resolveCommandSync(sync) {
 async function prepareCommandSync({ db, sync, command = null }) {
   const currentSync = await resolveCommandSync(sync);
   const dependencyCollections = commandDependencySyncCollections(command);
+  const queueProjectionRequired = command?.sync_queue_tasks !== false;
+  const readyTimeoutMs = commandSyncReadyTimeoutMs(command);
   const leases = [];
   try {
     const dependencyBridges = await Promise.all(
@@ -465,16 +498,30 @@ async function prepareCommandSync({ db, sync, command = null }) {
         leases,
       )),
     );
-    const commandBridge = await currentSync?.startCollection?.('business_commands');
-    const queueBridge = await currentSync?.startCollection?.('ctox_queue_tasks');
-    const afterCommand = [commandBridge, queueBridge];
+    const commandBridge = await startScopedSyncCollection(
+      currentSync,
+      'business_commands',
+      `command-core:${command?.type || command?.command_type || 'unknown'}`,
+      leases,
+    );
+    const queueBridge = queueProjectionRequired
+      ? await startScopedSyncCollection(
+        currentSync,
+        'ctox_queue_tasks',
+        `command-queue:${command?.type || command?.command_type || 'unknown'}`,
+        leases,
+      )
+      : null;
+    const submitBridges = [commandBridge].filter(Boolean);
+    const afterCommand = [commandBridge, queueBridge].filter(Boolean);
     await Promise.all(
-      [...dependencyBridges, ...afterCommand].map((bridge) => (
-        waitForSyncBridgeReady(bridge, COMMAND_SYNC_READY_TIMEOUT_MS)
+      [...dependencyBridges, ...submitBridges].map((bridge) => (
+        waitForSyncBridgeReady(bridge, readyTimeoutMs)
       )),
     );
     return {
       beforeCommand: dependencyBridges,
+      submitBridges,
       afterCommand,
       leases,
       sync: currentSync,
@@ -485,13 +532,30 @@ async function prepareCommandSync({ db, sync, command = null }) {
   }
 }
 
+function commandSyncReadyTimeoutMs(command) {
+  const explicit = Number(command?.sync_ready_timeout_ms || 0);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(25, Math.min(COMMAND_SYNC_READY_TIMEOUT_MS, explicit));
+  }
+  const deadlineAtMs = Number(
+    command?.deadline_at_ms
+      || command?.command_deadline_at_ms
+      || command?.payload?.command_deadline_at_ms
+      || 0,
+  );
+  if (Number.isFinite(deadlineAtMs) && deadlineAtMs > Date.now()) {
+    return Math.max(25, Math.min(COMMAND_SYNC_READY_TIMEOUT_MS, deadlineAtMs - Date.now()));
+  }
+  return COMMAND_SYNC_READY_TIMEOUT_MS;
+}
+
 async function startScopedSyncCollection(sync, collection, reason, leases) {
+  if (typeof sync?.leaseCollection === 'function') {
+    const lease = await sync.leaseCollection(collection, reason);
+    leases.push(lease);
+    return lease;
+  }
   if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
-    if (typeof sync?.leaseCollection === 'function') {
-      const lease = await sync.leaseCollection(collection, reason);
-      leases.push(lease);
-      return lease;
-    }
     throw new Error(`${collection} requires sync.leaseCollection().`);
   }
   return sync?.startCollection?.(collection);
@@ -761,7 +825,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
   rememberActiveCommandId(commandId);
   try {
     currentDb = await resolveCommandDb(db);
-    syncPlan = await prepareCommandSync({ db: currentDb, sync });
+    syncPlan = await prepareCommandSync({ db: currentDb, sync, command: options });
     return await new Promise((resolve, reject) => {
       let settled = false;
       let rebindInFlight = false;
@@ -963,27 +1027,27 @@ async function findDoc(collection, id, { swallowErrors = true } = {}) {
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs) {
-  const state = syncBridgeFromHandle(bridge)?.state;
-  if (!state) return;
+  const resolvedBridge = syncBridgeFromHandle(bridge);
+  const state = resolvedBridge?.state;
+  const collection = cleanContextText(
+    bridge?.collection || resolvedBridge?.collection || state?.collection?.name,
+  ) || 'unknown';
+  if (!state) {
+    if (resolvedBridge?.mode === 'pending' || resolvedBridge?.mode === 'paused') {
+      throw commandError('', `CTOX Sync Engine collection "${collection}" is ${resolvedBridge.mode}.`, {
+        code: 'sync_unavailable',
+        retryable: true,
+      });
+    }
+    return;
+  }
   // Command submission needs an authenticated, open native peer so the new
   // local row can be pushed; it must not wait for the complete historical
   // pull of business_commands. A mature instance can contain many thousands
   // of immutable command records, making that cold pull much longer than the
   // command deadline even though the transport is already usable.
-  if (typeof state.getTransportStatus === 'function' || state.demandStatus) {
-    await withTimeout(
-      async () => {
-        while (!syncBridgePeerConnected(state)) {
-          if (state.cancelled) throw new Error('WebRTC replication cancelled');
-          await delay(50);
-        }
-      },
-      timeoutMs,
-      {
-        code: 'native_unavailable',
-        message: 'CTOX Sync Engine did not become ready before the command deadline.',
-      },
-    );
+  if (syncBridgeHasPeerStatus(state)) {
+    await waitForConnectedSyncPeer(state, collection, timeoutMs);
     return;
   }
   await withTimeout(
@@ -991,26 +1055,93 @@ async function waitForSyncBridgeReady(bridge, timeoutMs) {
     timeoutMs,
     {
       code: 'native_unavailable',
-      message: 'CTOX Sync Engine did not become ready before the command deadline.',
+      message: `CTOX Sync Engine collection "${collection}" did not become ready before the command deadline.`,
     },
   );
 }
 
-function syncBridgePeerConnected(state) {
-  if (state?.demandStatus?.peerConnected === true) return true;
-  try {
-    const status = state?.getTransportStatus?.() || {};
-    if (status?.demandLoading?.peerConnected === true) return true;
-    if (status?.peerConnected === true) return true;
-    return Array.isArray(status?.connectionStates)
-      && status.connectionStates.some((connection) => (
-        connection?.open === true
-        || connection?.channelReadyState === 'open'
-        || ['connected', 'completed'].includes(connection?.peerConnectionState)
+function syncBridgeHasPeerStatus(state) {
+  return typeof state?.getTransportStatus === 'function'
+    || Boolean(state?.demandStatus)
+    || Boolean(state?.peerStates$)
+    || Boolean(state?.active$)
+    || Boolean(state?.transportStatus$);
+}
+
+function waitForConnectedSyncPeer(state, collection, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let lastStatus = syncBridgeStatus(state);
+    const subscriptions = [];
+    const finish = (handler, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(pollTimer);
+      subscriptions.forEach((subscription) => subscription?.unsubscribe?.());
+      handler(value);
+    };
+    const inspect = () => {
+      if (settled) return;
+      lastStatus = syncBridgeStatus(state);
+      if (state.cancelled || state.canceled$?.getValue?.() === true) {
+        finish(reject, commandError('', `CTOX Sync Engine collection "${collection}" was cancelled.`, {
+          code: 'sync_unavailable',
+          retryable: true,
+        }));
+        return;
+      }
+      if (syncBridgePeerConnected(state, lastStatus)) finish(resolve);
+    };
+    const timer = setTimeout(() => {
+      const summary = syncBridgeStatusSummary(lastStatus);
+      finish(reject, commandError(
+        '',
+        `CTOX Sync Engine collection "${collection}" has no authenticated WebRTC peer after ${timeoutMs} ms (${summary}).`,
+        { code: 'native_unavailable', retryable: true },
       ));
+    }, timeoutMs);
+    const pollTimer = setInterval(inspect, 50);
+    for (const observable of [state.peerStates$, state.active$, state.transportStatus$, state.canceled$]) {
+      if (settled) break;
+      const subscription = observable?.subscribe?.(inspect);
+      if (!subscription) continue;
+      if (settled) subscription.unsubscribe?.();
+      else subscriptions.push(subscription);
+    }
+    inspect();
+  });
+}
+
+function syncBridgeStatus(state) {
+  try {
+    return state?.getTransportStatus?.() || state?.transportStatus$?.getValue?.() || {};
   } catch {
-    return false;
+    return {};
   }
+}
+
+function syncBridgePeerConnected(state, status = syncBridgeStatus(state)) {
+  if (state?.demandStatus?.peerConnected === true) return true;
+  if (status?.demandLoading?.peerConnected === true || status?.peerConnected === true) return true;
+  const peerStates = state?.peerStates$?.getValue?.();
+  if (peerStates instanceof Map && peerStates.size > 0) return true;
+  if (Array.isArray(peerStates) && peerStates.length > 0) return true;
+  if (state?.active$?.getValue?.() === true && cleanContextText(state?.activeRemotePeerId)) return true;
+  return Array.isArray(status?.connectionStates)
+    && status.connectionStates.some((connection) => {
+      const channelState = connection?.channelState || connection?.channelReadyState || '';
+      const peerState = connection?.peerConnectionState || '';
+      return connection?.open === true
+        || (channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(peerState));
+    });
+}
+
+function syncBridgeStatusSummary(status) {
+  const activePeerCount = Number(status?.activePeerCount || 0);
+  const connectionCount = Number(status?.connectionCount || 0);
+  const demandPeer = status?.demandLoading?.peerConnected === true ? 'connected' : 'not-connected';
+  return `active peers: ${activePeerCount}, connections: ${connectionCount}, collection peer: ${demandPeer}`;
 }
 
 async function flushSyncBridges(bridges) {
@@ -1018,7 +1149,25 @@ async function flushSyncBridges(bridges) {
 }
 
 async function flushSyncBridge(bridge) {
-  const state = syncBridgeFromHandle(bridge)?.state;
+  const resolvedBridge = syncBridgeFromHandle(bridge);
+  if (resolvedBridge?.mode === 'follower') {
+    if (typeof resolvedBridge.flush !== 'function') {
+      throw commandError('', 'Multi-tab sync follower cannot confirm the leader push.', {
+        code: 'sync_unavailable',
+        retryable: true,
+      });
+    }
+    await withTimeout(
+      () => resolvedBridge.flush(),
+      COMMAND_SYNC_FLUSH_TIMEOUT_MS,
+      {
+        code: 'sync_unavailable',
+        message: 'CTOX Sync Engine leader did not confirm the command push before the deadline.',
+      },
+    );
+    return;
+  }
+  const state = resolvedBridge?.state;
   if (!state) return;
   await withTimeout(
     () => {

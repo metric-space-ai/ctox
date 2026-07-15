@@ -135,7 +135,18 @@ class CtoxRxDatabase {
       });
       this.collections[name] = collection;
       this[name] = collection;
-      await collection.storageCollection.initializeRecovery?.();
+      // Registering schemas is on the shell's critical startup path. Recovery
+      // must start immediately, but it must not hold every read-only surface
+      // behind a potentially large journal replay. All mutating collection
+      // methods call initializeRecovery() themselves and therefore still
+      // fail closed until recovery has completed.
+      collection.recoveryInitialization = Promise.resolve(
+        collection.storageCollection.initializeRecovery?.(),
+      ).catch((error) => {
+        collection.recoveryInitializationError = error;
+        console.error(`[ctox-rxdb] recovery initialization failed for ${name}:`, error);
+        return null;
+      });
     }
     return this.collections;
   }

@@ -85,10 +85,10 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   appsec_pipeline_stages: "62a18e76f2a1eaf38243d7b65f1614eeb7f38c67e5e32a8211e9bc099a7b613b",
   appsec_runs: "815d0931042bedab1356e27a22b3172b8e62e6c3eff983e7e2f74be89f30b326",
   appsec_scanner_inventory: "529588bf3120a75dbf86d7f8663eb5e088cc19e13477042ae5338fa0bb079bb3",
-  browser_frames: "3718321ed3853a1dff93aaedd5650e2487bb65795f761611a017e66f998635ed",
-  browser_input_events: "5733148e341550c1166db59b9b93c7975dc7aa4753451da9dd876b4cbe3d0875",
-  browser_sessions: "8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3",
-  browser_tabs: "3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004",
+  browser_frames: "9cf5482db6b78cdf4aec40ec1cb308c1a2c1a5e31ae2de191c63e9ae34f31ba4",
+  browser_input_events: "7435ba467228c2be5b43837e0644c2ebbb5c748ecc15098e508144a82605b0d9",
+  browser_sessions: "67fa8ec7abfbdd8651ad73042909ca417b1902a7c6d59a94d4f98f4d50392f42",
+  browser_tabs: "d06a73ca6896eeda3cf494616118b0bd4d7ca2f5b31315fc7f668cbb66fe8187",
   business_chats: "0e52de33b4ea565122debb0e46296b44cdbe13f60190b9d9d06259f3719918d7",
   business_commands: "83f3dc7b9078ae89640b9ffcc33bf29e1c74ec40df7cf63af9889b5bc0e4d238",
   business_consents: "4e0031090f60e466e8d9b2818a73faac41d89adabba5c2f2fd75a4b48cef9d68",
@@ -116,7 +116,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   communication_messages: "10d120234ec23bbe98124d255599f44d2ef68ecb5ff29787b9b647aaf6537b6f",
   communication_threads: "2111d907ee8cc8c7c2c4e9f10a43bc56f217071dbee0610a96b0457ef6473a8d",
   ctox_bug_reports: "f7329368ad5144b8ea740600265f06c6ac19ad049de751cec92818d9d9de94b5",
-  ctox_queue_tasks: "ef301e5c6b94a75aff9cc3e7f3d901ce0096b6cd003880450d54450d31f4ed0e",
+  ctox_queue_tasks: "00600391951e915fdf962bd89edaeabe24ed3475fed178f23eb37cba5e06faff",
   ctox_runs: "73df37bddc2e511b0567496f6199089aef436dd598a3e0bf85f462d38b4f3fff",
   ctox_runtime_settings: "3958bb6580e9705f3688fcf453a80ec33c486b43ac6988f015ffc16cb5ac918d",
   ctox_task_approval_requests: "5bbda4583cadd08e30c5948d2ed197cbf4a1f8f342580c1e531fd2a054da84fe",
@@ -229,8 +229,9 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   support_views: "10ac9212258aef30b798d1d4e6d58712b9f59ee725966a8c7bd0fa49f72c1033",
   user_notifications: "28593fbad81de44fc2218886d67284cc140ca4b657bf75267412859a32753e5b",
   user_thread_links: "cc911076015a884b58fda2b28b5e8d840b048e78d958081429db31d573916129",
-  user_thread_messages: "27f6e6e683c5ae1ccce85e4a73ce6d7df44639faeaad85f9f3fbadf0762a573a",
-  user_threads: "5074a07e8b5b03b69f6f47e4f908cbbe52b920a10f0ce615459afb3af47edb63"
+  user_thread_messages: "3e9ac54c218496245fdeaa9e8cd6f2f649455448703bada2ac290a1de4fd7646",
+  user_thread_states: "71e70b8a2e44bd2b851b24fde40a5b4cd42cd9e0b6158525055a9c04743de9eb",
+  user_threads: "97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb"
 });
 function canonicalJson(value) {
   return JSON.stringify(sortCanonical(value));
@@ -883,8 +884,9 @@ var recoveryCryptoTestInternals = Object.freeze({
 });
 
 // src/apps/business-os/rxdb/src/recovery-journal.mjs
-var JOURNAL_VERSION = 2;
+var JOURNAL_VERSION = 3;
 var BATCH_STORE = "batches";
+var BATCH_STATE_COLLECTION_INDEX = "stateCollection";
 var CONFLICT_STORE = "conflicts";
 var META_STORE = "meta";
 var ACKED_RETENTION_MS = 24 * 60 * 60 * 1e3;
@@ -942,7 +944,7 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
   }
   async markMasterAcknowledged(collection, documents = {}) {
-    const batches = await this.listBatches("pending");
+    const batches = await this.listBatches("pending", collection);
     for (const batch of batches) {
       if (batch.collection !== collection) continue;
       const acked = new Set(batch.ackedIds || []);
@@ -962,10 +964,11 @@ var CtoxRecoveryJournal = class {
     await this.gc();
     await this.publishStatus();
   }
-  async replayRegisteredCollections() {
-    const batches = await this.listBatches("pending");
+  async replayRegisteredCollections(collection = null) {
+    const batches = await this.listBatches("pending", collection);
     const outcomes = [];
     for (const batch of batches) {
+      if (Number(batch.primaryCommittedAtMs || 0) > 0) continue;
       const replayer = this.replayers.get(batch.collection);
       if (!replayer) continue;
       if (batch.schemaHash && replayer.schemaHash && batch.schemaHash !== replayer.schemaHash) {
@@ -1152,9 +1155,9 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
     return { imported: true, replay };
   }
-  async listBatches(state = null) {
-    const rows = (await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
-    return state ? rows.filter((row) => row.state === state) : rows;
+  async listBatches(state = null, collection = null) {
+    const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
   async gc(now = Date.now()) {
     const rows = await this.listBatches("master_acked");
@@ -1200,7 +1203,10 @@ function openJournalDatabase(name) {
     const request = indexedDB.open(name, JOURNAL_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(BATCH_STORE)) db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
+      const batches = db.objectStoreNames.contains(BATCH_STORE) ? request.transaction.objectStore(BATCH_STORE) : db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
+      if (!batches.indexNames.contains(BATCH_STATE_COLLECTION_INDEX)) {
+        batches.createIndex(BATCH_STATE_COLLECTION_INDEX, ["state", "collection"], { unique: false });
+      }
       if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: "conflictId" });
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: "key" });
     };
@@ -1279,6 +1285,9 @@ function getRecord(db, storeName, key) {
 }
 function getAllRecords(db, storeName) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.getAll()));
+}
+function getAllRecordsByIndex(db, storeName, indexName, key) {
+  return transact(db, storeName, "readonly", (store) => requestResult(store.index(indexName).getAll(key)));
 }
 function deleteRecord(db, storeName, key) {
   return transact(db, storeName, "readwrite", (store) => requestResult(store.delete(key)));
@@ -2071,13 +2080,13 @@ var CtoxIndexedDbCollection = class {
           })
         });
         await this.acknowledgePersistedMasterRecovery();
-        await this.recoveryJournal.replayRegisteredCollections();
+        await this.recoveryJournal.replayRegisteredCollections(this.name);
       })();
     }
     return this.recoveryReady;
   }
   async acknowledgePersistedMasterRecovery() {
-    const batches = await this.recoveryJournal?.listBatches?.("pending") || [];
+    const batches = await this.recoveryJournal?.listBatches?.("pending", this.name) || [];
     const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => batch.documentIds || []))];
     if (!ids.length) return;
     const documents = {};
@@ -8583,6 +8592,7 @@ var CtoxWebRtcReplicationState = class {
     this.localPushTimer = null;
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
+    this.localCheckpointValidityKey = "";
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -8700,9 +8710,12 @@ var CtoxWebRtcReplicationState = class {
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
+    const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    const localValidityKey = localCheckpointValidityKey(localCheckpoint);
+    this.localCheckpointValidityKey = localValidityKey;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey) {
+      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey) {
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -8825,7 +8838,7 @@ var CtoxWebRtcReplicationState = class {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
-      this.persistCheckpointsForPeer(activePeerId);
+      await this.persistCheckpointsForPeer(activePeerId);
       if (!documents.length) break;
     }
   }
@@ -8905,12 +8918,12 @@ var CtoxWebRtcReplicationState = class {
         if (result?.scanLimitReached && nextCheckpoint && checkpointKey(nextCheckpoint) !== checkpointKey(checkpoint)) {
           checkpoint = nextCheckpoint;
           this.pushCheckpointsByPeer.set(peerId, checkpoint);
-          this.persistCheckpointsForPeer(peerId);
+          await this.persistCheckpointsForPeer(peerId);
           continue;
         }
         checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
-        this.persistCheckpointsForPeer(peerId);
+        await this.persistCheckpointsForPeer(peerId);
         break;
       }
       let rows = documents.map((doc) => ({
@@ -8954,7 +8967,7 @@ var CtoxWebRtcReplicationState = class {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
-      this.persistCheckpointsForPeer(peerId);
+      await this.persistCheckpointsForPeer(peerId);
       if (documents.length < batchSize) break;
     }
   }
@@ -9266,8 +9279,13 @@ var CtoxWebRtcReplicationState = class {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
-    if (validityKey && (retainedPull || retainedPush)) {
-      this.retainedCheckpoints = { validityKey, pull: retainedPull, push: retainedPush };
+    if (validityKey && this.localCheckpointValidityKey && (retainedPull || retainedPush)) {
+      this.retainedCheckpoints = {
+        validityKey,
+        localValidityKey: this.localCheckpointValidityKey,
+        pull: retainedPull,
+        push: retainedPush
+      };
       writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
     }
     peerStates.delete(peerId);
@@ -9301,11 +9319,16 @@ var CtoxWebRtcReplicationState = class {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
   }
-  persistCheckpointsForPeer(peerId) {
+  async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     if (!validityKey) return;
+    const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    const localValidityKey = localCheckpointValidityKey(localCheckpoint);
+    if (!localValidityKey) return;
+    this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
+      localValidityKey,
       pull: this.pullCheckpointsByPeer.get(peerId) || null,
       push: this.pushCheckpointsByPeer.get(peerId) || null,
       collection: this.collection.name,
@@ -9497,6 +9520,13 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
+function localCheckpointValidityKey(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== "object") return "";
+  const epoch = typeof checkpoint.epoch === "string" ? checkpoint.epoch.trim() : "";
+  const schemaHashValue = typeof checkpoint.schemaHash === "string" ? checkpoint.schemaHash.trim() : "";
+  if (!epoch) return "";
+  return `${epoch}|${schemaHashValue}`;
+}
 function persistentCheckpointStorageKey(topic, collection) {
   return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ""))}.${encodeURIComponent(String(collection || ""))}`;
 }
@@ -9662,6 +9692,7 @@ var COORDINATORS = /* @__PURE__ */ Symbol.for("ctox.rxdb.multi-tab-sync-coordina
 var CHANNEL_PREFIX2 = "ctox-rxdb-sync-leader-";
 var HEARTBEAT_MS = 5e3;
 var LEASE_TTL_MS = 15e3;
+var DIRTY_ACK_TIMEOUT_MS = 1e4;
 function getMultiTabSyncCoordinator({ databaseName, room } = {}) {
   const key = `${databaseName || "ctox"}|${room || "default"}`;
   const root = globalThis;
@@ -9681,6 +9712,7 @@ function createMultiTabSyncCoordinator({
   const listeners = /* @__PURE__ */ new Set();
   const dirtyListeners = /* @__PURE__ */ new Set();
   const externalChangeListeners = /* @__PURE__ */ new Set();
+  const pendingDirtyAcks = /* @__PURE__ */ new Map();
   const channel = typeof globalThis.BroadcastChannel === "function" ? new BroadcastChannel(`${CHANNEL_PREFIX2}${databaseName}-${stableHash(room)}`) : null;
   const lockName = `ctox-rxdb-sync:${databaseName}:${stableHash(room)}`;
   let role = "follower";
@@ -9707,6 +9739,24 @@ function createMultiTabSyncCoordinator({
       channel?.postMessage({ ...message, tabId, atMs: clock() });
     } catch {
     }
+  };
+  const handleDirty = async (message) => {
+    let error = "";
+    try {
+      await Promise.all([...dirtyListeners].map((listener) => listener(message)));
+    } catch (cause) {
+      error = String(cause?.message || cause || "leader push failed").slice(0, 240);
+    }
+    if (message.requestId) {
+      post({
+        type: "dirty-ack",
+        requestId: message.requestId,
+        targetTabId: message.tabId,
+        ok: !error,
+        error
+      });
+    }
+    if (error && !message.requestId) throw new Error(error);
   };
   const becomeLeader = (reason) => {
     if (closed) return;
@@ -9793,11 +9843,15 @@ function createMultiTabSyncCoordinator({
         attemptElection().catch(() => {
         });
       } else if (message.type === "dirty" && role === "leader") {
-        for (const listener of dirtyListeners) {
-          try {
-            listener(message);
-          } catch {
-          }
+        handleDirty(message).catch(() => {
+        });
+      } else if (message.type === "dirty-ack" && String(message.targetTabId || "") === tabId) {
+        const pending = pendingDirtyAcks.get(String(message.requestId || ""));
+        if (pending) {
+          pendingDirtyAcks.delete(String(message.requestId || ""));
+          clearTimeout(pending.timer);
+          if (message.ok === false) pending.reject(new Error(message.error || "Leader could not push the collection."));
+          else pending.resolve(message);
         }
       } else if (message.type === "replicated-change" && role === "follower") {
         for (const listener of externalChangeListeners) {
@@ -9863,6 +9917,21 @@ function createMultiTabSyncCoordinator({
     notifyDirty(collection, ids = []) {
       post({ type: "dirty", collection, ids });
     },
+    notifyDirtyAndWait(collection, ids = [], { timeoutMs = DIRTY_ACK_TIMEOUT_MS } = {}) {
+      if (role === "leader") {
+        return handleDirty({ type: "dirty", collection, ids, tabId, atMs: clock() });
+      }
+      if (!channel || !leaderTabId) return Promise.reject(new Error("No multi-tab sync leader is available."));
+      const requestId = globalThis.crypto?.randomUUID?.() || `dirty-${tabId}-${clock()}-${Math.random().toString(36).slice(2)}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingDirtyAcks.delete(requestId);
+          reject(new Error(`Multi-tab leader did not acknowledge ${collection} within ${timeoutMs}ms.`));
+        }, Math.max(100, Number(timeoutMs) || DIRTY_ACK_TIMEOUT_MS));
+        pendingDirtyAcks.set(requestId, { resolve, reject, timer });
+        post({ type: "dirty", requestId, collection, ids });
+      });
+    },
     notifyReplicatedChange(collection, ids = []) {
       post({ type: "replicated-change", collection, ids });
     },
@@ -9880,6 +9949,11 @@ function createMultiTabSyncCoordinator({
         channel?.close();
       } catch {
       }
+      for (const pending of pendingDirtyAcks.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("Multi-tab sync coordinator closed before leader acknowledgement."));
+      }
+      pendingDirtyAcks.clear();
       listeners.clear();
       dirtyListeners.clear();
       externalChangeListeners.clear();
@@ -9900,6 +9974,7 @@ function delay3(ms) {
 var multiTabSyncCoordinatorTestInternals = Object.freeze({
   HEARTBEAT_MS,
   LEASE_TTL_MS,
+  DIRTY_ACK_TIMEOUT_MS,
   stableHash
 });
 
@@ -10007,7 +10082,13 @@ var CtoxRxDatabase = class {
       });
       this.collections[name] = collection;
       this[name] = collection;
-      await collection.storageCollection.initializeRecovery?.();
+      collection.recoveryInitialization = Promise.resolve(
+        collection.storageCollection.initializeRecovery?.()
+      ).catch((error) => {
+        collection.recoveryInitializationError = error;
+        console.error(`[ctox-rxdb] recovery initialization failed for ${name}:`, error);
+        return null;
+      });
     }
     return this.collections;
   }

@@ -2,6 +2,7 @@ const COORDINATORS = Symbol.for('ctox.rxdb.multi-tab-sync-coordinators.v1');
 const CHANNEL_PREFIX = 'ctox-rxdb-sync-leader-';
 const HEARTBEAT_MS = 5_000;
 const LEASE_TTL_MS = 15_000;
+const DIRTY_ACK_TIMEOUT_MS = 10_000;
 
 export function getMultiTabSyncCoordinator({ databaseName, room } = {}) {
   const key = `${databaseName || 'ctox'}|${room || 'default'}`;
@@ -23,6 +24,7 @@ export function createMultiTabSyncCoordinator({
   const listeners = new Set();
   const dirtyListeners = new Set();
   const externalChangeListeners = new Set();
+  const pendingDirtyAcks = new Map();
   const channel = typeof globalThis.BroadcastChannel === 'function'
     ? new BroadcastChannel(`${CHANNEL_PREFIX}${databaseName}-${stableHash(room)}`)
     : null;
@@ -47,6 +49,25 @@ export function createMultiTabSyncCoordinator({
 
   const post = (message) => {
     try { channel?.postMessage({ ...message, tabId, atMs: clock() }); } catch {}
+  };
+
+  const handleDirty = async (message) => {
+    let error = '';
+    try {
+      await Promise.all([...dirtyListeners].map((listener) => listener(message)));
+    } catch (cause) {
+      error = String(cause?.message || cause || 'leader push failed').slice(0, 240);
+    }
+    if (message.requestId) {
+      post({
+        type: 'dirty-ack',
+        requestId: message.requestId,
+        targetTabId: message.tabId,
+        ok: !error,
+        error,
+      });
+    }
+    if (error && !message.requestId) throw new Error(error);
   };
 
   const becomeLeader = (reason) => {
@@ -133,8 +154,14 @@ export function createMultiTabSyncCoordinator({
         leaderTabId = '';
         attemptElection().catch(() => {});
       } else if (message.type === 'dirty' && role === 'leader') {
-        for (const listener of dirtyListeners) {
-          try { listener(message); } catch {}
+        handleDirty(message).catch(() => {});
+      } else if (message.type === 'dirty-ack' && String(message.targetTabId || '') === tabId) {
+        const pending = pendingDirtyAcks.get(String(message.requestId || ''));
+        if (pending) {
+          pendingDirtyAcks.delete(String(message.requestId || ''));
+          clearTimeout(pending.timer);
+          if (message.ok === false) pending.reject(new Error(message.error || 'Leader could not push the collection.'));
+          else pending.resolve(message);
         }
       } else if (message.type === 'replicated-change' && role === 'follower') {
         for (const listener of externalChangeListeners) {
@@ -188,6 +215,21 @@ export function createMultiTabSyncCoordinator({
     onDirty(listener) { dirtyListeners.add(listener); return () => dirtyListeners.delete(listener); },
     onExternalChange(listener) { externalChangeListeners.add(listener); return () => externalChangeListeners.delete(listener); },
     notifyDirty(collection, ids = []) { post({ type: 'dirty', collection, ids }); },
+    notifyDirtyAndWait(collection, ids = [], { timeoutMs = DIRTY_ACK_TIMEOUT_MS } = {}) {
+      if (role === 'leader') {
+        return handleDirty({ type: 'dirty', collection, ids, tabId, atMs: clock() });
+      }
+      if (!channel || !leaderTabId) return Promise.reject(new Error('No multi-tab sync leader is available.'));
+      const requestId = globalThis.crypto?.randomUUID?.() || `dirty-${tabId}-${clock()}-${Math.random().toString(36).slice(2)}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingDirtyAcks.delete(requestId);
+          reject(new Error(`Multi-tab leader did not acknowledge ${collection} within ${timeoutMs}ms.`));
+        }, Math.max(100, Number(timeoutMs) || DIRTY_ACK_TIMEOUT_MS));
+        pendingDirtyAcks.set(requestId, { resolve, reject, timer });
+        post({ type: 'dirty', requestId, collection, ids });
+      });
+    },
     notifyReplicatedChange(collection, ids = []) { post({ type: 'replicated-change', collection, ids }); },
     async close() {
       if (role === 'leader') post({ type: 'leader-release' });
@@ -200,6 +242,11 @@ export function createMultiTabSyncCoordinator({
       globalThis.document?.removeEventListener?.('resume', lifecycleResume);
       globalThis.removeEventListener?.('pageshow', lifecycleResume);
       try { channel?.close(); } catch {}
+      for (const pending of pendingDirtyAcks.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('Multi-tab sync coordinator closed before leader acknowledgement.'));
+      }
+      pendingDirtyAcks.clear();
       listeners.clear();
       dirtyListeners.clear();
       externalChangeListeners.clear();
@@ -223,5 +270,6 @@ function delay(ms) {
 export const multiTabSyncCoordinatorTestInternals = Object.freeze({
   HEARTBEAT_MS,
   LEASE_TTL_MS,
+  DIRTY_ACK_TIMEOUT_MS,
   stableHash,
 });

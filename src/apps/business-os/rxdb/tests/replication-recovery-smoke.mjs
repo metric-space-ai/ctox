@@ -6,8 +6,9 @@
 // 2. Pull retry: a failed pull must re-arm via `retryTime` (pulls are
 //    otherwise purely event-driven; a quiet collection stayed stale forever).
 // 3. Checkpoint retention: pull/push checkpoints survive a peer drop and are
-//    re-seeded on reconnect ONLY when the native storage generation
-//    (epoch + peer session id) matches — otherwise a full resync is forced.
+//    re-seeded on reconnect ONLY when both the native storage generation and
+//    the local browser collection checkpoint match. A cleared browser store
+//    must force a full pull even when the daemon generation is unchanged.
 //
 // The test drives the real CtoxWebRtcReplicationState through replicateWebRTC
 // with a mock collection; network-level methods are stubbed per instance so
@@ -274,6 +275,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   state.peerStates$.next(new Map([['peer-1', { peerId: 'peer-1' }]]));
   state.pullCheckpointsByPeer.set('peer-1', { lwt: 111 });
   state.pushCheckpointsByPeer.set('peer-1', { lwt: 222 });
+  state.localCheckpointValidityKey = 'checkpoint-epoch-1|';
 
   state.removePeer('peer-1', 'test-drop');
   assert(state.retainedCheckpoints, 'retention: checkpoints retained on peer drop');
@@ -290,9 +292,26 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     'retention: push checkpoint re-seeded for the new peer id',
   );
 
-  // Drop again, then reconnect with a DIFFERENT daemon run: full resync.
+  // A primary IndexedDB reset clears the local collection but not localStorage.
+  // The old persistent pull checkpoint must not hide all master documents.
   state.peerStates$.next(new Map([['peer-2', { peerId: 'peer-2' }]]));
-  state.removePeer('peer-2', 'test-drop');
+  state.removePeer('peer-2', 'test-browser-reset');
+  state.collection.storageCollection.replicationCheckpointStatus = async () => ({
+    epoch: 'browser:checkpoints:empty',
+    schemaHash: 'hash-checkpoints',
+    state: 'advertised',
+  });
+  await state.runPeerReady('peer-browser-reset', protoSameGeneration, false);
+  assert(
+    !state.pullCheckpointsByPeer.has('peer-browser-reset'),
+    'retention: browser primary reset must discard the stale pull checkpoint',
+  );
+  assert(state.retainedCheckpoints === null, 'retention: browser reset clears persistent checkpoints');
+
+  // Drop again, then reconnect with a DIFFERENT daemon run: full resync.
+  state.peerStates$.next(new Map([['peer-browser-reset', { peerId: 'peer-browser-reset' }]]));
+  state.pullCheckpointsByPeer.set('peer-browser-reset', { lwt: 333 });
+  state.removePeer('peer-browser-reset', 'test-drop');
   const protoNewGeneration = {
     checkpoint: { epoch: 'checkpoint-epoch-1' },
     peerSession: { sessionId: 'rxdb-rs-run-B', role: 'ctox_instance' },

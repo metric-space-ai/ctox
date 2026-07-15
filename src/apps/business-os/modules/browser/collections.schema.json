@@ -16,10 +16,24 @@
         [
           "tab_id",
           "seq"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "seq"
         ]
       ],
       "primaryKey": "id",
       "properties": {
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "base_frame_id": {
+          "type": "string"
+        },
         "captured_at_ms": {
           "type": "number"
         },
@@ -35,6 +49,9 @@
         "frame_hash": {
           "type": "string"
         },
+        "frame_kind": {
+          "type": "string"
+        },
         "height": {
           "type": "number"
         },
@@ -43,6 +60,9 @@
           "type": "string"
         },
         "mime_type": {
+          "type": "string"
+        },
+        "owner_user_id": {
           "type": "string"
         },
         "quality": {
@@ -58,6 +78,9 @@
           "type": "number"
         },
         "tab_id": {
+          "type": "string"
+        },
+        "tenant_id": {
           "type": "string"
         },
         "updated_at_ms": {
@@ -88,7 +111,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "browser_input_events": {
       "additionalProperties": true,
@@ -106,14 +129,29 @@
         [
           "status",
           "created_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "status",
+          "seq"
         ]
       ],
       "primaryKey": "id",
       "properties": {
+        "ack_at_ms": {
+          "type": "number"
+        },
+        "ack_status": {
+          "type": "string"
+        },
         "button": {
           "type": "string"
         },
         "buttons": {
+          "type": "number"
+        },
+        "client_seq": {
           "type": "number"
         },
         "code": {
@@ -121,6 +159,9 @@
         },
         "consumed_at_ms": {
           "type": "number"
+        },
+        "controller_user_id": {
+          "type": "string"
         },
         "created_at_ms": {
           "type": "number"
@@ -134,6 +175,12 @@
         "error": {
           "type": "string"
         },
+        "error_code": {
+          "type": "string"
+        },
+        "frame_seq": {
+          "type": "number"
+        },
         "id": {
           "maxLength": 220,
           "type": "string"
@@ -141,11 +188,17 @@
         "key": {
           "type": "string"
         },
+        "lease_id": {
+          "type": "string"
+        },
         "modifiers": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "owner_user_id": {
+          "type": "string"
         },
         "payload": {
           "additionalProperties": true,
@@ -161,6 +214,9 @@
           "type": "string"
         },
         "tab_id": {
+          "type": "string"
+        },
+        "tenant_id": {
           "type": "string"
         },
         "text": {
@@ -189,7 +245,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "browser_sessions": {
       "additionalProperties": true,
@@ -198,11 +254,28 @@
         [
           "status",
           "updated_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "updated_at_ms"
         ]
       ],
       "primaryKey": "id",
       "properties": {
         "active_frame_id": {
+          "type": "string"
+        },
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "controller_lease_expires_at_ms": {
+          "type": "number"
+        },
+        "controller_lease_id": {
           "type": "string"
         },
         "controller_user_id": {
@@ -246,10 +319,19 @@
         "pending_input_count": {
           "type": "number"
         },
+        "profile_mode": {
+          "type": "string"
+        },
         "runtime_status": {
           "type": "string"
         },
+        "security_status": {
+          "type": "string"
+        },
         "status": {
+          "type": "string"
+        },
+        "tenant_id": {
           "type": "string"
         },
         "title": {
@@ -272,7 +354,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "browser_tabs": {
       "additionalProperties": true,
@@ -281,12 +363,23 @@
         [
           "session_id",
           "updated_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "updated_at_ms"
         ]
       ],
       "primaryKey": "id",
       "properties": {
         "active": {
           "type": "boolean"
+        },
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "can_go_back": {
           "type": "boolean"
@@ -316,14 +409,29 @@
         "loading": {
           "type": "boolean"
         },
+        "oauth_popup": {
+          "type": "boolean"
+        },
+        "opener_tab_id": {
+          "type": "string"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
         "payload": {
           "additionalProperties": true,
           "type": "object"
+        },
+        "position": {
+          "type": "number"
         },
         "session_id": {
           "type": "string"
         },
         "status": {
+          "type": "string"
+        },
+        "tenant_id": {
           "type": "string"
         },
         "title": {
@@ -344,7 +452,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     }
   },
   "module_id": "browser",

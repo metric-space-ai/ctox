@@ -18,7 +18,7 @@
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
-import { getBusinessOsCapabilityToken } from './command-bus.js';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260714-chat-queue-v56';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -39,6 +39,7 @@ const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 // user-visible command failure.
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
+const COMMAND_FOLLOWER_DIRECT_TIMEOUT_MS = 12_000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
 const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
@@ -56,6 +57,10 @@ let signalingErrorObserverInstalled = false;
 export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
   const activeCollections = new Set();
+  // Direct shell/service consumers pin a bridge until they explicitly stop
+  // it. App windows use reference-counted leases instead, so closing the last
+  // window can return the sync runtime to its pre-launch resource baseline.
+  const pinnedCollections = new Set();
   const collectionLeaseCounts = new Map();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
@@ -64,6 +69,17 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const multiTabUnsubscribers = [];
   let suspensionReason = '';
   let stopped = false;
+  const publishResourceBudget = () => {
+    const root = globalThis.document?.documentElement;
+    if (!root?.dataset) return;
+    root.dataset.syncActiveCollectionCount = String(activeCollections.size);
+    root.dataset.syncBridgeCount = String(bridges.size);
+    root.dataset.syncPinnedCollectionCount = String(pinnedCollections.size);
+    root.dataset.syncLeaseCount = String(
+      [...collectionLeaseCounts.values()].reduce((sum, count) => sum + count, 0),
+    );
+  };
+  publishResourceBudget();
   const useWebrtc = nativeRxdbPeerReady(config, db);
   if (!useWebrtc) {
     throw new Error('Business OS requires RxDB WebRTC sync; unsupported sync contract.');
@@ -128,6 +144,16 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     scheduleDiagnosticEmit({
       immediate: options.immediate === true || isUrgentDiagnosticUpdate(updates),
     });
+  };
+  const flushFollowerDirectly = async (collection) => {
+    const current = await Promise.resolve(bridges.get(collection)).catch(() => null);
+    if (current?.mode === 'follower') bridges.delete(collection);
+    const direct = await syncRuntime.startCollection(collection, { pin: false, forceDirect: true });
+    const state = direct?.state;
+    if (!state) throw new Error(`Direct sync bridge for ${collection} is unavailable.`);
+    await waitForNativePeerOpenState(state, collection, COMMAND_FOLLOWER_DIRECT_TIMEOUT_MS);
+    if (typeof state.pushToRemotePeers === 'function') await state.pushToRemotePeers();
+    else await state.scheduleLocalWritePush?.();
   };
   const resetRoomCircuit = () => {
     roomCircuit.state = 'closed';
@@ -212,7 +238,9 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     const bridgePromises = [...bridges.values()];
     bridges.clear();
     activeCollections.clear();
+    pinnedCollections.clear();
     collectionLeaseCounts.clear();
+    publishResourceBudget();
     const states = await Promise.allSettled(bridgePromises);
     for (const state of states) {
       if (state.status === 'fulfilled') {
@@ -298,7 +326,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260714-browser-contract-v59');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-recovery-index-v62');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -324,7 +352,12 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
             const bridge = await Promise.resolve(bridgePromise).catch(() => null);
             if (!bridge || bridge.mode === 'follower') continue;
             try { await withTimeout(bridge.stop?.(), 3000); } catch {}
-            bridges.set(collection, Promise.resolve(createFollowerBridge(collection, status)));
+            bridges.set(collection, Promise.resolve(createFollowerBridge(
+              collection,
+              status,
+              multiTabCoordinator,
+              () => flushFollowerDirectly(collection),
+            )));
             recordCollection(collection, {
               status: 'follower',
               connectionStatus: 'follower',
@@ -335,11 +368,15 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         });
       }
     }) || (() => {}));
-    multiTabUnsubscribers.push(multiTabCoordinator.onDirty?.(({ collection }) => {
+    multiTabUnsubscribers.push(multiTabCoordinator.onDirty?.(({ collection }) => (
       Promise.resolve(bridges.get(normalizeCollectionName(collection)))
-        .then((bridge) => bridge?.state?.scheduleLocalWritePush?.())
-        .catch(() => {});
-    }) || (() => {}));
+        .then((bridge) => {
+          const state = bridge?.state;
+          if (!state) throw new Error(`Leader bridge for ${collection} is unavailable.`);
+          if (typeof state.pushToRemotePeers === 'function') return state.pushToRemotePeers();
+          return state.scheduleLocalWritePush?.();
+        })
+    )) || (() => {}));
     const storageListener = (event) => {
       const detail = event?.detail || {};
       if (detail.databaseName !== (db?.name || db?.raw?.name)) return;
@@ -395,17 +432,50 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       }
       return results;
     },
+    async leaseModule(moduleManifest, reason = 'module-window') {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const collections = moduleSyncCollections(moduleManifest?.collections || []);
+      const leases = [];
+      try {
+        for (const collection of collections) {
+          leases.push(await this.leaseCollection(
+            collection,
+            `${reason}:${moduleManifest?.id || 'unknown'}`,
+          ));
+          await delay(25);
+        }
+      } catch (error) {
+        await Promise.allSettled(leases.map((lease) => lease.release()));
+        throw error;
+      }
+      let released = false;
+      return {
+        mode: 'module-lease',
+        moduleId: moduleManifest?.id || null,
+        collections: leases.map((lease) => lease.collection),
+        async release() {
+          if (released) return false;
+          released = true;
+          await Promise.allSettled(leases.map((lease) => lease.release()));
+          return true;
+        },
+      };
+    },
     async leaseCollection(collection, reason = 'scoped-collection-lease') {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
       collectionLeaseCounts.set(normalized, (collectionLeaseCounts.get(normalized) || 0) + 1);
+      publishResourceBudget();
       let released = false;
       let bridge = null;
       try {
-        bridge = await this.startCollection(normalized);
+        bridge = await this.startCollection(normalized, { pin: false });
       } catch (error) {
         releaseCollectionLease(normalized);
+        if (!pinnedCollections.has(normalized)) {
+          await this.stopCollection(normalized, { preservePin: true }).catch(() => null);
+        }
         throw error;
       }
       return {
@@ -417,14 +487,14 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           if (released) return false;
           released = true;
           const remaining = releaseCollectionLease(normalized);
-          if (remaining <= 0 && isModuleDemandOnlyCollection(normalized)) {
-            await syncRuntime.stopCollection(normalized).catch(() => null);
+          if (remaining <= 0 && !pinnedCollections.has(normalized)) {
+            await syncRuntime.stopCollection(normalized, { preservePin: true }).catch(() => null);
           }
           return true;
         },
       };
     },
-    async startCollection(collection) {
+    async startCollection(collection, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
@@ -445,10 +515,18 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         });
         throw error;
       }
+      if (options.pin !== false) pinnedCollections.add(collection);
       activeCollections.add(collection);
-      if (coordinator && !coordinator.isLeader()) {
-        const follower = createFollowerBridge(collection, coordinator.snapshot());
+      publishResourceBudget();
+      if (coordinator && !coordinator.isLeader() && options.forceDirect !== true) {
+        const follower = createFollowerBridge(
+          collection,
+          coordinator.snapshot(),
+          coordinator,
+          () => flushFollowerDirectly(collection),
+        );
         bridges.set(collection, Promise.resolve(follower));
+        publishResourceBudget();
         recordCollection(collection, {
           status: 'follower',
           connectionStatus: 'follower',
@@ -513,7 +591,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           });
           return currentBridgePromise;
         }
-        await this.stopCollection(collection);
+        await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
         }
       }
       recordCollection(collection, { status: 'starting' });
@@ -542,8 +620,9 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       // bursts stay ordered and the first connection wins the race cleanly.
       collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(50));
       bridges.set(collection, bridgePromise);
+      publishResourceBudget();
       try {
-        const bridge = await bridgePromise;
+        const bridge = await withTimeout(bridgePromise, 3000);
         recordCollection(collection, {
           status: bridge.mode === 'pending' ? 'pending' : 'running',
           connectionStatus: bridge.mode === 'pending' ? 'pending' : 'connecting',
@@ -556,6 +635,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         return bridge;
       } catch (error) {
         bridges.delete(collection);
+        publishResourceBudget();
         const serialized = serializeError(error);
         recordCollection(collection, { status: 'failed', lastError: serialized });
         emitDiagnostic({ phase: 'failed', lastError: serialized });
@@ -566,8 +646,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
       if (!options?.preserveLeases) collectionLeaseCounts.delete(collection);
+      if (!options?.preservePin) pinnedCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
+      publishResourceBudget();
       if (!bridgePromise) return false;
       recordCollection(collection, {
         status: 'restarting',
@@ -587,9 +669,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
+      const wasPinned = pinnedCollections.has(collection);
       activeCollections.add(collection);
-      await this.stopCollection(collection, { preserveLeases: true });
-      return this.startCollection(collection);
+      await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
+      return this.startCollection(collection, { pin: wasPinned });
     },
     async restartCollections(collections) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
@@ -599,17 +682,22 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         .filter((collection) => typeof collection === 'string')
         .map(normalizeCollectionName)
         .filter(Boolean))];
+      const pinnedBeforeRestart = new Map(
+        requested.map((collection) => [collection, pinnedCollections.has(collection)]),
+      );
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
       for (const collection of requested) activeCollections.add(collection);
       for (const collection of requested) {
-        await this.stopCollection(collection, { preserveLeases: true });
+        await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
       }
       const startBatch = async () => {
         collectionStartQueue = Promise.resolve();
         const batch = [];
         for (const collection of requested) {
-          batch.push(await this.startCollection(collection));
+          batch.push(await this.startCollection(collection, {
+            pin: pinnedBeforeRestart.get(collection) === true,
+          }));
           await delay(250);
         }
         return batch;
@@ -637,7 +725,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
             lastLifecycleEvent: lifecycleEvent,
             reconnectingSince: new Date().toISOString(),
           });
-          await this.stopCollection(collection, { preserveLeases: true });
+          await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
         }
         restarted = await startBatch();
         try {
@@ -662,7 +750,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         suspendedCollections.add(collection);
       }
       for (const collection of requested) {
-        await this.stopCollection(collection, { preserveLeases: true });
+        await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
         recordCollection(collection, {
           status: 'paused',
           connectionStatus: 'paused',
@@ -702,6 +790,14 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       await stopAllBridges();
       emitDiagnostic({ phase: 'stopped' }, { immediate: true });
     },
+    resourceSnapshot() {
+      return {
+        activeCollections: [...activeCollections].sort(),
+        bridgeCollections: [...bridges.keys()].sort(),
+        pinnedCollections: [...pinnedCollections].sort(),
+        leaseCounts: Object.fromEntries([...collectionLeaseCounts.entries()].sort()),
+      };
+    },
   };
   const releaseCollectionLease = (collection) => {
     const current = collectionLeaseCounts.get(collection) || 0;
@@ -711,17 +807,27 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     } else {
       collectionLeaseCounts.delete(collection);
     }
+    publishResourceBudget();
     return next;
   };
   return syncRuntime;
 }
 
-function createFollowerBridge(collection, status) {
+function createFollowerBridge(collection, status, coordinator = null, directFallback = null) {
   return {
     mode: 'follower',
     collection,
     state: null,
     multiTab: status,
+    async flush() {
+      try {
+        return await coordinator?.notifyDirtyAndWait?.(collection, [], { timeoutMs: 1_000 });
+      } catch (error) {
+        if (typeof directFallback !== 'function') throw error;
+        await directFallback(error);
+        return { ok: true, mode: 'direct-fallback' };
+      }
+    },
     stop: async () => {},
   };
 }
@@ -780,8 +886,13 @@ async function waitForNativePeerOpenState(state, collection, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (hasOpenNativePeerState(state)) return true;
-    await withTimeout(state?.awaitInitialReplication?.(), 2000);
-    await withTimeout(state?.awaitInSync?.(), 3000);
+    // A controlled daemon/peer restart cancels the old replication promises
+    // before the replacement peer opens. Cancellation is an intermediate
+    // lifecycle signal here, not a terminal result for this bounded poll.
+    // Keep checking the actual native peer/channel state until the deadline;
+    // non-recovery is still reported as a typed peer_connect_timeout below.
+    await withTimeout(Promise.resolve(state?.awaitInitialReplication?.()).catch(() => undefined), 2000);
+    await withTimeout(Promise.resolve(state?.awaitInSync?.()).catch(() => undefined), 3000);
     if (hasOpenNativePeerState(state)) return true;
     await delay(500);
   }
@@ -790,7 +901,7 @@ async function waitForNativePeerOpenState(state, collection, timeoutMs) {
 
 async function waitForStableNativePeerOpenState(state, collection, timeoutMs, stableMs) {
   await waitForNativePeerOpenState(state, collection, timeoutMs);
-  await withTimeout(state?.awaitInSync?.(), 3000);
+  await withTimeout(Promise.resolve(state?.awaitInSync?.()).catch(() => undefined), 3000);
   await delay(stableMs);
   if (hasOpenNativePeerState(state)) return true;
   throw createNativePeerOpenTimeoutEvent(collection, stableMs);
@@ -900,7 +1011,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260714-browser-contract-v59');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-recovery-index-v62');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -949,38 +1060,6 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   });
   subscriptions.push({ unsubscribe: unregisterSignalingErrorHandler });
   let nativePeerOpenWatchdog = null;
-  const recordRemotePeerProtocol = (info) => {
-    const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
-    const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
-    const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
-    nativePeerProtocolReady = !checkpointError && hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint);
-    recordCollection?.(collection, {
-      remoteProtocol: info?.protocol || null,
-      remoteCapabilities,
-      remotePeerSession: info?.peerSession || null,
-      remoteCheckpoint,
-      peerSessionSeenAt: new Date().toISOString(),
-      ...(checkpointError
-        ? {
-            status: 'error',
-            connectionStatus: 'error',
-            lastError: checkpointError,
-          }
-        : {
-            status: 'connected',
-            connectionStatus: 'connected',
-            connectedAt: new Date().toISOString(),
-            reconnectingSince: null,
-            lastError: null,
-            lastLifecycleEvent: null,
-          }),
-    });
-    if (nativePeerProtocolReady && nativePeerOpenWatchdog) {
-      clearTimeout(nativePeerOpenWatchdog);
-      nativePeerOpenWatchdog = null;
-    }
-    if (checkpointError) onFatalPeerError?.(checkpointError);
-  };
   const replicationState = await rxdb.replicateWebRTC({
     collection: rxCollection,
     // Phase 3: pass the BARE sync room so every collection multiplexes onto a
@@ -994,19 +1073,65 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       expectedNativePeerId: String(config?.native_peer_id || config?.nativePeerId || '').trim(),
       capabilityTokenProvider: getBusinessOsCapabilityToken,
       onPeerProtocol(info) {
-        recordRemotePeerProtocol(info);
+        const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
+        const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
+        const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
+        nativePeerProtocolReady = !checkpointError && hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint);
+        recordCollection?.(collection, {
+          remoteProtocol: info?.protocol || null,
+          remoteCapabilities,
+          remotePeerSession: info?.peerSession || null,
+          remoteCheckpoint,
+          peerSessionSeenAt: new Date().toISOString(),
+          ...(checkpointError
+            ? {
+                status: 'error',
+                connectionStatus: 'error',
+                lastError: checkpointError,
+              }
+            : {
+                status: 'connected',
+                connectionStatus: 'connected',
+                connectedAt: new Date().toISOString(),
+                reconnectingSince: null,
+                lastError: null,
+                lastLifecycleEvent: null,
+              }),
+        });
+        if (nativePeerProtocolReady && nativePeerOpenWatchdog) {
+          clearTimeout(nativePeerOpenWatchdog);
+          nativePeerOpenWatchdog = null;
+        }
+        if (checkpointError) onFatalPeerError?.(checkpointError);
       },
     },
   });
-  if (replicationState?.peerStates$ && typeof replicationState.peerStates$.subscribe === 'function') {
-    const peerProtocolSubscription = replicationState.peerStates$.subscribe((peerStates) => {
-      if (stopped || !peerStates || typeof peerStates.values !== 'function') return;
-      for (const entry of peerStates.values()) {
-        if (entry?.remoteProtocol?.peerSession?.role !== 'ctox_instance') continue;
-        recordRemotePeerProtocol(entry.remoteProtocol);
-      }
+  // The protocol callback may fire while the replication bridge is still being
+  // constructed. Backfill from its live peer state so diagnostics and policy
+  // do not remain permanently unaware of an already-open native peer.
+  const existingPeerStates = replicationState.peerStates$?.getValue?.();
+  const existingRemoteProtocol = existingPeerStates && typeof existingPeerStates.values === 'function'
+    ? Array.from(existingPeerStates.values()).map((entry) => entry?.remoteProtocol).find(Boolean)
+    : null;
+  if (existingRemoteProtocol) {
+    const remoteCapabilities = Array.isArray(existingRemoteProtocol.capabilities)
+      ? existingRemoteProtocol.capabilities
+      : [];
+    const remoteCheckpoint = sanitizeRemoteCheckpoint(existingRemoteProtocol.checkpoint || null);
+    const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
+    nativePeerProtocolReady = !checkpointError
+      && hasNativePeerProtocolEvidence(existingRemoteProtocol, remoteCapabilities, remoteCheckpoint);
+    recordCollection?.(collection, {
+      remoteProtocol: existingRemoteProtocol.protocol || null,
+      remoteCapabilities,
+      remotePeerSession: existingRemoteProtocol.peerSession || null,
+      remoteCheckpoint,
+      peerSessionSeenAt: new Date().toISOString(),
+      status: checkpointError ? 'error' : 'connected',
+      connectionStatus: checkpointError ? 'error' : 'connected',
+      lastError: checkpointError || null,
     });
-    subscriptions.push(peerProtocolSubscription);
+    if (checkpointError) onFatalPeerError?.(checkpointError);
   }
   const recordTransportStatus = (status) => {
     if (stopped) return;
@@ -2376,6 +2501,7 @@ function isReadOnlyProjectionCollection(collection) {
     || collection === 'business_users'
     || collection === 'channel_pairing_state'
     || collection === 'communication_accounts'
+    || collection === 'browser_sessions'
     || collection === 'knowledge_tables'
     || collection === 'ctox_runtime_settings';
 }

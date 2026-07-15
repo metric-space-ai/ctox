@@ -1,15 +1,12 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const STYLE_BUILD = '20260706-kit-tokens1';
+const STYLE_BUILD = '20260715-browser-working-ui-v82';
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
 const DEFAULT_SESSION_ID = 'browser_session_default';
 const DEFAULT_TAB_ID = 'browser_tab_default';
-const SYNTHETIC_SESSION_ID = 'browser_session_synthetic';
-const SYNTHETIC_TAB_ID = 'browser_tab_synthetic';
 const VIEWPORT = { width: 1280, height: 720 };
-const VIEWER_HEARTBEAT_MS = 5000;
 const FRAME_SYNC_RECOVERY_MS = 12000;
 const BROWSER_SYNC_COLLECTIONS = [
   'browser_sessions',
@@ -22,7 +19,11 @@ export async function mount(ctx) {
   await ensureStyles();
   const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
   t = (key, fallback) => messages[key] ?? fallback ?? key;
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const moduleUrl = new URL(import.meta.url);
+  const templateUrl = new URL('./index.html', moduleUrl);
+  templateUrl.search = moduleUrl.search;
+  templateUrl.searchParams.set('fragment', STYLE_BUILD);
+  const html = await fetch(templateUrl, { cache: 'no-store' }).then((res) => res.text());
   ctx.host.innerHTML = html;
 
   const root = ctx.host.querySelector('[data-browser-root]');
@@ -35,20 +36,30 @@ export async function mount(ctx) {
     sessionList: root.querySelector('[data-browser-session-list]'),
     refresh: root.querySelector('[data-browser-refresh]'),
     start: root.querySelector('[data-browser-start]'),
+    privateMode: root.querySelector('[data-browser-private]'),
+    viewport: root.querySelector('[data-browser-viewport]'),
+    newTab: root.querySelector('[data-browser-new-tab]'),
+    upload: root.querySelector('[data-browser-upload]'),
+    controllerAcquire: root.querySelector('[data-browser-controller-acquire]'),
+    controllerRelease: root.querySelector('[data-browser-controller-release]'),
+    observerGrant: root.querySelector('[data-browser-observer-grant]'),
+    observerRevoke: root.querySelector('[data-browser-observer-revoke]'),
+    clipboardCopy: root.querySelector('[data-browser-clipboard-copy]'),
+    clipboardPaste: root.querySelector('[data-browser-clipboard-paste]'),
+    clipboardClear: root.querySelector('[data-browser-clipboard-clear]'),
     stop: root.querySelector('[data-browser-stop]'),
-    reset: root.querySelector('[data-browser-reset]'),
     back: root.querySelector('[data-browser-back]'),
     forward: root.querySelector('[data-browser-forward]'),
     reload: root.querySelector('[data-browser-reload]'),
     sendToCtox: root.querySelector('[data-browser-send-to-ctox]'),
-    seed: root.querySelector('[data-browser-seed]'),
-    clear: root.querySelector('[data-browser-clear]'),
     notice: root.querySelector('[data-browser-notice]'),
     form: root.querySelector('[data-browser-address-form]'),
+    go: root.querySelector('[data-browser-go]'),
     address: root.querySelector('[data-browser-address]'),
     statusChip: root.querySelector('[data-browser-status-chip]'),
     statusTitle: root.querySelector('[data-browser-status-title]'),
     statusMeta: root.querySelector('[data-browser-status-meta]'),
+    downloads: root.querySelector('[data-browser-downloads]'),
     authAssist: root.querySelector('[data-browser-auth-assist]'),
     shell: root.querySelector('[data-browser-frame-shell]'),
     canvas: root.querySelector('[data-browser-canvas]'),
@@ -63,9 +74,10 @@ export async function mount(ctx) {
     handoffHistory: root.querySelector('[data-browser-handoff-history]'),
   };
 
+  const requestedSessionId = browserSessionIdFromArgs(ctx.args);
   const state = {
-    selectedSessionId: '',
-    requestedSessionId: '',
+    selectedSessionId: requestedSessionId,
+    requestedSessionId,
     latestFrame: null,
     latestSession: null,
     latestTab: null,
@@ -76,14 +88,50 @@ export async function mount(ctx) {
     drawing: false,
     lastInputSeq: 0,
     lastPointerMoveAt: 0,
-    lastViewerHeartbeatAt: 0,
     lastFrameSyncRecoveryAt: 0,
+    leaseRenewInFlight: false,
+    controllerLeaseId: '',
     addressDirty: false,
+    requestedSessionStarts: new Set(),
   };
 
   const cleanups = [];
   let mounted = true;
   const scheduleRefresh = debounce(safeLoadAndRender, 80);
+
+  const sessionSelectionToken = ctx.eventBus?.on?.('browser:select-session', (detail = {}) => {
+    const sessionId = browserSessionIdFromArgs(detail);
+    if (!sessionId) return;
+    if (sessionId !== state.selectedSessionId) state.controllerLeaseId = '';
+    state.selectedSessionId = sessionId;
+    state.requestedSessionId = sessionId;
+    scheduleRefresh();
+    ensureRequestedBrowserSession(ctx, state, detail)
+      .then(scheduleRefresh)
+      .catch((error) => {
+        state.notice = browserStartErrorMessage(error);
+        scheduleRefresh();
+      });
+  });
+  if (sessionSelectionToken && ctx.eventBus?.off) {
+    cleanups.push(() => ctx.eventBus.off('browser:select-session', sessionSelectionToken));
+  }
+  const handleFocusRefresh = () => {
+    scheduleRefresh();
+    renewControllerLeaseIfNeeded();
+  };
+  const focusRefreshToken = ctx.eventBus?.on?.('window:focused', handleFocusRefresh);
+  if (focusRefreshToken && ctx.eventBus?.off) {
+    cleanups.push(() => ctx.eventBus.off('window:focused', focusRefreshToken));
+  }
+  globalThis.addEventListener?.('focus', handleFocusRefresh);
+  globalThis.addEventListener?.('blur', scheduleRefresh);
+  globalThis.document?.addEventListener?.('visibilitychange', handleFocusRefresh);
+  cleanups.push(() => {
+    globalThis.removeEventListener?.('focus', handleFocusRefresh);
+    globalThis.removeEventListener?.('blur', scheduleRefresh);
+    globalThis.document?.removeEventListener?.('visibilitychange', handleFocusRefresh);
+  });
 
   for (const collectionName of ['business_commands', ...BROWSER_SYNC_COLLECTIONS, 'ctox_queue_tasks']) {
     ctx.sync?.startCollection?.(collectionName)
@@ -103,27 +151,77 @@ export async function mount(ctx) {
   }
 
   refs.refresh?.addEventListener('click', safeLoadAndRender);
-  refs.start?.addEventListener('click', () => {
+  const startNewBrowserSession = (url = refs.address?.value || 'https://example.com') => {
     const now = Date.now();
-    const sessionId = `browser_session_${now}`;
+    const sessionId = `${userSessionPrefix(ctx.session)}_${now}`;
     const tabId = `browser_tab_${now}`;
-    const url = refs.address?.value || 'https://example.com';
+    const viewport = selectedViewport(refs.viewport);
     state.addressDirty = false;
     state.selectedSessionId = sessionId;
     state.requestedSessionId = sessionId;
+    state.controllerLeaseId = newBrowserControllerLeaseId();
     state.notice = 'Browser wird mit CTOX verbunden …';
     safeLoadAndRender();
-    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.session.start', {
+    const command = () => dispatchBrowserCommand(ctx, state, 'browser.session.start', {
       session_id: sessionId,
       tab_id: tabId,
       url,
+      viewport_w: viewport.width,
+      viewport_h: viewport.height,
+      profile_mode: refs.privateMode?.checked ? 'private' : 'persistent',
+      lease_id: state.controllerLeaseId,
       new_session: true,
-    }));
-  });
+    });
+    runBrowserCommand(command());
+  };
+  refs.start?.addEventListener('click', () => startNewBrowserSession());
   refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
-  refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
-    url: refs.address?.value || 'https://example.com',
-  }).then(safeLoadAndRender));
+  refs.newTab?.addEventListener('click', () => {
+    const now = Date.now();
+    dispatchBrowserCommand(ctx, state, 'browser.tab.open', {
+      tab_id: `browser_tab_${now}`,
+      url: refs.address?.value || 'https://example.com',
+    }).then(safeLoadAndRender);
+  });
+  refs.upload?.addEventListener('click', () => {
+    const fileId = globalThis.prompt('CTOX Datei-ID für den Upload');
+    if (!fileId) return;
+    dispatchBrowserCommand(ctx, state, 'browser.upload.select', { file_id: fileId.trim() }).then(safeLoadAndRender);
+  });
+  refs.controllerAcquire?.addEventListener('click', () => {
+    const leaseId = newBrowserControllerLeaseId();
+    state.controllerLeaseId = leaseId;
+    runBrowserCommand(
+      dispatchBrowserCommand(ctx, state, 'browser.controller.acquire', { lease_id: leaseId })
+        .catch((error) => {
+          if (state.controllerLeaseId === leaseId) state.controllerLeaseId = '';
+          throw error;
+        }),
+    );
+  });
+  refs.controllerRelease?.addEventListener('click', () => {
+    const leaseId = state.controllerLeaseId;
+    runBrowserCommand(
+      dispatchBrowserCommand(ctx, state, 'browser.controller.release')
+        .then((result) => {
+          if (state.controllerLeaseId === leaseId) state.controllerLeaseId = '';
+          return result;
+        }),
+    );
+  });
+  refs.observerGrant?.addEventListener('click', () => {
+    const userId = globalThis.prompt('Benutzer-ID des Beobachters');
+    if (!userId) return;
+    dispatchBrowserCommand(ctx, state, 'browser.observer.grant', { user_id: userId.trim() }).then(safeLoadAndRender);
+  });
+  refs.observerRevoke?.addEventListener('click', () => {
+    const userId = globalThis.prompt('Benutzer-ID des zu entfernenden Beobachters');
+    if (!userId) return;
+    dispatchBrowserCommand(ctx, state, 'browser.observer.revoke', { user_id: userId.trim() }).then(safeLoadAndRender);
+  });
+  refs.clipboardCopy?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.clipboard.copy', { confirmed: true }).then(safeLoadAndRender));
+  refs.clipboardPaste?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.clipboard.paste', { confirmed: true }).then(safeLoadAndRender));
+  refs.clipboardClear?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.clipboard.clear', { confirmed: true }).then(safeLoadAndRender));
   refs.back?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.back').then(safeLoadAndRender));
   refs.forward?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.forward').then(safeLoadAndRender));
   refs.reload?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reload').then(safeLoadAndRender));
@@ -132,6 +230,44 @@ export async function mount(ctx) {
   });
   refs.sendToCtox?.addEventListener('click', () => sendBrowserContextToCtox(ctx, state).then(safeLoadAndRender));
   refs.authAssist?.addEventListener('click', (event) => {
+    const permissionButton = event.target?.closest?.('[data-browser-permission-response]');
+    if (permissionButton) {
+      dispatchBrowserCommand(ctx, state, 'browser.permission.respond', {
+        accept: permissionButton.dataset.browserPermissionResponse === 'accept',
+        confirmed: true,
+      }).then(safeLoadAndRender);
+      return;
+    }
+    const httpAuthButton = event.target?.closest?.('[data-browser-http-auth-response]');
+    if (httpAuthButton) {
+      const accept = httpAuthButton.dataset.browserHttpAuthResponse === 'accept';
+      const secretName = accept ? globalThis.prompt('CTOX Secret-Referenz für HTTP-Auth') : '';
+      if (accept && !secretName) return;
+      dispatchBrowserCommand(ctx, state, 'browser.http_auth.respond', {
+        accept,
+        confirmed: true,
+        secret_name: secretName?.trim?.() || '',
+      }).then(safeLoadAndRender);
+      return;
+    }
+    const webAuthnButton = event.target?.closest?.('[data-browser-webauthn-response]');
+    if (webAuthnButton) {
+      dispatchBrowserCommand(ctx, state, 'browser.webauthn.respond', {
+        accept: webAuthnButton.dataset.browserWebauthnResponse === 'accept',
+        confirmed: true,
+      }).then(safeLoadAndRender);
+      return;
+    }
+    const dialogButton = event.target?.closest?.('[data-browser-dialog-response]');
+    if (dialogButton) {
+      const accept = dialogButton.dataset.browserDialogResponse === 'accept';
+      const dialog = state.latestSession?.payload?.pending_dialog;
+      const value = accept && dialog?.type === 'prompt'
+        ? globalThis.prompt(dialog.message || 'Eingabe', dialog.default_value || '')
+        : undefined;
+      dispatchBrowserCommand(ctx, state, 'browser.dialog.respond', { accept, value }).then(safeLoadAndRender);
+      return;
+    }
     const fillButton = event.target?.closest?.('[data-browser-credential-fill]');
     if (fillButton) {
       fillWebStackCredential(ctx, state).then(safeLoadAndRender);
@@ -147,32 +283,54 @@ export async function mount(ctx) {
     const extractButton = event.target?.closest?.('[data-browser-web-stack-extract]');
     if (extractButton) extractWebStackFields(ctx, state).then(safeLoadAndRender);
   });
-  refs.seed?.addEventListener('click', () => seedSyntheticFrame(ctx, refs.address?.value || 'https://example.com').then(safeLoadAndRender));
-  refs.clear?.addEventListener('click', () => clearSyntheticFrames(ctx).then(safeLoadAndRender));
+  refs.downloads?.addEventListener('click', (event) => {
+    const action = event.target?.closest?.('[data-browser-download-action]');
+    if (!action) return;
+    dispatchBrowserCommand(ctx, state, `browser.download.${action.dataset.browserDownloadAction}`, {
+      download_id: action.dataset.browserDownloadId || '',
+    }).then(safeLoadAndRender);
+  });
   refs.sessionList?.addEventListener('click', (event) => {
+    const tabItem = event.target?.closest?.('[data-browser-tab-id]');
+    if (tabItem) {
+      const tabId = tabItem.dataset.browserTabId || '';
+      const commandType = event.target?.closest?.('[data-browser-tab-close]')
+        ? 'browser.tab.close'
+        : 'browser.tab.activate';
+      dispatchBrowserCommand(ctx, state, commandType, { tab_id: tabId }).then(safeLoadAndRender);
+      return;
+    }
     const item = event.target?.closest?.('[data-browser-session-id]');
     if (!item) return;
     state.selectedSessionId = item.dataset.browserSessionId || '';
     safeLoadAndRender();
   });
-  refs.form?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const commandType = state.latestSession?.id ? 'browser.navigate' : 'browser.session.start';
+  const submitAddress = () => {
+    const canNavigate = browserSurfaceCanControl(ctx, state);
     const url = refs.address?.value || 'https://example.com';
+    if (!canNavigate) {
+      startNewBrowserSession(url);
+      return;
+    }
     state.addressDirty = false;
     state.notice = 'Browser wird mit CTOX verbunden …';
     safeLoadAndRender();
-    runBrowserCommand(dispatchBrowserCommand(ctx, state, commandType, {
-      url,
-    }));
+    runBrowserCommand(dispatchBrowserCommand(ctx, state, 'browser.navigate', { url }));
+  };
+  refs.form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitAddress();
   });
   installInputHandlers(ctx, refs, state, scheduleRefresh);
-  const viewerHeartbeat = setInterval(() => {
-    writeViewerActivity(ctx, state).catch((error) => console.warn('[browser] viewer heartbeat failed', error));
-  }, VIEWER_HEARTBEAT_MS);
-  cleanups.push(() => clearInterval(viewerHeartbeat));
-
+  const leaseRenewTimer = globalThis.setInterval(renewControllerLeaseIfNeeded, 30_000);
+  cleanups.push(() => globalThis.clearInterval(leaseRenewTimer));
   safeLoadAndRender();
+  ensureRequestedBrowserSession(ctx, state, ctx.args)
+    .then(scheduleRefresh)
+    .catch((error) => {
+      state.notice = browserStartErrorMessage(error);
+      scheduleRefresh();
+    });
 
   return () => {
     mounted = false;
@@ -181,6 +339,29 @@ export async function mount(ctx) {
     }
     ctx.host.replaceChildren();
   };
+
+  function renewControllerLeaseIfNeeded() {
+    const session = state.latestSession;
+    const actorId = String(ctx.session?.user?.id || ctx.session?.userId || '');
+    const surface = ctx.host?.closest?.('.shell-window');
+    if (!shouldRenewControllerLease(session, actorId, Date.now(), {
+      documentVisible: globalThis.document?.visibilityState !== 'hidden',
+      documentFocused: globalThis.document?.hasFocus?.() !== false,
+      surfaceFocused: Boolean(surface?.classList.contains('is-focused')),
+      renewInFlight: state.leaseRenewInFlight,
+      controllerLeaseId: state.controllerLeaseId,
+    })) return;
+    state.leaseRenewInFlight = true;
+    dispatchBrowserCommand(ctx, state, 'browser.controller.renew', {
+      lease_id: state.controllerLeaseId,
+    })
+      .catch((error) => {
+        console.warn('[browser] controller lease renewal failed', error);
+      })
+      .finally(() => {
+        state.leaseRenewInFlight = false;
+      });
+  }
 
   function safeLoadAndRender() {
     loadAndRender().catch((error) => console.warn('[browser] refresh failed', error));
@@ -197,7 +378,7 @@ export async function mount(ctx) {
         safeLoadAndRender();
       })
       .catch((error) => {
-        state.notice = browserCommandErrorMessage(error);
+        state.notice = browserStartErrorMessage(error);
         console.warn('[browser] command failed', error);
         safeLoadAndRender();
       });
@@ -212,16 +393,27 @@ export async function mount(ctx) {
       readCollection(browserCollection(ctx, 'browser_input_events'), { limit: 80 }),
       readCollection(browserCollection(ctx, 'ctox_queue_tasks'), { limit: 50 }),
     ]);
-    const selectedSession = state.selectedSessionId ? latestSession(sessions, state.selectedSessionId) : null;
+    const actorId = String(ctx.session?.user?.id || ctx.session?.userId || '');
+    const visibleSessions = sessions.filter((session) => session.owner_user_id === actorId);
+    if (state.selectedSessionId
+      && state.selectedSessionId !== state.requestedSessionId
+      && !visibleSessions.some((session) => session.id === state.selectedSessionId)) {
+      state.selectedSessionId = '';
+    }
+    const selectedSession = state.selectedSessionId ? latestSession(visibleSessions, state.selectedSessionId) : null;
     const requestedSessionPending = Boolean(state.requestedSessionId && !selectedSession);
     const frameSessionId = selectedSession?.id || state.selectedSessionId || '';
-    const frames = await readCollection(browserCollection(ctx, 'browser_frames'), {
-      limit: frameSessionId ? 20 : 30,
-      selector: frameSessionId ? { session_id: frameSessionId } : {},
-    });
+    const frames = frameSessionId
+      ? await readCollection(browserCollection(ctx, 'browser_frames'), {
+        limit: 20,
+        selector: { session_id: frameSessionId },
+      })
+      : [];
     if (!mounted) return;
     const newestFrame = latestFrame(frames);
-    state.latestSession = selectedSession || latestSession(sessions, newestFrame?.session_id) || latestSession(sessions);
+    state.latestSession = requestedSessionPending
+      ? null
+      : selectedSession || latestSession(visibleSessions, newestFrame?.session_id) || latestSession(visibleSessions);
     if (!requestedSessionPending) {
       state.selectedSessionId = state.latestSession?.id || '';
       if (state.latestSession?.id === state.requestedSessionId) state.requestedSessionId = '';
@@ -232,7 +424,6 @@ export async function mount(ctx) {
     applyLatestNavigationResult(state, commands);
     state.browserCommands = latestBrowserCommands(commands, state.latestSession?.id || state.latestFrame?.session_id, 5);
     state.handoffTasks = latestBrowserHandoffTasks(handoffTasks, state.latestSession?.id || state.latestFrame?.session_id, 5);
-    await reconcileCompletedStopCommand(ctx, state, commands);
     state.lastInputSeq = Math.max(
       Number(state.lastInputSeq || 0),
       ...inputs.map((event) => Number(event.seq || 0)).filter(Number.isFinite),
@@ -240,16 +431,16 @@ export async function mount(ctx) {
     const renderedTabs = state.latestTab?.id
       ? tabs.map((tab) => tab.id === state.latestTab.id ? { ...tab, ...state.latestTab } : tab)
       : tabs;
-    renderSessionList(refs, sessions, renderedTabs, state.latestSession);
+    renderSessionList(refs, visibleSessions, renderedTabs, state.latestSession);
     renderSession(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand, state);
     renderAuthAssist(refs, state.latestSession);
     renderStatus(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand);
+    renderDownloads(refs, state.latestSession);
     renderDiagnostics(refs, state.latestFrame, inputs, state.latestCommand, state.browserCommands, state.handoffTasks);
-    renderControls(refs, state);
+    renderControls(ctx, refs, state);
     renderNotice(refs, state.notice);
     recoverFrameSyncIfNeeded(ctx, state);
     await renderFrame(refs, state.latestFrame, state);
-    writeViewerActivity(ctx, state).catch((error) => console.warn('[browser] viewer activity update failed', error));
   }
 }
 
@@ -271,11 +462,16 @@ function recoverFrameSyncIfNeeded(ctx, state) {
 }
 
 async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}) {
+  const requiresController = browserCommandRequiresController(commandType, state.latestSession);
+  if (requiresController && !browserSurfaceCanControl(ctx, state)) {
+    throw new Error('Dieses Browser-Fenster ist nicht aktiv. Aktivieren Sie das Fenster oder übernehmen Sie die Steuerung.');
+  }
   const now = Date.now();
   const opensNewSession = payloadPatch.new_session === true;
-  const sessionId = String(payloadPatch.session_id || (opensNewSession
-    ? `browser_session_${now}`
-    : state.latestSession?.id || DEFAULT_SESSION_ID));
+  const requestedSessionId = browserSessionIdFromArgs(payloadPatch);
+  const sessionId = requestedSessionId || (opensNewSession
+    ? `${userSessionPrefix(ctx.session)}_${now}`
+    : state.latestSession?.id || `${userSessionPrefix(ctx.session)}_default`);
   const tabId = String(payloadPatch.tab_id || (opensNewSession
     ? `browser_tab_${now}`
     : state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID));
@@ -287,18 +483,13 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     viewport_h: VIEWPORT.height,
     ...payloadPatch,
   };
+  if (requiresController) payload.lease_id = state.controllerLeaseId;
   delete payload.new_session;
   if (payload.url) payload.url = normalizeUrl(payload.url);
-  await startBrowserRuntimeSync(ctx);
-  if (commandType === 'browser.session.stop') {
-    await writeOptimisticBrowserSession(ctx, state, commandType, payload);
-  }
-  if (!ctx.commandBus?.dispatch) {
-    const error = new Error('CTOX command bus is unavailable.');
-    error.code = 'sync_unavailable';
-    throw error;
-  }
-  await ctx.commandBus.dispatch({
+  // The shell owns the live replication lifecycle and the command bus performs
+  // its own command-collection flush. Awaiting another five-collection startup
+  // here can deadlock submission while an existing peer is resyncing.
+  const command = {
     id: commandId,
     command_id: commandId,
     module: 'browser',
@@ -316,109 +507,90 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     },
     created_at_ms: now,
     updated_at_ms: now,
-  }, { until: 'accepted' });
+    sync_queue_tasks: false,
+  };
+  await requireCommandBus(ctx).dispatch(command, { until: 'accepted' });
   return { commandId, sessionId, tabId, opensNewSession };
 }
 
-function browserCommandErrorMessage(error) {
+async function ensureRequestedBrowserSession(ctx, state, args = {}) {
+  const request = browserAuthRequestFromArgs(args);
+  if (!request) return false;
+  state.selectedSessionId = request.session_id;
+  state.requestedSessionId = request.session_id;
+  if (state.requestedSessionStarts.has(request.session_id)) return false;
+
+  const existing = await browserCollection(ctx, 'browser_sessions')?.findOne(request.session_id).exec();
+  if (existing) return false;
+
+  state.requestedSessionStarts.add(request.session_id);
+  try {
+    state.controllerLeaseId = newBrowserControllerLeaseId();
+    await dispatchBrowserCommand(ctx, state, 'browser.session.start', {
+      ...request,
+      lease_id: state.controllerLeaseId,
+    });
+    state.notice = 'Browser-Anmeldung wird geöffnet.';
+    return true;
+  } catch (error) {
+    state.requestedSessionStarts.delete(request.session_id);
+    throw error;
+  }
+}
+
+function browserAuthRequestFromArgs(value) {
+  const sessionId = browserSessionIdFromArgs(value);
+  const purpose = String(value?.purpose || '').trim();
+  const targetUrl = String(value?.target_url || value?.targetUrl || '').trim();
+  if (!sessionId || purpose !== 'web_stack_auth' || !targetUrl) return null;
+  const tabId = String(value?.tab_id || value?.tabId || `browser_tab_${sessionId}`).trim();
+  const sourceId = String(value?.source_id || value?.sourceId || '').trim();
+  const allowedDomains = Array.isArray(value?.allowed_domains)
+    ? value.allowed_domains.map((entry) => String(entry || '').trim()).filter(Boolean)
+    : [];
+  const captureScript = String(value?.capture_script || value?.captureScript || '').trim();
+  const secretName = String(value?.secret_name || value?.required_secret_name || '').trim();
+  return {
+    session_id: sessionId,
+    tab_id: tabId,
+    url: targetUrl,
+    target_url: targetUrl,
+    source_id: sourceId,
+    purpose,
+    allowed_domains: allowedDomains,
+    capture_script: captureScript,
+    secret_name: secretName,
+    auth_assist_status: 'pending',
+    profile_mode: 'persistent',
+    secret_value_in_rxdb: false,
+  };
+}
+
+function browserStartErrorMessage(error) {
   const code = String(error?.code || '').toLowerCase();
   if (code === 'auth_required') return 'Die Browser-Anmeldung benötigt eine neue Business-OS-Autorisierung.';
-  if (['native_unavailable', 'projection_delayed', 'sync_unavailable'].includes(code)) {
+  if (code === 'native_unavailable') return 'Die Browser-Anmeldung konnte noch nicht mit CTOX verbunden werden. Bitte erneut versuchen.';
+  if (['projection_delayed', 'sync_unavailable'].includes(code)) {
     return 'CTOX ist nicht mit dem Browser-Datenkanal verbunden. Der Browser wurde nicht gestartet. Bitte die Verbindung erneut aufbauen und dann erneut versuchen.';
   }
   const message = String(error?.message || '').trim();
-  return message ? `Der Browser konnte nicht gestartet werden: ${message}` : 'Der Browser konnte nicht gestartet werden.';
+  return message
+    ? `Die Browser-Anmeldung konnte nicht geöffnet werden: ${message}`
+    : 'Die Browser-Anmeldung konnte nicht geöffnet werden.';
 }
 
-async function writeOptimisticBrowserSession(ctx, state, commandType, payload) {
-  if (!['browser.session.start', 'browser.navigate', 'browser.reset', 'browser.session.stop'].includes(commandType)) return;
-  const now = Date.now();
-  const sessionId = payload.session_id || state.latestSession?.id || DEFAULT_SESSION_ID;
-  const tabId = payload.tab_id || state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID;
-  const url = payload.url || state.latestTab?.url || state.latestSession?.current_url || 'https://example.com';
-  const title = state.latestTab?.title || state.latestSession?.title || 'Browser';
-  const frameId = state.latestFrame?.id || state.latestSession?.active_frame_id || '';
-  const frameSeq = Number(state.latestFrame?.seq || state.latestSession?.last_frame_seq || 0);
-  const sessionsCollection = browserCollection(ctx, 'browser_sessions');
-  const tabsCollection = browserCollection(ctx, 'browser_tabs');
-  const existingSession = (await sessionsCollection?.findOne(sessionId).exec())?.toJSON?.() || {};
-  const existingTab = (await tabsCollection?.findOne(tabId).exec())?.toJSON?.() || {};
-  const isStop = commandType === 'browser.session.stop';
-  const optimisticStatus = isStop ? 'stopped' : 'requested';
-  const optimisticRuntimeStatus = isStop ? 'stopped' : 'pending_command';
-  await Promise.all([
-    upsertDoc(sessionsCollection, {
-      ...existingSession,
-      id: sessionId,
-      owner_user_id: existingSession.owner_user_id || ctx.session?.user?.id || '',
-      controller_user_id: ctx.session?.user?.id || existingSession.controller_user_id || '',
-      status: optimisticStatus,
-      runtime_status: optimisticRuntimeStatus,
-      current_tab_id: tabId,
-      current_url: url,
-      title,
-      viewport_w: payload.viewport_w || VIEWPORT.width,
-      viewport_h: payload.viewport_h || VIEWPORT.height,
-      device_scale_factor: existingSession.device_scale_factor || 1,
-      frame_rate_target: existingSession.frame_rate_target || 0,
-      active_frame_id: frameId,
-      last_frame_seq: frameSeq,
-      last_input_seq: existingSession.last_input_seq || 0,
-      pending_input_count: existingSession.pending_input_count || 0,
-      payload: {
-        ...(existingSession.payload || {}),
-        browser_stream: 'rxdb',
-        last_command_type: commandType,
-        last_requested_command: commandType,
-      },
-      created_at_ms: existingSession.created_at_ms || now,
-      updated_at_ms: now,
-    }),
-    upsertDoc(tabsCollection, {
-      ...existingTab,
-      id: tabId,
-      session_id: sessionId,
-      title,
-      url,
-      status: optimisticStatus,
-      loading: !isStop,
-      active: true,
-      can_go_back: Boolean(existingTab.can_go_back),
-      can_go_forward: Boolean(existingTab.can_go_forward),
-      frame_seq: frameSeq,
-      last_frame_id: frameId,
-      last_frame_at_ms: existingTab.last_frame_at_ms || 0,
-      payload: {
-        ...(existingTab.payload || {}),
-        browser_stream: 'rxdb',
-        last_command_type: commandType,
-        last_requested_command: commandType,
-      },
-      created_at_ms: existingTab.created_at_ms || now,
-      updated_at_ms: now,
-    }),
-  ]);
+function userSessionPrefix(session) {
+  const raw = String(session?.user?.id || session?.userId || 'browser-user');
+  const safe = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  return `browser_session_${safe || 'user'}`;
 }
 
-async function reconcileCompletedStopCommand(ctx, state, commands) {
-  const sessionId = state.latestSession?.id || state.latestTab?.session_id || DEFAULT_SESSION_ID;
-  const stopCommand = commands
-    .filter((command) => {
-      const type = command.command_type || command.type || '';
-      if (type !== 'browser.session.stop') return false;
-      if (String(command.status || '') !== 'completed') return false;
-      const payloadSession = command.payload?.session_id;
-      return command.record_id === sessionId || payloadSession === sessionId || (!command.record_id && !payloadSession);
-    })
-    .sort((a, b) => Number(b.created_at_ms || b.updated_at_ms || 0) - Number(a.created_at_ms || a.updated_at_ms || 0))[0];
-  if (!stopCommand) return;
-  if (state.latestSession?.status === 'stopped' && state.latestTab?.status === 'stopped') return;
-  await writeOptimisticBrowserSession(ctx, state, 'browser.session.stop', {
-    session_id: sessionId,
-    tab_id: state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID,
-    viewport_w: state.latestSession?.viewport_w || VIEWPORT.width,
-    viewport_h: state.latestSession?.viewport_h || VIEWPORT.height,
-  });
+function selectedViewport(select) {
+  const [width, height] = String(select?.value || '1280x720').split('x').map(Number);
+  return {
+    width: Number.isFinite(width) ? Math.max(320, Math.min(3840, width)) : VIEWPORT.width,
+    height: Number.isFinite(height) ? Math.max(240, Math.min(2160, height)) : VIEWPORT.height,
+  };
 }
 
 async function sendBrowserContextToCtox(ctx, state, options = {}) {
@@ -473,31 +645,12 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
     secret_value_in_payload: false,
   };
   await startCommandSync(ctx);
-  if (ctx.commandBus?.dispatch) {
-    await ctx.commandBus.dispatch({
+  await requireCommandBus(ctx).dispatch({
       id: commandId,
-      module: 'ctox',
-      type: 'ctox.browser_context.capture',
-      record_id: session.id,
-      inbound_channel: 'browser',
-      payload,
-      client_context: {
-        source: options.webStack ? 'business-os.browser.web-stack-capture' : 'business-os.browser.context',
-        module_id: 'browser',
-        actor: actorContext(ctx.session),
-        browser_context: browserContext,
-      },
-    });
-  } else {
-    await upsertDoc(browserCollection(ctx, 'business_commands'), {
-      id: commandId,
-      command_id: commandId,
       module: 'ctox',
       command_type: 'ctox.browser_context.capture',
-      type: 'ctox.browser_context.capture',
       record_id: session.id,
       inbound_channel: 'browser',
-      status: 'pending_sync',
       payload,
       client_context: {
         source: options.webStack ? 'business-os.browser.web-stack-capture' : 'business-os.browser.context',
@@ -505,10 +658,7 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
         actor: actorContext(ctx.session),
         browser_context: browserContext,
       },
-      created_at_ms: now,
-      updated_at_ms: now,
     });
-  }
   const target = options.webStack ? 'Web Stack' : 'CTOX';
   state.notice = frame?.id
     ? `Browser-Kontext wurde an ${target} uebergeben.`
@@ -564,7 +714,6 @@ async function extractWebStackFields(ctx, state) {
     command_id: commandId,
     module: 'ctox',
     command_type: 'browser.capture.extract',
-    type: 'browser.capture.extract',
     record_id: session.id,
     inbound_channel: 'browser',
     payload: {
@@ -585,14 +734,7 @@ async function extractWebStackFields(ctx, state) {
     updated_at_ms: now,
   };
   await startCommandSync(ctx);
-  if (ctx.commandBus?.dispatch) {
-    await ctx.commandBus.dispatch(command);
-  } else {
-    await upsertDoc(browserCollection(ctx, 'business_commands'), {
-      ...command,
-      status: 'pending_sync',
-    });
-  }
+  await requireCommandBus(ctx).dispatch(command);
   state.notice = 'CTOX liest die Seite fuer den Web Stack aus.';
 }
 
@@ -618,40 +760,19 @@ async function completeWebStackAuthAssist(ctx, state) {
     secret_value_in_rxdb: false,
   };
   await startCommandSync(ctx);
-  if (ctx.commandBus?.dispatch) {
-    await ctx.commandBus.dispatch({
+  await requireCommandBus(ctx).dispatch({
       id: commandId,
-      module: 'browser',
-      type: 'web_stack.auth_assist.complete',
-      record_id: session.id,
-      inbound_channel: 'browser',
-      payload,
-      client_context: {
-        source: 'business-os.browser.auth-assist',
-        module_id: 'browser',
-        actor: actorContext(ctx.session),
-      },
-    });
-  } else {
-    await upsertDoc(browserCollection(ctx, 'business_commands'), {
-      id: commandId,
-      command_id: commandId,
       module: 'browser',
       command_type: 'web_stack.auth_assist.complete',
-      type: 'web_stack.auth_assist.complete',
       record_id: session.id,
       inbound_channel: 'browser',
-      status: 'pending_sync',
       payload,
       client_context: {
         source: 'business-os.browser.auth-assist',
         module_id: 'browser',
         actor: actorContext(ctx.session),
       },
-      created_at_ms: now,
-      updated_at_ms: now,
     });
-  }
   state.notice = 'Anmeldung wurde an CTOX uebergeben.';
 }
 
@@ -674,46 +795,27 @@ async function fillWebStackCredential(ctx, state) {
     source_id: session.payload?.source_id || '',
     secret_scope: 'credentials',
     secret_name: secretName,
+    field_role: session.payload?.credential_field_role || 'password',
+    confirmed: true,
     browser_stream: 'rxdb',
     secret_value_in_rxdb: false,
   };
   const selector = String(session.payload?.credential_selector || session.payload?.selector || '').trim();
   if (selector) payload.selector = selector;
   await startCommandSync(ctx);
-  if (ctx.commandBus?.dispatch) {
-    await ctx.commandBus.dispatch({
+  await requireCommandBus(ctx).dispatch({
       id: commandId,
-      module: 'browser',
-      type: 'browser.credential.fill',
-      record_id: session.id,
-      inbound_channel: 'browser',
-      payload,
-      client_context: {
-        source: 'business-os.browser.credential-fill',
-        module_id: 'browser',
-        actor: actorContext(ctx.session),
-      },
-    });
-  } else {
-    await upsertDoc(browserCollection(ctx, 'business_commands'), {
-      id: commandId,
-      command_id: commandId,
       module: 'browser',
       command_type: 'browser.credential.fill',
-      type: 'browser.credential.fill',
       record_id: session.id,
       inbound_channel: 'browser',
-      status: 'pending_sync',
       payload,
       client_context: {
         source: 'business-os.browser.credential-fill',
         module_id: 'browser',
         actor: actorContext(ctx.session),
       },
-      created_at_ms: now,
-      updated_at_ms: now,
     });
-  }
   state.notice = selector
     ? 'CTOX setzt die gespeicherten Zugangsdaten in das passende Feld ein.'
     : 'CTOX setzt die gespeicherten Zugangsdaten in das aktive Feld ein.';
@@ -747,6 +849,13 @@ function actorContext(session) {
   };
 }
 
+function requireCommandBus(ctx) {
+  if (!ctx?.commandBus?.dispatch) {
+    throw new Error('CTOX command bus is unavailable. The action was not submitted.');
+  }
+  return ctx.commandBus;
+}
+
 function installInputHandlers(ctx, refs, state, scheduleRefresh) {
   refs.canvas?.addEventListener('pointerdown', (event) => {
     refs.canvas.focus();
@@ -770,7 +879,6 @@ function installInputHandlers(ctx, refs, state, scheduleRefresh) {
     }).then(scheduleRefresh);
   }, { passive: false });
   refs.canvas?.addEventListener('keydown', (event) => {
-    if (event.metaKey || event.ctrlKey) return;
     event.preventDefault();
     writeKeyboardInput(ctx, state, 'keyDown', event).then(scheduleRefresh);
   });
@@ -804,7 +912,7 @@ async function writeKeyboardInput(ctx, state, type, event) {
     key: event.key || '',
     code: event.code || '',
     modifiers: eventModifiers(event),
-    text: type === 'keyDown' && event.key?.length === 1 ? event.key : '',
+    text: type === 'keyDown' && event.key?.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey ? event.key : '',
     payload: {
       repeat: Boolean(event.repeat),
       location: Number(event.location || 0),
@@ -814,6 +922,7 @@ async function writeKeyboardInput(ctx, state, type, event) {
 }
 
 async function writeInputEvent(ctx, state, type, patch) {
+  if (!browserSurfaceCanControl(ctx, state)) return;
   const session = state.latestSession;
   const frame = state.latestFrame;
   const sessionId = session?.id || frame?.session_id;
@@ -823,9 +932,16 @@ async function writeInputEvent(ctx, state, type, patch) {
   state.lastInputSeq = seq;
   const event = {
     id: `${sessionId}:input:${seq}:${type}`,
+    tenant_id: browserTenantId(ctx),
+    owner_user_id: session?.owner_user_id || '',
+    controller_user_id: ctx.session?.user?.id || ctx.session?.userId || '',
     session_id: sessionId,
     tab_id: state.latestTab?.id || frame?.tab_id || '',
     seq,
+    client_seq: seq,
+    frame_seq: Number(frame?.seq || session?.last_frame_seq || 0),
+    lease_id: state.controllerLeaseId || '',
+    ack_status: 'pending',
     type,
     status: 'pending',
     created_at_ms: now,
@@ -833,50 +949,16 @@ async function writeInputEvent(ctx, state, type, patch) {
     ...patch,
   };
   await upsertDoc(browserCollection(ctx, 'browser_input_events'), event);
-  if (session) {
-    const pendingInputCount = await countPendingInputEvents(ctx, session.id);
-    await patchDoc(browserCollection(ctx, 'browser_sessions'), session.id, {
-      last_input_seq: Math.max(seq, Number(session.last_input_seq || 0)),
-      pending_input_count: pendingInputCount,
-      updated_at_ms: now,
-    });
-    await writeViewerActivity(ctx, state, { force: true, atMs: now });
-  }
 }
 
-async function countPendingInputEvents(ctx, sessionId) {
-  const collection = browserCollection(ctx, 'browser_input_events');
-  if (!collection?.find || !sessionId) return 0;
-  const docs = await collection.find().exec();
-  return (docs || [])
-    .map((doc) => doc?.toJSON?.() || doc)
-    .filter((event) => event?.session_id === sessionId && event?.status === 'pending')
-    .length;
-}
-
-async function writeViewerActivity(ctx, state, options = {}) {
-  return;
-  const session = state.latestSession;
-  if (!session?.id || session.id === SYNTHETIC_SESSION_ID) return;
-  if (session.status !== 'active' && session.runtime_status !== 'active') return;
-  const now = Number(options.atMs || Date.now());
-  if (!options.force && now - Number(state.lastViewerHeartbeatAt || 0) < VIEWER_HEARTBEAT_MS) return;
-  state.lastViewerHeartbeatAt = now;
-  const collection = browserCollection(ctx, 'browser_sessions');
-  if (!collection?.findOne) return;
-  const existing = await collection.findOne(session.id).exec();
-  if (!existing?.incrementalPatch) return;
-  const current = existing.toJSON?.() || session;
-  const payload = {
-    ...(current.payload || {}),
-    viewer_source: 'business-os.browser',
-    viewer_user_id: ctx.session?.user?.id || ctx.session?.userId || '',
-    last_viewer_at_ms: now,
-  };
-  await existing.incrementalPatch({
-    payload,
-    updated_at_ms: Math.max(now, Number(current.updated_at_ms || 0)),
-  });
+function browserTenantId(ctx) {
+  return String(
+    ctx?.sync?.config?.instance_id
+      || ctx?.sync?.config?.instanceId
+      || ctx?.config?.instance_id
+      || ctx?.config?.instanceId
+      || '',
+  ).trim();
 }
 
 function canvasPoint(canvas, event) {
@@ -995,20 +1077,16 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
     refs.sessionList.innerHTML = '';
     return;
   }
-  refs.sessionList.innerHTML = sorted.slice(0, 8).map((session) => {
-    const tab = latestTab(tabs.filter((candidate) => candidate.session_id === session.id), session.current_tab_id);
-    const url = tab?.url || session.current_url || 'about:blank';
-    const status = browserStatusLabel(session);
-    const uiState = browserUiState(session);
-    return `
-      <button type="button" class="browser-session-item" data-browser-session-id="${escapeHtml(session.id)}" aria-current="${session.id === activeSession?.id ? 'true' : 'false'}">
-        <strong>${escapeHtml(browserDisplayTitle(tab, session, url))}</strong>
-        <span class="browser-pill" data-state="${escapeHtml(uiState)}">${escapeHtml(status)}</span>
-        <span>${escapeHtml(url)}</span>
-        <span>${escapeHtml(formatTime(session.updated_at_ms))}</span>
-      </button>
-    `;
-  }).join('');
+  const activeTabs = tabs
+    .filter((tab) => tab.session_id === activeSession?.id && tab.status !== 'closed')
+    .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0));
+  const tabMarkup = activeTabs.map((tab) => `
+    <span class="browser-tab-item" data-browser-tab-id="${escapeHtml(tab.id)}" aria-current="${tab.id === activeSession?.current_tab_id ? 'true' : 'false'}">
+      <span>${escapeHtml(tab.title || tab.url || 'Tab')}</span>
+      <button type="button" class="ctox-icon-button" data-browser-tab-close aria-label="Tab schließen">×</button>
+    </span>
+  `).join('');
+  refs.sessionList.innerHTML = tabMarkup;
 }
 
 function renderSession(refs, session, tab, frame, command, state) {
@@ -1025,6 +1103,8 @@ function renderSession(refs, session, tab, frame, command, state) {
   const policy = session.payload?.control_policy || {};
   const owner = session.owner_user_id || policy.owner_user_id || '-';
   const controller = session.controller_user_id || policy.controller_user_id || '-';
+  const leaseRemaining = Math.max(0, Number(session.controller_lease_expires_at_ms || 0) - Date.now());
+  const profileMode = session.profile_mode || session.payload?.profile_mode || 'persistent';
   const status = browserStatusLabel(session);
   if (refs.address && url && !state?.addressDirty && document.activeElement !== refs.address) refs.address.value = url;
   refs.sessionCard.innerHTML = `
@@ -1034,6 +1114,9 @@ function renderSession(refs, session, tab, frame, command, state) {
       <span>Status</span><span>${escapeHtml(status)}</span>
       <span>Owner</span><span>${escapeHtml(owner)}</span>
       <span>Control</span><span>${escapeHtml(controller)}</span>
+      <span>Lease</span><span>${leaseRemaining ? `${Math.ceil(leaseRemaining / 60000)} min` : 'inaktiv'}</span>
+      <span>Beobachter</span><span>${Array.isArray(session.allowed_observer_user_ids) ? session.allowed_observer_user_ids.length : 0}</span>
+      <span>Profil</span><span>${profileMode === 'private' ? 'Privat – wird gelöscht' : 'Persönlich – persistent'}</span>
       <span>Frame</span><span>${escapeHtml(frame ? `${frame.width}x${frame.height}` : 'Kein Bild')}</span>
     </div>
     ${commandLine}
@@ -1057,6 +1140,65 @@ function browserActionLabel(commandType) {
 function renderAuthAssist(refs, session) {
   if (!refs.authAssist) return;
   const payload = session?.payload || {};
+  const permission = payload.pending_permission;
+  if (permission && typeof permission === 'object') {
+    refs.authAssist.hidden = false;
+    refs.authAssist.innerHTML = `
+      <div>
+        <span class="browser-kicker">Website-Berechtigung</span>
+        <strong>${escapeHtml(titleCase(permission.kind || 'permission'))}</strong>
+        <small>${escapeHtml(permission.origin || '')}</small>
+      </div>
+      <div class="browser-auth-actions">
+        <button type="button" class="ctox-button" data-browser-permission-response="dismiss">Blockieren</button>
+        <button type="button" class="ctox-button" data-browser-permission-response="accept">Einmal erlauben</button>
+      </div>`;
+    return;
+  }
+  const httpAuth = payload.pending_http_auth;
+  if (httpAuth && typeof httpAuth === 'object') {
+    refs.authAssist.hidden = false;
+    refs.authAssist.innerHTML = `
+      <div>
+        <span class="browser-kicker">HTTP ${escapeHtml(httpAuth.scheme || 'Basic')} Authentifizierung</span>
+        <strong>${escapeHtml(httpAuth.realm || httpAuth.origin || 'Geschützter Bereich')}</strong>
+        <small>Zugangsdaten werden ausschließlich über eine CTOX Secret-Referenz eingesetzt.</small>
+      </div>
+      <div class="browser-auth-actions">
+        <button type="button" class="ctox-button" data-browser-http-auth-response="dismiss">Abbrechen</button>
+        <button type="button" class="ctox-button" data-browser-http-auth-response="accept">Secret verwenden</button>
+      </div>`;
+    return;
+  }
+  const webAuthn = payload.pending_webauthn;
+  if (webAuthn && typeof webAuthn === 'object') {
+    refs.authAssist.hidden = false;
+    refs.authAssist.innerHTML = `
+      <div>
+        <span class="browser-kicker">Passkey ${escapeHtml(webAuthn.type === 'create' ? 'registrieren' : 'verwenden')}</span>
+        <strong>${escapeHtml(webAuthn.rp_id || 'Unbekannte Website')}</strong>
+        <small>CTOX verwendet den verschlüsselten serverseitigen Passkey erst nach Ihrer Bestätigung.</small>
+      </div>
+      <div class="browser-auth-actions">
+        <button type="button" class="ctox-button" data-browser-webauthn-response="dismiss">Ablehnen</button>
+        <button type="button" class="ctox-button" data-browser-webauthn-response="accept">Bestätigen</button>
+      </div>`;
+    return;
+  }
+  const dialog = payload.pending_dialog;
+  if (dialog && typeof dialog === 'object') {
+    refs.authAssist.hidden = false;
+    refs.authAssist.innerHTML = `
+      <div>
+        <span class="browser-kicker">${escapeHtml(titleCase(dialog.type || 'dialog'))}</span>
+        <strong>${escapeHtml(dialog.message || 'Die Webseite wartet auf eine Entscheidung.')}</strong>
+      </div>
+      <div class="browser-auth-actions">
+        <button type="button" class="ctox-button" data-browser-dialog-response="dismiss">Abbrechen</button>
+        <button type="button" class="ctox-button" data-browser-dialog-response="accept">Bestätigen</button>
+      </div>`;
+    return;
+  }
   const isAuthAssist = payload.purpose === 'web_stack_auth';
   refs.authAssist.hidden = !isAuthAssist;
   if (!isAuthAssist) {
@@ -1122,13 +1264,46 @@ function renderStatus(refs, session, tab, frame, command) {
   if (refs.statusMeta) refs.statusMeta.textContent = bits.join(' - ') || '-';
 }
 
-function renderControls(refs, state) {
+function renderDownloads(refs, session) {
+  if (!refs.downloads) return;
+  const downloads = Array.isArray(session?.payload?.downloads) ? session.payload.downloads : [];
+  refs.downloads.hidden = downloads.length === 0;
+  refs.downloads.innerHTML = downloads.map((download) => `
+    <span class="browser-download-item">
+      <strong>${escapeHtml(download.filename || 'Download')}</strong>
+      · ${escapeHtml(download.status || 'Unbekannt')}
+      · ${escapeHtml(formatBytes(download.size_bytes || 0))}
+      <button type="button" class="ctox-button" data-browser-download-action="release" data-browser-download-id="${escapeHtml(download.id || '')}" ${download.status === 'clean' ? '' : 'disabled'}>Freigeben</button>
+      <button type="button" class="ctox-button" data-browser-download-action="rescan" data-browser-download-id="${escapeHtml(download.id || '')}" ${['infected', 'discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Neu prüfen</button>
+      <button type="button" class="ctox-button" data-browser-download-action="discard" data-browser-download-id="${escapeHtml(download.id || '')}" ${['discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Verwerfen</button>
+    </span>
+  `).join('');
+}
+
+function renderControls(ctx, refs, state) {
   const hasSession = Boolean(state.latestSession?.id);
   const isStopped = ['stopped', 'closed'].includes(String(state.latestSession?.status || state.latestSession?.runtime_status || '').toLowerCase());
-  for (const button of [refs.stop, refs.reset, refs.reload, refs.back, refs.forward, refs.sendToCtox]) {
+  const surfaceFocused = browserSurfaceIsFocused(ctx);
+  const canControl = browserSurfaceCanControl(ctx, state);
+  for (const button of [refs.go, refs.stop, refs.reload, refs.back, refs.forward, refs.sendToCtox, refs.upload, refs.newTab, refs.clipboardCopy, refs.clipboardPaste, refs.clipboardClear]) {
     if (!button) continue;
-    button.disabled = !hasSession || isStopped;
+    button.disabled = !hasSession || isStopped || !canControl;
   }
+  // The address bar is also the recovery path for a stale or disconnected
+  // session. Keep it operable; submit starts a fresh leased session when the
+  // current surface cannot safely navigate the existing one.
+  if (refs.go) refs.go.disabled = false;
+  if (refs.controllerAcquire) {
+    refs.controllerAcquire.disabled = !hasSession || isStopped || !surfaceFocused || canControl;
+  }
+  if (refs.controllerRelease) {
+    refs.controllerRelease.disabled = !hasSession || isStopped || !canControl;
+  }
+  for (const button of [refs.observerGrant, refs.observerRevoke]) {
+    if (!button) continue;
+    button.disabled = !hasSession || isStopped || !surfaceFocused;
+  }
+  refs.canvas?.setAttribute('aria-disabled', canControl ? 'false' : 'true');
 }
 
 function renderNotice(refs, notice) {
@@ -1265,85 +1440,6 @@ function commandErrorMessage(command) {
   return '';
 }
 
-async function seedSyntheticFrame(ctx, requestedUrl) {
-  const now = Date.now();
-  const url = normalizeUrl(requestedUrl);
-  const seq = now;
-  const image = await createSyntheticFrame(url, seq);
-  const session = {
-    id: SYNTHETIC_SESSION_ID,
-    owner_user_id: ctx.session?.user?.id || '',
-    controller_user_id: ctx.session?.user?.id || '',
-    status: 'synthetic',
-    runtime_status: 'not_started',
-    current_tab_id: SYNTHETIC_TAB_ID,
-    current_url: url,
-    title: 'Browser Vorschau',
-    viewport_w: VIEWPORT.width,
-    viewport_h: VIEWPORT.height,
-    device_scale_factor: 1,
-    frame_rate_target: 0,
-    active_frame_id: `browser_frame_synthetic_${seq}`,
-    last_frame_seq: seq,
-    last_input_seq: 0,
-    pending_input_count: 0,
-    payload: { source: 'business-os.browser.synthetic' },
-    created_at_ms: now,
-    updated_at_ms: now,
-  };
-  const tab = {
-    id: SYNTHETIC_TAB_ID,
-    session_id: SYNTHETIC_SESSION_ID,
-    title: 'Browser Vorschau',
-    url,
-    status: 'synthetic',
-    loading: false,
-    active: true,
-    can_go_back: false,
-    can_go_forward: false,
-    frame_seq: seq,
-    last_frame_id: session.active_frame_id,
-    last_frame_at_ms: now,
-    payload: { source: 'business-os.browser.synthetic' },
-    created_at_ms: now,
-    updated_at_ms: now,
-  };
-  const frame = {
-    id: session.active_frame_id,
-    session_id: SYNTHETIC_SESSION_ID,
-    tab_id: SYNTHETIC_TAB_ID,
-    seq,
-    mime_type: image.mimeType,
-    encoding: 'base64',
-    data: image.base64,
-    width: VIEWPORT.width,
-    height: VIEWPORT.height,
-    viewport_w: VIEWPORT.width,
-    viewport_h: VIEWPORT.height,
-    quality: 100,
-    size_bytes: image.sizeBytes,
-    frame_hash: await sha256Hex(image.base64),
-    captured_at_ms: now,
-    expires_at_ms: now + 5 * 60 * 1000,
-    updated_at_ms: now,
-  };
-  await Promise.all([
-    upsertDoc(browserCollection(ctx, 'browser_sessions'), session),
-    upsertDoc(browserCollection(ctx, 'browser_tabs'), tab),
-    upsertDoc(browserCollection(ctx, 'browser_frames'), frame),
-  ]);
-}
-
-async function clearSyntheticFrames(ctx) {
-  const docs = await browserCollection(ctx, 'browser_frames')?.find().exec();
-  for (const doc of docs || []) {
-    const json = doc?.toJSON?.() || {};
-    if (json.session_id === SYNTHETIC_SESSION_ID) {
-      await doc.remove();
-    }
-  }
-}
-
 async function upsertDoc(collection, doc) {
   if (!collection) throw new Error('Browser collection is not registered');
   const next = { ...doc };
@@ -1371,64 +1467,71 @@ async function patchDoc(collection, id, patch) {
   }
 }
 
-async function createSyntheticFrame(url, seq) {
-  const canvas = document.createElement('canvas');
-  canvas.width = VIEWPORT.width;
-  canvas.height = VIEWPORT.height;
-  const ctx = canvas.getContext('2d');
-  const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-  gradient.addColorStop(0, '#082f49');
-  gradient.addColorStop(0.55, '#0f172a');
-  gradient.addColorStop(1, '#14532d');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  for (let x = 0; x <= canvas.width; x += 80) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= canvas.height; y += 80) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-    ctx.stroke();
-  }
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.font = '700 52px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-  ctx.fillText('CTOX Browser', 72, 140);
-  ctx.font = '26px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.74)';
-  ctx.fillText(url, 72, 196);
-  ctx.font = '20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillText(`Vorschau ${seq}`, 72, 254);
-  ctx.strokeStyle = 'rgba(34,197,94,0.75)';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(72, 314, 1136, 260);
-  ctx.fillStyle = 'rgba(14,165,233,0.22)';
-  ctx.fillRect(92, 334, 1096, 220);
-  const dataUrl = canvas.toDataURL('image/png');
-  const base64 = dataUrl.split(',')[1] || '';
-  return {
-    base64,
-    mimeType: 'image/png',
-    sizeBytes: Math.ceil((base64.length * 3) / 4),
-  };
-}
-
-async function sha256Hex(text) {
-  if (!globalThis.crypto?.subtle) return '';
-  const bytes = new TextEncoder().encode(text);
-  const hash = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function normalizeUrl(value) {
   const trimmed = String(value || '').trim();
   if (!trimmed) return 'https://example.com';
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
+}
+
+function browserSessionIdFromArgs(value) {
+  const sessionId = String(value?.session_id || value?.sessionId || '').trim();
+  return /^browser_session_[a-z0-9_-]+$/i.test(sessionId) ? sessionId : '';
+}
+
+function browserSurfaceIsFocused(ctx) {
+  if (globalThis.document?.visibilityState === 'hidden') return false;
+  if (globalThis.document?.hasFocus?.() === false) return false;
+  const surface = ctx?.host?.closest?.('.shell-window');
+  return Boolean(surface?.classList.contains('is-focused'));
+}
+
+function browserSurfaceCanControl(ctx, state, now = Date.now()) {
+  if (!browserSurfaceIsFocused(ctx)) return false;
+  const session = state?.latestSession;
+  const actorId = String(ctx?.session?.user?.id || ctx?.session?.userId || '');
+  const expiresAt = Number(session?.controller_lease_expires_at_ms || 0);
+  return Boolean(
+    session?.id
+      && actorId
+      && session.controller_user_id === actorId
+      && String(session.controller_lease_id || '').trim()
+      && session.controller_lease_id === state.controllerLeaseId
+      && Number.isFinite(expiresAt)
+      && expiresAt > now
+  );
+}
+
+function browserCommandRequiresController(commandType, session) {
+  if (!session?.id) return false;
+  return ![
+    'browser.session.start',
+    'browser.controller.acquire',
+    'browser.observer.grant',
+    'browser.observer.revoke',
+  ].includes(commandType);
+}
+
+function shouldRenewControllerLease(session, actorId, now = Date.now(), options = {}) {
+  const {
+    documentVisible = true,
+    documentFocused = true,
+    surfaceFocused = true,
+    renewInFlight = false,
+    controllerLeaseId = '',
+  } = options;
+  if (!documentVisible || !documentFocused || !surfaceFocused || renewInFlight) return false;
+  if (!session?.id || !actorId || session.controller_user_id !== actorId) return false;
+  if (!String(session.controller_lease_id || '').trim()) return false;
+  if (session.controller_lease_id !== controllerLeaseId) return false;
+  const expiresAt = Number(session.controller_lease_expires_at_ms || 0);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return false;
+  return expiresAt - now <= 75_000;
+}
+
+function newBrowserControllerLeaseId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `browser-lease-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function debounce(fn, delayMs) {
@@ -1468,6 +1571,21 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+export const __browserTestHooks = {
+  normalizeUrl,
+  browserSessionIdFromArgs,
+  formatBytes,
+  titleCase,
+  userSessionPrefix,
+  selectedViewport,
+  browserAuthRequestFromArgs,
+  shouldRenewControllerLease,
+  browserCommandRequiresController,
+  browserSurfaceIsFocused,
+  browserSurfaceCanControl,
+  newBrowserControllerLeaseId,
+};
 
 async function ensureStyles() {
   const href = new URL(`./index.css?v=${STYLE_BUILD}`, import.meta.url).href;

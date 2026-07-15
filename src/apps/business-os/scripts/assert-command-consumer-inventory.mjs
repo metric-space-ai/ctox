@@ -11,7 +11,7 @@ const runtimeFiles = walk(appRoot)
   .filter((file) => /\.(?:js|mjs)$/.test(file))
   .filter((file) => !excluded(relative(file)));
 
-const dispatchConsumers = matchingFiles(/commandBus\.dispatch\s*\(/);
+const dispatchConsumers = matchingFiles(/(?:commandBus\?*\.|requireCommandBus\([^)]*\)\.)dispatch\s*\(/);
 const projectionReaders = matchingFiles(
   /(?:collection\?*\.\(['"]business_commands['"]\)|\.business_commands\b|activeCollection\(['"]business_commands['"]\)|documentCollection\([^\n]+['"]business_commands['"]\))/,
 );
