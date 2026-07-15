@@ -37279,10 +37279,14 @@ fn handle_appsec_business_command(
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
     let mut args = Vec::new();
-    push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
+    if command.command_type != "ctox.appsec.state.sync" {
+        push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
+    }
     match command.command_type.as_str() {
         "ctox.appsec.state.sync" => {
-            args.extend(["review", "--json"].map(str::to_string));
+            args.extend(["state", "sync"].map(str::to_string));
+            push_appsec_state_dir_arg(root, &command.payload, &mut args)?;
+            args.push("--json".to_string());
         }
         "ctox.appsec.review" => {
             args.extend(["review", "--json"].map(str::to_string));
