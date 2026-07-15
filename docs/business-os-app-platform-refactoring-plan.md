@@ -7,6 +7,8 @@ App-Vertrag: neue Business-Apps dürfen weder Rust-Änderungen noch einen CTOX-
 Recompile benötigen; Schema, Echtzeitsync, Freigaben und deklarative Aktionen
 werden zur Laufzeit aus dem App-Paket registriert. Die nachfolgenden Revisionen
 dokumentieren die Umsetzung; Revision 74 schließt den technischen Refactor.
+Revision 75 ergänzt den kompakten Settings-Vertrag: gekürzte Tab-Texte müssen
+ihren vollständigen Namen bei Hover und über den Accessible Name offenlegen.
 Revision 16 schließt die installierte interaktive Shell-/Window-/Mobile-
 Abnahme für alle 35 Launch Targets und nimmt gleichzeitig das dabei sichtbar
 gewordene kumulative Modul-Sync-Budget als neuen Plattformblocker auf.
@@ -4089,6 +4091,35 @@ src/core/business_os/task_id_inventory.json
 Technischer Status: abgeschlossen (100 %). Release-Status: automatisierte
 Gates grün; menschlicher Security-/Privacy-Signoff bleibt
 `pending-signoff` und ist ausdrücklich keine automatisierbare Codeaufgabe.
+
+### Revision 75: vollständige Namen für kompakte Settings-Tabs am 2026-07-15
+
+Die platzsparende Settings-Navigation bleibt bewusst einzeilig und darf ihre
+Labels bei kleinen Drawer-Breiten mit Ellipsis kürzen. Jeder Tab trägt jetzt
+zusätzlich denselben vollständigen Namen als Browser-Tooltip (`title`) und
+Accessible Name (`aria-label`). Das gilt zentral für Runtime, Channels, Sync,
+Design, MCP, Nutzer, Aktivität und Module; einzelne Tabs können die
+Zugänglichkeit daher nicht mehr versehentlich verlieren.
+
+Der Regressionstest rendert alle acht Admin-Tabs und prüft beide Attribute.
+Der echte Chromium-Lauf hovert jeden Tab bei 900 × 1000 und 390 × 844, prüft
+die vollständigen Namen und stellt sicher, dass die Tab-Leiste innerhalb des
+Viewports bleibt. Die lokale laufende Installation sowie Infyoda, SKF, GPU3
+und THESEN liefern den Fix mit einer neuen Asset-Version aus; die jeweiligen
+Installed-/Local-App-Mengen blieben unverändert.
+
+Evidence:
+
+```text
+output/playwright/business-os-settings-tooltips-v100/report.json
+output/playwright/business-os-settings-tooltips-v100/settings-900.png
+output/playwright/business-os-settings-tooltips-v100/settings-390.png
+src/apps/business-os/shared/react-settings.test.mjs
+```
+
+Revision 75 ist eine Regression-Härtung des bereits abgeschlossenen
+Responsive-/Accessibility-Vertrags und ändert den technischen Gesamtstand von
+100 % nicht.
 
 ## 1. Executive Decision
 
