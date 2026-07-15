@@ -158,3 +158,18 @@ test('research module catalog grants knowledge and document collections', async 
   assert.deepEqual(moduleJson.collections, required);
   assert.deepEqual(registryModule.collections, required);
 });
+
+test('presentation layer stays compact and shell-native', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const source = `${css}\n${await readFile(new URL('./index.js', import.meta.url), 'utf8')}`;
+  const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
+
+  assert.doesNotMatch(source, forbiddenSurfacePattern);
+  assert.doesNotMatch(source, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(source, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(source, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.doesNotMatch(source, /linear-gradient|radial-gradient/);
+  assert.match(css, /grid-template-columns: var\(--research-left-width\) 6px minmax\(0, 1fr\) 6px var\(--research-right-width\)/);
+  assert.match(css, /\.research-ai-prompt-pre/);
+  assert.match(css, /@keyframes research-spin/);
+});

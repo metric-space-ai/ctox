@@ -544,6 +544,9 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/isReadOnlyProjectionCollection[\s\S]{0,500}knowledge_tables/.test(syncContent)) {
     offenders.push('src/apps/business-os/shared/sync.js: knowledge_tables must remain pull-only because the native knowledge projection is the single writer');
   }
+  if (!/isReadOnlyProjectionCollection[\s\S]{0,500}browser_sessions/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: browser_sessions must remain pull-only because controller leases are native-authoritative');
+  }
   if (!/push:\s*isReadOnlyProjectionCollection\(collection\)\s*\?\s*null\s*:\s*\{\s*batchSize\s*\}/.test(syncContent)) {
     offenders.push('src/apps/business-os/shared/sync.js: read-only projection collections must pass push=null; push=undefined re-enables the replicateWebRTC default push path');
   }

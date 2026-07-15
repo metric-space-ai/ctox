@@ -3,31 +3,18 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadBusinessOsAppInventory } from './business-os-app-inventory.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../..');
 
-const AUDIT_APP_BASELINE = [
-  { id: 'ctox', title: 'CTOX', kind: 'module' },
-  { id: 'reports', title: 'Bugs & Features', kind: 'module' },
-  { id: 'documents', title: 'Documents', kind: 'module' },
-  { id: 'knowledge', title: 'Knowledge', kind: 'module' },
-  { id: 'research', title: 'Web Research', kind: 'module' },
-  { id: 'matching', title: 'Matching', kind: 'module' },
-  { id: 'conversations', title: 'Conversations', kind: 'module' },
-  { id: 'outbound', title: 'Outbound', kind: 'module' },
-  { id: 'shiftflow', title: 'Einsatzplanung', kind: 'module' },
-  { id: 'spreadsheets', title: 'Spreadsheets', kind: 'module' },
-  { id: 'notes', title: 'Notizen', kind: 'module', aliases: ['notizen'] },
-  { id: 'app-store', title: 'App Store', kind: 'module' },
-  { id: 'buchhaltung', title: 'Buchhaltung', kind: 'module' },
-  { id: 'calendar', title: 'Kalender', kind: 'module' },
-  { id: 'coding-agents', title: 'Coding Agents', kind: 'module' },
-  { id: 'explorer', title: 'Files', kind: 'desktop-app' },
-  { id: 'code-editor', title: 'Source Editor', kind: 'desktop-app' },
-  { id: 'creator', title: 'App Creator', kind: 'desktop-app' },
-];
+const appInventory = loadBusinessOsAppInventory();
+const ALL_APP_BASELINE = appInventory.allApps;
+const AUDIT_APP_BASELINE = Object.freeze([
+  ...appInventory.coreApps,
+  ...appInventory.compatibilityApps,
+]);
 
 const config = {
   url: process.env.BUSINESS_OS_QA_URL || 'http://127.0.0.1:18765/',
@@ -40,10 +27,35 @@ const config = {
   appWaitMs: parsePositiveInt(process.env.BUSINESS_OS_QA_APP_WAIT_MS || '1800', 'BUSINESS_OS_QA_APP_WAIT_MS'),
   readyTimeoutMs: parsePositiveInt(process.env.BUSINESS_OS_QA_READY_TIMEOUT_MS || '70000', 'BUSINESS_OS_QA_READY_TIMEOUT_MS'),
   failOnConsole: process.env.BUSINESS_OS_QA_FAIL_ON_CONSOLE !== '0',
+  failOnWarnings: process.env.BUSINESS_OS_QA_FAIL_ON_WARNINGS !== '0',
   failOnRegistry: process.env.BUSINESS_OS_QA_FAIL_ON_REGISTRY !== '0',
+  skipRegistry: process.env.BUSINESS_OS_QA_SKIP_REGISTRY === '1',
   loginUser: process.env.BUSINESS_OS_QA_LOGIN_USER || '',
   loginPassword: process.env.BUSINESS_OS_QA_LOGIN_PASSWORD || '',
+  authBearer: process.env.BUSINESS_OS_QA_AUTH_BEARER || '',
+  localAssets: process.env.BUSINESS_OS_QA_LOCAL_ASSETS === '1',
+  localAssetPrefixes: String(process.env.BUSINESS_OS_QA_LOCAL_ASSET_PREFIXES || '')
+    .split(',')
+    .map((value) => value.trim().replace(/^\/+/, ''))
+    .filter(Boolean),
+  installedStrict: process.env.BUSINESS_OS_QA_INSTALLED_STRICT === '1',
+  enforcePerformance: process.env.BUSINESS_OS_QA_ENFORCE_PERFORMANCE !== '0',
+  warmMountBudgetMs: parsePositiveInt(process.env.BUSINESS_OS_QA_WARM_MOUNT_BUDGET_MS || '500', 'BUSINESS_OS_QA_WARM_MOUNT_BUDGET_MS'),
+  interactionBudgetMs: parsePositiveInt(process.env.BUSINESS_OS_QA_INTERACTION_BUDGET_MS || '100', 'BUSINESS_OS_QA_INTERACTION_BUDGET_MS'),
+  theme: ['light', 'dark'].includes(process.env.BUSINESS_OS_QA_THEME) ? process.env.BUSINESS_OS_QA_THEME : '',
+  locale: ['de', 'en'].includes(process.env.BUSINESS_OS_QA_LOCALE) ? process.env.BUSINESS_OS_QA_LOCALE : '',
+  appIds: String(process.env.BUSINESS_OS_QA_APP_IDS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
 };
+const appsToCheck = config.appIds.length
+  ? ALL_APP_BASELINE.filter((app) => config.appIds.includes(app.id))
+  : AUDIT_APP_BASELINE;
+const unknownAppIds = config.appIds.filter((id) => !ALL_APP_BASELINE.some((app) => app.id === id));
+if (unknownAppIds.length) {
+  throw new Error(`BUSINESS_OS_QA_APP_IDS contains unknown app id(s): ${unknownAppIds.join(', ')}`);
+}
 
 const summary = {
   ok: false,
@@ -56,11 +68,24 @@ const summary = {
     appWaitMs: config.appWaitMs,
     readyTimeoutMs: config.readyTimeoutMs,
     failOnConsole: config.failOnConsole,
+    failOnWarnings: config.failOnWarnings,
     failOnRegistry: config.failOnRegistry,
+    skipRegistry: config.skipRegistry,
     loginUser: config.loginUser || '',
     loginPasswordConfigured: !!config.loginPassword,
+    authBearerConfigured: !!config.authBearer,
+    localAssets: config.localAssets,
+    localAssetPrefixes: config.localAssetPrefixes,
+    installedStrict: config.installedStrict,
+    enforcePerformance: config.enforcePerformance,
+    warmMountBudgetMs: config.warmMountBudgetMs,
+    interactionBudgetMs: config.interactionBudgetMs,
+    theme: config.theme,
+    locale: config.locale,
   },
-  expectedApps: AUDIT_APP_BASELINE,
+  expectedApps: appsToCheck,
+  expectedCoreApps: appsToCheck.filter((app) => app.cohort === 'core').length,
+  expectedCompatibilityApps: appsToCheck.filter((app) => app.cohort === 'compatibility').length,
   staticRegistry: readStaticRegistry(),
   shell: null,
   surfaces: null,
@@ -70,6 +95,7 @@ const summary = {
 };
 
 const consoleEvents = [];
+const localAssetEvents = [];
 const playwrightModule = resolvePlaywrightModule();
 const { chromium } = require(playwrightModule);
 
@@ -83,36 +109,129 @@ try {
       deviceScaleFactor: 1,
     });
     const page = await context.newPage();
+    let smokeUrlLoaded = false;
+    if (config.authBearer) await attachSameOriginBearer(page);
     attachConsoleCapture(page);
 
+    if (config.localAssets) {
+      const bootstrapUrl = withQuery(config.url, 'rxdbSmoke', '1');
+      if (config.localAssetPrefixes.length) await attachLocalAssetRouting(page);
+      await page.goto(bootstrapUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+      smokeUrlLoaded = true;
+      await authenticateIfNeeded(page, bootstrapUrl);
+      await page.waitForFunction(
+        () => document.body?.dataset?.authState !== 'locked',
+        null,
+        { timeout: config.readyTimeoutMs },
+      );
+      if (!config.localAssetPrefixes.length) await attachLocalAssetRouting(page);
+    }
+
     const smokeUrl = withQuery(config.url, 'rxdbSmoke', '1');
-    await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+    if (!smokeUrlLoaded) {
+      await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+    }
     await authenticateIfNeeded(page, smokeUrl);
     summary.shell = await waitForShellReady(page);
+    await applyQAPreferences(page);
 
-    summary.surfaces = await collectRegistrySurfaces(page);
-    await safeScreenshot(page, '00-registry-surfaces.png');
-    pushRegistryFailures(summary.failures, summary.surfaces, summary.staticRegistry);
+    if (!config.skipRegistry) {
+      summary.surfaces = await collectRegistrySurfaces(page);
+      await safeScreenshot(page, '00-registry-surfaces.png');
+      pushRegistryFailures(summary.failures, summary.surfaces, summary.staticRegistry);
+      await closeAppWindow(page, { id: 'app-store', kind: 'module' });
+    }
 
-    for (let index = 0; index < AUDIT_APP_BASELINE.length; index += 1) {
-      const app = AUDIT_APP_BASELINE[index];
-      const appResult = await captureApp(page, app, index + 1);
+    for (let index = 0; index < appsToCheck.length; index += 1) {
+      const app = appsToCheck[index];
+      let appResult;
+      try {
+        appResult = await withHostTimeout(
+          captureApp(page, app, index + 1),
+          Math.max(config.readyTimeoutMs, 45000),
+          `App capture timed out outside the renderer: ${app.id}`,
+        );
+      } catch (error) {
+        summary.failures.push({
+          scope: 'app-open',
+          app: app.id,
+          message: error?.message || String(error),
+          stack: error?.stack || '',
+        });
+        await withHostTimeout(
+          closeAppWindow(page, app),
+          5000,
+          `Failed app cleanup timed out: ${app.id}`,
+        ).catch(() => {});
+        // An in-page timer cannot fire when Chromium's renderer event loop is
+        // starved. Abort this browser session on a host-side timeout instead of
+        // sending more work to a renderer that can no longer answer.
+        if (error?.code === 'BUSINESS_OS_QA_HOST_TIMEOUT') throw error;
+        continue;
+      }
       summary.apps.push(appResult);
+      if (appResult.dom.horizontalOverflow || appResult.dom.unnamedVisibleButtons > 0) {
+        summary.failures.push({
+          scope: 'app-contract',
+          app: app.id,
+          message: `${app.title} violates the responsive/accessibility contract`,
+          horizontalOverflow: appResult.dom.horizontalOverflow,
+          unnamedVisibleButtons: appResult.dom.unnamedVisibleButtons,
+        });
+      }
+      if (appResult.presentation?.applicable && !appResult.presentation.ok) {
+        summary.failures.push({
+          scope: 'presentation-contract',
+          app: app.id,
+          message: `${app.title} failed mode continuity or responsive overflow checks`,
+          presentation: appResult.presentation,
+        });
+      }
       if (config.failOnConsole && appResult.consoleErrors.length > 0) {
         summary.failures.push({
           scope: 'console',
           app: app.id,
-          message: `${app.title} emitted ${appResult.consoleErrors.length} console/page error(s)`,
+          message: `${app.title} emitted ${appResult.consoleErrors.length} disallowed console/page event(s)`,
           errors: appResult.consoleErrors,
+        });
+      }
+    }
+
+    summary.performance = summarizePerformance(summary.apps);
+    if (config.enforcePerformance && summary.performance.warmMountP95Ms > config.warmMountBudgetMs) {
+      summary.failures.push({
+        scope: 'performance',
+        message: `Warm mount p95 ${summary.performance.warmMountP95Ms}ms exceeds ${config.warmMountBudgetMs}ms`,
+      });
+    }
+    if (config.enforcePerformance && summary.performance.interactionP95Ms > config.interactionBudgetMs) {
+      summary.failures.push({
+        scope: 'performance',
+        message: `Visible interaction p95 ${summary.performance.interactionP95Ms}ms exceeds ${config.interactionBudgetMs}ms`,
+      });
+    }
+    if (config.failOnConsole) {
+      const attributed = new Set(summary.failures
+        .flatMap((failure) => failure.errors || [])
+        .map(consoleEventKey));
+      const unattributed = consoleEvents.filter((entry) => (
+        (entry.level === 'error' || entry.level === 'pageerror' || (config.failOnWarnings && entry.level === 'warning'))
+        && !attributed.has(consoleEventKey(entry))
+      ));
+      if (unattributed.length) {
+        summary.failures.push({
+          scope: 'console-global',
+          message: `Business OS emitted ${unattributed.length} unattributed disallowed console/page event(s)`,
+          errors: unattributed,
         });
       }
     }
 
     summary.console = consoleEvents;
     summary.ok = summary.failures.length === 0;
-    await context.close().catch(() => {});
+    await withHostTimeout(context.close(), 5000, 'Browser context close timed out').catch(() => {});
   } finally {
-    await browser.close().catch(() => {});
+    await withHostTimeout(browser.close(), 5000, 'Browser close timed out').catch(() => {});
   }
 } catch (error) {
   summary.failures.push({
@@ -123,6 +242,7 @@ try {
 } finally {
   summary.endedAt = new Date().toISOString();
   summary.console = consoleEvents;
+  summary.localAssetEvents = localAssetEvents;
   summary.ok = summary.failures.length === 0;
   writeJson('business-os-qa-baseline.json', summary);
   writeMarkdownReport(summary);
@@ -134,12 +254,18 @@ if (!summary.ok) {
   process.exit(1);
 }
 
-console.log(`Business OS QA baseline OK: ${AUDIT_APP_BASELINE.length} apps checked.`);
+console.log(`Business OS QA baseline OK: ${appsToCheck.length} apps checked.`);
 console.log(`Report: ${path.join(config.outputDir, 'business-os-qa-baseline.md')}`);
 
 async function authenticateIfNeeded(page, smokeUrl) {
   const authState = await page.evaluate(() => document.body?.dataset?.authState || '');
   if (authState !== 'locked') return;
+  if (config.authBearer) {
+    await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+    const bearerAuthState = await page.evaluate(() => document.body?.dataset?.authState || '');
+    if (bearerAuthState !== 'locked') return;
+    throw new Error('Business OS capability bearer was rejected by the server');
+  }
   if (!config.loginUser || !config.loginPassword) {
     throw new Error('Business OS login gate is locked and BUSINESS_OS_QA_LOGIN_USER/PASSWORD are not configured');
   }
@@ -176,68 +302,303 @@ async function authenticateIfNeeded(page, smokeUrl) {
   await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
 }
 
+async function attachSameOriginBearer(page) {
+  const allowedOrigin = new URL(config.url).origin;
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).origin !== allowedOrigin) {
+      await route.fallback();
+      return;
+    }
+    await route.fallback({
+      headers: {
+        ...request.headers(),
+        authorization: `Bearer ${config.authBearer}`,
+      },
+    });
+  });
+}
+
+async function applyQAPreferences(page) {
+  if (!config.theme && !config.locale) return;
+  await page.evaluate(({ theme, locale }) => {
+    if (theme) document.documentElement.dataset.theme = theme;
+    if (locale) document.documentElement.lang = locale;
+    const detail = {
+      theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
+      language: document.documentElement.lang === 'en' ? 'en' : 'de',
+    };
+    window.dispatchEvent(new CustomEvent('ctox-business-os-preferences', { detail }));
+    window.postMessage({ type: 'ctox-business-os-language', lang: detail.language }, '*');
+  }, { theme: config.theme, locale: config.locale });
+}
+
 async function captureApp(page, app, ordinal) {
   const consoleStart = consoleEvents.length;
+  const openStartedAt = Date.now();
   const opened = await openApp(page, app);
+  const openDurationMs = Date.now() - openStartedAt;
   await page.waitForTimeout(config.appWaitMs);
+  const healthAfterOpen = await captureCompactRuntimeHealth(page);
+  const presentation = await exercisePresentationContract(page, app);
   const dom = await collectDomCounts(page, app);
   const screenshot = `${String(ordinal).padStart(2, '0')}-${slug(app.id)}.png`;
   await safeScreenshot(page, screenshot);
   const consoleErrors = consoleEvents
     .slice(consoleStart)
-    .filter((entry) => entry.level === 'error' || entry.level === 'pageerror');
-  return {
+    .filter((entry) => entry.level === 'error' || entry.level === 'pageerror' || (config.failOnWarnings && entry.level === 'warning'));
+  const result = {
     id: app.id,
     title: app.title,
     kind: app.kind,
+    cohort: app.cohort,
     opened,
+    openDurationMs,
     screenshot,
     dom,
     consoleErrors,
+    healthAfterOpen,
+    presentation,
   };
+  await closeAppWindow(page, app);
+  await page.waitForTimeout(250);
+  result.healthAfterClose = await captureCompactRuntimeHealth(page);
+  if (app.kind !== 'shell-surface') {
+    const warmOpen = await openApp(page, app);
+    result.warmMountMs = warmOpen.visibleMountMs;
+    result.warmReadyMs = warmOpen.readyMountMs;
+    result.warmLoadingShadowObserved = warmOpen.loadingShadowObserved;
+    await closeAppWindow(page, app);
+  }
+  return result;
+}
+
+async function exercisePresentationContract(page, app) {
+  if (app.kind === 'shell-surface') {
+    return { applicable: false, reason: 'shell-surface' };
+  }
+  return page.evaluate(async (appId) => {
+    const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
+    const manager = state?.windowManager;
+    const win = manager?.listWindows?.().find((entry) => entry.ownerId === `desktop-app:${appId}`);
+    const element = win ? document.getElementById(win.id) : null;
+    const root = element?.querySelector('[data-window-content]');
+    if (!win || !element || !root || typeof manager?.setAppMode !== 'function') {
+      return { applicable: true, ok: false, error: 'window presentation surface unavailable' };
+    }
+    const marker = `qa-${appId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    root.dataset.qaMountIdentity = marker;
+    const modes = [];
+    for (const mode of ['maximized', 'focus', 'window']) {
+      const started = performance.now();
+      manager.setAppMode(win.id, mode);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      modes.push({
+        mode,
+        durationMs: Number((performance.now() - started).toFixed(2)),
+        renderedMode: element.dataset.appMode || '',
+        sameMount: root.isConnected && root.dataset.qaMountIdentity === marker,
+      });
+    }
+    const original = {
+      width: element.style.width,
+      height: element.style.height,
+      left: element.style.left,
+      top: element.style.top,
+    };
+    const responsive = [];
+    for (const width of [640, 960, 1180]) {
+      element.style.width = `${width}px`;
+      element.style.height = '760px';
+      element.style.left = '0px';
+      element.style.top = '0px';
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      responsive.push({
+        width,
+        contentWidth: root.clientWidth,
+        scrollWidth: root.scrollWidth,
+        horizontalOverflow: root.scrollWidth > root.clientWidth + 2,
+        layoutSamples: ['.app-explorer-toolbar', '.app-explorer-body', '.source-editor', '.source-editor-toolbar']
+          .flatMap((selector) => {
+            const node = root.querySelector(selector);
+            if (!node) return [];
+            const style = getComputedStyle(node);
+            return [{ selector, display: style.display, gridTemplateColumns: style.gridTemplateColumns, flexWrap: style.flexWrap }];
+          }),
+        overflowElements: [...root.querySelectorAll('*')].flatMap((node) => {
+          const rootRect = root.getBoundingClientRect();
+          const rect = node.getBoundingClientRect();
+          const overflow = Math.max(0, rect.right - rootRect.right, node.scrollWidth - node.clientWidth);
+          return overflow > 2 ? [{
+            node: `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.classList.length ? `.${[...node.classList].slice(0, 3).join('.')}` : ''}`,
+            overflow: Number(overflow.toFixed(1)),
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+          }] : [];
+        }).sort((a, b) => b.overflow - a.overflow).slice(0, 8),
+      });
+    }
+    Object.assign(element.style, original);
+    delete root.dataset.qaMountIdentity;
+    return {
+      applicable: true,
+      ok: modes.every((entry) => entry.renderedMode === entry.mode && entry.sameMount)
+        && responsive.every((entry) => !entry.horizontalOverflow),
+      modes,
+      responsive,
+      interactionMaxMs: Math.max(...modes.map((entry) => entry.durationMs)),
+      styleCapabilities: {
+        explorerContainerRules: document.getElementById('app-explorer-styles')?.textContent.includes('@container business-app-window') || false,
+        editorContainerRules: document.getElementById('source-editor-styles')?.textContent.includes('@container business-app-window') || false,
+      },
+    };
+  }, app.id);
+}
+
+async function closeAppWindow(page, app) {
+  await page.evaluate((targetId) => {
+    const state = globalThis.ctoxBusinessOsSmoke?.state;
+    const ownerId = `desktop-app:${targetId.id}`;
+    const windows = state?.windowManager?.listWindows?.()
+      .filter((item) => item.ownerId === ownerId) || [];
+    for (const win of windows) state.windowManager.destroy?.(win.id);
+  }, app);
+  await page.waitForFunction((targetId) => {
+    const state = globalThis.ctoxBusinessOsSmoke?.state;
+    const ownerId = `desktop-app:${targetId.id}`;
+    return !(state?.windowManager?.listWindows?.() || [])
+      .some((item) => item.ownerId === ownerId);
+  }, app, { timeout: 3000 }).catch(() => {});
+}
+
+async function captureCompactRuntimeHealth(page) {
+  return page.evaluate(() => {
+    // Use the synchronous runtime diagnostic object here. Calling the full
+    // advanced-status snapshot after every app also performs IndexedDB
+    // evidence reads and can itself block the lifecycle stress test.
+    const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
+    const diagnostics = state?.sync?.diagnostics || {};
+    const entries = Object.values(diagnostics.collections || {});
+    const failedCollections = entries
+      .filter((entry) => ['failed', 'error'].includes(String(entry?.connectionStatus || entry?.status || '')))
+      .map((entry) => entry.collection)
+      .filter(Boolean);
+    const reconnectingCollections = entries
+      .filter((entry) => String(entry?.connectionStatus || entry?.status || '') === 'reconnecting')
+      .map((entry) => entry.collection)
+      .filter(Boolean);
+    const replicationErrors = entries
+      .filter((entry) => entry?.lastError)
+      .slice(0, 20)
+      .map((entry) => ({ collection: entry.collection, error: entry.lastError }));
+    const frameEntries = entries.map((entry) => entry?.frameTransport).filter(Boolean);
+    const demand = frameEntries
+      .map((entry) => entry?.demandTransport)
+      .filter(Boolean)
+      .reduce((acc, entry) => ({
+        pendingQueryCollectors: Math.max(acc.pendingQueryCollectors, Number(entry.pendingQueryCollectors || 0)),
+        queuedQueryRequests: Math.max(acc.queuedQueryRequests, Number(entry.queuedQueryRequests || 0)),
+        activeQueryStreams: Math.max(acc.activeQueryStreams, Number(entry.activeQueryStreams || 0)),
+        queryCollectorTimeouts: Math.max(acc.queryCollectorTimeouts, Number(entry.queryCollectorTimeouts || 0)),
+        queryCollectorsRejected: Math.max(acc.queryCollectorsRejected, Number(entry.queryCollectorsRejected || 0)),
+      }), {
+        pendingQueryCollectors: 0,
+        queuedQueryRequests: 0,
+        activeQueryStreams: 0,
+        queryCollectorTimeouts: 0,
+        queryCollectorsRejected: 0,
+      });
+    const frameTotals = frameEntries.reduce((totals, entry) => {
+      for (const key of ['activeTransfers', 'pendingAcks', 'incomingTransfers', 'priorityQueueDepth', 'highPriorityQueueDepth']) {
+        totals[key] = Math.max(totals[key] || 0, Number(entry?.[key] || 0));
+      }
+      return totals;
+    }, {});
+    const ok = failedCollections.length === 0
+      && reconnectingCollections.length === 0
+      && replicationErrors.length === 0;
+    return {
+      checkedAt: new Date().toISOString(),
+      ok,
+      failures: ok ? [] : ['runtime_diagnostics_unhealthy'],
+      failedCollections,
+      reconnectingCollections,
+      replicationErrors,
+      frameTransport: {
+        healthy: ok,
+        unhealthyCollections: [...new Set([...failedCollections, ...reconnectingCollections])],
+        totals: frameTotals,
+      },
+      demandTransport: demand,
+    };
+  });
 }
 
 async function openApp(page, app) {
-  if (app.kind === 'desktop-app') {
-    return page.evaluate(async (appId) => {
-      const api = globalThis.ctoxBusinessOsSmoke;
-      const state = api?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
-      if (!api?.openDesktopApp || !state?.windowManager) {
-        throw new Error('Business OS smoke desktop launcher is unavailable');
-      }
-      const existing = state.windowManager.listWindows?.()
-        .find((win) => win.ownerId === `desktop-app:${appId}`);
-      if (existing) {
-        state.windowManager.restore?.(existing.id);
-        state.windowManager.focus?.(existing.id);
-      } else {
-        await api.openDesktopApp(appId);
-      }
-      return {
-        activeModule: document.body.dataset.activeModule || '',
-        windows: state.windowManager.listWindows?.() || [],
-      };
-    }, app.id);
+  if (app.kind === 'shell-surface') {
+    await openDesktopSurface(page);
+    return page.evaluate(() => ({
+      activeModule: document.body.dataset.activeModule || '',
+      hash: location.hash,
+      windows: globalThis.ctoxBusinessOsSmoke?.state?.windowManager?.listWindows?.() || [],
+      shellSurface: 'desktop',
+    }));
   }
-
-  const targetHash = `#${app.id}`;
-  await page.evaluate((hash) => {
-    if (location.hash === hash) {
-      window.dispatchEvent(new HashChangeEvent('hashchange'));
+  const sourceDefinition = app.kind === 'module' && !config.installedStrict
+    ? JSON.parse(fs.readFileSync(
+      path.join(repoRoot, 'src/apps/business-os/modules', app.id, 'module.json'),
+      'utf8',
+    ))
+    : null;
+  const launchKey = `launch-${app.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const startedAt = Date.now();
+  await page.evaluate(({ appId, sourceDefinition, installedStrict, launchKey }) => {
+    const api = globalThis.ctoxBusinessOsSmoke;
+    const state = api?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
+    if (!api?.openDesktopApp || !state?.windowManager) throw new Error('Business OS desktop launcher is unavailable');
+    const current = state.modules?.find((item) => item.id === appId);
+    if (sourceDefinition && !current) throw new Error(`Installed Business OS registry is missing module: ${appId}`);
+    if (!installedStrict && sourceDefinition) Object.assign(current, sourceDefinition);
+    const existing = state.windowManager.listWindows?.().find((win) => win.ownerId === `desktop-app:${appId}`);
+    let promise;
+    if (existing) {
+      state.windowManager.restore?.(existing.id);
+      state.windowManager.focus?.(existing.id);
+      promise = Promise.resolve(existing.id);
     } else {
-      location.hash = hash;
+      promise = Promise.resolve(api.openDesktopApp(appId, { mode: 'window' }));
     }
-  }, targetHash);
-  await page.waitForFunction(
-    (id) => document.body.dataset.activeModule === id && !document.body.dataset.moduleLoading,
-    app.id,
-    { timeout: 25000 }
-  );
-  return page.evaluate(() => ({
+    globalThis.__CTOX_QA_APP_LAUNCHES ||= new Map();
+    globalThis.__CTOX_QA_APP_LAUNCHES.set(launchKey, promise);
+  }, { appId: app.id, sourceDefinition, installedStrict: config.installedStrict, launchKey });
+  const ownerSelector = `.shell-window[data-owner-id="desktop-app:${app.id}"]`;
+  await page.waitForSelector(ownerSelector, { timeout: 25000 });
+  const visibleMountMs = Date.now() - startedAt;
+  const loadingShadowObserved = await page.locator(ownerSelector).evaluate((windowElement) => (
+    Boolean(windowElement.querySelector('[data-loading-shadow]'))
+  ));
+  await page.evaluate(async ({ launchKey, appId }) => {
+    const promise = globalThis.__CTOX_QA_APP_LAUNCHES?.get(launchKey);
+    if (!promise) throw new Error(`Business OS QA launch promise missing: ${appId}`);
+    try {
+      await Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`App ready timed out: ${appId}`)), 25000)),
+      ]);
+    } finally {
+      globalThis.__CTOX_QA_APP_LAUNCHES.delete(launchKey);
+    }
+  }, { launchKey, appId: app.id });
+  const readyMountMs = Date.now() - startedAt;
+  return page.evaluate(({ appId, visibleMountMs, readyMountMs, loadingShadowObserved }) => ({
     activeModule: document.body.dataset.activeModule || '',
     hash: location.hash,
-    windows: globalThis.CTOX_BUSINESS_OS_APP?.windowManager?.listWindows?.() || [],
-  }));
+    windows: globalThis.ctoxBusinessOsSmoke?.state?.windowManager?.listWindows?.() || [],
+    windowedModule: appId,
+    visibleMountMs,
+    readyMountMs,
+    loadingShadowObserved,
+  }), { appId: app.id, visibleMountMs, readyMountMs, loadingShadowObserved });
 }
 
 async function waitForShellReady(page) {
@@ -266,7 +627,14 @@ async function waitForShellReady(page) {
     if (last.authState === 'locked') {
       throw new Error(`Business OS login gate is locked: ${JSON.stringify(last, null, 2)}`);
     }
-    if (last.hasSmokeApi && last.moduleCount > 0 && last.activeModule && !last.moduleLoading) {
+    const installedRuntimeReady = !config.installedStrict || last.status?.ok === true;
+    if (
+      last.hasSmokeApi
+      && last.moduleCount > 0
+      && last.activeModule
+      && !last.moduleLoading
+      && installedRuntimeReady
+    ) {
       return last;
     }
     await page.waitForTimeout(300);
@@ -302,8 +670,9 @@ async function collectRegistrySurfaces(page) {
   await page.evaluate(() => document.querySelector('.shell-start-menu-panel')?.classList.remove('is-active'));
 
   await openModuleSurface(page, 'app-store');
-  await page.waitForTimeout(config.appWaitMs);
+  await page.waitForTimeout(Math.max(config.appWaitMs, 1200));
   await page.evaluate(() => document.querySelector('[data-scope="all"]')?.click());
+  await page.waitForSelector('[data-apps-grid] .app-card', { timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(500);
   const appStore = await page.evaluate(() => ({
     activeModule: document.body.dataset.activeModule || '',
@@ -376,11 +745,29 @@ async function safeScreenshot(page, fileName) {
 }
 
 async function openModuleSurface(page, id) {
-  await page.evaluate((moduleId) => {
+  const launchKind = await page.evaluate(async ({ moduleId, installedStrict }) => {
+    const api = globalThis.ctoxBusinessOsSmoke;
+    const state = api?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
+    const current = state?.modules?.find?.((item) => item.id === moduleId) || null;
+    const windowed = installedStrict
+      || current?.launch_kind === 'desktop-app'
+      || current?.layout?.shell === 'windowed';
+    if (windowed) {
+      if (!api?.openDesktopApp) throw new Error('Business OS windowed module launcher is unavailable');
+      await api.openDesktopApp(moduleId, { mode: 'window' });
+      return 'window';
+    }
     const hash = `#${moduleId}`;
     if (location.hash === hash) window.dispatchEvent(new HashChangeEvent('hashchange'));
     else location.hash = hash;
-  }, id);
+    return 'module';
+  }, { moduleId: id, installedStrict: config.installedStrict });
+  if (launchKind === 'window') {
+    await page.waitForSelector(`.shell-window [data-module-root="${id}"]`, {
+      timeout: config.readyTimeoutMs,
+    });
+    return;
+  }
   await page.waitForFunction(
     (moduleId) => document.body.dataset.activeModule === moduleId && !document.body.dataset.moduleLoading,
     id,
@@ -390,16 +777,17 @@ async function openModuleSurface(page, id) {
 
 async function collectDomCounts(page, app) {
   return page.evaluate((appInfo) => {
-    const activeWindow = appInfo.kind === 'desktop-app'
-      ? [...document.querySelectorAll('.shell-window')]
-        .find((node) => node.classList.contains('is-focused'))
-      : null;
+    const activeWindow = document.querySelector(
+      `.shell-window[data-owner-id="desktop-app:${CSS.escape(appInfo.id)}"]`,
+    ) || [...document.querySelectorAll('.shell-window')]
+      .find((node) => node.classList.contains('is-focused'));
     const root = activeWindow?.querySelector('[data-window-content]')
       || document.querySelector('[data-module-host]')
       || document.body;
     const visible = (node) => !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length);
     const text = root.innerText || '';
     const all = [...root.querySelectorAll('*')];
+    const visibleButtons = [...root.querySelectorAll('button')].filter(visible);
     return {
       activeModule: document.body.dataset.activeModule || '',
       rootClass: root.className || '',
@@ -420,6 +808,10 @@ async function collectDomCounts(page, app) {
       cards: root.querySelectorAll('.app-card,.card,[class*="card"]').length,
       dialogs: document.querySelectorAll('[role="dialog"],dialog').length,
       separators: root.querySelectorAll('[role="separator"],[data-resizer]').length,
+      horizontalOverflow: root.scrollWidth > root.clientWidth + 2,
+      unnamedVisibleButtons: visibleButtons.filter((button) => !String(
+        button.getAttribute('aria-label') || button.title || button.textContent || '',
+      ).trim()).length,
       emptyStateMentions: countMatches(text, [
         'Keine',
         'No ',
@@ -447,11 +839,14 @@ async function collectDomCounts(page, app) {
 
 function pushRegistryFailures(failures, surfaces, staticRegistry) {
   if (!config.failOnRegistry) return;
-  const expected = new Set(AUDIT_APP_BASELINE.map((app) => app.id));
-  const moduleExpected = new Set(AUDIT_APP_BASELINE.filter((app) => app.kind === 'module').map((app) => app.id));
-  const expectedTitleMap = new Map(AUDIT_APP_BASELINE.map((app) => [app.id, app.title]));
-  const normalizedExpectedTitles = new Set(AUDIT_APP_BASELINE.flatMap((app) => [app.title, ...(app.aliases || [])]).map(normalizeLabel));
-
+  const coreExpected = new Set(appInventory.coreApps.map((app) => app.id));
+  const launchableExpected = new Set(AUDIT_APP_BASELINE
+    .filter((app) => app.kind !== 'shell-surface')
+    .map((app) => app.id));
+  const storeExpected = new Set(ALL_APP_BASELINE
+    .filter((app) => app.kind !== 'shell-surface')
+    .map((app) => app.id));
+  const expectedTitleMap = new Map(ALL_APP_BASELINE.map((app) => [app.id, app.title]));
   const runtimeIds = new Set((surfaces.runtime.modules || []).map((item) => item.id));
   const desktopTargets = new Set((surfaces.desktop.icons || []).map((item) => item.target).filter(Boolean));
   const startLabels = new Set((surfaces.startMenu.items || []).map((item) => normalizeLabel(item.label)));
@@ -463,25 +858,19 @@ function pushRegistryFailures(failures, surfaces, staticRegistry) {
     {
       surface: 'runtime modules',
       actual: runtimeIds,
-      expected: moduleExpected,
+      expected: coreExpected,
       expectedLabel: (id) => id,
     },
     {
       surface: 'desktop icons',
       actual: desktopTargets,
-      expected,
+      expected: launchableExpected,
       expectedLabel: (id) => id,
-    },
-    {
-      surface: 'start menu',
-      actual: startLabels,
-      expected: normalizedExpectedTitles,
-      expectedLabel: (label) => label,
     },
     {
       surface: 'app store',
       actual: appStoreIds,
-      expected,
+      expected: storeExpected,
       expectedLabel: (id) => id,
     },
     {
@@ -493,10 +882,27 @@ function pushRegistryFailures(failures, surfaces, staticRegistry) {
     {
       surface: 'static modules/registry.json',
       actual: staticIds,
-      expected: moduleExpected,
+      expected: coreExpected,
       expectedLabel: (id) => id,
     },
   ];
+
+  const missingStartMenuApps = AUDIT_APP_BASELINE
+    .filter((app) => app.kind !== 'shell-surface')
+    .filter((app) => ![app.title, ...(app.aliases || [])]
+      .map(normalizeLabel)
+      .some((label) => startLabels.has(label)))
+    .map((app) => app.id);
+  const duplicateStartMenuLabels = duplicateLabelsForSurface('start menu', surfaces, expectedTitleMap);
+  if (missingStartMenuApps.length || duplicateStartMenuLabels.length) {
+    failures.push({
+      scope: 'registry',
+      surface: 'start menu',
+      message: 'start menu does not match the Business OS QA baseline',
+      missing: missingStartMenuApps,
+      duplicates: duplicateStartMenuLabels,
+    });
+  }
 
   for (const check of checks) {
     const missing = [...check.expected].filter((id) => !check.actual.has(check.expectedLabel(id)));
@@ -573,12 +979,50 @@ function attachConsoleCapture(page) {
   });
   page.on('requestfailed', (request) => {
     const failure = request.failure();
-    if (!failure || /favicon/i.test(request.url())) return;
+    if (!failure || /favicon/i.test(request.url()) || /ERR_ABORTED/i.test(failure.errorText || '')) return;
     consoleEvents.push({
       at: new Date().toISOString(),
       level: 'error',
       text: `requestfailed ${request.method()} ${request.url()} ${failure.errorText}`,
     });
+  });
+}
+
+async function attachLocalAssetRouting(page) {
+  const assetRoot = path.join(repoRoot, 'src/apps/business-os');
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    const relativePath = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
+    const servedRelativePath = relativePath.replace(/^business-os\//, '');
+    if (/desktop-apps\/(explorer|code-editor)/.test(relativePath)) {
+      localAssetEvents.push({ url: route.request().url(), relativePath, action: 'seen' });
+    }
+    if (config.localAssetPrefixes.length
+      && !config.localAssetPrefixes.some((prefix) => servedRelativePath === prefix || servedRelativePath.startsWith(`${prefix}/`))) {
+      await route.fallback();
+      return;
+    }
+    const candidate = path.resolve(assetRoot, servedRelativePath);
+    if (!candidate.startsWith(`${assetRoot}${path.sep}`) && candidate !== path.join(assetRoot, 'index.html')) {
+      await route.fallback();
+      return;
+    }
+    try {
+      if (!fs.statSync(candidate).isFile()) throw new Error('not a file');
+      const ext = path.extname(candidate).toLowerCase();
+      const contentType = {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'text/javascript; charset=utf-8',
+        '.mjs': 'text/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.svg': 'image/svg+xml',
+      }[ext] || 'application/octet-stream';
+      await route.fulfill({ status: 200, contentType, body: fs.readFileSync(candidate) });
+      localAssetEvents.push({ url: route.request().url(), relativePath: servedRelativePath, action: 'fulfilled' });
+    } catch {
+      await route.fallback();
+    }
   });
 }
 
@@ -602,10 +1046,6 @@ function chromiumLaunchOptions() {
   const executablePath = existingChromeExecutable();
   const options = {
     headless: config.headless,
-    args: [
-      '--disable-gpu',
-      '--disable-features=WebRtcHideLocalIpsWithMdns',
-    ],
   };
   if (executablePath) options.executablePath = executablePath;
   return options;
@@ -639,6 +1079,49 @@ function parsePositiveInt(value, name) {
   return parsed;
 }
 
+function summarizePerformance(apps) {
+  const warmMounts = apps.map((app) => Number(app.warmMountMs)).filter(Number.isFinite);
+  const warmReady = apps.map((app) => Number(app.warmReadyMs)).filter(Number.isFinite);
+  const interactions = apps
+    .map((app) => Number(app.presentation?.interactionMaxMs))
+    .filter(Number.isFinite);
+  return {
+    warmMountSamples: warmMounts.length,
+    warmMountP95Ms: percentile(warmMounts, 0.95),
+    warmMountMaxMs: warmMounts.length ? Math.max(...warmMounts) : 0,
+    warmReadyP95Ms: percentile(warmReady, 0.95),
+    warmReadyMaxMs: warmReady.length ? Math.max(...warmReady) : 0,
+    loadingShadowObserved: apps.filter((app) => app.warmLoadingShadowObserved).length,
+    interactionSamples: interactions.length,
+    interactionP95Ms: percentile(interactions, 0.95),
+    interactionMaxMs: interactions.length ? Math.max(...interactions) : 0,
+  };
+}
+
+function percentile(values, quantile) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1)];
+}
+
+function consoleEventKey(entry) {
+  return `${entry?.at || ''}\u0000${entry?.level || ''}\u0000${entry?.text || ''}`;
+}
+
+function withHostTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = 'BUSINESS_OS_QA_HOST_TIMEOUT';
+        reject(error);
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 function writeJson(name, value) {
   fs.writeFileSync(path.join(config.outputDir, name), `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -651,8 +1134,14 @@ function writeMarkdownReport(data) {
   lines.push(`- URL: ${data.config.url}`);
   lines.push(`- Started: ${data.startedAt}`);
   lines.push(`- Ended: ${data.endedAt}`);
-  lines.push(`- Apps checked: ${data.apps.length}/${AUDIT_APP_BASELINE.length}`);
+  lines.push(`- Apps checked: ${data.apps.length}/${data.expectedApps.length}`);
+  lines.push(`- Core matrix: ${data.apps.filter((app) => app.cohort === 'core').length}/${data.expectedCoreApps}`);
+  lines.push(`- Compatibility surfaces: ${data.apps.filter((app) => app.cohort === 'compatibility').length}/${data.expectedCompatibilityApps}`);
   lines.push(`- Console events captured: ${data.console.length}`);
+  lines.push(`- Warm mount p95: ${data.performance?.warmMountP95Ms ?? 'n/a'} ms (budget ${data.config.warmMountBudgetMs} ms)`);
+  lines.push(`- Warm ready p95: ${data.performance?.warmReadyP95Ms ?? 'n/a'} ms (diagnostic, includes app data work)`);
+  lines.push(`- Loading shadow observed: ${data.performance?.loadingShadowObserved ?? 0} mounts`);
+  lines.push(`- Visible interaction p95: ${data.performance?.interactionP95Ms ?? 'n/a'} ms (budget ${data.config.interactionBudgetMs} ms)`);
   lines.push('');
   lines.push('## Registry Surfaces');
   lines.push('');
@@ -665,10 +1154,11 @@ function writeMarkdownReport(data) {
   lines.push('');
   lines.push('## App Smoke');
   lines.push('');
-  lines.push('| App | Kind | Screenshot | Elements | Buttons | Inputs | Tables | Rows | Console Errors |');
-  lines.push('|---|---|---:|---:|---:|---:|---:|---:|---:|');
+  lines.push('| App | Kind | Ready ms | Warm visible ms | Warm ready ms | Interaction ms | Presentation | Health after open/close | Screenshot | Elements | Buttons | Inputs | Tables | Rows | Console Errors |');
+  lines.push('|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
   for (const app of data.apps) {
-    lines.push(`| ${escapeMd(app.title)} | ${app.kind} | ${app.screenshot} | ${app.dom.totalElements} | ${app.dom.buttons} | ${app.dom.inputs + app.dom.selects + app.dom.textareas} | ${app.dom.tables} | ${app.dom.rows} | ${app.consoleErrors.length} |`);
+    const health = `${app.healthAfterOpen?.ok ? 'OK' : 'FAIL'}/${app.healthAfterClose?.ok ? 'OK' : 'FAIL'}`;
+    lines.push(`| ${escapeMd(app.title)} | ${app.kind} | ${app.openDurationMs} | ${app.warmMountMs ?? 'n/a'} | ${app.warmReadyMs ?? 'n/a'} | ${app.presentation?.interactionMaxMs ?? 'n/a'} | ${app.presentation?.applicable === false ? 'N/A' : app.presentation?.ok ? 'OK' : 'FAIL'} | ${health} | ${app.screenshot} | ${app.dom.totalElements} | ${app.dom.buttons} | ${app.dom.inputs + app.dom.selects + app.dom.textareas} | ${app.dom.tables} | ${app.dom.rows} | ${app.consoleErrors.length} |`);
   }
   lines.push('');
   if (data.failures.length) {

@@ -2,6 +2,10 @@
 
 Use this when styling a Business OS app or reviewing a port.
 
+The strategic and visual source of truth is the repository-root `PRODUCT.md`
+and `DESIGN.md`. This guide translates those contracts into the current
+Business OS class and validator vocabulary.
+
 ## Token Contract
 
 Business OS owns the workspace palette. Apps consume semantic CSS tokens and
@@ -98,7 +102,31 @@ Do not rebuild any of these locally.
 
 ## UX Patterns
 
-- Runtime-installed business apps use `layout.shell: "full-workspace"`.
+### Operational Density and Signature Automation
+
+- Treat Ableton Live as a density and immediacy reference, never as a skin.
+- Routine import, search, filter, sort, select, edit, save, export, navigation,
+  status, and window controls stay flat, neutral, and compact.
+- A visible work surface may elevate at most one domain-named automation action.
+  It may be more colorful and slightly larger only when it dispatches a real
+  typed command and exposes approval, queued/running, result, failure, abort,
+  and retry state.
+- Do not call ordinary Create, Save, Export, Settings, or generic "Ask AI"
+  controls hero actions. A signature control names the business outcome.
+
+- New runtime-installed business apps use root `launch_kind: "desktop-app"`
+  plus the canonical `presentation` object; minimum size is 640×480.
+  `layout.shell: "windowed"` remains a compatibility hint.
+- Floating desktop windows support real mouse resize down to 640×480. At a
+  shell width of 600px or below they switch to a mobile-sheet presentation
+  supported down to 360px; they do not retain an off-screen 640px canvas.
+- Two-/three-pane apps use shell-owned resizers while wide. When compact, every
+  hidden pane needs a visible tab/drawer/stack and return path. Stacking panes
+  with one scroll owner is acceptable; silently dropping a context pane is not.
+- The shell owns app name, version/status, Source, Versions, and window controls.
+  App CSS must leave that header usable and must not duplicate it.
+- `full-workspace` is a legacy compatibility value. Do not select it for a new
+  generated app.
 - Put the primary workflow in the central workspace, not in generic shell side
   panes.
 - Use dense, operational layouts for repeated business work: tables, split

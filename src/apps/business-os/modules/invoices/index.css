@@ -20,7 +20,7 @@
 
 .invoices-grid {
   display: grid;
-  grid-template-columns: 320px 1fr 320px;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(260px, 320px);
   gap: 1px;
   background: var(--line);
   flex: 1;
@@ -250,4 +250,34 @@
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12px;
+}
+
+/* A 640px floating window cannot preserve three useful columns. Keep every
+   pane reachable by switching to a single scrollable workbench stack instead
+   of silently collapsing the center or inspector to zero width. */
+@container business-app-window (max-width: 760px) {
+  .invoices-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 1fr) auto;
+    gap: 1px;
+    overflow: auto;
+  }
+
+  .invoices-list {
+    min-height: 150px;
+    max-height: 220px;
+  }
+
+  .invoices-center {
+    min-height: 320px;
+  }
+
+  .invoices-inspector {
+    min-height: 150px;
+    max-height: 240px;
+  }
+
+  .invoices-pane-scroll {
+    padding: 8px;
+  }
 }

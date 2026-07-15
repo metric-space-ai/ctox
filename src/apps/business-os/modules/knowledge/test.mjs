@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -215,6 +216,20 @@ test('action dialogs require non-empty required fields before submit', () => {
   assert.equal(isKnowledgeActionFormReady({ title: 'Customer Knowledge' }, ['title']), true);
   assert.equal(isKnowledgeActionFormReady({ destination: '' }, ['destination']), false);
   assert.equal(isKnowledgeActionFormReady({ destination: 'runtime/knowledge/exports/' }, ['destination']), true);
+});
+
+test('presentation follows compact Business OS knowledge contract', async () => {
+  const css = await readFile(fileURLToPath(new URL('./index.css', import.meta.url)), 'utf8');
+  const html = await readFile(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+
+  assert.doesNotMatch(html, /ctox-pane--glass/);
+  assert.doesNotMatch(css, /border-(?:left|right):\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(css, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(css, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.match(css, /--knowledge-shadow:\s*none;/);
+  assert.match(css, /--knowledge-panel-radius:\s*var\(--surface-radius\)/);
+  assert.match(css, /--knowledge-control-radius:\s*var\(--control-radius\)/);
+  assert.match(css, /\.bundle-caret::before\s*\{[\s\S]*?content:\s*"›"/);
 });
 
 let passed = 0;

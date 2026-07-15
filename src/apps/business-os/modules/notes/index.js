@@ -350,7 +350,6 @@ export async function mount(ctx) {
   // Load notes and wire up database merge sync
   await loadNotesFromLocal();
   state.localSubscriptionCleanup = wireLocalRealtime();
-  state.contextMenuCleanup = initNotesContextMenu(state);
   
   // Pre-select first note if available
   // Presence (advisory UX): show who else has the same note open, and
@@ -1003,7 +1002,7 @@ function renderNotesList() {
     }
     
     return `
-      <div class="notes-card ${active ? 'active' : ''}" data-note-id="${note.id}">
+      <div class="notes-card ${active ? 'active' : ''}" data-note-id="${escapeHtml(note.id)}" data-context-record-id="${escapeHtml(note.id)}" data-context-record-type="note" data-context-label="${escapeHtml(note.title || note.id)}">
         <div class="nn-card-row">
           <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
           <div class="nn-card-icons">
@@ -2796,12 +2795,10 @@ function initNotesContextMenu(state) {
     if (event.key === 'Escape') hideNotesContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideNotesContextMenu(state);

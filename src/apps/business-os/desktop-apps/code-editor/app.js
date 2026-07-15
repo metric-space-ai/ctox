@@ -32,10 +32,11 @@ export async function mount(container, ctx) {
     usingMonaco: false,
     diffOpen: false,
     sourceDenied: false,
+    lockedModule: Boolean(ctx.args?.lockedModule),
   };
 
   container.innerHTML = `
-    <section class="source-editor" data-source-editor>
+    <section class="source-editor" data-source-editor data-locked-module="${state.lockedModule ? 'true' : 'false'}">
       <aside class="source-editor-sidebar">
         <div class="source-editor-sidebar-head">
           <strong data-source-module-title>${escapeHtml(state.moduleTitle)}</strong>
@@ -142,7 +143,9 @@ export async function mount(container, ctx) {
     state.editor?.layout?.();
   });
   refs.openApp.addEventListener('click', () => {
-    if (state.moduleId) location.hash = `#${encodeURIComponent(state.moduleId)}`;
+    if (!state.moduleId) return;
+    if (typeof ctx.showApp === 'function') ctx.showApp();
+    else location.hash = `#${encodeURIComponent(state.moduleId)}`;
   });
 
   const monacoReady = initMonaco().catch((error) => {
@@ -214,6 +217,9 @@ export async function mount(container, ctx) {
         governance: ctx.governance,
         requireSourceView: true,
       });
+      if (state.lockedModule && state.moduleId) {
+        state.modules = state.modules.filter((entry) => entry.id === state.moduleId);
+      }
       const selected = state.modules.find((entry) => entry.id === state.moduleId);
       if (selected) {
         state.moduleTitle = selected.title;
@@ -314,6 +320,8 @@ export async function mount(container, ctx) {
 
   function renderModuleList() {
     refs.moduleList.innerHTML = '';
+    refs.moduleList.hidden = state.lockedModule;
+    if (state.lockedModule) return;
     if (state.loadingModules) {
       refs.moduleList.innerHTML = '<p class="source-editor-empty">Lade Apps...</p>';
       return;
@@ -525,7 +533,10 @@ export async function mount(container, ctx) {
 
   function setEditorValue(value, language, path) {
     if (state.editor && state.monaco) {
-      const uri = state.monaco.Uri.parse(`business-os-source:///${state.moduleId}/${path}`);
+      const modelPath = sourceModelPath(state.moduleId, path);
+      const uri = typeof state.monaco.Uri.from === 'function'
+        ? state.monaco.Uri.from({ scheme: 'business-os-source', path: modelPath })
+        : state.monaco.Uri.parse(`business-os-source:${modelPath}`);
       const existing = state.monaco.editor.getModel(uri);
       const model = existing || state.monaco.editor.createModel(value, monacoLanguage(language), uri);
       if (model.getValue() !== value) model.setValue(value);
@@ -786,6 +797,12 @@ export function filterSourceFiles(files, query) {
   return files.filter((file) => `${file.path} ${file.language || ''}`.toLowerCase().includes(needle));
 }
 
+export function sourceModelPath(moduleId, filePath) {
+  const moduleSegment = String(moduleId || 'unselected').trim().replace(/^\/+|\/+$/g, '') || 'unselected';
+  const fileSegment = String(filePath || 'empty.txt').trim().replace(/\\/g, '/').replace(/^\/+/, '') || 'empty.txt';
+  return `/${moduleSegment}/${fileSegment}`.replace(/\/{2,}/g, '/');
+}
+
 export function sourceEditorActionState(input) {
   const hasModule = Boolean(input.moduleId);
   const hasFile = Boolean(input.hasFile);
@@ -1023,6 +1040,12 @@ function ensureStyles() {
       min-width: 0;
       border-right: 1px solid var(--hairline, var(--line));
       background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
+    }
+    .source-editor[data-locked-module="true"] .source-editor-sidebar {
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
+    .source-editor[data-locked-module="true"] .source-editor-module-list {
+      display: none;
     }
     .source-editor-sidebar-head {
       display: grid;
@@ -1369,13 +1392,13 @@ function ensureStyles() {
       padding: 10px 8px;
       color: var(--muted);
     }
-    @media (max-width: 860px) {
+    @container business-app-window (max-width: 860px) {
       .source-editor { grid-template-columns: 190px minmax(0, 1fr); }
       .source-editor-actions button { padding: 0 8px; }
       .source-editor-workbench { grid-template-columns: minmax(0, 1fr); }
       .source-editor-diff { display: none; }
     }
-    @media (max-width: 560px) {
+    @container business-app-window (max-width: 640px) {
       .source-editor {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(190px, 38%) minmax(0, 1fr);

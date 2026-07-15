@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { __shiftflowTestHooks as hooks } from './index.js';
 
 const {
@@ -57,6 +58,22 @@ test('week publish bounds cover exactly seven days', () => {
   assert.equal(start.getHours(), 0);
   assert.equal(start.getMinutes(), 0);
   assert.equal(endMs - startMs, (7 * 24 * 60 * 60 * 1000) - 1);
+});
+
+test('presentation follows compact Business OS planning contract', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(css, /Premium/);
+  assert.doesNotMatch(css, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.doesNotMatch(css, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(css, /border-(?:left|right):\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(css, /@keyframes\s+shiftflow-pulse-active/);
+  assert.doesNotMatch(js, /border-radius:12px/);
+  assert.match(css, /--shiftflow-radius:\s*var\(--control-radius\)/);
+  assert.match(css, /--shiftflow-panel-radius:\s*var\(--surface-radius\)/);
+  assert.match(css, /\.shiftflow-panel\s*\{[\s\S]*?box-shadow:\s*none;/);
+  assert.match(css, /\.shiftflow-grid-cell\.drag-over\s*\{[\s\S]*?outline:\s*2px solid var\(--shiftflow-accent\)/);
 });
 
 let passed = 0;

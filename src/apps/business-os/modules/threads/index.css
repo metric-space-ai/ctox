@@ -24,14 +24,18 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .threads-left,
 .threads-right {
   background: var(--surface-2);
+}
+
+.threads-center {
+  position: relative;
 }
 
 .threads-filter-list {
@@ -50,6 +54,34 @@
 
 .threads-list {
   padding: 8px;
+}
+
+.threads-briefing {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: var(--hairline, var(--line));
+}
+
+.threads-briefing-item {
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--surface-2);
+}
+
+.threads-briefing-value {
+  display: block;
+  color: var(--text-strong, var(--text));
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.threads-briefing-label {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.25;
 }
 
 .threads-list-item {
@@ -95,6 +127,13 @@
   color: var(--text);
 }
 
+.threads-attention {
+  min-height: 16px;
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .threads-timeline {
   flex: 1;
   padding: 18px;
@@ -136,6 +175,28 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.threads-approval-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.threads-approval-facts div {
+  min-width: 0;
+}
+
+.threads-approval-facts dt {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.threads-approval-facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 
 .threads-composer {
@@ -214,22 +275,12 @@
   gap: 6px;
 }
 
-@media (max-width: 980px) {
+@container business-app-window (max-width: 980px) {
   .threads-module {
     grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   }
 
   .threads-right {
-    display: none;
-  }
-}
-
-@media (max-width: 720px) {
-  .threads-module {
-    grid-template-columns: 1fr;
-  }
-
-  .threads-left {
     display: none;
   }
 }
@@ -240,4 +291,400 @@
   font-weight: 600;
   color: var(--warning);
   white-space: nowrap;
+}
+
+.threads-mobile-back,
+.threads-mobile-actions {
+  display: none;
+}
+
+.threads-sync-state[data-state="offline"] {
+  color: var(--danger);
+}
+
+@media (pointer: coarse) {
+  .threads-module button,
+  .threads-module input,
+  .threads-module textarea {
+    min-height: 44px;
+  }
+}
+
+@container business-app-window (max-width: 600px) {
+  .threads-module {
+    display: block;
+    padding: 0 0 calc(var(--shell-taskbar-safe-area, 52px) + env(safe-area-inset-bottom, 0px));
+    min-width: 0;
+  }
+
+  .threads-pane {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .threads-left {
+    display: flex;
+  }
+
+  .threads-center,
+  .threads-right {
+    display: none;
+  }
+
+  .threads-module.is-mobile-detail .threads-left {
+    display: none;
+  }
+
+  .threads-module.is-mobile-detail .threads-center {
+    display: flex;
+  }
+
+  .threads-module.is-context-open .threads-center {
+    display: none;
+  }
+
+  .threads-module.is-context-open .threads-right {
+    display: block;
+    height: 100%;
+    background: var(--surface);
+  }
+
+  .threads-mobile-back {
+    display: inline-grid;
+    flex: 0 0 44px;
+  }
+
+  .threads-filter-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 8px;
+  }
+
+  .threads-filter-list .ctox-chip {
+    flex: 0 0 auto;
+    min-height: 36px;
+  }
+
+  .threads-list {
+    padding: 0;
+  }
+
+  .threads-list-item {
+    min-height: 76px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    padding: 10px 12px;
+  }
+
+  .threads-list-item.is-active {
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    border-color: var(--line);
+  }
+
+  .threads-timeline {
+    padding: 12px;
+    padding-bottom: 84px;
+  }
+
+  .threads-message,
+  .threads-approval-card {
+    max-width: min(100%, 72ch);
+  }
+
+  .threads-composer {
+    grid-template-columns: 1fr auto;
+    padding: 8px 10px;
+  }
+
+  .threads-composer textarea {
+    max-height: 120px;
+  }
+
+  .threads-mobile-actions {
+    position: absolute;
+    inset: auto 0 0;
+    z-index: 3;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .threads-mobile-actions button {
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .threads-approval-actions > button {
+    flex: 1 1 44%;
+    min-height: 44px;
+  }
+}
+
+/* ==========================================================================
+   Revision 31 compact OS layer
+
+   Threads is a timeline/approval workbench, not a dashboard. Routine inbox,
+   notification and note controls stay flat and compact; delegation, approval
+   and AI execution remain visible as operational actions without becoming
+   landing-page CTAs.
+   ========================================================================== */
+.threads-module {
+  --threads-surface: var(--surface);
+  --threads-surface-raised: var(--surface-2);
+  --threads-line: var(--line);
+  --threads-text: var(--text);
+  --threads-muted: var(--muted);
+  --threads-radius: var(--surface-radius, 4px);
+  --threads-control-radius: var(--control-radius, 3px);
+  gap: 8px;
+  padding: 8px 8px calc(var(--shell-taskbar-safe-area, 58px) + 8px);
+  background: var(--surface);
+}
+
+.threads-pane {
+  border-color: var(--threads-line);
+  border-radius: var(--threads-radius);
+  background: var(--threads-surface);
+  box-shadow: none;
+}
+
+.threads-left,
+.threads-right,
+.threads-composer,
+.threads-panel,
+.threads-briefing-item,
+.threads-message {
+  background: var(--threads-surface);
+}
+
+.threads-left,
+.threads-right {
+  background: var(--threads-surface-raised);
+}
+
+.threads-filter-list {
+  gap: 5px;
+  padding: 8px 10px;
+}
+
+.threads-filter-list .ctox-chip {
+  min-height: 24px;
+  padding-inline: 8px;
+  border-radius: var(--threads-control-radius);
+  font-size: 11px;
+}
+
+.threads-briefing {
+  background: var(--threads-line);
+}
+
+.threads-briefing-item {
+  padding: 7px 9px;
+}
+
+.threads-briefing-value {
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.1;
+}
+
+.threads-briefing-label {
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.threads-list {
+  padding: 6px;
+}
+
+.threads-list-item {
+  gap: 4px;
+  padding: 8px;
+  border-radius: var(--threads-radius);
+  box-shadow: none;
+}
+
+.threads-list-item:hover,
+.threads-list-item.is-active {
+  background: var(--threads-surface);
+  border-color: var(--threads-line);
+}
+
+.threads-list-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--threads-line));
+}
+
+.threads-timeline {
+  gap: 8px;
+  padding: 12px;
+}
+
+.threads-message,
+.threads-approval-card,
+.threads-notification-item {
+  border-radius: var(--threads-radius);
+  box-shadow: none;
+}
+
+.threads-message {
+  padding: 10px 12px;
+  background: var(--threads-surface);
+}
+
+.threads-message.is-mine,
+.threads-approval-card {
+  background: color-mix(in srgb, var(--accent) 7%, var(--threads-surface));
+}
+
+.threads-message-body {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.threads-approval-card {
+  gap: 8px;
+  padding: 10px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--threads-line));
+}
+
+.threads-approval-facts {
+  gap: 5px 10px;
+}
+
+.threads-approval-actions {
+  gap: 6px;
+}
+
+.threads-composer {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.threads-composer .ctox-button.is-primary {
+  min-height: 32px;
+  border-color: var(--threads-line);
+  background: var(--threads-surface);
+  color: var(--threads-text);
+}
+
+.threads-panel {
+  gap: 8px;
+  padding: 10px;
+}
+
+.threads-panel h3 {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.threads-form {
+  gap: 8px;
+}
+
+.threads-form label {
+  gap: 4px;
+}
+
+.threads-form .ctox-field-label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.threads-check {
+  display: grid !important;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  min-height: 28px;
+}
+
+.threads-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.threads-right .ctox-input,
+.threads-right .ctox-textarea,
+.threads-composer .ctox-textarea {
+  border-radius: var(--threads-control-radius);
+  box-shadow: none;
+}
+
+.threads-right .ctox-button,
+.threads-approval-actions .ctox-button {
+  min-height: 30px;
+  border-radius: var(--threads-control-radius);
+}
+
+.threads-right [data-ai-form] .ctox-button,
+.threads-right [data-approval-form] .ctox-button,
+.threads-approval-actions [data-approve-approval] {
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--threads-line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--threads-surface));
+  color: var(--accent);
+  font-weight: 780;
+}
+
+.threads-right [data-note-form] .ctox-button.is-primary {
+  border-color: var(--threads-line);
+  background: var(--threads-surface);
+  color: var(--threads-text);
+}
+
+@container business-app-window (max-width: 980px) {
+  .threads-module {
+    gap: 6px;
+    padding: 6px 6px calc(var(--shell-taskbar-safe-area, 58px) + 6px);
+  }
+}
+
+@container business-app-window (max-width: 600px) {
+  .threads-module {
+    padding: 0 0 calc(var(--shell-taskbar-safe-area, 52px) + env(safe-area-inset-bottom, 0px));
+    background: var(--threads-surface);
+  }
+
+  .threads-pane {
+    border-radius: 0;
+  }
+
+  .threads-filter-list {
+    padding: 7px 8px;
+  }
+
+  .threads-list-item {
+    min-height: 68px;
+    padding: 9px 10px;
+  }
+
+  .threads-timeline {
+    padding: 10px;
+    padding-bottom: 82px;
+  }
+
+  .threads-composer {
+    padding: 8px;
+  }
+
+  .threads-mobile-actions {
+    gap: 4px;
+  }
+
+  .threads-mobile-actions button {
+    min-height: 40px;
+    border-radius: var(--threads-control-radius);
+  }
 }

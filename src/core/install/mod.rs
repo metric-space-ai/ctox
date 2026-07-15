@@ -27,6 +27,7 @@ const DEFAULT_INSTALL_ROOT_RELATIVE_PATH: &str = ".local/lib/ctox";
 const DEFAULT_STATE_ROOT_RELATIVE_PATH: &str = ".local/state/ctox";
 const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
+const LAUNCHD_SIGNALING_LABEL: &str = "com.metric-space.ctox.signaling";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
@@ -1134,6 +1135,7 @@ fn apply_update(
         release_root.display()
     ));
     copy_workspace(source_root, &release_root, kind)?;
+    clear_macos_execution_metadata(&release_root)?;
     progress_done("copied release workspace", copy_started);
     if kind == UpdateSourceKind::Binary {
         if let Some(prev) = previous_release_root.as_deref() {
@@ -2239,7 +2241,17 @@ fn run_release_installer(
             legacy_script.display()
         );
     };
-    let mut cmd = Command::new(chosen_script);
+    // Invoke the installer through the system shell explicitly. On macOS a
+    // copied script with `#!/usr/bin/env bash` adds an unnecessary dyld/env
+    // launch before bash and can stall in the same provenance/notification
+    // path that previously affected the service wrapper.
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut command = Command::new("/bin/bash");
+        command.arg(chosen_script);
+        command
+    } else {
+        Command::new(chosen_script)
+    };
     cmd.current_dir(release_root)
         .env("CTOX_STATE_ROOT", state_root);
     if skip_optional_runtime_builds && env::var_os("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS").is_none() {
@@ -2274,9 +2286,18 @@ fn run_release_installer(
         args.join(" ")
     ));
     progress_info("installer output follows");
-    let status = cmd
+    let mut status = cmd
         .status()
         .with_context(|| format!("failed to start installer {}", chosen_script.display()))?;
+    if !status.success() {
+        progress_info(
+            "release installer failed once; retrying with the preserved managed build cache",
+        );
+        std::thread::sleep(Duration::from_secs(1));
+        status = cmd
+            .status()
+            .with_context(|| format!("failed to restart installer {}", chosen_script.display()))?;
+    }
     if !status.success() {
         anyhow::bail!("release installer failed for {}", release_root.display());
     }
@@ -2345,24 +2366,133 @@ fn copy_workspace(source_root: &Path, release_root: &Path, kind: UpdateSourceKin
             return false;
         };
         let relative = path.strip_prefix(source_root).ok();
-        let top_level_runtime = relative
-            .map(|entry| entry.components().count() == 1 && name == "runtime")
-            .unwrap_or(false);
+        let top_level_local_dir = is_dir
+            && relative
+                .map(|entry| {
+                    entry.components().count() == 1
+                        && matches!(
+                            name,
+                            "runtime"
+                                | "archive"
+                                | "output"
+                                | ".claude"
+                                | ".playwright-cli"
+                                | ".remote_import"
+                                | ".pentest"
+                                | ".wrangler"
+                                | ".venv"
+                                | "node_modules"
+                                | ".codex-paramiko-venv"
+                                | "old-legacy-for-transplation-only"
+                                | "tmp_intersolar"
+                        )
+                })
+                .unwrap_or(false);
         let skip_target = kind == UpdateSourceKind::Source && name == "target";
+        let downloadable_pdf_fixture = kind == UpdateSourceKind::Source
+            && !is_dir
+            && relative.is_some_and(|entry| {
+                entry.starts_with("src/tools/pdf-parse/tests/fixtures/samples/public")
+                    && entry.extension().and_then(OsStr::to_str) == Some("pdf")
+            });
+        let nested_workspace_lock = kind == UpdateSourceKind::Source
+            && !is_dir
+            && name == "Cargo.lock"
+            && relative.is_some_and(|entry| entry.components().count() > 1);
         name == ".git"
             || skip_target
-            || top_level_runtime
+            || top_level_local_dir
+            || downloadable_pdf_fixture
+            || nested_workspace_lock
             || (is_dir && matches!(name, ".DS_Store"))
             || (!is_dir && name == ".DS_Store")
     })
 }
 
+/// macOS can attach execution metadata to a copied release tree. Compiler
+/// artifacts created below that tree then inherit the metadata and can stall
+/// in dyld before a build-script reaches `main`. A managed source update must
+/// remove that metadata itself instead of relying on an operator repair.
+fn clear_macos_execution_metadata(release_root: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        for attribute in ["com.apple.quarantine", "com.apple.provenance"] {
+            let status = Command::new("/usr/bin/xattr")
+                .args(["-d", "-r", attribute])
+                .arg(release_root)
+                .status()
+                .with_context(|| {
+                    format!(
+                        "failed to clear {attribute} from release tree {}",
+                        release_root.display()
+                    )
+                })?;
+            if !status.success() {
+                anyhow::bail!(
+                    "failed to clear {attribute} from release tree {}",
+                    release_root.display()
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = release_root;
+    Ok(())
+}
+
+const BINARY_BUNDLE_REQUIRED_PATHS: &[&str] = &[
+    "install.sh",
+    "Cargo.toml",
+    "contracts/source_origins_manifest.json",
+    "src/apps/business-os/index.html",
+    "src/apps/business-os/app.js",
+    "src/apps/business-os/app.css",
+    "src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs",
+    "src/apps/business-os/scripts/validate-app-module.mjs",
+    "src/apps/business-os/modules/documents/index.js",
+    "src/apps/business-os/modules/spreadsheets/index.js",
+    "src/apps/business-os/office-engine/features.json",
+    "src/apps/business-os/vendor/ctox-office/ctox-office-document.mjs",
+    "src/apps/business-os/vendor/ctox-office/ctox-office-spreadsheet.mjs",
+    "src/apps/business-os/vendor/ctox-office/frame.html",
+    "src/apps/business-os/vendor/ctox-office/provenance.json",
+    "src/apps/business-os/vendor/ctox-office/runtime/ctox-documents.mjs",
+    "src/apps/business-os/vendor/ctox-office/runtime/ctox-spreadsheets.mjs",
+    "src/apps/business-os/vendor/ctox-office/forks/ctox-documents/manifest.json",
+    "src/apps/business-os/vendor/ctox-office/forks/ctox-documents/business-os.css",
+    "src/apps/business-os/vendor/ctox-office/forks/ctox-spreadsheets/manifest.json",
+    "src/apps/business-os/vendor/ctox-office/forks/ctox-spreadsheets/business-os.css",
+    "src/apps/business-os/vendor/ctox-office/forks/shared/business-os.css",
+    "src/apps/business-os/vendor/ctox-office/upstream/web-apps/apps/documenteditor/main/index.html",
+    "src/apps/business-os/vendor/ctox-office/upstream/web-apps/apps/spreadsheeteditor/main/index.html",
+    "src/apps/business-os/vendor/ctox-office/upstream/sdkjs/word/sdk-all-min.js",
+    "src/apps/business-os/vendor/ctox-office/upstream/sdkjs/cell/sdk-all-min.js",
+    "src/core/harness/Cargo.toml",
+    "src/core/rxdb/Cargo.toml",
+    "src/core/rxdb/tools/local_signaling_server.js",
+    "src/skills/system",
+];
+
 fn validate_binary_bundle(source_root: &Path) -> Result<()> {
     let binary = source_root.join("bin").join(bundle_binary_name());
     if !binary.exists() {
         anyhow::bail!(
-            "binary bundle is missing the ctox executable at {}",
-            binary.display()
+            "binary bundle is missing a real CTOX launch binary at {} or {}",
+            source_root.join("bin/ctox-real").display(),
+            source_root.join("bin/ctox").display()
+        );
+    }
+    let mut missing = Vec::new();
+    for required_path in BINARY_BUNDLE_REQUIRED_PATHS {
+        let path = source_root.join(required_path);
+        if !path.exists() {
+            missing.push(path.display().to_string());
+        }
+    }
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "binary bundle is missing required runtime paths: {}",
+            missing.join(", ")
         );
     }
     Ok(())
@@ -2954,6 +3084,7 @@ fn refresh_service_unit(
     install_root: Option<&Path>,
 ) -> Result<()> {
     if cfg!(target_os = "macos") {
+        refresh_launchd_signaling_agent(current_root)?;
         return refresh_launchd_agent(current_root, state_root, install_root);
     }
     if !cfg!(target_os = "linux") {
@@ -3034,6 +3165,7 @@ fn refresh_launchd_agent(
   <string>{}</string>\n\
   <key>ProgramArguments</key>\n\
   <array>\n\
+    <string>/bin/bash</string>\n\
     <string>{}</string>\n\
     <string>service</string>\n\
     <string>--foreground</string>\n\
@@ -3078,6 +3210,146 @@ fn refresh_launchd_agent(
     fs::write(&marker, "installed\n")
         .with_context(|| format!("failed to update {}", marker.display()))?;
     Ok(())
+}
+
+fn refresh_launchd_signaling_agent(current_root: &Path) -> Result<()> {
+    let Some(home_dir) = home_dir() else {
+        return Ok(());
+    };
+    let Some(node_path) = find_executable_in_path("node") else {
+        return Ok(());
+    };
+    let signaling_script = current_root.join("src/core/rxdb/tools/local_signaling_server.js");
+    if !signaling_script.is_file() {
+        return Ok(());
+    }
+    let launch_agent_dir = home_dir.join("Library/LaunchAgents");
+    ensure_dir(&launch_agent_dir)?;
+    let runtime_dir = current_root.join("runtime");
+    ensure_dir(&runtime_dir)?;
+    let plist_path = launch_agent_dir.join(format!("{LAUNCHD_SIGNALING_LABEL}.plist"));
+    let log_path = runtime_dir.join("ctox_signaling.log");
+    let signaling_port =
+        env::var("CTOX_BUSINESS_OS_LOCAL_SIGNALING_PORT").unwrap_or_else(|_| "20876".to_string());
+    let contents = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>{}</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{}</string>\n\
+    <string>{}</string>\n\
+    <string>{}</string>\n\
+  </array>\n\
+  <key>WorkingDirectory</key>\n\
+  <string>{}</string>\n\
+  <key>EnvironmentVariables</key>\n\
+  <dict>\n\
+    <key>SIGNALING_HOST</key>\n\
+    <string>127.0.0.1</string>\n\
+    <key>SIGNALING_PORT</key>\n\
+    <string>{}</string>\n\
+    <key>PATH</key>\n\
+    <string>{}</string>\n\
+  </dict>\n\
+  <key>RunAtLoad</key>\n\
+  <true/>\n\
+  <key>KeepAlive</key>\n\
+  <true/>\n\
+  <key>StandardOutPath</key>\n\
+  <string>{}</string>\n\
+  <key>StandardErrorPath</key>\n\
+  <string>{}</string>\n\
+</dict>\n\
+</plist>\n",
+        xml_escape_text(LAUNCHD_SIGNALING_LABEL),
+        xml_escape_text(&node_path.display().to_string()),
+        xml_escape_text(&signaling_script.display().to_string()),
+        xml_escape_text(&signaling_port),
+        xml_escape_text(&current_root.display().to_string()),
+        xml_escape_text(&signaling_port),
+        xml_escape_text(&default_launchd_path()),
+        xml_escape_text(&log_path.display().to_string()),
+        xml_escape_text(&log_path.display().to_string())
+    );
+    fs::write(&plist_path, contents)
+        .with_context(|| format!("failed to write {}", plist_path.display()))?;
+    let marker = current_root.join("runtime/ctox_signaling_launchd_user.installed");
+    if let Some(parent) = marker.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::write(&marker, "installed\n")
+        .with_context(|| format!("failed to update {}", marker.display()))?;
+    reload_launchd_user_agent(LAUNCHD_SIGNALING_LABEL, &plist_path)?;
+    Ok(())
+}
+
+fn reload_launchd_user_agent(label: &str, plist_path: &Path) -> Result<()> {
+    // Unit tests redirect HOME into a temporary directory and only verify the
+    // generated contract. Never mutate the operator's real launchd domain from
+    // such a test process.
+    if cfg!(test) {
+        return Ok(());
+    }
+
+    let domain = format!("gui/{}", unsafe { libc::geteuid() });
+    let target = format!("{domain}/{label}");
+    let _ = Command::new("launchctl")
+        .args(["bootout", target.as_str()])
+        .status();
+    // launchd may report EIO while the previous job is still being torn down,
+    // even though the plist is valid and an immediate retry succeeds.
+    std::thread::sleep(Duration::from_millis(250));
+    run_launchctl_required(["enable", target.as_str()], label)?;
+    run_launchctl_required_with_retry(
+        [
+            "bootstrap",
+            domain.as_str(),
+            &plist_path.display().to_string(),
+        ],
+        label,
+        3,
+    )?;
+    run_launchctl_required_with_retry(["kickstart", "-k", target.as_str()], label, 3)
+}
+
+fn run_launchctl_required<const N: usize>(args: [&str; N], label: &str) -> Result<()> {
+    let output = Command::new("launchctl")
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to execute launchctl for {label}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!(
+            "launchctl failed to activate {label} with status {}{}{}",
+            output.status,
+            if stderr.is_empty() { "" } else { ": " },
+            stderr
+        );
+    }
+    Ok(())
+}
+
+fn run_launchctl_required_with_retry<const N: usize>(
+    args: [&str; N],
+    label: &str,
+    attempts: usize,
+) -> Result<()> {
+    let attempts = attempts.max(1);
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match run_launchctl_required(args, label) {
+            Ok(()) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+        if attempt < attempts {
+            std::thread::sleep(Duration::from_millis(250 * attempt as u64));
+        }
+    }
+    Err(last_error.expect("at least one launchctl attempt"))
 }
 
 /// Writes the watchdog timer + service that re-starts ctox.service if it ever
@@ -3136,6 +3408,17 @@ fn default_launchd_path() -> String {
     env::var("PATH").unwrap_or_else(|_| {
         "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
     })
+}
+
+fn find_executable_in_path(name: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn xml_escape_text(value: &str) -> String {
@@ -3406,6 +3689,118 @@ mod tests {
     }
 
     #[test]
+    fn source_workspace_copy_excludes_local_runtime_build_and_archive_state() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("source");
+        let release = temp.path().join("release");
+        ensure_dir(&source.join("src/core")).unwrap();
+        ensure_dir(&source.join("archive/kernel-probes")).unwrap();
+        ensure_dir(&source.join("runtime/build")).unwrap();
+        ensure_dir(&source.join("output/playwright")).unwrap();
+        ensure_dir(&source.join(".claude")).unwrap();
+        ensure_dir(&source.join("target/release")).unwrap();
+        ensure_dir(&source.join("src/tools/target/debug")).unwrap();
+        ensure_dir(&source.join("src/standalone-workspace")).unwrap();
+        ensure_dir(
+            &source.join("src/tools/pdf-parse/tests/fixtures/samples/public/opendataloader"),
+        )
+        .unwrap();
+        ensure_dir(&source.join(".git/objects")).unwrap();
+        fs::write(source.join("src/core/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(source.join("archive/kernel-probes/result.env"), "local=1\n").unwrap();
+        fs::write(source.join("runtime/build/cache"), "runtime\n").unwrap();
+        fs::write(source.join("output/playwright/report.json"), "{}\n").unwrap();
+        fs::write(source.join(".claude/settings.local.json"), "{}\n").unwrap();
+        fs::write(source.join("target/release/ctox"), "binary\n").unwrap();
+        fs::write(source.join("src/tools/target/debug/helper"), "binary\n").unwrap();
+        fs::write(source.join("Cargo.lock"), "root-lock\n").unwrap();
+        fs::write(
+            source.join("src/standalone-workspace/Cargo.lock"),
+            "nested-lock\n",
+        )
+        .unwrap();
+        fs::write(
+            source.join(
+                "src/tools/pdf-parse/tests/fixtures/samples/public/opendataloader/sample.pdf",
+            ),
+            "downloaded fixture\n",
+        )
+        .unwrap();
+        fs::write(source.join(".git/objects/probe"), "git\n").unwrap();
+
+        copy_workspace(&source, &release, UpdateSourceKind::Source).unwrap();
+
+        assert!(release.join("src/core/main.rs").is_file());
+        assert!(!release.join("archive").exists());
+        assert!(!release.join("runtime").exists());
+        assert!(!release.join("output").exists());
+        assert!(!release.join(".claude").exists());
+        assert!(!release.join("target").exists());
+        assert!(!release.join("src/tools/target").exists());
+        assert_eq!(
+            fs::read_to_string(release.join("Cargo.lock")).unwrap(),
+            "root-lock\n"
+        );
+        assert!(!release.join("src/standalone-workspace/Cargo.lock").exists());
+        assert!(!release
+            .join("src/tools/pdf-parse/tests/fixtures/samples/public/opendataloader/sample.pdf")
+            .exists());
+        assert!(!release.join(".git").exists());
+    }
+
+    #[test]
+    fn binary_bundle_validation_rejects_target_only_archive_layout() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("bundle");
+        ensure_dir(&bundle.join("target/release")).unwrap();
+        fs::write(bundle.join("target/release/ctox"), "binary\n").unwrap();
+
+        let error = validate_binary_bundle(&bundle).unwrap_err().to_string();
+
+        assert!(error.contains("missing a real CTOX launch binary"));
+        assert!(error.contains("bin/ctox-real"));
+    }
+
+    #[test]
+    fn binary_bundle_validation_requires_runtime_workspace_assets() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("bundle");
+        ensure_dir(&bundle.join("bin")).unwrap();
+        fs::write(bundle.join("bin/ctox-real"), "binary\n").unwrap();
+
+        let error = validate_binary_bundle(&bundle).unwrap_err().to_string();
+
+        assert!(error.contains("missing required runtime paths"));
+        assert!(error.contains("src/apps/business-os/index.html"));
+    }
+
+    #[test]
+    fn binary_bundle_validation_accepts_release_runtime_workspace() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("bundle");
+        ensure_dir(&bundle.join("bin")).unwrap();
+        fs::write(bundle.join("bin/ctox-real"), "binary\n").unwrap();
+        for required_path in BINARY_BUNDLE_REQUIRED_PATHS {
+            let path = bundle.join(required_path);
+            if required_path.ends_with(".json")
+                || required_path.ends_with(".html")
+                || required_path.ends_with(".js")
+                || required_path.ends_with(".css")
+                || required_path.ends_with(".mjs")
+                || required_path.ends_with(".toml")
+                || required_path == &"install.sh"
+            {
+                ensure_dir(path.parent().unwrap()).unwrap();
+                fs::write(path, "asset\n").unwrap();
+            } else {
+                ensure_dir(&path).unwrap();
+            }
+        }
+
+        validate_binary_bundle(&bundle).unwrap();
+    }
+
+    #[test]
     fn release_switch_stop_is_guarded_for_business_os_app_tasks() {
         let temp = tempdir().unwrap();
         let root = temp.path();
@@ -3526,12 +3921,53 @@ mod tests {
             .join("Library/LaunchAgents")
             .join(format!("{LAUNCHD_USER_LABEL}.plist"));
         let text = fs::read_to_string(&plist).unwrap();
+        assert!(text.contains("<key>ProgramArguments</key>"));
+        assert!(text.contains("<string>/bin/bash</string>"));
         assert!(text.contains("<key>WorkingDirectory</key>"));
         assert!(text.contains(&current_root.display().to_string()));
         assert!(text.contains(&state_root.display().to_string()));
         assert!(text.contains(&install_root.display().to_string()));
         assert!(current_root
             .join("runtime/ctox_launchd_user.installed")
+            .exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn refresh_launchd_signaling_agent_uses_local_signaling_script() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let current_root = temp.path().join("install/current");
+        let script = current_root.join("src/core/rxdb/tools/local_signaling_server.js");
+        let fake_bin = temp.path().join("bin");
+        ensure_dir(script.parent().unwrap()).unwrap();
+        ensure_dir(&fake_bin).unwrap();
+        fs::write(&script, "console.log('signaling');\n").unwrap();
+        fs::write(fake_bin.join("node"), "#!/bin/sh\n").unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("PATH", &fake_bin);
+        refresh_launchd_signaling_agent(&current_root).unwrap();
+        match original_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match original_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let plist = home
+            .join("Library/LaunchAgents")
+            .join(format!("{LAUNCHD_SIGNALING_LABEL}.plist"));
+        let text = fs::read_to_string(&plist).unwrap();
+        assert!(text.contains("<string>com.metric-space.ctox.signaling</string>"));
+        assert!(text.contains("local_signaling_server.js"));
+        assert!(text.contains("<string>20876</string>"));
+        assert!(current_root
+            .join("runtime/ctox_signaling_launchd_user.installed")
             .exists());
     }
 

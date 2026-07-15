@@ -1,5 +1,6 @@
 export const THREAD_COLLECTIONS = [
   'user_threads',
+  'user_thread_states',
   'user_thread_messages',
   'user_thread_links',
   'user_notifications',

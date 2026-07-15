@@ -6,6 +6,36 @@ const TITLE = 'consent';
 const CHECK_COMMAND = 'ats.consent.check';
 const EXPORT_COMMAND = 'ats.subject.export';
 const ERASE_COMMAND = 'ats.subject.erase';
+const COPY = {
+  de: {
+    title: 'Einwilligungen', subjectLabel: 'Subjekt', purposeLabel: 'Zweck', rightsLabel: 'Betroffenenrechte', subjectPlaceholder: 'Subjekt-ID', purposePlaceholder: 'Zweck (optional — leer = nur Existenz)',
+    checkConsent: 'Einwilligung prüfen', rightsSubjectPlaceholder: 'Subjekt-ID für Betroffenenrechte',
+    exportArticle15: 'Auskunft (Art. 15)', eraseArticle17: 'Löschen (Art. 17)',
+    exportTitle: 'Recht auf Auskunft (DSGVO Art. 15)', eraseTitle: 'Recht auf Löschung (DSGVO Art. 17)',
+    entries: 'Einträge', entriesEmpty: 'Noch keine Einträge.', commandOffline: 'Offline: Befehlsdienst nicht verfügbar.',
+    subjectRequired: 'Subjekt-ID erforderlich.', dispatchOffline: 'Offline: Befehl konnte nicht gesendet werden.',
+    checkFailed: 'Prüfung fehlgeschlagen.', consentPresent: 'Einwilligung vorhanden.', consentMissing: 'Keine gültige Einwilligung.',
+    subject: 'Subjekt', purpose: 'Zweck', existenceOnly: '— (nur Existenzprüfung)', decision: 'Entscheidung',
+    allowed: 'erlaubt', denied: 'verweigert', blocked: 'blockiert', executed: 'ausgeführt',
+    deletedRecords: 'Gelöschte Datensätze', affectedRecords: 'Betroffene Datensätze', auditEntries: 'Audit-Einträge',
+    exportLabel: 'Auskunft (Art. 15)', valid: 'gültig', withdrawn: 'widerrufen', expired: 'abgelaufen', open: 'offen',
+    legalBasis: 'Rechtsgrundlage', validUntil: 'gültig bis', granted: 'erteilt', exportShort: 'Auskunft', eraseShort: 'Löschen',
+  },
+  en: {
+    title: 'Consent', subjectLabel: 'Subject', purposeLabel: 'Purpose', rightsLabel: 'Data-subject rights', subjectPlaceholder: 'Subject ID', purposePlaceholder: 'Purpose (optional — blank checks existence only)',
+    checkConsent: 'Check consent', rightsSubjectPlaceholder: 'Subject ID for data-subject rights',
+    exportArticle15: 'Access request (Art. 15)', eraseArticle17: 'Erase (Art. 17)',
+    exportTitle: 'Right of access (GDPR Art. 15)', eraseTitle: 'Right to erasure (GDPR Art. 17)',
+    entries: 'entries', entriesEmpty: 'No entries yet.', commandOffline: 'Offline: command service unavailable.',
+    subjectRequired: 'Subject ID is required.', dispatchOffline: 'Offline: command could not be sent.',
+    checkFailed: 'Consent check failed.', consentPresent: 'Valid consent exists.', consentMissing: 'No valid consent.',
+    subject: 'Subject', purpose: 'Purpose', existenceOnly: '— (existence check only)', decision: 'Decision',
+    allowed: 'allowed', denied: 'denied', blocked: 'blocked', executed: 'completed',
+    deletedRecords: 'Deleted records', affectedRecords: 'Affected records', auditEntries: 'Audit entries',
+    exportLabel: 'Access request (Art. 15)', valid: 'valid', withdrawn: 'withdrawn', expired: 'expired', open: 'pending',
+    legalBasis: 'Legal basis', validUntil: 'valid until', granted: 'granted', exportShort: 'Access', eraseShort: 'Erase',
+  },
+};
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -14,6 +44,13 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   const root = ctx.host.querySelector('[data-ats-root]');
+  const locale = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const copy = COPY[locale];
+  const t = (key) => copy[key] || COPY.de[key] || key;
+  root?.setAttribute('lang', locale);
+  root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+  root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = t(node.dataset.i18nTitle); });
   const listEl = root?.querySelector('[data-ats-list]');
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
@@ -21,7 +58,7 @@ export async function mount(ctx) {
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
-  if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
+  if (titleEl) titleEl.textContent = locale === 'en' ? t('title') : (ctx.manifest?.title || t('title'));
   if (subEl) subEl.textContent = ctx.manifest?.description || '';
 
   let rowsCache = [];
@@ -41,8 +78,8 @@ export async function mount(ctx) {
       catch (e) { console.error('[consent] load failed:', e); }
     }
     rowsCache = rows;
-    if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => consentRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
+    if (countEl) countEl.textContent = rows.length + ' ' + t('entries');
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => consentRow(r, t, locale)).join('') : '<div class="ctox-empty">' + esc(t('entriesEmpty')) + '</div>';
   }
 
   // ats.consent.check — reads { subject_id, purpose? }, returns { ok, allowed, purpose }.
@@ -50,29 +87,29 @@ export async function mount(ctx) {
     event.preventDefault();
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
+    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const f = Object.fromEntries(new FormData(formEl).entries());
     const subject_id = String(f.subject_id || '').trim();
-    if (!subject_id) { setGate('Subjekt-ID erforderlich.', 'block'); return; }
+    if (!subject_id) { setGate(t('subjectRequired'), 'block'); return; }
     const purposeRaw = String(f.purpose || '').trim();
     const payload = { subject_id, purpose: purposeRaw || null };
 
     let result;
-    try { result = await dispatch.call(ctx.commandBus, { module: MODULE_ID, type: CHECK_COMMAND, command_type: CHECK_COMMAND, payload }); }
-    catch (e) { console.error('[consent] check dispatch failed:', e); setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline'); return; }
+    try { result = await dispatch.call(ctx.commandBus, { module: MODULE_ID, command_type: CHECK_COMMAND, payload }); }
+    catch (e) { console.error('[consent] check dispatch failed:', e); setGate(t('dispatchOffline'), 'offline'); return; }
 
     const blockers = collectBlockers(result);
     if (result?.ok === false || (Array.isArray(blockers) && blockers.length > 0)) {
-      setGate('<strong>Prüfung fehlgeschlagen.</strong>' + blockerList(blockers), 'block');
+      setGate('<strong>' + esc(t('checkFailed')) + '</strong>' + blockerList(blockers), 'block');
       return;
     }
     const allowed = result?.allowed === true || result?.data?.allowed === true;
     const checkedPurpose = result?.purpose ?? result?.data?.purpose ?? (purposeRaw || null);
     setGate(
-      '<strong>' + (allowed ? 'Einwilligung vorhanden.' : 'Keine gültige Einwilligung.') + '</strong>'
-      + '<div class="ats-result-row">Subjekt: ' + esc(subject_id) + '</div>'
-      + '<div class="ats-result-row">Zweck: ' + esc(checkedPurpose ?? '— (nur Existenzprüfung)') + '</div>'
-      + '<div class="ats-result-row">Entscheidung: ' + (allowed ? 'erlaubt' : 'verweigert') + '</div>',
+      '<strong>' + esc(allowed ? t('consentPresent') : t('consentMissing')) + '</strong>'
+      + '<div class="ats-result-row">' + esc(t('subject')) + ': ' + esc(subject_id) + '</div>'
+      + '<div class="ats-result-row">' + esc(t('purpose')) + ': ' + esc(checkedPurpose ?? t('existenceOnly')) + '</div>'
+      + '<div class="ats-result-row">' + esc(t('decision')) + ': ' + esc(allowed ? t('allowed') : t('denied')) + '</div>',
       allowed ? 'ok' : 'block'
     );
   }
@@ -82,17 +119,17 @@ export async function mount(ctx) {
   async function dispatchSubject(commandType, subjectId, label) {
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
+    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const subject_id = String(subjectId || '').trim();
-    if (!subject_id) { setGate('Subjekt-ID erforderlich.', 'block'); return; }
+    if (!subject_id) { setGate(t('subjectRequired'), 'block'); return; }
 
     let result;
     try { result = await dispatch.call(ctx.commandBus, { module: MODULE_ID, type: commandType, command_type: commandType, payload: { subject_id } }); }
-    catch (e) { console.error('[consent] ' + commandType + ' dispatch failed:', e); setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline'); return; }
+    catch (e) { console.error('[consent] ' + commandType + ' dispatch failed:', e); setGate(t('dispatchOffline'), 'offline'); return; }
 
     const blockers = collectBlockers(result);
     if (result?.ok === false || (Array.isArray(blockers) && blockers.length > 0)) {
-      setGate('<strong>' + esc(label) + ' blockiert.</strong>' + blockerList(blockers), 'block');
+      setGate('<strong>' + esc(label) + ' ' + esc(t('blocked')) + '.</strong>' + blockerList(blockers), 'block');
       return;
     }
     renderSubjectResult(commandType, label, subject_id, result);
@@ -104,19 +141,19 @@ export async function mount(ctx) {
     //   export -> { record_count, collections{coll:[rec]}, audit_trail[] }
     //   erase  -> { erased_count, erased{coll:[id]} }
     const data = result?.data || result || {};
-    let body = '<div class="ats-result-row">Subjekt: ' + esc(subjectId) + '</div>';
+    let body = '<div class="ats-result-row">' + esc(t('subject')) + ': ' + esc(subjectId) + '</div>';
 
     if (commandType === ERASE_COMMAND) {
       const erased = data.erased && typeof data.erased === 'object' ? data.erased : {};
       const count = data.erased_count ?? Object.values(erased).reduce((n, ids) => n + (Array.isArray(ids) ? ids.length : 0), 0);
-      body += '<div class="ats-result-row">Gelöschte Datensätze: ' + esc(count) + '</div>';
+      body += '<div class="ats-result-row">' + esc(t('deletedRecords')) + ': ' + esc(count) + '</div>';
       const collEntries = Object.entries(erased).filter(([, ids]) => Array.isArray(ids) && ids.length);
       if (collEntries.length) {
         body += '<ul class="ats-blockers">'
           + collEntries.map(([coll, ids]) => '<li>' + esc(coll) + ': ' + esc(ids.length) + ' (' + esc(ids.join(', ')) + ')</li>').join('')
           + '</ul>';
       }
-      setGate('<strong>' + esc(label) + ' ausgeführt.</strong>' + body, 'ok');
+      setGate('<strong>' + esc(label) + ' ' + esc(t('executed')) + '.</strong>' + body, 'ok');
       return;
     }
 
@@ -124,13 +161,13 @@ export async function mount(ctx) {
     const collections = data.collections && typeof data.collections === 'object' ? data.collections : {};
     const auditTrail = Array.isArray(data.audit_trail) ? data.audit_trail : [];
     const recordCount = data.record_count ?? Object.values(collections).reduce((n, recs) => n + (Array.isArray(recs) ? recs.length : 0), 0);
-    body += '<div class="ats-result-row">Betroffene Datensätze: ' + esc(recordCount)
-      + ' · Audit-Einträge: ' + esc(auditTrail.length) + '</div>';
+    body += '<div class="ats-result-row">' + esc(t('affectedRecords')) + ': ' + esc(recordCount)
+      + ' · ' + esc(t('auditEntries')) + ': ' + esc(auditTrail.length) + '</div>';
     const exportPayload = { subject_id: subjectId, record_count: recordCount, collections, audit_trail: auditTrail };
     let pretty;
     try { pretty = JSON.stringify(exportPayload, null, 2); } catch { pretty = String(exportPayload); }
-    body += '<div class="ats-result-row">Auskunft (Art. 15):</div><pre class="ats-export">' + esc(pretty) + '</pre>';
-    setGate('<strong>' + esc(label) + ' ausgeführt.</strong>' + body, 'ok');
+    body += '<div class="ats-result-row">' + esc(t('exportLabel')) + ':</div><pre class="ats-export">' + esc(pretty) + '</pre>';
+    setGate('<strong>' + esc(label) + ' ' + esc(t('executed')) + '.</strong>' + body, 'ok');
   }
 
   async function onSubjectSubmit(event) {
@@ -138,8 +175,8 @@ export async function mount(ctx) {
     const action = event.submitter?.getAttribute?.('data-subject-action');
     const f = Object.fromEntries(new FormData(subjectFormEl).entries());
     const subjectId = f.subject_id;
-    if (action === EXPORT_COMMAND) await dispatchSubject(EXPORT_COMMAND, subjectId, 'Auskunft (Art. 15)');
-    else if (action === ERASE_COMMAND) await dispatchSubject(ERASE_COMMAND, subjectId, 'Löschen (Art. 17)');
+    if (action === EXPORT_COMMAND) await dispatchSubject(EXPORT_COMMAND, subjectId, t('exportArticle15'));
+    else if (action === ERASE_COMMAND) await dispatchSubject(ERASE_COMMAND, subjectId, t('eraseArticle17'));
   }
   subjectFormEl?.addEventListener('submit', onSubjectSubmit);
 
@@ -147,8 +184,8 @@ export async function mount(ctx) {
   async function onListClick(event) {
     const exportBtn = event.target?.closest?.('[data-subject-export]');
     const eraseBtn = event.target?.closest?.('[data-subject-erase]');
-    if (exportBtn) { await dispatchSubject(EXPORT_COMMAND, exportBtn.getAttribute('data-subject-export'), 'Auskunft (Art. 15)'); return; }
-    if (eraseBtn) { await dispatchSubject(ERASE_COMMAND, eraseBtn.getAttribute('data-subject-erase'), 'Löschen (Art. 17)'); }
+    if (exportBtn) { await dispatchSubject(EXPORT_COMMAND, exportBtn.getAttribute('data-subject-export'), t('exportArticle15')); return; }
+    if (eraseBtn) { await dispatchSubject(ERASE_COMMAND, eraseBtn.getAttribute('data-subject-erase'), t('eraseArticle17')); }
   }
   listEl?.addEventListener('click', onListClick);
 
@@ -178,8 +215,6 @@ function consentStatus(r) {
   return 'active';
 }
 
-const STATUS_LABEL = { active: 'gültig', withdrawn: 'widerrufen', expired: 'abgelaufen', pending: 'offen' };
-
 // Consent status → kit badge state (base.css .ctox-badge modifiers).
 function badgeStateClass(status) {
   switch (status) {
@@ -195,25 +230,25 @@ function badgeStateClass(status) {
   }
 }
 
-function fmtDate(ms) {
+function fmtDate(ms, locale) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return '—';
-  try { return new Date(n).toLocaleDateString('de-DE'); } catch { return String(n); }
+  try { return new Date(n).toLocaleDateString(locale === 'en' ? 'en-US' : 'de-DE'); } catch { return String(n); }
 }
 
-function consentRow(r) {
+function consentRow(r, t, locale) {
   const status = consentStatus(r);
   const subjectId = r.subject_id || '';
   const purpose = r.purpose || '—';
   const basis = r.legal_basis || 'consent';
-  const validUntil = Number.isFinite(Number(r.expires_at_ms)) && Number(r.expires_at_ms) > 0 ? fmtDate(r.expires_at_ms) : '∞';
+  const validUntil = Number.isFinite(Number(r.expires_at_ms)) && Number(r.expires_at_ms) > 0 ? fmtDate(r.expires_at_ms, locale) : '∞';
   const metaBits = [
-    'Subjekt ' + esc(subjectId),
-    'Rechtsgrundlage ' + esc(basis),
-    'gültig bis ' + esc(validUntil),
-    'erteilt ' + esc(fmtDate(r.granted_at_ms)),
+    t('subject') + ' ' + esc(subjectId),
+    t('legalBasis') + ' ' + esc(basis),
+    t('validUntil') + ' ' + esc(validUntil),
+    t('granted') + ' ' + esc(fmtDate(r.granted_at_ms, locale)),
   ];
-  if (status === 'withdrawn') metaBits.push('widerrufen ' + esc(fmtDate(r.withdrawn_at_ms)));
+  if (status === 'withdrawn') metaBits.push(t('withdrawn') + ' ' + esc(fmtDate(r.withdrawn_at_ms, locale)));
   if (r.id) metaBits.push('#' + esc(r.id));
   const ctxLabel = subjectId || r.id || '';
   return '<div class="ats-item ats-item--rich"'
@@ -221,13 +256,13 @@ function consentRow(r) {
     + ' data-context-record-type="consent"'
     + ' data-context-label="' + esc(ctxLabel) + '">'
     + '<div class="ats-item-main">'
-    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(STATUS_LABEL[status] || status) + '</span>'
+    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(t({ active: 'valid', withdrawn: 'withdrawn', expired: 'expired', pending: 'open' }[status]) || status) + '</span>'
     + '<span class="ats-item-title">' + esc(purpose) + '</span>'
     + '<div class="ats-item-meta">' + metaBits.join(' · ') + '</div>'
     + '</div>'
     + '<div class="ats-item-actions">'
-    + '<button type="button" class="ctox-button" data-subject-export="' + esc(subjectId) + '" title="Recht auf Auskunft (DSGVO Art. 15)">Auskunft</button>'
-    + '<button type="button" class="ctox-button is-danger" data-subject-erase="' + esc(subjectId) + '" title="Recht auf Löschung (DSGVO Art. 17)">Löschen</button>'
+    + '<button type="button" class="ctox-button" data-subject-export="' + esc(subjectId) + '" title="' + esc(t('exportTitle')) + '">' + esc(t('exportShort')) + '</button>'
+    + '<button type="button" class="ctox-button is-danger" data-subject-erase="' + esc(subjectId) + '" title="' + esc(t('eraseTitle')) + '">' + esc(t('eraseShort')) + '</button>'
     + '</div>'
     + '</div>';
 }

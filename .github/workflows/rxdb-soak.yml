@@ -98,6 +98,26 @@ jobs:
           SMOKE_MATRIX_RESULT_PATH: runtime/build/office-spreadsheet-restart-matrix.json
         run: node src/core/rxdb/tools/browser_rust_smoke_matrix.js
 
+      - name: Run CTOX Documents restart gate
+        env:
+          SMOKE_MODES: office-document-midflight-restart-browser-to-rust
+          SMOKE_MATRIX_ATTEMPTS: "1"
+          SMOKE_PAGE_PATH: /index.html
+          BUSINESS_PORT: "8980"
+          SIGNALING_PORT: "18980"
+          SMOKE_MATRIX_RESULT_PATH: runtime/build/office-document-restart-matrix.json
+        run: node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
+      - name: Run CTOX Spreadsheets restart gate
+        env:
+          SMOKE_MODES: office-spreadsheet-midflight-restart-browser-to-rust
+          SMOKE_MATRIX_ATTEMPTS: "1"
+          SMOKE_PAGE_PATH: /index.html
+          BUSINESS_PORT: "8981"
+          SIGNALING_PORT: "18981"
+          SMOKE_MATRIX_RESULT_PATH: runtime/build/office-spreadsheet-restart-matrix.json
+        run: node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
       - name: Run RxDB WebRTC soak
         env:
           SOAK_CYCLES: ${{ inputs.cycles || (github.event_name == 'schedule' && '9' || '3') }}

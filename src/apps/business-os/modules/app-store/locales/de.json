@@ -8,7 +8,6 @@
   "scopeMarketplace": "Marketplace",
   "scopeTemplates": "Templates",
   "scopeInstalled": "Installiert",
-  "scopeStarter": "Starter",
   "scopeLocal": "Lokale Module",
   "scopeSystem": "System",
   "scopeAll": "Alles",
@@ -43,7 +42,6 @@
   "scopeTitleMarketplace": "GitHub Marketplace",
   "scopeTitleTemplate": "Templates",
   "scopeTitleInstalled": "Installierte Apps",
-  "scopeTitleStarter": "Starter Apps",
   "scopeTitleSystem": "System Apps",
   "scopeTitleLocal": "Lokale Module",
   "scopeTitleFallback": "Anwendungen"

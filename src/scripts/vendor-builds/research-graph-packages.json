@@ -1,0 +1,10 @@
+{
+  "schema_version": "ctox-research-graph-vendor-input-v1",
+  "runtime_format": "browser-esm",
+  "target": "es2022",
+  "packages": {
+    "3d-force-graph": "1.80.0",
+    "three": "0.185.1",
+    "three-spritetext": "1.10.0"
+  }
+}

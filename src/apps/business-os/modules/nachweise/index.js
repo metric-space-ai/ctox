@@ -12,6 +12,52 @@ const DEPLOY_COMMAND = 'ats.deployment.check';
 const SIGNOFF_COMMAND = 'ats.leistungsnachweis.signoff';
 
 const TYPE_LABEL = new Map(CREDENTIAL_TYPES.map((t) => [t.key, t.label]));
+const TYPE_LABEL_EN = new Map([
+  ['staplerschein', 'Forklift licence'], ['g25', 'G25 (driving/control work)'],
+  ['g37', 'G37 (display-screen work)'], ['schweisserpruefung', 'Welder qualification'],
+  ['fuehrerschein', 'Driving licence'], ['pflege_fortbildung', 'Care training'],
+  ['aufenthaltstitel', 'Residence/work permit'], ['fuehrungszeugnis', 'Criminal-record certificate'],
+]);
+const COPY = {
+  de: {
+    title: 'Nachweise', subtitle: 'Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.',
+    subjectLabel: 'Subjekt', credentialTypeLabel: 'Nachweistyp', validUntilLabel: 'Gültig bis', deploymentSubjectLabel: 'Einsatz-Subjekt', requiredTypesLabel: 'Pflicht-Typen', recordLabel: 'Leistungsnachweis', rateLabel: 'Verrechnungssatz', clientLabel: 'Entleiher', signatureLabel: 'Signatur-Anfrage', collectionLabel: 'Collection',
+    subjectPlaceholder: 'Subjekt-ID (Kandidat/Mitarbeiter)', issuerPlaceholder: 'Aussteller', addCredential: 'Nachweis hinzufügen',
+    deploymentSubjectPlaceholder: 'Subjekt-ID für Einsatz-Prüfung', requiredTypesPlaceholder: 'Pflicht-Typen (kommagetrennt)',
+    checkReadiness: 'Einsatzbereitschaft prüfen', recordPlaceholder: 'Leistungsnachweis-ID (Sign-off)',
+    ratePlaceholder: 'Verrechnungssatz €/h (Pflicht für Abrechnung)', clientAccountPlaceholder: 'Entleiher-Account-ID (Rechnungsempfänger)',
+    signaturePlaceholder: 'Signatur-Anfrage-ID (falls Entleiher-Signatur erzwungen)', collectionPlaceholder: 'Collection (optional, Standard: planning_time_records)',
+    releaseBilling: 'Entleiher-Sign-off → Abrechnung freigeben', credentials: 'Nachweise', empty: 'Noch keine Nachweise erfasst.',
+    commandOffline: 'Offline: Befehlsdienst nicht verfügbar.', checking: 'Prüfe Einsatzbereitschaft…', dispatchOffline: 'Offline: Befehl konnte nicht gesendet werden.',
+    blockedReason: 'blockiert', notReady: 'Nicht einsatzbereit', ready: 'Einsatzbereit', databaseUnavailable: 'Datenbank nicht verfügbar.',
+    databaseOffline: 'Offline: Datenbank nicht verfügbar.', subjectRequired: 'Subjekt-ID erforderlich.', saveFailed: 'Nachweis konnte nicht gespeichert werden.',
+    recordRequired: 'Leistungsnachweis-ID erforderlich.', signoffRunning: 'Sign-off läuft…', signoffBlocked: 'Sign-off blockiert.',
+    signoffSaved: 'Entleiher-Sign-off gespeichert.', performanceRecord: 'Leistungsnachweis', billingReleased: 'Abrechnung freigegeben',
+    invoice: 'Rechnung', net: 'Netto', yes: 'ja', no: 'nein', subject: 'Subjekt', issuer: 'Aussteller',
+    expiredAgo: 'abgelaufen vor', daysRemaining: 'noch', days: 'Tage', noExpiry: 'kein Ablauf', verifiedBy: 'verifiziert von',
+    deploymentCheck: 'Einsatz prüfen', deploymentBlocking: 'Einsatz blockierend', credential: 'Nachweis',
+    statusValid: 'gültig', statusExpiring: 'läuft ab', statusExpired: 'abgelaufen', statusNotYetValid: 'noch nicht gültig', statusUnverified: 'nicht verifiziert',
+  },
+  en: {
+    title: 'Credentials', subtitle: 'Expiring, verified credentials per subject with deployment gate and performance-record billing release.',
+    subjectLabel: 'Subject', credentialTypeLabel: 'Credential type', validUntilLabel: 'Valid until', deploymentSubjectLabel: 'Deployment subject', requiredTypesLabel: 'Required types', recordLabel: 'Performance record', rateLabel: 'Charge rate', clientLabel: 'Client', signatureLabel: 'Signature request', collectionLabel: 'Collection',
+    subjectPlaceholder: 'Subject ID (candidate/employee)', issuerPlaceholder: 'Issuer', addCredential: 'Add credential',
+    deploymentSubjectPlaceholder: 'Subject ID for deployment check', requiredTypesPlaceholder: 'Required types (comma-separated)',
+    checkReadiness: 'Check deployment readiness', recordPlaceholder: 'Performance record ID (sign-off)',
+    ratePlaceholder: 'Charge rate €/h (required for billing)', clientAccountPlaceholder: 'Client account ID (invoice recipient)',
+    signaturePlaceholder: 'Signature request ID (when client signature is enforced)', collectionPlaceholder: 'Collection (optional, default: planning_time_records)',
+    releaseBilling: 'Client sign-off → release billing', credentials: 'credentials', empty: 'No credentials recorded yet.',
+    commandOffline: 'Offline: command service unavailable.', checking: 'Checking deployment readiness…', dispatchOffline: 'Offline: command could not be sent.',
+    blockedReason: 'blocked', notReady: 'Not ready for deployment', ready: 'Ready for deployment', databaseUnavailable: 'Database unavailable.',
+    databaseOffline: 'Offline: database unavailable.', subjectRequired: 'Subject ID is required.', saveFailed: 'Credential could not be saved.',
+    recordRequired: 'Performance record ID is required.', signoffRunning: 'Sign-off in progress…', signoffBlocked: 'Sign-off blocked.',
+    signoffSaved: 'Client sign-off saved.', performanceRecord: 'Performance record', billingReleased: 'Billing released',
+    invoice: 'Invoice', net: 'Net', yes: 'yes', no: 'no', subject: 'Subject', issuer: 'Issuer',
+    expiredAgo: 'expired', daysRemaining: 'expires in', days: 'days', noExpiry: 'no expiry', verifiedBy: 'verified by',
+    deploymentCheck: 'Check deployment', deploymentBlocking: 'Blocks deployment', credential: 'Credential',
+    statusValid: 'valid', statusExpiring: 'expiring', statusExpired: 'expired', statusNotYetValid: 'not yet valid', statusUnverified: 'unverified',
+  },
+};
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -22,6 +68,12 @@ export async function mount(ctx) {
   ctx.right?.replaceChildren?.();
 
   const root = ctx.host.querySelector('[data-ats-root]');
+  const locale = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const copy = COPY[locale];
+  const t = (key) => copy[key] || COPY.de[key] || key;
+  root?.setAttribute('lang', locale);
+  root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+  root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
   const listEl = root?.querySelector('[data-ats-list]');
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
@@ -31,11 +83,11 @@ export async function mount(ctx) {
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
   const typeSelect = root?.querySelector('[data-credential-type]');
-  if (titleEl) titleEl.textContent = ctx.manifest?.title || 'Nachweise';
-  if (subEl && ctx.manifest?.description) subEl.textContent = ctx.manifest.description;
+  if (titleEl) titleEl.textContent = locale === 'en' ? t('title') : (ctx.manifest?.title || t('title'));
+  if (subEl && ctx.manifest?.description && locale !== 'en') subEl.textContent = ctx.manifest.description;
   if (typeSelect) {
     typeSelect.innerHTML = CREDENTIAL_TYPES
-      .map((type) => '<option value="' + esc(type.key) + '">' + esc(type.label) + '</option>')
+      .map((type) => '<option value="' + esc(type.key) + '">' + esc(typeLabel(type.key, locale)) + '</option>')
       .join('');
   }
 
@@ -58,12 +110,12 @@ export async function mount(ctx) {
         rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
       } catch (e) { console.error('[nachweise] load failed:', e); }
     }
-    if (countEl) countEl.textContent = rows.length + ' Nachweise';
+    if (countEl) countEl.textContent = rows.length + ' ' + t('credentials');
     if (listEl) {
       const now = Date.now();
       listEl.innerHTML = rows.length
-        ? rows.map((r) => credentialRow(r, now)).join('')
-        : '<div class="ctox-empty">Noch keine Nachweise erfasst.</div>';
+        ? rows.map((r) => credentialRow(r, now, t, locale)).join('')
+        : '<div class="ctox-empty">' + esc(t('empty')) + '</div>';
     }
   }
 
@@ -80,20 +132,19 @@ export async function mount(ctx) {
 
   async function runDeploymentCheck(subjectId, requiredTypes) {
     const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
-    setGate('Prüfe Einsatzbereitschaft…');
+    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
+    setGate(t('checking'));
     let result;
     try {
       const decision = await dispatch({
         module: MODULE_ID,
-        type: DEPLOY_COMMAND,
         command_type: DEPLOY_COMMAND,
         payload: { subject_id: subjectId, required_types: requiredTypes },
       });
       result = decision?.result || decision;
     } catch (e) {
       console.warn('[nachweise] deployment gate check failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(t('dispatchOffline'), 'offline');
       return;
     }
     const blockers = result?.blockers || [];
@@ -101,16 +152,16 @@ export async function mount(ctx) {
     if (!ready) {
       const items = (Array.isArray(blockers) ? blockers : [blockers])
         .filter(Boolean)
-        .map((b) => '<li>' + esc(typeLabel(b?.credential_type) + ' — ' + (b?.reason || 'blockiert')) + '</li>')
+        .map((b) => '<li>' + esc(typeLabel(b?.credential_type, locale) + ' — ' + (b?.reason || t('blockedReason'))) + '</li>')
         .join('');
       setGate(
-        '<strong>✗ Nicht einsatzbereit: ' + esc(subjectId) + '</strong>'
+        '<strong>✗ ' + esc(t('notReady')) + ': ' + esc(subjectId) + '</strong>'
         + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''),
         'block'
       );
       return;
     }
-    setGate('<strong>✓ Einsatzbereit: ' + esc(subjectId) + '</strong>', 'ok');
+    setGate('<strong>✓ ' + esc(t('ready')) + ': ' + esc(subjectId) + '</strong>', 'ok');
   }
 
   // Create a credential (plain RxDB write — no native command for capture).
@@ -119,14 +170,14 @@ export async function mount(ctx) {
     setGate('');
     const col = collection();
     if (!col?.insert) {
-      ctx.notifications?.show?.({ type: 'error', title: 'Nachweise', message: 'Datenbank nicht verfügbar.' });
-      setGate('Offline: Datenbank nicht verfügbar.', 'offline');
+      ctx.notifications?.show?.({ type: 'error', title: t('title'), message: t('databaseUnavailable') });
+      setGate(t('databaseOffline'), 'offline');
       return;
     }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const subjectId = String(f.subject_id || '').trim();
-    if (!subjectId) { setGate('Subjekt-ID erforderlich.', 'block'); return; }
+    if (!subjectId) { setGate(t('subjectRequired'), 'block'); return; }
     const validUntil = String(f.valid_until || '');
     const now = Date.now();
     const record = {
@@ -148,7 +199,7 @@ export async function mount(ctx) {
       await render();
     } catch (e) {
       console.error('[nachweise] insert failed:', e);
-      setGate('Nachweis konnte nicht gespeichert werden.', 'block');
+      setGate(t('saveFailed'), 'block');
     }
   }
   formEl?.addEventListener('submit', onSubmit);
@@ -158,7 +209,7 @@ export async function mount(ctx) {
     event.preventDefault();
     const data = new FormData(gateFormEl);
     const subjectId = String(data.get('subject_id') || '').trim();
-    if (!subjectId) { setGate('Subjekt-ID erforderlich.', 'block'); return; }
+    if (!subjectId) { setGate(t('subjectRequired'), 'block'); return; }
     const requiredTypes = String(data.get('required_types') || '')
       .split(',')
       .map((s) => s.trim())
@@ -172,10 +223,10 @@ export async function mount(ctx) {
     event.preventDefault();
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
+    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const data = new FormData(signoffFormEl);
     const recordId = String(data.get('record_id') || '').trim();
-    if (!recordId) { setGate('Leistungsnachweis-ID erforderlich.', 'block'); return; }
+    if (!recordId) { setGate(t('recordRequired'), 'block'); return; }
     const collectionName = String(data.get('collection') || '').trim();
     const payload = { record_id: recordId };
     if (collectionName) payload.collection = collectionName;
@@ -192,19 +243,18 @@ export async function mount(ctx) {
     if (entleiherId) payload.entleiher_account_id = entleiherId;
     const signatureRequestId = String(data.get('signature_request_id') || '').trim();
     if (signatureRequestId) payload.signature_request_id = signatureRequestId;
-    setGate('Sign-off läuft…');
+    setGate(t('signoffRunning'));
     let result;
     try {
       const decision = await dispatch({
         module: MODULE_ID,
-        type: SIGNOFF_COMMAND,
         command_type: SIGNOFF_COMMAND,
         payload,
       });
       result = decision?.result || decision;
     } catch (e) {
       console.warn('[nachweise] signoff failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(t('dispatchOffline'), 'offline');
       return;
     }
     const blockers = result?.blockers || result?.errors || null;
@@ -215,7 +265,7 @@ export async function mount(ctx) {
         .filter(Boolean)
         .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
         .join('');
-      setGate('<strong>Sign-off blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      setGate('<strong>' + esc(t('signoffBlocked')) + '</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
       return;
     }
     const signedId = result?.record_id ?? recordId;
@@ -223,11 +273,11 @@ export async function mount(ctx) {
     const invoiceId = result?.invoice_id ? String(result.invoice_id) : '';
     const netTotal = result?.net_total;
     setGate(
-      '<strong>Entleiher-Sign-off gespeichert.</strong>'
-      + '<div class="ats-result-row">Leistungsnachweis: ' + esc(signedId) + '</div>'
-      + '<div class="ats-result-row">Abrechnung freigegeben: ' + (released ? 'ja' : 'nein') + '</div>'
-      + (invoiceId ? '<div class="ats-result-row">Rechnung: ' + esc(invoiceId) + '</div>' : '')
-      + (netTotal != null ? '<div class="ats-result-row">Netto: ' + esc(String(netTotal)) + ' €</div>' : ''),
+      '<strong>' + esc(t('signoffSaved')) + '</strong>'
+      + '<div class="ats-result-row">' + esc(t('performanceRecord')) + ': ' + esc(signedId) + '</div>'
+      + '<div class="ats-result-row">' + esc(t('billingReleased')) + ': ' + esc(released ? t('yes') : t('no')) + '</div>'
+      + (invoiceId ? '<div class="ats-result-row">' + esc(t('invoice')) + ': ' + esc(invoiceId) + '</div>' : '')
+      + (netTotal != null ? '<div class="ats-result-row">' + esc(t('net')) + ': ' + esc(String(netTotal)) + ' €</div>' : ''),
       'ok'
     );
     try { signoffFormEl.reset(); } catch {}
@@ -271,43 +321,43 @@ function badgeStateClass(status) {
   }
 }
 
-function credentialRow(r, now) {
+function credentialRow(r, now, t, locale) {
   const status = credentialStatus(r, now);
   const blocking = isDeploymentBlocking(r, now);
   const days = daysUntilExpiry(r, now);
   const daysLabel = Number.isFinite(days)
-    ? (days < 0 ? 'abgelaufen vor ' + Math.abs(days) + ' T.' : 'noch ' + days + ' Tage')
-    : 'kein Ablauf';
+    ? (days < 0 ? t('expiredAgo') + ' ' + Math.abs(days) + ' ' + t('days') : t('daysRemaining') + ' ' + days + ' ' + t('days'))
+    : t('noExpiry');
   const subject = r.subject_id || '—';
   const meta = [
-    'Subjekt: ' + subject,
-    r.issuer ? 'Aussteller: ' + r.issuer : '',
+    t('subject') + ': ' + subject,
+    r.issuer ? t('issuer') + ': ' + r.issuer : '',
     daysLabel,
-    r.verified_by ? 'verifiziert von ' + r.verified_by : '',
+    r.verified_by ? t('verifiedBy') + ' ' + r.verified_by : '',
     r.id ? 'ID: ' + r.id : '',
   ].filter(Boolean).join(' · ');
   const checkBtn = r.subject_id
-    ? '<button type="button" class="ctox-button" data-deploy-check="' + esc(r.subject_id) + '">Einsatz prüfen</button>'
+    ? '<button type="button" class="ctox-button" data-deploy-check="' + esc(r.subject_id) + '">' + esc(t('deploymentCheck')) + '</button>'
     : '';
   const recordId = r.id || '';
-  const contextLabel = typeLabel(r.credential_type) + ' · ' + subject;
+  const contextLabel = typeLabel(r.credential_type, locale) + ' · ' + subject;
   return '<div class="ats-item ats-item--rich"'
     + ' data-context-record-id="' + esc(recordId) + '"'
     + ' data-context-record-type="nachweis"'
     + ' data-context-label="' + esc(contextLabel || recordId) + '">'
-    + '<div class="ats-item-main">' + esc(typeLabel(r.credential_type))
+    + '<div class="ats-item-main">' + esc(typeLabel(r.credential_type, locale))
     + '<span class="ats-item-sub"> · ' + esc(subject) + '</span></div>'
     + '<div class="ats-item-side">'
-    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(status) + '</span>'
-    + (blocking ? '<span class="ctox-badge is-danger">Einsatz blockierend</span>' : '')
+    + '<span class="ctox-badge' + badgeStateClass(status) + '">' + esc(t({ valid: 'statusValid', expiring: 'statusExpiring', expired: 'statusExpired', not_yet_valid: 'statusNotYetValid', unverified: 'statusUnverified' }[status]) || status) + '</span>'
+    + (blocking ? '<span class="ctox-badge is-danger">' + esc(t('deploymentBlocking')) + '</span>' : '')
     + checkBtn
     + '</div>'
     + '<div class="ats-item-meta">' + esc(meta) + '</div>'
     + '</div>';
 }
 
-function typeLabel(key) {
-  return TYPE_LABEL.get(key) || key || 'Nachweis';
+function typeLabel(key, locale = 'de') {
+  return (locale === 'en' ? TYPE_LABEL_EN.get(key) : TYPE_LABEL.get(key)) || key || COPY[locale]?.credential || COPY.de.credential;
 }
 
 async function ensureStyles() {

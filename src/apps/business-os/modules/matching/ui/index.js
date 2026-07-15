@@ -15,7 +15,7 @@ import { readViewState, patchViewState } from './viewState.js';
 import { normalizeCandidateStage } from '../core/pipeline.js';
 window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
-import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask } from './ctoxCommandAdapter.js';
+import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask, setCtoxCommandBus } from './ctoxCommandAdapter.js';
 import { getContactsCollection, getMatchingCollectionDiagnostics } from './businessOsDataSource.js';
 import { createSyncFeedback } from './syncFeedback.js';
 import { getActiveMatchingDefinition, matchingText, setActiveMatchingDefinition } from './matchingDefinition.js';
@@ -8222,25 +8222,6 @@ function renderMap() {
     else if (colObjects.length <= 14) maxNameLen = 10;
     else maxNameLen = 8;
 
-    // Kompaktere Kürzung für Header
-    function shortenObjectName(fullName, maxLen) {
-      const name = String(fullName || '').trim();
-      if (!name) return '';
-      if (name.length <= maxLen) return name;
-
-      const parts = name.split(/\s+/).filter(Boolean);
-      if (parts.length >= 2) {
-        const c1 = `${parts[0]} ${parts[1].charAt(0)}.`;
-        if (c1.length <= maxLen) return c1;
-
-        const c2 = `${parts[0].charAt(0)}. ${parts[1].charAt(0)}.`;
-        if (c2.length <= maxLen) return c2;
-      }
-
-      if (maxLen > 1) return name.slice(0, maxLen - 1).trimEnd() + '…';
-      return name.charAt(0);
-    }
-
     // Layout-Berechnung
     const section = document.createElement('section');
     section.style.border = '1px solid var(--line)';
@@ -8879,6 +8860,7 @@ function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
 // Initial: erst RxDB laden, dann rendern, dann Live-Sync aktivieren
 export async function mountMatchingDashboard(ctx = {}){
   matchingRuntimeCtx = ctx;
+  setCtoxCommandBus(ctx.commandBus);
   matchingModuleHost = ctx.host || document.querySelector('[data-matching-module="native"]') || null;
   if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
     setActiveMatchingDefinition(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);

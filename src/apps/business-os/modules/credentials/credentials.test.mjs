@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -53,4 +54,15 @@ test('dispatched command targets the credentials module and a secret command typ
   assert.equal(doc.command_type, 'ctox.secret.put');
   assert.equal(doc.record_id, 'OPENAI_API_KEY');
   assert.equal(doc.inbound_channel, 'business_os.credentials');
+});
+
+test('mount renders before command-bus credential hydration completes', async () => {
+  const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  const mountSource = source.slice(
+    source.indexOf('export async function mount'),
+    source.indexOf('async function loadModuleMarkup'),
+  );
+  assert.match(mountSource, /render\(\);\s*void refresh\(ctx\);/);
+  assert.doesNotMatch(mountSource, /await refresh\(/);
+  assert.match(mountSource, /if \(state\.ctx === ctx\) state\.ctx = null/);
 });

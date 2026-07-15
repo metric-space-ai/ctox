@@ -74,7 +74,24 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     install_scope: 'installed',
     icon: 'icon.svg',
     collections: ['business_commands', collectionName],
-    layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
+    launch_kind: 'desktop-app',
+    layout: {
+      shell: 'windowed',
+      left: 'List',
+      center: 'Details',
+      default_width: 960,
+      default_height: 680,
+      min_width: 640,
+      min_height: 480,
+    },
+    presentation: {
+      default_mode: 'window',
+      supported_modes: ['window', 'maximized', 'focus'],
+      initial_size: { width: 960, height: 680 },
+      minimum_size: { width: 640, height: 480 },
+      multi_instance: false,
+      auto_restore: false,
+    },
     tags: ['business-os', moduleId, 'workflow'],
     ...overrides.manifest,
   });
@@ -94,6 +111,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
       },
       ...overrides.collections,
     },
+    ...overrides.schemaDocument,
   });
   writeFileSync(join(dir, 'schema.js'), overrides.schemaJs || [
     'export const collections = {',
@@ -111,7 +129,6 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     'export function buildFollowUpCommand(record = {}) {',
     '  return {',
     `    module: '${moduleId}',`,
-    "    type: 'business_os.chat.task',",
     "    command_type: 'business_os.chat.task',",
     "    record_id: record.id || 'demo',",
     '    payload: {',
@@ -168,7 +185,6 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     "assert.equal(visibleRecords([record]).length, 1);",
     "assert.equal(summarizeRecords([record]).total, 1);",
     'const command = buildFollowUpCommand(record);',
-    "assert.equal(command.type, 'business_os.chat.task');",
     "assert.equal(command.command_type, 'business_os.chat.task');",
     "assert.deepEqual(command.payload.record_snapshot, record);",
     '',
@@ -241,12 +257,54 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'missingmigration', {
+    collections: {
+      missingmigration_records: {
+        version: 1,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'updated_at_ms'],
+      },
+    },
+  });
+  const run = runValidator(root, 'missingmigration', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /requires migration_strategies\.missingmigration_records\.1/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'paneshell', {
     manifest: { layout: { shell: 'pane', left: 'Kontext', center: 'Workbench', right: 'Themen' } },
   });
   const run = runValidator(root, 'paneshell', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /layout\.shell must be full-workspace/);
+  assert.match(run.stderr, /layout\.shell must be windowed/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'windowedgood', {
+    manifest: {
+      layout: {
+        shell: 'windowed',
+        launch_kind: 'desktop-app',
+        default_width: 960,
+        default_height: 680,
+        min_width: 640,
+        min_height: 480,
+      },
+      launch_kind: 'desktop-app',
+    },
+  });
+  const run = runValidator(root, 'windowedgood', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+  assert.match(run.stdout, /validation OK: windowedgood \(installed mode\)/);
 }
 
 {

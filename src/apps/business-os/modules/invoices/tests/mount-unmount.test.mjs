@@ -228,7 +228,7 @@ test('reactive subscription triggers a refresh after unmount cleanup is not call
   try {
     const mod = await buildInvoicesModule();
     const ctx = {
-      db: watched,
+      db: { collection: (name) => watched[name] || null },
       commandBus: { dispatch: async () => ({ status: 'completed' }) },
       eventBus: { on: () => () => {} },
       modules: [
@@ -280,7 +280,7 @@ test('rendered shell stamps data-context-* attributes on root, list, and center 
   try {
     const mod = await buildInvoicesModule();
     const ctx = {
-      db: watched,
+      db: { collection: (name) => watched[name] || null },
       commandBus: { dispatch: async () => ({ status: 'completed' }) },
       eventBus: { on: () => () => {} },
       modules: [

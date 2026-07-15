@@ -214,7 +214,7 @@ test('mount publishes a debug handle so the shell can drive tests / inspect stat
   try {
     const mod = await buildInvoicesModule();
     const ctx = {
-      db: watched,
+      db: { collection: (name) => watched[name] || null },
       commandBus: { dispatch: async () => ({ status: 'completed' }) },
       eventBus: { on: () => () => {} },
       modules: [
@@ -228,8 +228,10 @@ test('mount publishes a debug handle so the shell can drive tests / inspect stat
     const unmount = await mod.mount(ctx);
     assert.ok(globalThis.window.__ctoxInvoicesModule, 'module must publish __ctoxInvoicesModule');
     assert.equal(typeof globalThis.window.__ctoxInvoicesModule.mount, 'function');
-    assert.ok(globalThis.window.__ctoxInvoicesModule.STATE, 'STATE must be reachable for inspection');
-    assert.equal(globalThis.window.__ctoxInvoicesModule.STATE.lastError, null);
+    assert.equal(typeof globalThis.window.__ctoxInvoicesModule.inspect, 'function');
+    const snapshot = globalThis.window.__ctoxInvoicesModule.inspect();
+    assert.equal(snapshot.mounted, true);
+    assert.equal(snapshot.last_error, '');
     unmount();
   } finally {
     if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
@@ -259,7 +261,7 @@ test('mount does not dispatch any command when no parties are available', async 
   try {
     const mod = await buildInvoicesModule();
     const ctx = {
-      db: watched,
+      db: { collection: (name) => watched[name] || null },
       commandBus: { dispatch: async () => { dispatched += 1; return { status: 'completed' }; } },
       eventBus: { on: () => () => {} },
       modules: [

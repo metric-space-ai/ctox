@@ -31,6 +31,7 @@ function truncateArchiveUrl(url) {
 // --- Global Fibu State ---
 const state = {
   ctx: null,
+  mountGeneration: 0,
   lang: 'de',
   activeNav: 'skr',
   activeReportTab: 'bilanz',
@@ -184,21 +185,26 @@ async function ensureStyles() {
 // 🏁 Lifecycle Mount Hook
 // =========================================================================
 export async function mount(ctx) {
+  const mountGeneration = ++state.mountGeneration;
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
 
   await ensureStyles();
+  if (state.mountGeneration !== mountGeneration) return () => {};
 
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
+  if (state.mountGeneration !== mountGeneration) return () => {};
   t = (key) => messages[key] ?? labels.de[key] ?? key;
 
   // 1. Inject HTML Structure
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  if (state.mountGeneration !== mountGeneration) return () => {};
   ctx.host.innerHTML = html;
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
 
   // 2. Bind DOM Elements & Resizers
+  state.els.root?.removeAttribute('data-mount-ready');
   bindElements(ctx.host);
   const resizerCleanup = setupResizers(ctx.host);
 
@@ -212,28 +218,36 @@ export async function mount(ctx) {
     state.els.skrSelect.value = savedSKR;
   }
 
-  // 5. Ensure Chart of Accounts is Initialized
-  await autoInitializeAccounts();
-
-  // 6. Bind Event Listeners
+  // 5. Bind and render immediately. Database initialization, demand reads and
+  // optional seed writes must never hold the shell's window-open lifecycle.
   wireEvents();
-
-  // 7. Wire RxDB Realtime Subscriptions
-  state.rxCleanup = wireRealtimeSubscriptions();
-
-  // 8. Load once synchronously before seeding so account-dependent mock data can resolve account ids.
-  await loadAllFibuData();
-
-  // 9. Pre-load mock data if completely fresh
-  await seedMockDataIfEmpty();
-
-  // 10. Initial View Render
+  if (state.els.root) state.els.root.dataset.mountReady = 'true';
   switchView(state.activeNav);
+  let disposed = false;
+  Promise.resolve()
+    .then(async () => {
+      await autoInitializeAccounts();
+      if (disposed || state.ctx !== ctx) return;
+      await loadAllFibuData();
+      if (disposed || state.ctx !== ctx) return;
+      await seedMockDataIfEmpty();
+      if (disposed || state.ctx !== ctx) return;
+      state.rxCleanup = wireRealtimeSubscriptions();
+      renderActiveView();
+    })
+    .catch((error) => {
+      if (disposed || state.ctx !== ctx) return;
+      console.error('[fibu] background initialization failed', error);
+      renderActiveView();
+    });
 
-  state.contextMenuCleanup = initBuchhaltungContextMenu(state);
 
   // Return unmount function
   return () => {
+    disposed = true;
+    if (state.mountGeneration !== mountGeneration) return;
+    state.mountGeneration += 1;
+    state.els.root?.removeAttribute('data-mount-ready');
     if (state.rxCleanup) state.rxCleanup();
     state.contextMenuCleanup?.();
     state.contextMenu?.remove();
@@ -731,8 +745,26 @@ function wireEvents() {
   // Trigger auto reconciliation
   els.centerActions?.addEventListener('click', handleToolbarActions);
   els.panels.skr?.querySelector('[data-action="init-skr"]')?.addEventListener('click', forceReInitSKR);
-  els.panels.journal?.querySelector('[data-action="new-entry"]')?.addEventListener('click', () => openManualJournalDrawer());
+  const newEntryButton = els.panels.journal?.querySelector('[data-action="new-entry"]');
+  if (newEntryButton) {
+    newEntryButton.onclick = () => {
+      // A shell remount can leave the previous window DOM connected briefly.
+      // Keep this visible action bound to the element set it was wired with so
+      // the drawer is always opened in the window the operator clicked.
+      state.els = els;
+      els.root.dataset.newEntryInvoked = 'true';
+      try {
+        openManualJournalDrawer();
+        delete els.root.dataset.newEntryError;
+      } catch (error) {
+        els.root.dataset.newEntryError = error?.message || String(error);
+        console.error('[fibu] failed to open manual journal entry', error);
+      }
+    };
+  }
   els.panels.banking?.querySelector('[data-action="run-auto-reconciliation"]')?.addEventListener('click', triggerAutoReconcile);
+  els.panels.assets?.querySelector('[data-action="new-asset"]')?.addEventListener('click', requestNewAsset);
+  els.panels.assets?.querySelector('[data-action="trigger-depreciations"]')?.addEventListener('click', triggerDepreciationRun);
   els.panels.tests?.querySelector('[data-action="run-all-ui-tests"]')?.addEventListener('click', () => window.runAllUiTests());
 
   // DATEV Export Click
@@ -745,6 +777,22 @@ function wireEvents() {
   els.chatSendBtn?.addEventListener('click', handleSendAgentMsg);
   els.chatInput?.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') handleSendAgentMsg();
+  });
+}
+
+async function requestNewAsset(event) {
+  await state.ctx.contextActions.dispatch('data', {
+    target: event?.currentTarget,
+    title: 'Anlagegut erfassen',
+    prompt: 'Erfasse ein neues Anlagegut. Frage die fehlenden Stammdaten ab und lege den Datensatz nach Freigabe an.',
+  });
+}
+
+async function triggerDepreciationRun(event) {
+  await state.ctx.contextActions.dispatch('data', {
+    target: event?.currentTarget,
+    title: 'AfA-Abschreibungslauf starten',
+    prompt: 'Starte den AfA-Abschreibungslauf für die aktuelle Buchungsperiode und liefere den Laufstatus sowie die erzeugten Buchungen.',
   });
 }
 
@@ -4079,12 +4127,10 @@ function initBuchhaltungContextMenu(state) {
     if (event.key === 'Escape') hideBuchhaltungContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideBuchhaltungContextMenu(state);
@@ -4298,4 +4344,3 @@ async function dispatchBuchhaltungContextChat(state, context, message, mode = 'd
   }));
   hideBuchhaltungContextMenu(state);
 }
-

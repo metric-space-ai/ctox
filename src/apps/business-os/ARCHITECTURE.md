@@ -175,8 +175,8 @@ Desktop state persists through RxDB collections (`desktop_icons`,
 `desktop_layout`, `desktop_notifications`); no code under `modules/desktop/`
 or `shared/` reads or writes IndexedDB directly. Live events surface from
 the `business_commands` stream into the notifications layer — the desktop
-is the visible "CTOX is working" surface. The desktop module runs at
-`module.json: { "shell": "full-workspace" }` so it takes over the whole
+is the visible "CTOX is working" surface. The desktop module is the remaining
+intentional `module.json: { "shell": "full-workspace" }` shell exception, so it takes over the whole
 pane area rather than sitting inside the 3-pane module shell.
 
 The OS chrome is switchable Windows-style vs macOS-style at the **shell**
@@ -197,14 +197,12 @@ popover that hands the agent a structured context for **where** the click
 happened: `module`, `column` (left/center/right), `record_type`,
 `record_id`, `label`, `deep_link`, plus `selected_text` and `clicked_text`.
 The handler lives in `app.js` (`handleGlobalContextMenu` →
-`extractGlobalCtoxContext`); it is a capture-phase listener on `document`,
-so it pre-empts any module-local `contextmenu` handler. It is active for
-every full-workspace module and skips `input`/`textarea`/`select`/
-`[contenteditable]`/`.monaco-editor`/`.no-ctox-context` targets (those keep
-the native menu). A module can suppress the shell menu and run its own by
-marking its host with `data-ctox-local-context-menu` (e.g. `app-store`); the
-pane-mode reference apps `documents`/`spreadsheets` ship an equivalent
-in-module menu because the shell menu only binds to full-workspace modules.
+`extractGlobalCtoxContext`); it is a capture-phase listener on `document` and
+attributes both workspace and windowed module roots. Editable and explicitly
+opted-out surfaces retain their native/local menu. Fifteen legacy module-local
+handlers remain behind a shrinking CI allowlist; new ones are forbidden. The
+target contract is Context v2 plus the shell-supplied typed action dispatcher,
+not a custom menu or a window event in each app.
 
 For the agent to know **which record** was clicked, the clicked element (or
 an ancestor) must expose an id. `detectRecordFromElement` resolves, in order:

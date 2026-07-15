@@ -1,32 +1,34 @@
-<section class="ats-module ats-intake" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ats-head">
+<section class="ats-module ats-intake ctox-record-workbench" data-ats-root>
+  <header class="ctox-pane-header ctox-pane-band ats-head ctox-record-workbench__header">
     <div class="ctox-pane-title-row">
       <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker">Bewerbungseingang</span>
+        <span class="ctox-pane-kicker" data-copy="kicker">Bewerbungseingang</span>
         <h1 class="ctox-pane-title" data-ats-title></h1>
       </div>
     </div>
-    <p class="ats-sub" data-ats-sub></p>
+    <p class="ats-sub ctox-record-workbench__subtitle" data-ats-sub></p>
   </header>
-  <div class="ats-body">
-    <form class="ats-form" data-ats-form>
-      <input class="ctox-input" type="text" name="name" placeholder="Name" required data-f />
-      <input class="ctox-input" type="email" name="email" placeholder="E-Mail" data-f />
-      <input class="ctox-input" type="text" name="phone" placeholder="Telefon" data-f />
-      <input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f />
-      <select class="ctox-select" name="channel" data-f>
-        <option value="career_site">career_site</option>
-        <option value="job_board">job_board</option>
-        <option value="easy_apply">easy_apply</option>
-        <option value="email">email</option>
-        <option value="qr">qr</option>
-        <option value="walk_in">walk_in</option>
-        <option value="referral">referral</option>
-      </select>
-      <button class="ctox-button is-primary" type="submit">Erfassen</button>
+  <div class="ats-body ctox-record-workbench__body">
+    <form class="ats-form ctox-compact-form" data-ats-form>
+      <div class="ctox-compact-form__fields">
+        <label class="ctox-compact-field"><span data-copy="name">Name</span><input class="ctox-input" type="text" name="name" placeholder="Name" required data-f data-copy-placeholder="name" /></label>
+        <label class="ctox-compact-field"><span data-copy="email">E-Mail</span><input class="ctox-input" type="email" name="email" placeholder="E-Mail" data-f data-copy-placeholder="email" /></label>
+        <label class="ctox-compact-field"><span data-copy="phone">Telefon</span><input class="ctox-input" type="text" name="phone" placeholder="Telefon" data-f data-copy-placeholder="phone" /></label>
+        <label class="ctox-compact-field"><span data-copy="vacancy">Vakanz-ID</span><input class="ctox-input" type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f data-copy-placeholder="vacancy" /></label>
+        <label class="ctox-compact-field"><span data-copy="channel">Kanal</span><select class="ctox-select" name="channel" data-f>
+          <option value="career_site">Karriereseite</option>
+          <option value="job_board">Jobbörse</option>
+          <option value="easy_apply">Easy Apply</option>
+          <option value="email">E-Mail</option>
+          <option value="qr">QR</option>
+          <option value="walk_in">Walk-in</option>
+          <option value="referral">Empfehlung</option>
+        </select></label>
+      </div>
+      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="capture">Erfassen</button></div>
     </form>
     <div class="ats-gate" data-ats-gate></div>
-    <div class="ats-count" data-ats-count></div>
-    <div class="ats-list" data-ats-list></div>
+    <div class="ats-count ctox-record-workbench__status" data-ats-count></div>
+    <div class="ats-list ctox-record-list" data-ats-list></div>
   </div>
 </section>

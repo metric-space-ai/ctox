@@ -194,6 +194,52 @@ function collectSchemaJsParityFailures(schemaDoc, schemaJsCollections) {
   return messages;
 }
 
+function collectDeclarativeMigrationFailures(schemaDoc) {
+  const messages = [];
+  const collections = schemaDoc?.collections && typeof schemaDoc.collections === 'object'
+    ? schemaDoc.collections
+    : {};
+  const strategies = schemaDoc?.migration_strategies && typeof schemaDoc.migration_strategies === 'object'
+    ? schemaDoc.migration_strategies
+    : {};
+  for (const [name, definition] of Object.entries(collections)) {
+    const schema = definition?.schema && !definition?.primaryKey ? definition.schema : definition;
+    const version = Number(schema?.version || 0);
+    if (!Number.isInteger(version) || version < 0) {
+      messages.push(`collections.schema.json collection ${name} version must be a non-negative integer`);
+      continue;
+    }
+    for (let target = 1; target <= version; target += 1) {
+      const spec = strategies?.[name]?.[String(target)];
+      if (!spec) {
+        messages.push(`collections.schema.json collection ${name} version ${version} requires migration_strategies.${name}.${target}`);
+        continue;
+      }
+      const operations = Array.isArray(spec) ? spec : spec?.operations;
+      if (!Array.isArray(operations)) {
+        messages.push(`migration_strategies.${name}.${target} must contain an operations array`);
+        continue;
+      }
+      for (const operation of operations) {
+        if (!operation || typeof operation !== 'object') {
+          messages.push(`migration_strategies.${name}.${target} contains a non-object operation`);
+        } else if (operation.op === 'set_from_first_truthy') {
+          if (!operation.field || !Array.isArray(operation.paths)) {
+            messages.push(`migration_strategies.${name}.${target} set_from_first_truthy requires field and paths`);
+          }
+        } else if (operation.op === 'set_boolean') {
+          if (!operation.field) {
+            messages.push(`migration_strategies.${name}.${target} set_boolean requires field`);
+          }
+        } else {
+          messages.push(`migration_strategies.${name}.${target} uses unsupported operation ${operation.op || '<missing>'}`);
+        }
+      }
+    }
+  }
+  return messages;
+}
+
 function sampleValueForSchema(schema) {
   const types = schemaTypes(schema);
   const type = types.find((item) => item !== 'null') || types[0] || 'string';
@@ -423,17 +469,19 @@ function parseExportedNames(text) {
 
 function extractStaticImportSpecs(text) {
   const specs = [];
-  const importExportFromPattern = /\b(?:import|export)\s+(?:[\s\S]*?\s+from\s*)['"]([^'"]+)['"]/g;
-  for (const match of text.matchAll(importExportFromPattern)) specs.push(match[1]);
-  const sideEffectImportPattern = /\bimport\s*['"]([^'"]+)['"]/g;
-  for (const match of text.matchAll(sideEffectImportPattern)) specs.push(match[1]);
+  const source = stripJsComments(text);
+  const importExportFromPattern = /(?:^|\n)\s*(?:import|export)\s+(?:[^;]*?\s+from\s*)['"]([^'"\n]+)['"]/g;
+  for (const match of source.matchAll(importExportFromPattern)) specs.push(match[1]);
+  const sideEffectImportPattern = /(?:^|\n)\s*import\s*['"]([^'"\n]+)['"]/g;
+  for (const match of source.matchAll(sideEffectImportPattern)) specs.push(match[1]);
   return specs;
 }
 
 function resolveRelativeJsImport(baseFile, specifier) {
   if (!specifier.startsWith('.')) return null;
-  const target = join(dirname(baseFile), specifier);
-  const candidates = /\.[cm]?js$/i.test(specifier)
+  const cleanSpecifier = specifier.split(/[?#]/, 1)[0];
+  const target = join(dirname(baseFile), cleanSpecifier);
+  const candidates = /\.[cm]?js$/i.test(cleanSpecifier)
     ? [target]
     : [target, `${target}.js`, `${target}.mjs`];
   return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) || null;
@@ -441,8 +489,9 @@ function resolveRelativeJsImport(baseFile, specifier) {
 
 function relativeImportExists(baseFile, specifier) {
   if (!specifier.startsWith('.')) return true;
-  const target = join(dirname(baseFile), specifier);
-  if (/\.[cm]?js$/i.test(specifier) || specifier.endsWith('.css') || specifier.endsWith('.html')) {
+  const cleanSpecifier = specifier.split(/[?#]/, 1)[0];
+  const target = join(dirname(baseFile), cleanSpecifier);
+  if (/\.[cm]?js$/i.test(cleanSpecifier) || cleanSpecifier.endsWith('.css') || cleanSpecifier.endsWith('.html')) {
     return existsSync(target);
   }
   return [target, `${target}.js`, `${target}.mjs`].some((candidate) => existsSync(candidate));
@@ -923,8 +972,40 @@ if (manifest) {
     }
   }
   if (installedMode) {
-    if (manifest.layout?.shell !== 'full-workspace') {
-      fail('module.json layout.shell must be full-workspace for runtime-installed apps; do not leave users in generic Kontext/Themen shell side panes');
+    const presentationShell = String(manifest.layout?.shell || '').trim();
+    if (!['windowed', 'desktop-window'].includes(presentationShell)) {
+      fail('module.json layout.shell must be windowed for runtime-installed apps; full-workspace is a legacy source-only compatibility mode');
+    }
+    const launchKind = String(manifest.launch_kind || '').trim();
+    if (launchKind !== 'desktop-app') {
+      fail('runtime apps must set root module.json launch_kind=desktop-app');
+    }
+    if (manifest.presentation == null) {
+      fail('runtime apps must declare the canonical module.json presentation contract');
+    } else {
+      const presentation = manifest.presentation;
+      if (!presentation || typeof presentation !== 'object' || Array.isArray(presentation)) {
+        fail('module.json presentation must be an object');
+      } else {
+        const modes = new Set(['window', 'maximized', 'focus']);
+        if (!modes.has(presentation.default_mode)) {
+          fail('module.json presentation.default_mode must be window, maximized, or focus');
+        }
+        if (!Array.isArray(presentation.supported_modes)
+          || !presentation.supported_modes.includes('window')
+          || presentation.supported_modes.some((mode) => !modes.has(mode))) {
+          fail('module.json presentation.supported_modes must contain window and only supported modes');
+        }
+        for (const [key, minimum] of [['initial_size', 1], ['minimum_size', 1]]) {
+          if (!Number.isInteger(presentation[key]?.width) || presentation[key].width < minimum
+            || !Number.isInteger(presentation[key]?.height) || presentation[key].height < minimum) {
+            fail(`module.json presentation.${key} must contain positive integer width and height`);
+          }
+        }
+        if (presentation.minimum_size?.width !== 640 || presentation.minimum_size?.height !== 480) {
+          fail('module.json presentation.minimum_size must be exactly 640x480; the shell switches to mobile-sheet presentation below the floating-window contract');
+        }
+      }
     }
     const version = String(manifest.version || '');
     const parsed = semverPattern.exec(version);
@@ -982,6 +1063,7 @@ if (schemaDoc) {
         fail(`collections.schema.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
       }
     }
+    for (const message of collectDeclarativeMigrationFailures(schemaDoc)) fail(message);
   }
 }
 
@@ -1030,8 +1112,10 @@ if (!runtimeModuleMode && manifest && existsSync(registryPath)) {
 
 const files = walk(moduleDir);
 const jsFiles = files.filter((file) => /\.(?:js|mjs)$/.test(file));
+const isTestFile = (file) => hasSegment(file, 'tests')
+  || /(?:^|[/\\])test\.[cm]?js$|\.test\.[cm]?js$|-smoke\.[cm]?js$/i.test(file);
 const runtimeFiles = files.filter((file) =>
-  /\.(?:js|mjs|html|css)$/.test(file) && !hasSegment(file, 'tests') && !file.endsWith('.test.mjs')
+  /\.(?:js|mjs|html|css)$/.test(file) && !isTestFile(file)
 );
 
 for (const path of files) {
@@ -1064,7 +1148,7 @@ for (const path of jsFiles) {
     if (!relativeImportExists(path, specifier)) {
       fail(`${rel(path)} relative import ${specifier} does not exist`);
     }
-    if (!specifier.startsWith('.') && !hasSegment(path, 'tests') && !path.endsWith('.test.mjs')) {
+    if (!specifier.startsWith('.') && !isTestFile(path)) {
       fail(`${rel(path)} imports bare package ${specifier}; Business OS apps must use browser ESM local files only`);
     }
   }
@@ -1080,7 +1164,7 @@ const indexCss = existsSync(indexCssPath) ? readText(indexCssPath) : '';
 const runtimeText = runtimeFiles.map((file) => readText(file)).join('\n');
 const nonTestModuleText = files
   .filter((file) => /\.(?:js|mjs|html|css|json)$/.test(file))
-  .filter((file) => !hasSegment(file, 'tests') && !file.endsWith('.test.mjs'))
+  .filter((file) => !isTestFile(file))
   .map((file) => readText(file))
   .join('\n');
 
@@ -1127,10 +1211,11 @@ const runtimeRules = [
   ['browser storage data path outside CTOX focus handoff', containsForbiddenBrowserPersistence],
   ['Business OS HTTP data path', /fetch\s*\(\s*['"]\/(?:api|rxdb|business-os)/],
   ['direct business_commands write', /collection\s*\(\s*['"]business_commands['"]\s*\)|business_commands[\s\S]{0,120}\b(?:insert|upsert|bulk)\s*\(/],
+  ['legacy command type property', /\btype\s*:\s*['"](?:ats|browser|business_os|ctox|customers|document|invoices|knowledge|matching|outbound|research|spreadsheet|support|threads|web_stack)\./],
   ['upstream rxdb import', /from\s+['"]rxdb['"]/],
   ['CommonJS require', /\brequire\s*\(/],
   ['Node runtime import', /from\s+['"]node:/],
-  ['remote URL dependency', /https?:\/\/|cdn\./],
+  ['remote URL dependency', /(?:from\s+|import\s*\(|src\s*=\s*)['"]https?:\/\//i],
   ['React framework runtime', /\bReact(?:DOM)?\.|\bcreateRoot\s*\(|from\s+['"][^'"]*react(?:\/|['"])/i],
   ['Vue framework runtime', /\bVue\.|\bcreateApp\s*\(|from\s+['"][^'"]*vue(?:\/|['"])/i],
   ['Svelte framework runtime', /from\s+['"][^'"]*svelte(?:\/|['"])/i],
@@ -1140,9 +1225,10 @@ const runtimeRules = [
 ];
 for (const path of runtimeFiles) {
   const text = readText(path);
+  const executableText = stripJsComments(text);
   if (!sourceShellModuleMode) {
     for (const [label, check] of runtimeRules) {
-      const matched = typeof check === 'function' ? check(text) : check.test(text);
+      const matched = typeof check === 'function' ? check(executableText) : check.test(executableText);
       if (matched) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
     }
   }
@@ -1165,7 +1251,7 @@ for (const action of htmlDataActions(indexHtml)) {
   if (htmlDataActionIsSubmitControl(indexHtml, action) && hasFormSubmitHandler(indexJs)) {
     continue;
   }
-  if (!indexJsHandlesDataAction(indexJs, action)) {
+  if (!indexJsHandlesDataAction(runtimeText, action)) {
     fail(`index.html declares data-action="${action}" but index.js has no visible handler for it`);
   }
 }

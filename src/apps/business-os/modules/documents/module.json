@@ -39,12 +39,33 @@
     "summary": "DOCX and Markdown workspace with the CTOX Documents ESM fork, native Rust roundtrip, versions, blob chunks, and automation runbooks.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/documents",
-    "installable": false,
+    "installable": true,
     "editable_after_install": true,
-    "distribution": "starter-module"
+    "distribution": "catalog-module"
   },
-  "install_scope": "starter",
-  "default_installed": true,
+  "install_scope": "store",
+  "default_installed": false,
   "launch_kind": "desktop-app",
-  "presentation": { "default_mode": "window", "supported_modes": ["window", "maximized", "focus"], "initial_size": { "width": 1180, "height": 800 }, "minimum_size": { "width": 640, "height": 480 }, "multi_instance": false, "auto_restore": false }
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1180,
+      "height": 800
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  },
+  "source": "catalog",
+  "core": false,
+  "editable": true,
+  "deletable": true
 }

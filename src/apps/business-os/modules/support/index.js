@@ -183,6 +183,16 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  // Support depends on its declared data set as one coherent workspace. Fail
+  // during mount when the actor cannot read a required collection so the
+  // shell can render its standard permission/delegation state. Deferring this
+  // into background initialization used to leave a deceptively empty app.
+  const deniedCollection = COLLECTIONS.find((name) => (
+    ctx.permissions?.canReadCollection?.(name) === false
+  ));
+  if (deniedCollection) {
+    ctx.db.collection(deniedCollection).find();
+  }
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -201,10 +211,25 @@ export async function mount(ctx) {
   applyStaticLabels();
   wireUi();
   render();
-  await startCollections();
-  await refreshSupport();
-  state.cleanup = wireRealtime();
+  let disposed = false;
+  let collectionStartCleanup = null;
+  Promise.resolve()
+    .then(async () => {
+      collectionStartCleanup = await startCollections(() => !disposed && state.ctx === ctx);
+      if (disposed || state.ctx !== ctx) return;
+      await refreshSupport();
+      if (disposed || state.ctx !== ctx) return;
+      state.cleanup = wireRealtime();
+    })
+    .catch((error) => {
+      if (disposed || state.ctx !== ctx) return;
+      console.warn('[support] background initialization failed', error);
+      state.loading = false;
+      render();
+    });
   return () => {
+    disposed = true;
+    collectionStartCleanup?.();
     state.cleanup?.();
     if (state.renderTimer) window.clearTimeout(state.renderTimer);
     state.ctx = null;
@@ -240,6 +265,15 @@ function wireUi() {
   root.querySelector('[data-support-search]')?.addEventListener('input', (event) => {
     state.search = event.target.value || '';
     render();
+  });
+  root.querySelectorAll('[data-support-toggle-context]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const open = !root.classList.contains('is-context-open');
+      root.classList.toggle('is-context-open', open);
+      root.querySelectorAll('[data-support-toggle-context]').forEach((entry) => {
+        entry.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    });
   });
   root.querySelector('[data-support-filters]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -286,22 +320,23 @@ function wireUi() {
   });
 }
 
-async function startCollections() {
+async function startCollections(isActive = () => true) {
   const sync = state.ctx?.sync;
-  if (typeof sync?.startCollection !== 'function') return;
+  if (typeof sync?.startCollection !== 'function') return () => {};
   const available = COLLECTIONS.filter((name) => collectionFor(name));
-  if (!available.length) return;
+  if (!available.length) return () => {};
   const primary = available.includes(PRIMARY_COLLECTION) ? PRIMARY_COLLECTION : available[0];
   await withTimeout(sync.startCollection(primary), SYNC_START_TIMEOUT_MS, null)
     .catch((error) => console.warn('[support] primary sync start failed', error));
-  available
+  if (!isActive()) return () => {};
+  const timers = available
     .filter((name) => name !== primary)
-    .forEach((name, index) => {
-      window.setTimeout(() => {
+    .map((name, index) => window.setTimeout(() => {
+        if (!isActive()) return;
         Promise.resolve(sync.startCollection(name))
           .catch((error) => console.warn(`[support] ${name} sync start failed`, error));
-      }, index * 80);
-    });
+      }, index * 80));
+  return () => timers.forEach((timer) => window.clearTimeout(timer));
 }
 
 function wireRealtime() {
@@ -314,15 +349,21 @@ function wireRealtime() {
 }
 
 function scheduleRefresh() {
-  if (state.renderTimer) return;
+  const mountContext = state.ctx;
+  if (!mountContext || state.renderTimer) return;
   state.renderTimer = window.setTimeout(() => {
     state.renderTimer = null;
-    refreshSupport().catch((error) => console.warn('[support] refresh failed', error));
+    if (state.ctx !== mountContext) return;
+    refreshSupport(mountContext).catch((error) => {
+      if (state.ctx === mountContext) console.warn('[support] refresh failed', error);
+    });
   }, REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshSupport() {
+async function refreshSupport(mountContext = state.ctx) {
+  if (!mountContext || state.ctx !== mountContext) return;
   const entries = await Promise.all(COLLECTIONS.map(async (name) => [name, await loadCollection(name)]));
+  if (state.ctx !== mountContext) return;
   state.data = Object.fromEntries(entries);
   pruneOptimisticState();
   state.loading = false;
@@ -396,7 +437,7 @@ function renderConversationRows() {
     const risk = isSlaRisk(item) ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('slaRisk', 'SLA'))}</span>` : '';
     const agent = Number(item.agent_draft_count || 0) > 0 ? `<span class="ctox-badge is-info">${escapeHtml(state.t('agentDrafts', 'CTOX'))}</span>` : '';
     return `
-      <button type="button" class="support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}">
+      <button type="button" class="support-conversation-row ${selected}" data-support-conversation-id="${escapeAttr(item.id)}" data-context-record-id="${escapeAttr(item.id)}" data-context-record-type="support_conversation" data-context-label="${escapeAttr(label)}">
         <span class="support-row-meta">
           <span>${escapeHtml(item.inbox_id || state.t('inbox', 'Inbox'))}</span>
           <span>${escapeHtml(item.priority || 'normal')}</span>
@@ -594,7 +635,7 @@ async function createNote() {
   if (!item || !body) return;
   const now = Date.now();
   const command = buildSupportCommand({
-    type: 'support.note.create',
+    commandType: 'support.note.create',
     recordId: item.id,
     payload: {
       conversation_id: item.id,
@@ -673,7 +714,7 @@ async function runConversationAction(action) {
     render();
     try {
       await dispatchSupportCommand(buildSupportCommand({
-        type: 'support.conversation.assign',
+        commandType: 'support.conversation.assign',
         recordId: item.id,
         payload: { conversation_id: item.id, assignee_id: assigneeId },
         surface: 'support.conversation.assign',
@@ -692,7 +733,7 @@ async function runConversationAction(action) {
     render();
     try {
       await dispatchSupportCommand(buildSupportCommand({
-        type: 'support.conversation.snooze',
+        commandType: 'support.conversation.snooze',
         recordId: item.id,
         payload: {
           conversation_id: item.id,
@@ -710,7 +751,7 @@ async function runConversationAction(action) {
   }
   if (action === 'create-ticket') {
     await dispatchSupportCommand(buildSupportCommand({
-      type: 'support.ticket.create_from_conversation',
+      commandType: 'support.ticket.create_from_conversation',
       recordId: item.id,
       payload: {
         conversation_id: item.id,
@@ -740,7 +781,7 @@ async function runConversationAction(action) {
   render();
   try {
     await dispatchSupportCommand(buildSupportCommand({
-      type,
+      commandType: type,
       recordId: item.id,
       payload: { conversation_id: item.id },
       surface: type,
@@ -768,7 +809,7 @@ async function runConversationControl(control, value) {
   render();
   try {
     await dispatchSupportCommand(buildSupportCommand({
-      type,
+      commandType: type,
       recordId: item.id,
       payload: { conversation_id: item.id, ...payload },
       surface: type,
@@ -788,7 +829,7 @@ async function runSuggestionAction(action, suggestionId) {
     ? 'support.agent.reject_suggestion'
     : 'support.agent.apply_suggestion';
   await dispatchSupportCommand(buildSupportCommand({
-    type,
+    commandType: type,
     recordId: item.id,
     payload: {
       conversation_id: item.id,

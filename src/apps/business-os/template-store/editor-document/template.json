@@ -1,0 +1,9 @@
+{
+  "id": "editor-document",
+  "title": "Editor / Document",
+  "description": "Compact document workspace with navigation, editing, properties and a publish action.",
+  "category": "Knowledge",
+  "starter_archetype": "editor-document",
+  "default_title": "Document Workspace",
+  "tags": ["editor", "document", "publish", "automation"]
+}

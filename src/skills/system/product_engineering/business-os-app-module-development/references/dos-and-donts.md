@@ -28,11 +28,18 @@
   Business Chat.
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
-- For runtime-installed business apps, set `module.json` `layout.shell` to
-  `full-workspace` so the app owns the visible central Business OS work area.
+- For runtime-installed business apps, set root `launch_kind` to `desktop-app`,
+  write the canonical `presentation` object, and keep `layout.shell: windowed`
+  only as a compatibility hint; compose the responsive work
+  surface inside `ctx.host` from shared workspace and pane patterns.
 - Optimize the primary user path for direct action. Booking, parking,
   scheduling, shift, and availability apps should expose a calendar/date-strip
   or equivalent slot view with one-click claim/release/book actions.
+- Keep utility chrome visually quiet and space-efficient. Reserve prominent
+  color/space for at most one real signature AI automation per visible work
+  surface, with trackable command/run state.
+- Use shell-owned container queries and column resizers. Switch from floating
+  window to mobile sheet at the shell breakpoint and keep every pane reachable.
 - Prefer one or two panes inside the app only when both panes contain real
   business workflow content; use modals for occasional detail work.
 - Style the app with Business OS theme tokens such as `--bg`, `--surface`,
@@ -103,6 +110,10 @@
 - Do not build stacked app chrome. The Business OS shell already has the global
   header and app/version controls; a module gets at most one compact commandbar
   before the actual work surface.
+- Do not turn Create, Save, Export, Settings, generic AI, or ordinary CRUD into
+  oversized hero cards/buttons. Do not show two competing signature actions.
+- Do not hide a pane at a compact breakpoint without a visible tab, drawer,
+  stack, or back path that restores its workflow and selection.
 - Do not put category/title hero blocks, duplicate app names, version bars,
   metrics strips, date strips, and filters into separate header rows. Fold the
   minimum controls into one compact commandbar or make the calendar/work grid

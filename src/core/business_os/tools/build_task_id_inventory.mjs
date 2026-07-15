@@ -23,6 +23,7 @@ const classifications = new Map(Object.entries({
   record_report: ['execution_link', 'execution_task_id'],
   record_report_command: ['execution_link', 'execution_task_id'],
   write_rxdb_control_command_outcome: ['compatibility_target', 'target_task_id/target_record_id; execution_task_id stays empty'],
+  write_rxdb_control_command_state: ['compatibility_target', 'target_task_id/target_record_id; execution_task_id stays empty'],
 }));
 
 const sites = [];

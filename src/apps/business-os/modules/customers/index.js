@@ -6,7 +6,7 @@ import {
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260706-kit1';
+const BUILD = '20260714-command-responsive1';
 const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',
@@ -488,8 +488,7 @@ export async function mount(ctx) {
   const root = ctx.host.querySelector('[data-customers-root]');
   wireUi(root);
   state.cleanup.push(setupResizers(root));
-  await refreshData({ renderLoading: true });
-  state.cleanup.push(wireRealtime());
+  let disposed = false;
   // Presence (advisory UX): show who else is on the selected record, and
   // publish what this user is looking at / editing. Cleared on unmount so a
   // closed module leaves no stale hints on other peers.
@@ -500,9 +499,21 @@ export async function mount(ctx) {
     }));
     state.cleanup.push(() => { try { ctx.presence.clear(); } catch {} });
   }
+  state.diagnostics.loading = true;
   render();
+  refreshData()
+    .then(() => {
+      if (disposed || state.ctx !== ctx) return;
+      state.cleanup.push(wireRealtime());
+      render();
+    })
+    .catch((error) => {
+      if (disposed || state.ctx !== ctx) return;
+      reportRefreshError(error);
+    });
 
   return () => {
+    disposed = true;
     for (const cleanup of state.cleanup.splice(0)) {
       try { cleanup?.(); } catch {}
     }
@@ -1018,6 +1029,9 @@ function selectableAttrs(type, id, selected, label) {
   const fallback = labels.de[labelKey] || '{0}';
   return [
     'data-customers-selectable',
+    `data-context-record-id="${escapeAttribute(id || '')}"`,
+    `data-context-record-type="${escapeAttribute(type || 'customer_record')}"`,
+    `data-context-label="${escapeAttribute(label || id || '')}"`,
     'tabindex="0"',
     'role="button"',
     `aria-selected="${selected ? 'true' : 'false'}"`,
@@ -2644,7 +2658,7 @@ async function upsertLocalDoc(collection, id, doc) {
 function buildCreateAccountCommand(draft) {
   return {
     module: 'customers',
-    type: 'customers.account.create',
+    command_type: 'customers.account.create',
     payload: compactPayload(accountPayloadFromDraft(draft)),
     client_context: { build: BUILD, surface: 'customers.account.create' },
   };
@@ -2653,7 +2667,7 @@ function buildCreateAccountCommand(draft) {
 function buildAccountUpdateCommand(accountId, draft) {
   return {
     module: 'customers',
-    type: 'customers.account.update',
+    command_type: 'customers.account.update',
     record_id: accountId,
     payload: { account_id: accountId, ...compactPayload(accountPayloadFromDraft(draft)) },
     client_context: { build: BUILD, surface: 'customers.account.update' },
@@ -2663,7 +2677,7 @@ function buildAccountUpdateCommand(accountId, draft) {
 function buildAccountArchiveCommand(accountId) {
   return {
     module: 'customers',
-    type: 'customers.account.archive',
+    command_type: 'customers.account.archive',
     record_id: accountId,
     payload: { account_id: accountId },
     client_context: { build: BUILD, surface: 'customers.account.archive' },
@@ -2673,7 +2687,7 @@ function buildAccountArchiveCommand(accountId) {
 function buildContactCreateCommand(draft) {
   return {
     module: 'customers',
-    type: 'customers.contact.create',
+    command_type: 'customers.contact.create',
     payload: compactPayload(contactPayloadFromDraft(draft)),
     client_context: { build: BUILD, surface: 'customers.contact.create' },
   };
@@ -2682,7 +2696,7 @@ function buildContactCreateCommand(draft) {
 function buildContactUpdateCommand(contactId, draft) {
   return {
     module: 'customers',
-    type: 'customers.contact.update',
+    command_type: 'customers.contact.update',
     record_id: contactId,
     payload: { contact_id: contactId, ...compactPayload(contactPayloadFromDraft(draft)) },
     client_context: { build: BUILD, surface: 'customers.contact.update' },
@@ -2692,7 +2706,7 @@ function buildContactUpdateCommand(contactId, draft) {
 function buildContactArchiveCommand(contactId) {
   return {
     module: 'customers',
-    type: 'customers.contact.archive',
+    command_type: 'customers.contact.archive',
     record_id: contactId,
     payload: { contact_id: contactId },
     client_context: { build: BUILD, surface: 'customers.contact.archive' },
@@ -2702,7 +2716,7 @@ function buildContactArchiveCommand(contactId) {
 function buildOpportunityCreateCommand(draft) {
   return {
     module: 'customers',
-    type: 'customers.opportunity.create',
+    command_type: 'customers.opportunity.create',
     payload: compactPayload(opportunityPayloadFromDraft(draft)),
     client_context: { build: BUILD, surface: 'customers.opportunity.create' },
   };
@@ -2711,7 +2725,7 @@ function buildOpportunityCreateCommand(draft) {
 function buildOpportunityUpdateCommand(opportunityId, draft) {
   return {
     module: 'customers',
-    type: 'customers.opportunity.update',
+    command_type: 'customers.opportunity.update',
     record_id: opportunityId,
     payload: { opportunity_id: opportunityId, ...compactPayload(opportunityPayloadFromDraft(draft)) },
     client_context: { build: BUILD, surface: 'customers.opportunity.update' },
@@ -2721,7 +2735,7 @@ function buildOpportunityUpdateCommand(opportunityId, draft) {
 function buildOpportunityMoveStageCommand(opportunityId, stage) {
   return {
     module: 'customers',
-    type: 'customers.opportunity.move_stage',
+    command_type: 'customers.opportunity.move_stage',
     record_id: opportunityId,
     payload: { opportunity_id: opportunityId, stage },
     client_context: { build: BUILD, surface: 'customers.opportunity.move_stage' },
@@ -2734,7 +2748,7 @@ function buildOpportunityCloseCommand(opportunityId, outcome) {
     : { opportunity_id: opportunityId };
   return {
     module: 'customers',
-    type: outcome === 'lost' ? 'customers.opportunity.close_lost' : 'customers.opportunity.close_won',
+    command_type: outcome === 'lost' ? 'customers.opportunity.close_lost' : 'customers.opportunity.close_won',
     record_id: opportunityId,
     payload,
     client_context: { build: BUILD, surface: `customers.opportunity.close_${outcome}` },
@@ -2744,7 +2758,7 @@ function buildOpportunityCloseCommand(opportunityId, outcome) {
 function buildTaskCreateCommand(draft) {
   return {
     module: 'customers',
-    type: 'customers.task.create',
+    command_type: 'customers.task.create',
     payload: compactPayload(taskPayloadFromDraft(draft)),
     client_context: { build: BUILD, surface: 'customers.task.create' },
   };
@@ -2753,7 +2767,7 @@ function buildTaskCreateCommand(draft) {
 function buildTaskUpdateCommand(taskId, draft) {
   return {
     module: 'customers',
-    type: 'customers.task.update',
+    command_type: 'customers.task.update',
     record_id: taskId,
     payload: { task_id: taskId, ...compactPayload(taskPayloadFromDraft(draft)) },
     client_context: { build: BUILD, surface: 'customers.task.update' },
@@ -2763,7 +2777,7 @@ function buildTaskUpdateCommand(taskId, draft) {
 function buildTaskCompleteCommand(taskId) {
   return {
     module: 'customers',
-    type: 'customers.task.complete',
+    command_type: 'customers.task.complete',
     record_id: taskId,
     payload: { task_id: taskId },
     client_context: { build: BUILD, surface: 'customers.task.complete' },
@@ -2773,7 +2787,7 @@ function buildTaskCompleteCommand(taskId) {
 function buildNoteCreateCommand(draft) {
   return {
     module: 'customers',
-    type: 'customers.note.create',
+    command_type: 'customers.note.create',
     payload: compactPayload(notePayloadFromDraft(draft)),
     client_context: { build: BUILD, surface: 'customers.note.create' },
   };
@@ -2782,7 +2796,7 @@ function buildNoteCreateCommand(draft) {
 function buildNoteUpdateCommand(noteId, draft) {
   return {
     module: 'customers',
-    type: 'customers.note.update',
+    command_type: 'customers.note.update',
     record_id: noteId,
     payload: { note_id: noteId, ...compactPayload(notePayloadFromDraft(draft)) },
     client_context: { build: BUILD, surface: 'customers.note.update' },
@@ -2793,7 +2807,7 @@ function buildImportFromOutboundCommand(row) {
   const company = row?.company || {};
   return {
     module: 'customers',
-    type: 'customers.import.from_outbound',
+    command_type: 'customers.import.from_outbound',
     record_id: company.id,
     payload: compactPayload({
       source_record_id: company.id,
@@ -2808,7 +2822,7 @@ function buildImportFromOutboundCommand(row) {
 function buildDedupeResolveCommand(candidateId, decision) {
   return {
     module: 'customers',
-    type: 'customers.dedupe.resolve',
+    command_type: 'customers.dedupe.resolve',
     record_id: candidateId,
     payload: { candidate_id: candidateId, decision },
     client_context: { build: BUILD, surface: 'customers.dedupe.resolve' },
@@ -2838,7 +2852,7 @@ function buildSaveViewCommand({ stage, health, search, sort }) {
   const sorts = sort?.field ? [{ field_name: sort.field, direction: sort.direction || 'asc' }] : [];
   return {
     module: 'customers',
-    type: 'customers.view.save',
+    command_type: 'customers.view.save',
     payload: {
       view: {
         name,

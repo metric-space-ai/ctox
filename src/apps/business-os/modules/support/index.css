@@ -31,14 +31,14 @@
 
 .support-filter-list {
   overflow: auto;
-  padding: 12px;
+  padding: 8px;
 }
 
 .support-context-list {
   overflow: auto;
-  padding: 12px;
+  padding: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
 }
 
@@ -46,23 +46,23 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 .support-conversation-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .support-conversation-row {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface) 92%, var(--bg) 8%);
   color: var(--text);
   font: inherit;
-  padding: 12px;
+  padding: 8px;
   text-align: left;
   cursor: pointer;
 }
@@ -84,7 +84,7 @@
 
 .support-conversation-row strong {
   display: block;
-  margin: 8px 0;
+  margin: 6px 0;
   color: var(--text-strong);
   font-size: 14px;
   line-height: 1.35;
@@ -93,18 +93,18 @@
 .support-timeline {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 20px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .support-timeline-item {
   max-width: 760px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
-  padding: 12px 14px;
+  padding: 8px 10px;
 }
 
 .support-timeline-item.is-note {
@@ -119,8 +119,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 6px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -133,18 +133,18 @@
 
 .support-composer {
   border-top: 1px solid var(--line);
-  padding: 12px;
+  padding: 8px;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 10px;
+  gap: 8px;
   align-items: end;
 }
 
 .support-context-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .support-context-actions.is-grid {
@@ -154,8 +154,8 @@
 .support-control-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .support-control-grid label {
@@ -189,8 +189,8 @@
   display: grid;
   gap: 6px;
   border-top: 1px solid var(--line);
-  padding-top: 10px;
-  margin-top: 10px;
+  padding-top: 8px;
+  margin-top: 8px;
 }
 
 .support-suggestion-row:first-child {
@@ -219,7 +219,11 @@
   color: var(--danger);
 }
 
-@media (max-width: 1180px) {
+.support-context-toggle {
+  display: none;
+}
+
+@container business-app-window (max-width: 1180px) {
   .support-module {
     grid-template-columns: minmax(240px, 300px) minmax(360px, 1fr);
   }
@@ -227,9 +231,22 @@
   .support-right {
     display: none;
   }
+
+  .support-context-toggle {
+    display: grid;
+  }
+
+  .support-module.is-context-open .support-center {
+    display: none;
+  }
+
+  .support-module.is-context-open .support-right {
+    display: grid;
+    min-width: 0;
+  }
 }
 
-@media (max-width: 760px) {
+@container business-app-window (max-width: 760px) {
   .support-module {
     grid-template-columns: 1fr;
   }
@@ -243,5 +260,9 @@
 
   .support-composer {
     grid-template-columns: 1fr;
+  }
+
+  .support-module.is-context-open .support-left {
+    display: none;
   }
 }

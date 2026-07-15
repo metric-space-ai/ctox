@@ -56,9 +56,12 @@ new `index.js`.
 
 ## Shell Layout And Theme
 
-- Runtime-installed business apps must set `module.json` `layout.shell` to
-  `"full-workspace"`. The generic shell `Kontext` and `Themen` panes are for
-  shell diagnostics, not for normal generated business-app UX.
+- New runtime-installed business apps must set root `launch_kind` to
+  `"desktop-app"` and write the canonical root `presentation` object.
+  Keep `layout.shell: "windowed"` as a compatibility hint. Declare default and
+  minimum dimensions and build a container-responsive workspace inside
+  `ctx.host`. `full-workspace` is a legacy compatibility value, not the default
+  for newly generated apps.
 - Build the app's own information architecture inside `ctx.host`. Use a focused
   single workspace, a two-pane workbench when the left pane contains real
   navigable business records, and modals/drawers for occasional details. Do not
@@ -153,6 +156,13 @@ new `index.js`.
 - Keep browser and native schema shapes aligned: `schema.js` and
   `collections.schema.json` must use the same collection names, versions,
   primary keys, required fields, property names, and property types.
+- Never change a persisted schema in place. Increment `version` and declare
+  every intermediate JSON migration under
+  `migration_strategies.<collection>.<targetVersion>` in
+  `collections.schema.json`. Use `{ "operations": [] }` for an additive
+  identity migration; supported transforms are `set_from_first_truthy` and
+  `set_boolean`. Browser and native peers execute this same JSON contract, and
+  native bring-up fails closed when old rows exist without a strategy.
 - Persist values in the type declared by the schema. For dates, either store
   ISO date strings in `*_date` fields or declare numeric millisecond fields as
   `*_date_ms`. Do not put `Date.parse(...)` numbers into fields declared as
@@ -175,7 +185,16 @@ new `index.js`.
 - Visible automation actions must call `ctx.commandBus.dispatch(...)`.
 - The normal intelligent workflow command is `business_os.chat.task`.
 - Use `business_os.chat.task` for follow-up chats, AI review, drafting, renewal checks, reports, and normal CTOX task continuation.
-- Include both `type` and `command_type`, set `module`, set `record_id`, and include enough `payload.record_snapshot` context for CTOX to continue the workflow.
+- Set canonical `command_type`, `module`, and `record_id`, and include enough
+  `payload.record_snapshot` context for CTOX to continue the workflow. Do not
+  emit the historical `type` alias. The shell bus accepts it only for old
+  external packages and rejects mismatched aliases.
+- Never insert or patch `business_commands` directly and never construct a
+  private pending-intent fallback. If the shell bus or native capability is
+  unavailable, show that failure honestly. For durable queue/harness work use
+  the facade lifecycle (`until`, `waitForAccepted`, `waitForTerminal`,
+  `resumeTracking`, `subscribe`, `getStatus`, `cancel`) instead of polling
+  private projection fields.
 - Every visible automation that creates a CTOX command or queue task must expose
   a visible tracking affordance in the originating record. Store the returned
   `task_id` and `command_id`, and provide a button/link that sets
@@ -245,13 +264,23 @@ For a runtime-installed app, `module.json` normally uses:
   "icon": "icon.svg",
   "version": "0.1.0",
   "collections": ["<module_collection>"],
-  "data_runtime": {
-    "version": 1,
-    "sync": "realtime",
-    "scope": "actor",
-    "actions": {}
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": ["window", "maximized", "focus"],
+    "initial_size": { "width": 960, "height": 680 },
+    "minimum_size": { "width": 640, "height": 480 },
+    "multi_instance": false,
+    "auto_restore": false
   },
-  "layout": { "shell": "full-workspace", "center": "module workspace" }
+  "layout": {
+    "shell": "windowed",
+    "default_width": 960,
+    "default_height": 680,
+    "min_width": 640,
+    "min_height": 480,
+    "center": "module workspace"
+  }
 }
 ```
 

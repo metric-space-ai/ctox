@@ -297,7 +297,6 @@ const invoiceApprovalSchema = {
 };
 
 export const collections = {
-  business_commands: commandSchema,
   customer_accounts: customerCollections.customer_accounts,
   customer_activities: customerCollections.customer_activities,
   accounting_accounts: accountingCollections.accounting_accounts,

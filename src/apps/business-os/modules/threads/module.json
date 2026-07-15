@@ -7,17 +7,22 @@
     "business_commands",
     "ctox_queue_tasks",
     "user_threads",
+    "user_thread_states",
     "user_thread_messages",
     "user_thread_links",
     "user_notifications",
     "ctox_task_approval_requests"
   ],
   "layout": {
-    "shell": "full-workspace",
+    "shell": "windowed",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-threads\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-threads\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><path d=\"M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H10l-5 4v-4.2A2.5 2.5 0 0 1 4 12.5z\" fill=\"url(#grad-threads)\" fill-opacity=\"0.12\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 8h8M8 11h5\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"18\" r=\"3\" fill=\"#fff\" stroke=\"url(#grad-threads)\" stroke-width=\"1.5\"></circle><path d=\"M18 16.6v1.7l1.2.8\" stroke=\"url(#grad-threads)\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
     "left": "personal inbox, approvals, and source filters",
     "center": "durable thread timeline tied to app records",
-    "right": "new notes, CTOX approval requests, and lifecycle context"
+    "right": "new notes, CTOX approval requests, and lifecycle context",
+    "default_width": 1120,
+    "default_height": 760,
+    "min_width": 640,
+    "min_height": 480
   },
   "category": "System",
   "version": "v0.1",
@@ -40,8 +45,27 @@
   },
   "install_scope": "core",
   "default_installed": true,
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1120,
+      "height": 760
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  },
   "source": "core",
   "core": true,
   "editable": true,
-  "deletable": false
+  "deletable": false,
+  "launch_kind": "desktop-app"
 }

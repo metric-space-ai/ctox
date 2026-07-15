@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -26,7 +27,9 @@ const {
   formatRelativeAge,
   friendlyWebStackStatus,
   labels,
+  normalizeFocusTask,
   progressPercent,
+  resolveSelectedTaskId,
   safeTaskDisplayText,
   setFlowZoom,
   taskSteps,
@@ -44,6 +47,57 @@ function test(name, fn) {
     throw error;
   }
 }
+
+test('Presentation layer stays compact and shell-native', () => {
+  const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const manifest = readFileSync(new URL('./module.json', import.meta.url), 'utf8');
+  const icon = readFileSync(new URL('./icon.svg', import.meta.url), 'utf8');
+  const source = `${css}\n${js}\n${html}\n${manifest}\n${icon}`;
+  const surfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'gla' + 'ss', 'Prem' + 'ium'].join('|'), 'i');
+  const sidePattern = new RegExp('border-' + '(?:left|right)\\s*:\\s*(?:[2-9]|[0-9]{2,})px');
+  const radiusPattern = new RegExp('border-' + 'radius:\\s*(?:8|10|12|14|16|18|20|24)px');
+  const shadowPattern = new RegExp('box-' + 'shadow:\\s*(?:0|inset|rgba|color-mix|var\\(--panel-shadow\\)|var\\(--shadow-sm\\)|var\\(--shadow-md\\))');
+  const gradientPattern = new RegExp(['linear-grad' + 'ient', 'radial-grad' + 'ient'].join('|'));
+  const hardNeutralPattern = new RegExp(['#00' + '0', '#ff' + 'f'].join('|'), 'i');
+
+  assert.doesNotMatch(source, surfacePattern);
+  assert.doesNotMatch(source, sidePattern);
+  assert.doesNotMatch(source, radiusPattern);
+  assert.doesNotMatch(source, shadowPattern);
+  assert.doesNotMatch(source, gradientPattern);
+  assert.doesNotMatch(source, hardNeutralPattern);
+  assert.match(css, /grid-template-columns: var\(--ctox-left-width\) 6px minmax\(0, 1fr\)/);
+  assert.match(manifest, /currentColor/);
+});
+
+test('Task focus normalizes launch args and shell events consistently', () => {
+  assert.deepEqual(normalizeFocusTask({ task_id: 'queue-42', command_id: 'cmd-42', open_drawer: true }), {
+    taskId: 'queue-42',
+    commandId: 'cmd-42',
+    taskStatus: '',
+    sourceModule: 'business-os',
+    openDrawer: true,
+  });
+  assert.deepEqual(
+    normalizeFocusTask({ taskId: 'queue-42', commandId: 'cmd-42', openDrawer: true }),
+    normalizeFocusTask({ task_id: 'queue-42', command_id: 'cmd-42', open_drawer: true }),
+  );
+});
+
+test('A focused task that appears later replaces the previous fallback selection', () => {
+  const model = {
+    tasks: [
+      { id: 'queue-old', commandId: 'cmd-old', status: 'running' },
+      { id: 'queue-target', commandId: 'cmd-target', status: 'queued' },
+    ],
+  };
+  assert.equal(
+    resolveSelectedTaskId(model, { taskId: 'queue-target', commandId: 'cmd-target' }, 'queue-old'),
+    'queue-target',
+  );
+});
 
 test('WebRTC status does not claim CTOX flow is connected when projection is missing', () => {
   const view = flowSourceView({

@@ -1,0 +1,9 @@
+{
+  "id": "queue-workflow",
+  "title": "Queue / Workflow",
+  "description": "Operational queue with work-item editing, handoff context and a prominent workflow action.",
+  "category": "Operations",
+  "starter_archetype": "queue-workflow",
+  "default_title": "Queue Workflow",
+  "tags": ["queue", "workflow", "handoff", "automation"]
+}

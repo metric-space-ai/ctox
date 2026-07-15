@@ -7,8 +7,21 @@ Use this before claiming a Business OS app is done.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
 - Runtime `module.json` sets `"icon": "icon.svg"` and the module directory
   contains a local `icon.svg`.
-- Runtime `module.json` sets `layout.shell` to `full-workspace`, so the app
-  opens without the generic shell `Kontext`/`Themen` side panes.
+- Runtime `module.json` sets root `launch_kind` to `desktop-app`, writes the
+  canonical `presentation` object (minimum 640×480), and keeps
+  `layout.shell: windowed` only as a compatibility hint.
+- The app is usable at its minimum width and responds to its window container,
+  not only to the browser viewport.
+- `IMPECCABLE_PREFLIGHT` passed with Product register plus the CTOX root
+  `PRODUCT.md`, `DESIGN.md`, and `.impeccable/design.json` context.
+- Routine controls remain compact and neutral. At most one real, domain-named
+  AI/automation action is visually dominant per visible work surface.
+- Real mouse dragging resizes the floating window and every visible
+  `.ctox-column-resizer`; no direct style mutation is accepted as proof.
+- At 360px the shell uses a mobile app sheet with Start, version/status,
+  Source/Versions, close/back, chat, and task switching reachable.
+- Each two-/three-pane layout preserves a visible stack/tab/drawer and return
+  path for panes that cannot remain side by side.
 - The app has at most one compact app-level command/header row. It does not
   repeat shell-owned app identity/version/source chrome or stack hero, metrics,
   date-strip, and filter headers before the work surface.
@@ -27,6 +40,8 @@ Use this before claiming a Business OS app is done.
 - Runtime app collection names are scoped to the module id.
 - `schema.js`, `collections.schema.json`, and record helper outputs agree on
   collection names, schema versions, required fields, and property types.
+- Every collection version above 0 has all intermediate JSON
+  `migration_strategies`; persisted schemas were never edited in place.
 - Automation uses `ctx.commandBus.dispatch(...)`.
 - Chat/AI actions use `business_os.chat.task` with `payload.record_snapshot`; real ticket lifecycle actions use `ctox.ticket.*`.
 - Automation results that return `task_id` or `command_id` are visible and
@@ -50,6 +65,8 @@ Use this before claiming a Business OS app is done.
 - The app was visually checked in light and dark theme at desktop and narrow
   viewport sizes; text, buttons, cards, dialogs, and bottom actions remain
   readable and do not overlap.
+- Long German, English, and unbreakable technical app names remain within a
+  fixed two-line desktop icon cell and keep the full accessible name/tooltip.
 - The app was visually checked against one custom-brand fixture, proving it
   consumes shell tokens instead of hard-coded root palettes.
 - Every record row/card/tree node exposes `data-context-record-id`/`-record-type`/`-label` (or at least a `data-*-id`) so a right-click hands the agent the record.

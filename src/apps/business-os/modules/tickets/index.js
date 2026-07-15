@@ -166,7 +166,9 @@ export async function mount(ctx) {
   wireUi();
   state.resizeCleanup = setupResizers();
   render();
-  await startTicketCollections();
+  // The shell-owned module lease already starts every declared ticket
+  // collection. Scheduling a second wave here races fast window close and can
+  // recreate bridges after the lease has released them.
   await waitForPrimaryTicketDataOrReady();
   await refreshTickets();
   state.cleanup = wireRealtime();

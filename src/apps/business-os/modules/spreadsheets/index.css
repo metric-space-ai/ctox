@@ -739,7 +739,7 @@ body[data-active-module="spreadsheets"] [data-resizer]::before {
   }
 }
 
-@media (max-width: 600px) {
+@container business-app-window (max-width: 600px) {
   .spreadsheets-empty,
   .spreadsheets-loading,
   .spreadsheets-error {

@@ -38,7 +38,7 @@ export function renderCandidateBoard(host, matches, opts = {}) {
           ${g.items
             .map((m) => {
               const id = String(m.id ?? m.objectId ?? '');
-              return `<article class="cb-card" draggable="true" data-card-id="${escapeHtml(id)}">${escapeHtml(label(m))}</article>`;
+              return `<article class="cb-card" draggable="true" data-card-id="${escapeHtml(id)}" data-context-record-id="${escapeHtml(id)}" data-context-record-type="matching_candidate" data-context-label="${escapeHtml(label(m))}">${escapeHtml(label(m))}</article>`;
             })
             .join('')}
         </div>

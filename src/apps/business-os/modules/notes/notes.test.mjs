@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -122,4 +123,20 @@ test('draft and destructive note actions expose safe modes', () => {
   const note = { id: 'note-1', is_trashed: false, is_locked: false };
   assert.equal(hooks.noteActionAvailability(note).deleteMode, 'confirm-trash-with-undo');
   assert.equal(hooks.noteActionAvailability({ ...note, is_trashed: true }).deleteMode, 'confirm-permanent-delete');
+});
+
+test('notes presentation follows compact Business OS editor contract', async () => {
+  const css = await readFile(fileURLToPath(new URL('./index.css', import.meta.url)), 'utf8');
+  const html = await readFile(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+
+  assert.doesNotMatch(html, /ctox-pane--glass/);
+  assert.doesNotMatch(css, /Premium Port/);
+  assert.doesNotMatch(css, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.doesNotMatch(css, /box-shadow:\s*inset\s+3px\s+0\s+0/);
+  assert.doesNotMatch(css, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+  assert.match(css, /--nn-shadow:\s*none;/);
+  assert.match(css, /--nn-paper-shadow:\s*none;/);
+  assert.match(css, /\.notes-card\.active\s*\{[\s\S]*?border-color:/);
+  assert.match(css, /\.nn-paper-sheet\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
+  assert.match(css, /\.nn-pin-container\s*\{[\s\S]*?border-radius:\s*var\(--control-radius\)/);
 });

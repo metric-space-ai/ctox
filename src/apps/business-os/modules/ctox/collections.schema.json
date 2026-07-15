@@ -130,7 +130,17 @@
         "record_id": {
           "type": "string"
         },
+        "result": {
+          "additionalProperties": true,
+          "type": "object"
+        },
         "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_status": {
           "type": "string"
         },
         "updated_at_ms": {
@@ -404,6 +414,10 @@
         "is_deleted": {
           "type": "boolean"
         },
+        "profile": {
+          "additionalProperties": true,
+          "type": "object"
+        },
         "role": {
           "type": "string"
         },
@@ -575,7 +589,7 @@
         "module"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "ctox_runs": {
       "additionalProperties": true,
@@ -685,6 +699,11 @@
             ]
           }
         ]
+      }
+    },
+    "ctox_queue_tasks": {
+      "1": {
+        "operations": []
       }
     }
   },

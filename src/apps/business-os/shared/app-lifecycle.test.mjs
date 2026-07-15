@@ -154,6 +154,61 @@ test('runtime installed 1.0.0 app is team-visible by default', () => {
   assert.equal(appLifecycleState(released).state, 'team');
 });
 
+test('native release projection, not SemVer, controls team visibility', () => {
+  const unreleased = {
+    ...draftApp,
+    version: '4.2.0',
+    lifecycle: {
+      source: 'native_catalog_projection',
+      runtime_installed: true,
+      visibility_state: 'private',
+      current_semver: '4.2.0',
+      release_status: 'unreleased',
+    },
+  };
+  assert.equal(hasPublicAppVersion(unreleased), true, 'SemVer remains valid display metadata');
+  assert.equal(appLifecycleState(unreleased).state, 'private');
+  assert.equal(canSeeModuleForAppVersion(unreleased, {
+    session: session('team_member', 'user'),
+    governance,
+  }), false);
+
+  const released = {
+    ...unreleased,
+    lifecycle: {
+      ...unreleased.lifecycle,
+      visibility_state: 'team',
+      release_status: 'released',
+    },
+  };
+  assert.equal(appLifecycleState(released).state, 'team');
+});
+
+test('tenant-local module is private instead of packaged system UI', () => {
+  const local = {
+    id: 'thesen-outbound',
+    title: 'THESEN Outbound',
+    version: '0.3.12',
+    source: 'local',
+    install_scope: 'local',
+    entry: 'local-modules/thesen-outbound/index.html',
+    lifecycle: {
+      source: 'native_catalog_projection',
+      runtime_installed: false,
+      local_module: true,
+      visibility_state: 'private',
+      audience: 'instance',
+      public: false,
+      current_semver: '0.3.12',
+    },
+  };
+  const lifecycle = appLifecycleState(local);
+  assert.equal(lifecycle.state, 'private');
+  assert.equal(lifecycle.label, 'Privat');
+  assert.equal(lifecycle.public, false);
+  assert.equal(canSeeModuleForAppVersion(local), true, 'local app is present only in this instance catalog');
+});
+
 test('projected preview audience display still requires exact app view access', () => {
   const preview = {
     ...draftApp,

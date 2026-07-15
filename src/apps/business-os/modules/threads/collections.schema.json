@@ -2,6 +2,20 @@
   "collections": {
     "business_commands": {
       "additionalProperties": true,
+      "indexes": [
+        "status",
+        "command_id",
+        [
+          "status",
+          "updated_at_ms"
+        ],
+        [
+          "module",
+          "command_type",
+          "status",
+          "updated_at_ms"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
         "client_context": {
@@ -61,8 +75,27 @@
     },
     "ctox_queue_tasks": {
       "additionalProperties": true,
+      "indexes": [
+        "status",
+        "command_id",
+        "updated_at_ms",
+        [
+          "status",
+          "updated_at_ms"
+        ],
+        [
+          "command_id",
+          "status"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
         "id": {
           "maxLength": 128,
           "type": "string"
@@ -93,7 +126,7 @@
         "module"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "ctox_task_approval_requests": {
       "additionalProperties": true,
@@ -402,6 +435,12 @@
       ],
       "primaryKey": "id",
       "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string"
+        },
         "approval_request_id": {
           "type": "string"
         },
@@ -423,6 +462,18 @@
         "deleted_at_ms": {
           "type": "number"
         },
+        "event_type": {
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execution_status": {
+          "type": "string"
+        },
         "id": {
           "maxLength": 256,
           "type": "string"
@@ -439,6 +490,9 @@
         "metadata": {
           "additionalProperties": true,
           "type": "object"
+        },
+        "parent_event_id": {
+          "type": "string"
         },
         "source_deep_link": {
           "type": "string"
@@ -476,6 +530,87 @@
         "body"
       ],
       "type": "object",
+      "version": 1
+    },
+    "user_thread_states": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        "thread_id",
+        "user_id",
+        "attention_score",
+        [
+          "user_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "attention_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "attention_score": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "follow_up_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_seen_at_ms": {
+          "type": "number"
+        },
+        "notification_preferences": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "snoozed_until_ms": {
+          "type": "number"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "unread_count": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms",
+        "thread_id",
+        "user_id"
+      ],
+      "type": "object",
       "version": 0
     },
     "user_threads": {
@@ -499,6 +634,10 @@
       ],
       "primaryKey": "id",
       "properties": {
+        "ai_state": {
+          "additionalProperties": true,
+          "type": "object"
+        },
         "archived_at_ms": {
           "type": "number"
         },
@@ -512,6 +651,9 @@
           "type": "string"
         },
         "deleted_at_ms": {
+          "type": "number"
+        },
+        "due_at_ms": {
           "type": "number"
         },
         "id": {
@@ -537,6 +679,9 @@
         "metadata": {
           "additionalProperties": true,
           "type": "object"
+        },
+        "next_step": {
+          "type": "string"
         },
         "owner_user_id": {
           "type": "string"
@@ -571,6 +716,9 @@
         "status": {
           "type": "string"
         },
+        "team_id": {
+          "type": "string"
+        },
         "thread_id": {
           "type": "string"
         },
@@ -595,7 +743,39 @@
         "participant_ids"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
+    }
+  },
+  "migration_strategies": {
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      }
+    },
+    "ctox_queue_tasks": {
+      "1": {
+        "operations": []
+      }
+    },
+    "user_thread_messages": {
+      "1": {
+        "operations": []
+      }
+    },
+    "user_threads": {
+      "1": {
+        "operations": []
+      }
     }
   },
   "module_id": "threads",

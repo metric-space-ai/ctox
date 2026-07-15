@@ -171,6 +171,17 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         true
     }
 
+    /// Optional document-level push gate. Generic handlers preserve upstream
+    /// behavior; CTOX binds browser documents to the authenticated peer.
+    fn are_documents_write_authorized_for_peer(
+        &self,
+        _peer: &Self::Peer,
+        _collection: &str,
+        _params: &[serde_json::Value],
+    ) -> bool {
+        true
+    }
+
     /// Optional per-peer document filter for master responses and live changes.
     /// Returning `None` drops the whole change event for that peer.
     fn filter_master_change_for_peer(

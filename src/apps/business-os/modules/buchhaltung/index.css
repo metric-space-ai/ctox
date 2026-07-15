@@ -2,12 +2,12 @@
 
 .fibu-module[data-fibu-root] {
   display: grid;
-  grid-template-columns: var(--fibu-left-width, 300px) 12px minmax(0, 1fr) 12px var(--fibu-right-width, 360px);
+  grid-template-columns: var(--fibu-left-width, 284px) 8px minmax(0, 1fr) 8px var(--fibu-right-width, 330px);
   gap: 0;
-  padding: 12px;
+  padding: 8px;
   height: 100%;
   width: 100%;
-  background: var(--bg);
+  background: var(--surface);
   color: var(--text);
   font-family: var(--font-sans);
   overflow: hidden;
@@ -45,30 +45,30 @@
   --fibu-credit-glow: 0 0 8px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
-/* Three Pane Layout with Gutters and Floating Cards */
+/* Three Pane Layout */
 .fibu-pane {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   position: relative;
   box-sizing: border-box;
 }
 
 .fibu-left {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
+  box-shadow: none;
 }
 
 .fibu-center {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
 }
@@ -76,8 +76,8 @@
 .fibu-right {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
 }
@@ -94,7 +94,7 @@
 .fibu-nav-list {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 12px;
+  padding: 10px 8px;
 }
 
 .fibu-nav-section-title {
@@ -103,15 +103,16 @@
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--muted);
-  margin: 16px 12px 6px 12px;
+  margin: 12px 8px 5px;
 }
 
 .fibu-nav-item {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
   border-radius: var(--control-radius);
   border: 1px solid transparent;
   background: transparent;
@@ -120,8 +121,8 @@
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  margin-bottom: 3px;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  margin-bottom: 2px;
 }
 
 .fibu-nav-item:hover {
@@ -133,19 +134,19 @@
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   font-weight: 600;
 }
 
 .fibu-nav-icon {
-  width: 24px;
-  min-width: 24px;
-  height: 22px;
+  width: 22px;
+  min-width: 22px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 68%, transparent);
   color: var(--text-strong);
   font-family: var(--fibu-font-mono);
@@ -172,7 +173,7 @@
   justify-content: center;
   flex: 0 0 auto;
   border: 1px solid currentColor;
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   font-family: var(--fibu-font-mono);
   font-size: 9px;
   font-weight: 800;
@@ -185,7 +186,7 @@
 }
 
 .fibu-sidebar-footer {
-  padding: 16px;
+  padding: 10px;
   border-top: 1px solid var(--line);
   background: transparent;
 }
@@ -218,7 +219,6 @@
   flex-direction: column;
   height: 100%;
   width: 100%;
-  animation: fadeIn 0.3s ease-out;
 }
 
 .fibu-view-panel[hidden] {
@@ -227,12 +227,12 @@
 
 /* Toolbars */
 .fibu-panel-toolbar {
-  padding: 16px 24px;
+  padding: 8px 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-2) 20%, transparent);
   flex-shrink: 0;
@@ -257,9 +257,9 @@
 /* Dropzones */
 .fibu-file-dropzone {
   width: 100%;
-  border: 2px dashed var(--line);
-  border-radius: 12px;
-  padding: 20px 30px;
+  border: 1px dashed var(--line);
+  border-radius: var(--surface-radius);
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -267,7 +267,7 @@
   gap: 8px;
   cursor: pointer;
   background: color-mix(in srgb, var(--surface-2) 15%, transparent);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
   text-align: center;
 }
 
@@ -292,7 +292,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
   color: var(--text-strong);
   font-family: var(--fibu-font-mono);
@@ -318,11 +318,26 @@
   font-size: 11px;
 }
 
+.fibu-module .ctox-button.is-primary:not(.fibu-automation-hero) {
+  min-height: 28px;
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.fibu-module .ctox-button.is-primary:not(.fibu-automation-hero):hover:not(:disabled),
+.fibu-module .ctox-button.is-primary:not(.fibu-automation-hero):focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* Scrollable Tables Container */
 .fibu-scrollable-container {
   flex: 1;
   overflow: auto;
-  padding: 16px 24px;
+  padding: 10px;
   min-height: 0;
 }
 
@@ -381,7 +396,7 @@
    kit segmented control (.ctox-pane-tabs / .ctox-pane-tab); this wrapper only
    positions it inside the reports panel. */
 .fibu-report-tabs {
-  padding: 16px 24px 12px;
+  padding: 8px 10px;
   display: flex;
   overflow-x: auto;
   border-bottom: 1px solid var(--line);
@@ -391,7 +406,7 @@
 .fibu-report-workspace-content {
   flex: 1;
   overflow: auto;
-  padding: 24px;
+  padding: 10px;
 }
 
 .fibu-report-subpanel[hidden] {
@@ -402,7 +417,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 12px;
 }
@@ -430,10 +445,10 @@
   font-weight: 700;
   color: var(--muted);
   letter-spacing: 0.1em;
-  margin-bottom: 16px;
-  padding: 6px 12px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
   background: color-mix(in srgb, var(--surface-2) 60%, transparent);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
 }
 
 .fibu-bilanz-divider {
@@ -451,8 +466,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border-radius: var(--control-radius);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -505,8 +520,8 @@
   max-width: 700px;
   margin: 0 auto;
   background: color-mix(in srgb, var(--surface-2) 20%, transparent);
-  padding: 24px;
-  border-radius: 14px;
+  padding: 14px;
+  border-radius: var(--surface-radius);
   border: 1px solid var(--line);
 }
 
@@ -514,7 +529,7 @@
 .fibu-ustva-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
+  gap: 8px;
   max-width: 800px;
   margin: 0 auto;
 }
@@ -522,8 +537,8 @@
 .fibu-ustva-card {
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: var(--surface-radius);
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -537,7 +552,7 @@
 
 .ustva-card-value {
   font-family: var(--fibu-font-mono);
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text-strong);
 }
@@ -551,7 +566,7 @@
   grid-column: span 2;
   border-color: color-mix(in srgb, var(--fibu-accent) 50%, transparent);
   background: color-mix(in srgb, var(--fibu-accent) 8%, transparent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .fibu-ustva-card.total .ustva-card-value {
@@ -562,8 +577,8 @@
 .fibu-datev-exporter-box {
   background: color-mix(in srgb, var(--surface-2) 20%, transparent);
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 30px;
+  border-radius: var(--surface-radius);
+  padding: 18px;
   max-width: 600px;
   margin: 0 auto;
   text-align: center;
@@ -610,18 +625,18 @@
   left: 0;
   right: 0;
   height: min(430px, calc(100% - 32px));
-  background: var(--glass-bg);
+  background: var(--surface);
   border-top: 1px solid var(--line);
-  border-top-left-radius: 14px;
-  border-top-right-radius: 14px;
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  border-top-left-radius: var(--surface-radius);
+  border-top-right-radius: var(--surface-radius);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   z-index: 100;
   display: flex;
   flex-direction: column;
   transform: translateY(100%);
-  transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: transform 0.16s ease-out;
   visibility: hidden;
   pointer-events: none;
   overflow: hidden;
@@ -641,7 +656,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 .fibu-drawer-handle {
-  padding: 12px 24px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -657,7 +672,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   left: 50%;
   transform: translateX(-50%);
   width: 40px;
-  height: 4px;
+  height: 3px;
   background: var(--line);
   border-radius: 2px;
 }
@@ -673,7 +688,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-drawer-content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 30px;
+  padding: 14px;
   min-height: 0;
 }
 
@@ -681,14 +696,14 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   position: sticky;
   bottom: 0;
   z-index: 1;
-  margin: 20px -30px -24px;
-  padding: 14px 30px 18px;
+  margin: 14px -14px -14px;
+  padding: 10px 14px;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  backdrop-filter: blur(10px);
+  background: var(--surface);
+  backdrop-filter: none;
 }
 
 .fibu-validation-summary {
@@ -750,22 +765,22 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* Simulated OCR invoice layout */
 .fibu-simulated-ocr {
-  background: #ffffff;
-  color: #1e293b;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--text) 6%);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--surface-radius);
+  padding: 14px;
+  box-shadow: none;
   font-size: 12px;
   line-height: 1.4;
   margin-bottom: 20px;
   font-family: 'Helvetica Neue', Arial, sans-serif;
-  animation: fadeIn 0.3s;
 }
 
 .ocr-invoice-header {
   display: flex;
   justify-content: space-between;
-  border-bottom: 2px solid #cbd5e1;
+  border-bottom: 1px solid var(--line);
   padding-bottom: 12px;
   margin-bottom: 16px;
 }
@@ -790,7 +805,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 .ocr-invoice-details th {
-  border-bottom: 1px solid #94a3b8;
+  border-bottom: 1px solid var(--line);
   padding: 4px;
   text-align: left;
   font-weight: 700;
@@ -798,12 +813,12 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 .ocr-invoice-details td {
   padding: 6px 4px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
 }
 
 .ocr-invoice-total-row {
   font-weight: 700;
-  background: #f1f5f9;
+  background: var(--surface-2);
 }
 
 /* AI Agent Chat Companion */
@@ -839,7 +854,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   background: var(--surface-2);
   width: 28px;
   height: 28px;
-  border-radius: 50%;
+  border-radius: var(--control-radius);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -852,8 +867,8 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .message-bubble {
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 10px 14px;
+  border-radius: var(--surface-radius);
+  padding: 8px 10px;
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--text);
@@ -867,7 +882,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 .chat-message.system .message-bubble {
-  border-left: 3px solid var(--fibu-primary);
+  border-color: color-mix(in srgb, var(--fibu-primary) 36%, var(--line));
 }
 
 .chat-message ul {
@@ -880,7 +895,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 .fibu-agent-chat-input-wrap {
-  padding: 14px 20px;
+  padding: 10px;
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-2) 40%, transparent);
   display: flex;
@@ -905,7 +920,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-right-content-area::-webkit-scrollbar-thumb,
 .fibu-agent-chat-messages::-webkit-scrollbar-thumb {
   background: var(--line);
-  border-radius: 10px;
+  border-radius: var(--control-radius);
 }
 
 .fibu-nav-list::-webkit-scrollbar-track,
@@ -920,13 +935,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 /* Fibu Column Resizers */
 /* Column resizer styling handled by global [data-resizer] in app.css. */
 
-/* Animations */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* --- PREMIUM VISUAL HIERARCHY & STYLING POLISH --- */
+/* Operational hierarchy polish */
 
 /* Collapsible Navigation Section details */
 .fibu-nav-details {
@@ -959,7 +968,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   content: "▾";
   font-size: 10px;
   color: var(--muted);
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.12s ease;
   margin-left: auto;
 }
 
@@ -990,13 +999,13 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-text-debit {
   color: var(--success) !important;
   font-weight: 600 !important;
-  text-shadow: var(--fibu-debit-glow);
+  text-shadow: none;
 }
 
 .fibu-text-credit {
   color: var(--danger) !important;
   font-weight: 600 !important;
-  text-shadow: var(--fibu-credit-glow);
+  text-shadow: none;
 }
 
 /* Warnings and secondary alignment utilities */
@@ -1021,7 +1030,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   background: var(--fibu-terminal-bg) !important;
   border: 1px solid var(--fibu-terminal-line) !important;
   border-radius: var(--control-radius);
-  padding: 15px;
+  padding: 10px;
   font-family: var(--fibu-font-mono);
   font-size: 12px;
   height: 180px;
@@ -1032,21 +1041,20 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* GoBD Elegant Security Badge Card */
 .fibu-security-badge-card {
-  margin-top: 20px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--fibu-success) 6%, transparent) 0%, color-mix(in srgb, var(--fibu-success) 2%, transparent) 100%);
+  margin-top: 12px;
+  background: color-mix(in srgb, var(--fibu-success) 6%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
-  border-radius: 12px;
-  padding: 14px 20px;
+  border-radius: var(--surface-radius);
+  padding: 10px;
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  box-shadow: var(--shadow-sm);
-  animation: fadeIn 0.35s ease-out;
+  gap: 10px;
+  box-shadow: none;
 }
 
 .security-badge-icon {
-  font-size: 24px;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--fibu-success) 30%, transparent));
+  font-size: 18px;
+  filter: none;
   flex-shrink: 0;
 }
 
@@ -1073,7 +1081,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .mileage-dash-wrapper {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 14px;
   width: 100%;
 }
 
@@ -1114,7 +1122,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 .mileage-dash-shares {
   display: flex;
-  gap: 20px;
+  gap: 12px;
   flex: 1;
 }
 
@@ -1140,9 +1148,9 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   display: inline-block;
 }
 
-.mileage-share-item.business .share-color-dot { background: var(--fibu-success); box-shadow: 0 0 6px var(--fibu-success); }
-.mileage-share-item.private .share-color-dot { background: var(--fibu-warning); box-shadow: 0 0 6px var(--fibu-warning); }
-.mileage-share-item.commute .share-color-dot { background: var(--fibu-info); box-shadow: 0 0 6px var(--fibu-info); }
+.mileage-share-item.business .share-color-dot { background: var(--fibu-success); box-shadow: none; }
+.mileage-share-item.private .share-color-dot { background: var(--fibu-warning); box-shadow: none; }
+.mileage-share-item.commute .share-color-dot { background: var(--fibu-info); box-shadow: none; }
 
 .share-val {
   font-size: 13px;
@@ -1159,10 +1167,10 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* Premium OCR Metadata badge card */
 .ocr-raw-meta-badge {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--fibu-accent) 5%, transparent) 0%, color-mix(in srgb, var(--fibu-accent) 1%, transparent) 100%) !important;
+  background: var(--surface-2) !important;
   border: 1px solid var(--line) !important;
-  border-radius: 12px !important;
-  padding: 16px !important;
+  border-radius: var(--surface-radius) !important;
+  padding: 10px !important;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1190,7 +1198,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   color: var(--fibu-success);
   border: 1px solid color-mix(in srgb, var(--fibu-success) 20%, transparent);
   padding: 2px 8px;
-  border-radius: 99px;
+  border-radius: var(--control-radius);
   font-family: var(--fibu-font-mono);
 }
 
@@ -1213,7 +1221,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   background: var(--surface-2);
   border: 1px solid var(--line);
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--control-radius);
 }
 
 .ocr-archive-path {
@@ -1233,7 +1241,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   cursor: pointer;
   font-size: 11px;
   padding: 2px;
-  transition: color 0.15s, transform 0.1s;
+  transition: color 0.12s ease, background-color 0.12s ease;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1241,19 +1249,18 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 .ocr-copy-btn:hover {
   color: var(--text-strong);
-  transform: scale(1.1);
 }
 
 .ocr-copy-btn:active {
-  transform: scale(0.95);
+  color: var(--accent);
 }
 
-@media (max-width: 1100px) {
+@container business-app-window (max-width: 1100px) {
   .fibu-module[data-fibu-root] {
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: auto;
-    gap: 10px;
-    padding: 8px;
+    gap: 6px;
+    padding: 6px;
     overflow-y: auto;
     align-content: start;
   }
@@ -1264,20 +1271,20 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
   .fibu-pane {
     height: auto;
-    min-height: 280px;
-    border-radius: 12px;
+    min-height: 220px;
+    border-radius: var(--surface-radius);
   }
 
   .fibu-left {
-    max-height: 320px;
+    max-height: 300px;
   }
 
   .fibu-center {
-    min-height: 560px;
+    min-height: 420px;
   }
 
   .fibu-right {
-    min-height: 360px;
+    min-height: 280px;
   }
 
   .fibu-nav-list {
@@ -1298,23 +1305,23 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   }
 }
 
-@media (max-width: 640px) {
+@container business-app-window (max-width: 640px) {
   .fibu-module[data-fibu-root] {
-    padding: 6px;
-    gap: 8px;
+    padding: 4px;
+    gap: 6px;
   }
 
   .fibu-pane {
-    min-height: 240px;
-    border-radius: 10px;
+    min-height: 190px;
+    border-radius: var(--surface-radius);
   }
 
   .fibu-left {
-    max-height: 360px;
+    max-height: 280px;
   }
 
   .fibu-center {
-    min-height: 520px;
+    min-height: 360px;
   }
 
   .fibu-panel-toolbar {
@@ -1323,15 +1330,26 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   }
 
   .fibu-search-wrapper,
-  .fibu-toolbar-actions,
-  .fibu-panel-toolbar .ctox-button {
+  .fibu-toolbar-actions {
     width: 100%;
     max-width: none;
   }
 
+  .fibu-toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .fibu-toolbar-actions .ctox-button {
+    flex: 0 1 auto;
+    width: auto;
+    min-height: 30px;
+  }
+
   .fibu-scrollable-container,
   .fibu-report-workspace-content {
-    padding: 12px;
+    padding: 8px;
   }
 
   .fibu-module .ctox-table {
@@ -1385,10 +1403,10 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
   .fibu-module .ctox-bottom-drawer,
   .fibu-bottom-drawer {
-    height: min(520px, calc(100% - 18px));
+    height: min(460px, calc(100% - 18px));
   }
 
   .fibu-drawer-content {
-    padding: 18px;
+    padding: 10px;
   }
 }

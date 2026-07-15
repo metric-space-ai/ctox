@@ -27,13 +27,28 @@ const archivedGeneratedNodeModules = path.join(
   'business-basic',
   'node_modules',
 );
+const archivedVendorRoot = path.join(
+  repoRoot,
+  'archive',
+  'reorg-review',
+  'templates',
+  'business-basic',
+  'apps',
+  'web',
+  'vendor',
+);
 
 const esbuild = await loadEsbuild();
+const requestedBuild = process.argv.find((argument) => argument.startsWith('--only='))?.slice('--only='.length);
 
-await buildDocumentFormat();
-await buildSuperdoc();
-await buildHyperFormula();
-await buildLexical();
+if (!requestedBuild || requestedBuild === 'document-format') await buildDocumentFormat();
+if (!requestedBuild || requestedBuild === 'superdoc') await buildSuperdoc();
+if (!requestedBuild || requestedBuild === 'hyperformula') await buildHyperFormula();
+if (!requestedBuild || requestedBuild === 'lexical') await buildLexical();
+
+if (requestedBuild && !['document-format', 'superdoc', 'hyperformula', 'lexical'].includes(requestedBuild)) {
+  throw new Error(`Unknown vendor build target: ${requestedBuild}`);
+}
 
 async function buildDocumentFormat() {
   const entry = path.join(businessOsRoot, 'modules', 'documents', 'document-format', 'src', 'index.ts');
@@ -131,8 +146,8 @@ async function fileExists(file) {
 function wordPortArchiveResolver() {
   const wordPortEntry = path.join(archivedWordPortRoot, 'index.ts');
   const packageAliases = new Map([
-    ['fast-xml-parser', path.join(archivedGeneratedNodeModules, '.pnpm', 'fast-xml-parser@5.8.0', 'node_modules', 'fast-xml-parser', 'lib', 'fxp.cjs')],
-    ['jszip', path.join(archivedGeneratedNodeModules, '.pnpm', 'jszip@3.10.1', 'node_modules', 'jszip', 'dist', 'jszip.min.js')],
+    ['fast-xml-parser', path.join(archivedVendorRoot, 'fast-xml-parser.mjs')],
+    ['jszip', path.join(archivedVendorRoot, 'jszip.mjs')],
   ]);
   return {
     name: 'word-port-archive-resolver',
@@ -156,6 +171,11 @@ async function loadEsbuild() {
   try {
     return await import('esbuild');
   } catch {}
+
+  const localEsbuild = path.join(businessOsRoot, 'node_modules', 'esbuild', 'lib', 'main.js');
+  if (await fileExists(localEsbuild)) {
+    return import(pathToFileURL(localEsbuild).href);
+  }
 
   const pnpmRoots = [
     path.join(repoRoot, 'archive', '2026-05-18-cleanup', 'generated', 'templates', 'business-basic', 'node_modules', '.pnpm'),

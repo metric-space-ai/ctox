@@ -5,15 +5,34 @@ export function makeIconDraggable(iconEl, {
   iconId,
   grid = { offset: 24 },
   onSelect,
+  onActivate,
   onMoved,
   onDragToTopbar,
 }) {
   if (!iconEl) throw new Error('makeIconDraggable: iconEl is required');
   const surfaceEl = surface || iconEl.parentElement;
+  let suppressNextClick = false;
+
+  function shouldIgnoreActivationEvent(event) {
+    return event?.target?.closest?.('button, a, input, select, textarea');
+  }
+
+  function suppressClickOnce() {
+    suppressNextClick = true;
+    setTimeout(() => {
+      suppressNextClick = false;
+    }, 0);
+  }
+
+  function activateIcon(event) {
+    if (shouldIgnoreActivationEvent(event)) return;
+    onSelect?.(iconId, iconEl);
+    onActivate?.(iconId, iconEl);
+  }
 
   function onMouseDown(downEvent) {
     if (downEvent.button !== 0) return;
-    if (downEvent.target.closest('button, a, input, select, textarea')) return;
+    if (shouldIgnoreActivationEvent(downEvent)) return;
     downEvent.preventDefault();
 
     let dragging = false;
@@ -49,7 +68,12 @@ export function makeIconDraggable(iconEl, {
       document.body.style.userSelect = previousUserSelect;
       document.body.style.webkitUserSelect = previousWebkitUserSelect;
       iconEl.style.zIndex = '';
-      if (!dragging) return;
+      if (!dragging) {
+        activateIcon(upEvent);
+        suppressClickOnce();
+        return;
+      }
+      suppressClickOnce();
       dragging = false;
       iconEl.classList.remove('dragging');
 
@@ -90,6 +114,18 @@ export function makeIconDraggable(iconEl, {
     document.addEventListener('mouseup', onMouseUp);
   }
 
+  function onClick(clickEvent) {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
+    activateIcon(clickEvent);
+  }
+
   iconEl.addEventListener('mousedown', onMouseDown);
-  return () => iconEl.removeEventListener('mousedown', onMouseDown);
+  iconEl.addEventListener('click', onClick);
+  return () => {
+    iconEl.removeEventListener('mousedown', onMouseDown);
+    iconEl.removeEventListener('click', onClick);
+  };
 }

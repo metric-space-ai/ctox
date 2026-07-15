@@ -17,5 +17,12 @@
       "required": ["id", "title", "status", "notes", "is_deleted", "created_at_ms", "updated_at_ms"],
       "additionalProperties": true
     }
+  },
+  "migration_strategies": {
+    "__COLLECTION__": {
+      "1": {
+        "operations": []
+      }
+    }
   }
 }

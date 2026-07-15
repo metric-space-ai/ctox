@@ -125,8 +125,29 @@ export async function mount(container, ctx) {
     await uploadFiles(event.dataTransfer?.files);
   });
 
-  await ensureFileSystem(ctx.db);
-  await selectSource(FILE_SOURCE);
+  let disposed = false;
+  refs.table.replaceChildren(message('Lade Dateien...'));
+  refs.preview.innerHTML = emptyPreview();
+  renderHeader();
+  Promise.resolve()
+    .then(async () => {
+      await ensureFileSystem(ctx.db);
+      if (disposed) return;
+      await selectSource(FILE_SOURCE);
+    })
+    .catch((error) => {
+      if (disposed) return;
+      console.error('[explorer] background initialization failed:', error);
+      state.lastLoad = {
+        ok: false,
+        reason: 'load_error',
+        total: 0,
+        visible: 0,
+        message: `Fehler: ${error?.message || error}`,
+      };
+      renderHeader();
+      renderRows();
+    });
 
   async function selectSource(source) {
     state.activeSource = source;
@@ -158,6 +179,7 @@ export async function mount(container, ctx) {
     }
     try {
       const docs = await collection.find(activeDocumentQueryForSource(state.activeSource)).exec();
+      if (disposed) return;
       const data = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
       const activeData = data.filter((item) => !item.is_deleted);
       if (isFilesystemSource()) {
@@ -176,6 +198,7 @@ export async function mount(container, ctx) {
       renderHeader();
       renderRows();
     } catch (error) {
+      if (disposed) return;
       console.error('[explorer] render failed:', error);
       state.rows = [];
       state.lastLoad = {
@@ -601,8 +624,7 @@ export async function mount(container, ctx) {
   }
 
   function activeDocumentQueryForSource(source) {
-    if (!source?.filesystem) return {};
-    return { selector: { is_deleted: { $ne: true } } };
+    return {};
   }
 
   function renderFooter(rows = filteredRows()) {
@@ -628,6 +650,7 @@ export async function mount(container, ctx) {
   }
 
   return () => {
+    disposed = true;
     revokePreviewUrl();
     container.replaceChildren();
   };
@@ -646,18 +669,25 @@ async function ensureFileSystem(db) {
   ];
   for (const seed of seeds) {
     const existing = await files.findOne(seed.id).exec();
-    const doc = {
+    const expected = {
       ...seed,
       mime_type: '',
       extension: '',
       size_bytes: 0,
       source: 'system',
       is_deleted: false,
-      created_at_ms: now,
-      updated_at_ms: now,
     };
-    if (existing) await existing.incrementalPatch({ ...doc, created_at_ms: existing.created_at_ms || now });
-    else await files.upsert(doc);
+    if (!existing) {
+      await files.upsert({ ...expected, created_at_ms: now, updated_at_ms: now });
+      continue;
+    }
+    const current = existing?.toJSON?.() || existing;
+    const patch = Object.fromEntries(
+      Object.entries(expected).filter(([key, value]) => current?.[key] !== value),
+    );
+    if (Object.keys(patch).length > 0) {
+      await existing.incrementalPatch({ ...patch, updated_at_ms: now });
+    }
   }
 }
 
@@ -1456,13 +1486,13 @@ function ensureStyles() {
       border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
       color: var(--danger);
     }
-    @media (max-width: 900px) {
+    @container business-app-window (max-width: 900px) {
       .app-explorer-body { grid-template-columns: 180px minmax(0, 1fr); }
       .app-explorer-preview { display: none; }
       .app-explorer-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
       .app-explorer-search { grid-column: 1 / -1; }
     }
-    @media (max-width: 640px) {
+    @container business-app-window (max-width: 640px) {
       .app-explorer {
         grid-template-rows: auto minmax(0, 1fr);
       }

@@ -35,5 +35,9 @@
     "distribution": "system-module"
   },
   "install_scope": "core",
-  "default_installed": true
+  "default_installed": true,
+  "source": "core",
+  "core": true,
+  "editable": true,
+  "deletable": false
 }

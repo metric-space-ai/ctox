@@ -1,49 +1,14 @@
+import { collections as ctoxCoreCollections } from '../ctox/schema.js';
+
 const jsonObject = { type: 'object', additionalProperties: true };
 const stringArray = { type: 'array', items: { type: 'string' } };
 
-const commandSchema = {
-  version: 1,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    command_id: { type: 'string' },
-    module: { type: 'string' },
-    command_type: { type: 'string' },
-    record_id: { type: 'string' },
-    status: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    payload: jsonObject,
-    client_context: jsonObject,
-    result: jsonObject,
-    task_id: { type: 'string' },
-    task_status: { type: 'string' },
-    updated_at_ms: { type: 'number' },
-  },
-  required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true,
-};
+const commandSchema = ctoxCoreCollections.business_commands;
+const queueTaskSchema = ctoxCoreCollections.ctox_queue_tasks;
 
-const queueTaskSchema = {
-  version: 0,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    title: { type: 'string' },
-    status: { type: 'string' },
-    module: { type: 'string' },
-    source_module: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    updated_at_ms: { type: 'number' },
-  },
-  required: ['id', 'title', 'status', 'module'],
-  additionalProperties: true,
-};
-
-function threadsRecordSchema(properties, required = [], indexes = []) {
+function threadsRecordSchema(properties, required = [], indexes = [], version = 0) {
   return {
-    version: 0,
+    version,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -73,6 +38,10 @@ export const collections = {
     owner_user_id: { type: 'string' },
     created_by_id: { type: 'string' },
     assigned_user_id: { type: 'string' },
+    team_id: { type: 'string' },
+    due_at_ms: { type: 'number' },
+    next_step: { type: 'string' },
+    ai_state: jsonObject,
     source_module: { type: 'string' },
     source_record_type: { type: 'string' },
     source_record_id: { type: 'string' },
@@ -93,11 +62,35 @@ export const collections = {
     'source_module',
     'source_record_id',
     ['status', 'updated_at_ms'],
+  ], 1),
+  user_thread_states: threadsRecordSchema({
+    thread_id: { type: 'string' },
+    user_id: { type: 'string' },
+    unread_count: { type: 'number' },
+    last_seen_at_ms: { type: 'number' },
+    pinned: { type: 'boolean' },
+    snoozed_until_ms: { type: 'number' },
+    priority: { type: 'string' },
+    follow_up_at_ms: { type: 'number' },
+    attention_score: { type: 'number' },
+    attention_reasons: stringArray,
+    notification_preferences: jsonObject,
+  }, ['thread_id', 'user_id'], [
+    'thread_id',
+    'user_id',
+    'attention_score',
+    ['user_id', 'updated_at_ms'],
   ]),
   user_thread_messages: threadsRecordSchema({
     message_id: { type: 'string' },
     thread_id: { type: 'string' },
     kind: { type: 'string' },
+    event_type: { type: 'string' },
+    actor_type: { type: 'string' },
+    actor_id: { type: 'string' },
+    parent_event_id: { type: 'string' },
+    execution_status: { type: 'string' },
+    evidence_refs: stringArray,
     author_user_id: { type: 'string' },
     author_display_name: { type: 'string' },
     target_user_ids: stringArray,
@@ -115,7 +108,7 @@ export const collections = {
     'author_user_id',
     'approval_request_id',
     ['thread_id', 'created_at_ms'],
-  ]),
+  ], 1),
   user_thread_links: threadsRecordSchema({
     thread_id: { type: 'string' },
     source_module: { type: 'string' },
@@ -195,5 +188,14 @@ export const migrationStrategies = {
       ...oldDoc,
       inbound_channel: oldDoc.inbound_channel || oldDoc.module || '',
     }),
+  },
+  ctox_queue_tasks: {
+    1: (oldDoc) => oldDoc,
+  },
+  user_threads: {
+    1: (oldDoc) => oldDoc,
+  },
+  user_thread_messages: {
+    1: (oldDoc) => oldDoc,
   },
 };

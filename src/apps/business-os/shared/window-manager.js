@@ -5,6 +5,8 @@ const CONST = {
   MIN_WIDTH: 320,
   MIN_HEIGHT: 200,
   ALWAYS_ON_TOP_Z: 9000,
+  MOBILE_SHEET_MAX_WIDTH: 600,
+  WORKSPACE_BOTTOM_GAP: 8,
 };
 
 const CONTROL_KINDS_BY_STYLE = {
@@ -45,7 +47,17 @@ export function createWindowManager({
   const stack = [];
   let focusedId = null;
   let chromeLayout = rootEl?.dataset?.desktopStyle === 'macos' ? 'macos' : 'windows';
-  let insets = { top: 0, bottom: 0 };
+  let insets = { top: 0, right: 0, bottom: 0, left: 0 };
+  let affectNormalInsets = true;
+  let transientInsets = false;
+  const onViewportResize = () => reflowWindowsForInsets();
+  globalThis.addEventListener?.('resize', onViewportResize, { passive: true });
+  globalThis.visualViewport?.addEventListener?.('resize', onViewportResize, { passive: true });
+  const surfaceResizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(onViewportResize)
+    : null;
+  surfaceResizeObserver?.observe(surfaceEl);
+  surfaceResizeObserver?.observe(windowLayer);
 
   function setChromeLayout(layout) {
     const next = layout === 'macos' ? 'macos' : 'windows';
@@ -53,47 +65,246 @@ export function createWindowManager({
     chromeLayout = next;
     for (const win of windows) {
       renderControls(win.element.querySelector('.shell-window-controls'), chromeLayout, translate);
+      updateMaximizeControl(win, translate);
     }
   }
 
-  function setInsets(next) {
-    insets = {
-      top: Math.max(0, next?.top ?? 0),
-      bottom: Math.max(0, next?.bottom ?? 0),
+  function setInsets(next, options = {}) {
+    const normalized = {
+      top: Math.max(0, Number(next?.top) || 0),
+      right: Math.max(0, Number(next?.right) || 0),
+      bottom: Math.max(0, Number(next?.bottom) || 0),
+      left: Math.max(0, Number(next?.left) || 0),
+    };
+    const nextAffectNormal = options?.affectNormal !== false;
+    const nextTransient = options?.transient === true && nextAffectNormal;
+    const unchanged = Object.keys(normalized).every((key) => normalized[key] === insets[key]);
+    if (unchanged && nextTransient === transientInsets && nextAffectNormal === affectNormalInsets) return;
+
+    const enteringTransient = nextTransient && !transientInsets;
+    const leavingTransient = !nextTransient && transientInsets;
+    if (enteringTransient) {
+      for (const win of windows) captureInsetRestore(win);
+    } else if (leavingTransient) {
+      for (const win of windows) restoreInsetGeometry(win, { clear: true });
+    } else if (nextTransient) {
+      for (const win of windows) restoreInsetGeometry(win, { clear: false });
+    }
+
+    insets = normalized;
+    affectNormalInsets = nextAffectNormal;
+    transientInsets = nextTransient;
+    reflowWindowsForInsets();
+    bus.emit('window:insets_changed', {
+      ...insets,
+      transient: transientInsets,
+      affectNormal: affectNormalInsets,
+    });
+  }
+
+  function getViewport({ includeInsets = true } = {}) {
+    const rect = surfaceEl.getBoundingClientRect();
+    const layerRect = windowLayer.getBoundingClientRect();
+    const activeInsets = includeInsets ? insets : { top: 0, right: 0, bottom: 0, left: 0 };
+    return {
+      w: layerRect.width,
+      h: layerRect.height,
+      originLeft: layerRect.left,
+      originTop: layerRect.top,
+      top: Math.max(0, rect.top - layerRect.top) + activeInsets.top,
+      right: Math.max(0, layerRect.right - rect.right) + activeInsets.right,
+      bottom: Math.max(0, layerRect.bottom - rect.bottom) + activeInsets.bottom + CONST.WORKSPACE_BOTTOM_GAP,
+      left: Math.max(0, rect.left - layerRect.left) + activeInsets.left,
     };
   }
 
-  function getViewport() {
-    const rect = surfaceEl.getBoundingClientRect();
-    return { w: rect.width, h: rect.height, top: insets.top, bottom: insets.bottom };
+  function getNormalViewport() {
+    return getViewport({ includeInsets: affectNormalInsets });
+  }
+
+  function getMinimumWorkArea() {
+    const visible = windows.filter((win) => win.state !== 'minimized' && win.element.style.display !== 'none');
+    return {
+      width: Math.max(CONST.MIN_WIDTH, ...visible.map((win) => win.minWidth || CONST.MIN_WIDTH)),
+      height: Math.max(CONST.MIN_HEIGHT, ...visible.map((win) => win.minHeight || CONST.MIN_HEIGHT)),
+    };
+  }
+
+  function captureInsetRestore(win) {
+    if (!win || win.state !== 'normal' || win.element.classList.contains('is-snapped') || win._insetStored) return;
+    win._insetStored = geometryStyles(win.element);
+  }
+
+  function restoreInsetGeometry(win, { clear = false } = {}) {
+    if (!win?._insetStored || win.state !== 'normal' || win.element.classList.contains('is-snapped')) return;
+    Object.assign(win.element.style, win._insetStored);
+    if (clear) win._insetStored = null;
+  }
+
+  function clearInsetRestore(win) {
+    if (win) win._insetStored = null;
+  }
+
+  function reflowWindowsForInsets() {
+    for (const win of windows) {
+      if (win.state === 'minimized' || win.element.style.display === 'none') continue;
+      if (win.state === 'maximized') {
+        applyMaximizedBounds(win);
+      } else if (win.element.classList.contains('is-snapped')) {
+        applySnapBounds(win, win.element.dataset.snapZone);
+      } else {
+        constrainNormalWindow(win);
+      }
+    }
+  }
+
+  function isMobileViewport(vp = getViewport()) {
+    return vp.w <= CONST.MOBILE_SHEET_MAX_WIDTH;
+  }
+
+  function applyMobileSheetBounds(win, vp = getViewport()) {
+    if (!win._mobileStored) win._mobileStored = geometryStyles(win.element);
+    win.element.classList.add('is-mobile-sheet');
+    const left = 0;
+    const right = 0;
+    Object.assign(win.element.style, {
+      left: `${left}px`,
+      top: `${vp.top}px`,
+      width: `${Math.max(0, vp.w - left - right)}px`,
+      height: `${Math.max(0, vp.h - vp.top - vp.bottom)}px`,
+    });
+    updateDynamicShadow(win.element);
+  }
+
+  function restoreFromMobileSheet(win) {
+    if (!win.element.classList.contains('is-mobile-sheet')) return;
+    win.element.classList.remove('is-mobile-sheet');
+    if (win._mobileStored) Object.assign(win.element.style, win._mobileStored);
+    win._mobileStored = null;
+  }
+
+  function constrainNormalWindow(win) {
+    if (!win) return;
+    const vp = getNormalViewport();
+    const el = win.element;
+    if (isMobileViewport(vp)) {
+      applyMobileSheetBounds(win, vp);
+      return;
+    }
+    restoreFromMobileSheet(win);
+    const minWidth = win.minWidth || CONST.MIN_WIDTH;
+    const minHeight = win.minHeight || CONST.MIN_HEIGHT;
+    const usableWidth = Math.max(minWidth, vp.w - vp.left - vp.right);
+    const usableHeight = Math.max(minHeight, vp.h - vp.top - vp.bottom);
+    let width = Math.min(usableWidth, parsePx(el.style.width) || el.offsetWidth || minWidth);
+    let height = Math.min(usableHeight, parsePx(el.style.height) || el.offsetHeight || minHeight);
+    width = Math.max(minWidth, width);
+    height = Math.max(minHeight, height);
+    const rightEdge = Math.max(vp.left, vp.w - vp.right);
+    const bottomEdge = Math.max(vp.top, vp.h - vp.bottom);
+    const visibleHeaderWidth = Math.min(96, width);
+    const visibleHeaderHeight = 40;
+    let left = parsePx(el.style.left);
+    let top = parsePx(el.style.top);
+    if (!Number.isFinite(left)) left = vp.left;
+    if (!Number.isFinite(top)) top = vp.top;
+    left = Math.max(vp.left - width + visibleHeaderWidth, Math.min(rightEdge - visibleHeaderWidth, left));
+    top = Math.max(vp.top, Math.min(bottomEdge - visibleHeaderHeight, top));
+    Object.assign(el.style, {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    });
+    updateDynamicShadow(el);
+  }
+
+  function applyMaximizedBounds(win) {
+    const vp = getViewport();
+    if (isMobileViewport(vp)) win.element.classList.add('is-mobile-sheet');
+    else win.element.classList.remove('is-mobile-sheet');
+    const left = isMobileViewport(vp) ? 0 : vp.left;
+    const right = isMobileViewport(vp) ? 0 : vp.right;
+    Object.assign(win.element.style, {
+      top: `${vp.top}px`,
+      left: `${left}px`,
+      width: `calc(100% - ${left + right}px)`,
+      height: `calc(100% - ${vp.top + vp.bottom}px)`,
+    });
+  }
+
+  function snapTargetStyles(zone, win = null) {
+    const vp = getViewport();
+    if (isMobileViewport(vp)) {
+      const left = 0;
+      const right = 0;
+      return {
+        top: `${vp.top}px`,
+        left: `${left}px`,
+        width: `${Math.max(0, vp.w - left - right)}px`,
+        height: `${Math.max(0, vp.h - vp.top - vp.bottom)}px`,
+      };
+    }
+    const minWidth = win?.minWidth || CONST.MIN_WIDTH;
+    const minHeight = win?.minHeight || CONST.MIN_HEIGHT;
+    const usableWidthPx = Math.max(minWidth, vp.w - vp.left - vp.right);
+    const usableHeightPx = Math.max(minHeight, vp.h - vp.top - vp.bottom);
+    const halfWidthPx = Math.min(usableWidthPx, Math.max(minWidth, usableWidthPx / 2));
+    const halfHeightPx = Math.min(usableHeightPx, Math.max(minHeight, usableHeightPx / 2));
+    const top = `${vp.top}px`;
+    const left = `${vp.left}px`;
+    const usableWidth = `${usableWidthPx}px`;
+    const usableHeight = `${usableHeightPx}px`;
+    const halfWidth = `${halfWidthPx}px`;
+    const halfHeight = `${halfHeightPx}px`;
+    const rightLeft = `${vp.left + usableWidthPx - halfWidthPx}px`;
+    const bottomTop = `${vp.top + usableHeightPx - halfHeightPx}px`;
+    return {
+      left: { top, left, width: halfWidth, height: usableHeight },
+      right: { top, left: rightLeft, width: halfWidth, height: usableHeight },
+      top: { top, left, width: usableWidth, height: halfHeight },
+      bottom: { top: bottomTop, left, width: usableWidth, height: halfHeight },
+      'top-left': { top, left, width: halfWidth, height: halfHeight },
+      'top-right': { top, left: rightLeft, width: halfWidth, height: halfHeight },
+      'bottom-left': { top: bottomTop, left, width: halfWidth, height: halfHeight },
+      'bottom-right': { top: bottomTop, left: rightLeft, width: halfWidth, height: halfHeight },
+    }[zone] || null;
+  }
+
+  function applySnapBounds(win, zone) {
+    const target = snapTargetStyles(zone, win);
+    if (target) Object.assign(win.element.style, target);
   }
 
   function create(options = {}, legacyOwnerId) {
     const id = `desk_win_${secureToken()}`;
     const ownerId = options.ownerId || legacyOwnerId || null;
     const vp = getViewport();
+    const minWidth = Math.max(CONST.MIN_WIDTH, parseInt(options.minWidth ?? options.min_width, 10) || CONST.MIN_WIDTH);
+    const minHeight = Math.max(CONST.MIN_HEIGHT, parseInt(options.minHeight ?? options.min_height, 10) || CONST.MIN_HEIGHT);
 
     const winEl = document.createElement('section');
     winEl.className = 'shell-window';
     winEl.id = id;
+    if (ownerId) winEl.dataset.ownerId = ownerId;
     winEl.style.transition = 'none';
 
     const persisted = ownerId && persistence?.load ? persistence.load(ownerId) : null;
     const restored = persisted && (persisted.width || persisted.height || persisted.x != null || persisted.y != null);
 
-    const maxInitialWidth = Math.max(CONST.MIN_WIDTH, vp.w);
-    const maxInitialHeight = Math.max(CONST.MIN_HEIGHT, vp.h - vp.top - vp.bottom);
-    const width = Math.min(maxInitialWidth, Math.max(CONST.MIN_WIDTH, parseInt(persisted?.width ?? options.width, 10) || 520));
-    const height = Math.min(maxInitialHeight, Math.max(CONST.MIN_HEIGHT, parseInt(persisted?.height ?? options.height, 10) || 360));
+    const maxInitialWidth = Math.max(minWidth, vp.w - vp.left - vp.right);
+    const maxInitialHeight = Math.max(minHeight, vp.h - vp.top - vp.bottom);
+    const width = Math.min(maxInitialWidth, Math.max(minWidth, parseInt(persisted?.width ?? options.width, 10) || 520));
+    const height = Math.min(maxInitialHeight, Math.max(minHeight, parseInt(persisted?.height ?? options.height, 10) || 360));
     winEl.style.width = `${width}px`;
     winEl.style.height = `${height}px`;
 
     const cascadeOffset = (windows.length * CONST.CASCADE_STEP) % Math.max(80, Math.floor(vp.h / 3));
     let baseX = parseInt(persisted?.x ?? options.x ?? 80 + cascadeOffset, 10);
     let baseY = parseInt(persisted?.y ?? options.y ?? 60 + cascadeOffset, 10);
-    const maxX = Math.max(0, vp.w - 100);
+    const maxX = Math.max(vp.left, vp.w - vp.right - 100);
     const maxY = Math.max(vp.top, vp.h - vp.bottom - 100);
-    if (!Number.isFinite(baseX) || baseX < 0 || baseX > maxX) baseX = 24;
+    if (!Number.isFinite(baseX) || baseX < vp.left || baseX > maxX) baseX = Math.max(vp.left, 24);
     if (!Number.isFinite(baseY) || baseY < vp.top || baseY > maxY) baseY = Math.max(vp.top, 24);
     winEl.style.left = `${baseX}px`;
     winEl.style.top = `${baseY}px`;
@@ -101,6 +312,8 @@ export function createWindowManager({
     winEl.innerHTML = `
       <header class="shell-window-header" data-window-header>
         <div class="shell-window-title" data-window-title></div>
+        <div class="shell-window-meta" data-window-meta></div>
+        <div class="shell-window-actions" data-window-actions></div>
         <div class="shell-window-controls" data-window-controls></div>
       </header>
       <div class="shell-window-content" data-window-content></div>
@@ -111,11 +324,9 @@ export function createWindowManager({
     const winIconKey = ownerId ? ownerId.replace(/^(desktop-app|module):/, '') : '';
     const svgHtml = svgIconFor(winIconKey, 14, 1.8);
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    if (svgHtml) {
-      titleEl.innerHTML = `<span class="shell-window-title-icon" style="display:inline-flex; align-items:center; margin-right:6px; vertical-align:middle; opacity:0.85;">${svgHtml}</span><span class="shell-window-title-text" style="vertical-align:middle;">${escapeHtml(options.title || translate('defaultWindowTitle', 'Fenster'))}</span>`;
-    } else {
-      titleEl.textContent = composeTitle(options, translate);
-    }
+    titleEl.innerHTML = `${svgHtml ? `<span class="shell-window-title-icon" aria-hidden="true">${svgHtml}</span>` : ''}<span class="shell-window-title-text">${escapeHtml(options.title || composeTitle(options, translate))}</span>`;
+    renderHeaderItems(winEl.querySelector('[data-window-meta]'), options.headerBadges, 'meta');
+    renderHeaderItems(winEl.querySelector('[data-window-actions]'), options.headerActions, 'action');
     const controlsEl = winEl.querySelector('[data-window-controls]');
     renderControls(controlsEl, chromeLayout, translate);
 
@@ -128,15 +339,20 @@ export function createWindowManager({
       icon: options.icon || '',
       element: winEl,
       state: 'normal',
+      minWidth,
+      minHeight,
       stored: persisted?.stored
         ? { ...persisted.stored }
         : null,
       alwaysOnTop: !!persisted?.alwaysOnTop,
+      appMode: 'window',
       _destroying: false,
       _restored: restored,
       _onHostFileDrop: typeof options.onHostFileDrop === 'function' ? options.onHostFileDrop : null,
+      _onHeaderAction: typeof options.onHeaderAction === 'function' ? options.onHeaderAction : null,
     };
     windows.push(win);
+    constrainNormalWindow(win);
 
     makeDraggable(win);
     for (const dir of RESIZE_HANDLES) {
@@ -144,6 +360,7 @@ export function createWindowManager({
     }
     setupFocus(win);
     bindControls(win);
+    bindHeaderActions(win);
     bindHeaderGestures(win);
     bindHostFileDrop(win);
     updateDynamicShadow(winEl);
@@ -184,14 +401,8 @@ export function createWindowManager({
       close: () => destroy(id),
       setTitle: (next) => {
         const text = String(next ?? '');
-        const winIconKey = ownerId ? ownerId.replace(/^(desktop-app|module):/, '') : '';
-        const svgHtml = svgIconFor(winIconKey, 14, 1.8);
-        const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        if (svgHtml) {
-          titleEl.innerHTML = `<span class="shell-window-title-icon" style="display:inline-flex; align-items:center; margin-right:6px; vertical-align:middle; opacity:0.85;">${svgHtml}</span><span class="shell-window-title-text" style="vertical-align:middle;">${escapeHtml(text)}</span>`;
-        } else {
-          titleEl.textContent = text;
-        }
+        const textEl = titleEl.querySelector('.shell-window-title-text');
+        if (textEl) textEl.textContent = text;
         bus.emit('window:title_changed', { id, ownerId: win.ownerId, title: text });
       },
       setAlwaysOnTop: (flag) => setAlwaysOnTop(id, flag),
@@ -211,17 +422,20 @@ export function createWindowManager({
       prev?.element.classList.remove('is-focused');
     }
     win.element.classList.add('is-focused');
-    if (win.state === 'minimized' || win.element.style.display === 'none') {
+    const wasMinimized = win.state === 'minimized' || win.element.style.display === 'none';
+    if (wasMinimized) {
       win.element.style.display = '';
       win.element.style.transform = '';
       win.element.style.opacity = '';
       win.state = 'normal';
+      constrainNormalWindow(win);
     }
     focusedId = id;
     const without = stack.filter((winId) => winId !== id);
     stack.length = 0;
     stack.push(...without, id);
     restackZ();
+    if (wasMinimized) bus.emit('window:restored', { id, ownerId: win.ownerId });
     bus.emit('window:focused', { id, ownerId: win.ownerId });
   }
 
@@ -266,6 +480,7 @@ export function createWindowManager({
     if (!win) return;
     if (win.state === 'maximized') {
       restoreSize(win);
+      updateMaximizeControl(win, translate);
       bus.emit('window:restored', { id, ownerId: win.ownerId });
       persistFor(win);
       return;
@@ -278,15 +493,12 @@ export function createWindowManager({
         left: win.element.style.left,
       };
     }
-    win.element.style.transition = 'all 200ms ease';
-    win.element.style.top = `${insets.top}px`;
-    win.element.style.left = '0';
-    win.element.style.width = '100%';
-    win.element.style.height = `calc(100% - ${insets.top + insets.bottom}px)`;
+    clearInsetRestore(win);
+    applyMaximizedBounds(win);
     win.element.classList.remove('is-snapped');
     win.element.removeAttribute('data-snap-zone');
     win.state = 'maximized';
-    setTimeout(() => { win.element.style.transition = ''; }, 220);
+    updateMaximizeControl(win, translate);
     bus.emit('window:maximized', { id, ownerId: win.ownerId });
     persistFor(win);
   }
@@ -295,17 +507,18 @@ export function createWindowManager({
     if (!win.stored) {
       win.state = 'normal';
       win.element.classList.remove('is-snapped');
+      win.element.classList.remove('is-maximized');
       return;
     }
-    win.element.style.transition = 'all 200ms ease';
     win.element.style.width = win.stored.width || '520px';
     win.element.style.height = win.stored.height || '360px';
     win.element.style.top = win.stored.top || '60px';
     win.element.style.left = win.stored.left || '80px';
     win.element.classList.remove('is-snapped');
     win.element.removeAttribute('data-snap-zone');
+    win.element.classList.remove('is-maximized');
     win.state = 'normal';
-    setTimeout(() => { win.element.style.transition = ''; }, 220);
+    constrainNormalWindow(win);
   }
 
   function snapTo(id, zone, { skipStore = false } = {}) {
@@ -320,25 +533,11 @@ export function createWindowManager({
         left: win.element.style.left,
       };
     }
-    const top = `${insets.top}px`;
-    const usableHeight = `calc(100% - ${insets.top + insets.bottom}px)`;
-    const halfHeight = `calc((100% - ${insets.top + insets.bottom}px) / 2)`;
-    const targets = {
-      left: { top, left: '0', width: '50%', height: usableHeight },
-      right: { top, left: '50%', width: '50%', height: usableHeight },
-      top: { top, left: '0', width: '100%', height: halfHeight },
-      bottom: { top: `calc(${insets.top}px + ${halfHeight})`, left: '0', width: '100%', height: halfHeight },
-      'top-left': { top, left: '0', width: '50%', height: halfHeight },
-      'top-right': { top, left: '50%', width: '50%', height: halfHeight },
-      'bottom-left': { top: `calc(${insets.top}px + ${halfHeight})`, left: '0', width: '50%', height: halfHeight },
-      'bottom-right': { top: `calc(${insets.top}px + ${halfHeight})`, left: '50%', width: '50%', height: halfHeight },
-    };
-    win.element.style.transition = 'all 180ms ease';
-    Object.assign(win.element.style, targets[zone]);
+    clearInsetRestore(win);
+    applySnapBounds(win, zone);
     win.element.classList.add('is-snapped');
     win.element.dataset.snapZone = zone;
     win.state = 'normal';
-    setTimeout(() => { win.element.style.transition = ''; }, 200);
     bus.emit('window:snapped', { id, ownerId: win.ownerId, zone });
     persistFor(win);
   }
@@ -355,10 +554,36 @@ export function createWindowManager({
     persistFor(win);
   }
 
+  function setAppMode(id, mode = 'window') {
+    const win = windows.find((w) => w.id === id);
+    if (!win) return;
+    const next = ['window', 'maximized', 'focus'].includes(mode) ? mode : 'window';
+    // Mode changes resize the complete app container. Suppress decorative
+    // module transitions for the short geometry hand-off so complex apps do
+    // not animate hundreds of descendants while the user is waiting for the
+    // window itself to react. Functional state and mount identity stay intact.
+    win.element.classList.add('is-layout-switching');
+    clearTimeout(win._layoutSwitchTimer);
+    win._layoutSwitchTimer = setTimeout(() => {
+      win.element?.classList?.remove('is-layout-switching');
+      win._layoutSwitchTimer = null;
+    }, 140);
+    win.element.classList.toggle('is-focus-mode', next === 'focus');
+    win.element.dataset.appMode = next;
+    if (next === 'window' && win.state === 'maximized') {
+      toggleMaximize(id);
+    } else if ((next === 'maximized' || next === 'focus') && win.state !== 'maximized') {
+      toggleMaximize(id);
+    }
+    win.appMode = next;
+    bus.emit('window:app_mode_changed', { id, ownerId: win.ownerId, mode: next });
+  }
+
   function destroy(id) {
     const win = windows.find((w) => w.id === id);
     if (!win || win._destroying) return;
     win._destroying = true;
+    clearTimeout(win._layoutSwitchTimer);
     win.element.classList.add('is-closing');
     const stackIndex = stack.indexOf(id);
     if (stackIndex !== -1) stack.splice(stackIndex, 1);
@@ -390,6 +615,9 @@ export function createWindowManager({
       icon: w.icon,
       state: w.state,
       alwaysOnTop: !!w.alwaysOnTop,
+      appMode: w.appMode || 'window',
+      minWidth: w.minWidth,
+      minHeight: w.minHeight,
       title: w.element.querySelector('[data-window-title]')?.textContent || '',
       isFocused: focusedId === w.id,
     }));
@@ -411,16 +639,30 @@ export function createWindowManager({
     });
   }
 
+  function bindHeaderActions(win) {
+    win.element.querySelector('[data-window-header]')?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-window-header-action]');
+      if (!button || !win.element.contains(button)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      win._onHeaderAction?.(button.dataset.windowHeaderAction, {
+        id: win.id,
+        ownerId: win.ownerId,
+        event,
+      });
+    });
+  }
+
   function bindHeaderGestures(win) {
     const header = win.element.querySelector('[data-window-header]');
     if (!header) return;
     header.addEventListener('dblclick', (event) => {
-      if (event.target.closest('[data-window-controls]')) return;
+      if (event.target.closest('[data-window-controls], [data-window-header-action]')) return;
       event.preventDefault();
       toggleMaximize(win.id);
     });
     header.addEventListener('contextmenu', (event) => {
-      if (event.target.closest('[data-window-controls]')) return;
+      if (event.target.closest('[data-window-controls], [data-window-header-action]')) return;
       event.preventDefault();
       event.stopPropagation();
       bus.emit('window:context_request', {
@@ -483,26 +725,35 @@ export function createWindowManager({
     if (!header) return;
     header.addEventListener('mousedown', (downEvent) => {
       if (downEvent.button !== 0) return;
-      if (downEvent.target.closest('[data-window-controls]')) return;
+      if (win.element.classList.contains('is-mobile-sheet')) return;
+      if (downEvent.target.closest('[data-window-controls], [data-window-header-action]')) return;
+      clearInsetRestore(win);
       const el = win.element;
       let initialX = downEvent.clientX;
       let initialY = downEvent.clientY;
+      const dragStartX = downEvent.clientX;
+      const dragStartY = downEvent.clientY;
       let currentX = initialX;
       let currentY = initialY;
       let dragging = true;
       let rAFQueued = false;
+      let dragFrame = 0;
 
       function update() {
         const dx = initialX - currentX;
         const dy = initialY - currentY;
         initialX = currentX;
         initialY = currentY;
-        const vp = getViewport();
-        const top = Math.max(insets.top, Math.min(vp.h - insets.bottom - 40, el.offsetTop - dy));
-        const left = Math.max(-el.offsetWidth + 80, Math.min(vp.w - 80, el.offsetLeft - dx));
+        const vp = getNormalViewport();
+        const top = Math.max(vp.top, Math.min(vp.h - vp.bottom - 40, el.offsetTop - dy));
+        const visibleHeaderWidth = Math.min(96, el.offsetWidth);
+        const left = Math.max(
+          vp.left - el.offsetWidth + visibleHeaderWidth,
+          Math.min(vp.w - vp.right - visibleHeaderWidth, el.offsetLeft - dx),
+        );
         el.style.top = `${top}px`;
         el.style.left = `${left}px`;
-        applySnapPreview(currentX, currentY);
+        applySnapPreview(currentX, currentY, { dragStartX, dragStartY });
         updateDynamicShadow(el);
       }
 
@@ -525,11 +776,24 @@ export function createWindowManager({
         }
         if (!rAFQueued) {
           rAFQueued = true;
-          requestAnimationFrame(() => { rAFQueued = false; update(); });
+          dragFrame = requestAnimationFrame(() => {
+            dragFrame = 0;
+            rAFQueued = false;
+            if (dragging) update();
+          });
         }
       }
 
       function onMouseUp() {
+        // A fast pointer release can arrive before the last animation frame.
+        // Evaluate that final position synchronously so snapping never depends
+        // on how slowly the operator drags the title bar.
+        if (dragFrame) cancelAnimationFrame(dragFrame);
+        dragFrame = 0;
+        if (rAFQueued) {
+          rAFQueued = false;
+          update();
+        }
         dragging = false;
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
@@ -555,7 +819,9 @@ export function createWindowManager({
     if (!handle) return;
     handle.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
+      if (win.element.classList.contains('is-mobile-sheet')) return;
       if (win.state === 'maximized') return;
+      clearInsetRestore(win);
       const el = win.element;
       const startWidth = el.offsetWidth;
       const startHeight = el.offsetHeight;
@@ -566,55 +832,68 @@ export function createWindowManager({
       event.stopPropagation();
       event.preventDefault();
       focus(win.id);
-      let rAFQueued = false;
+      let resizeRaf = 0;
+      let pendingDX = 0;
+      let pendingDY = 0;
+      let hasPendingResize = false;
       let resizing = true;
-      const vp = getViewport();
+      const vp = getNormalViewport();
+
+      function applyResize() {
+        resizeRaf = 0;
+        if (!hasPendingResize) return;
+        hasPendingResize = false;
+        const dX = pendingDX;
+        const dY = pendingDY;
+        let newWidth = startWidth;
+        let newHeight = startHeight;
+        let newLeft = startLeft;
+        let newTop = startTop;
+        const minWidth = win.minWidth || CONST.MIN_WIDTH;
+        const minHeight = win.minHeight || CONST.MIN_HEIGHT;
+        if (direction.includes('e')) newWidth = Math.max(minWidth, startWidth + dX);
+        if (direction.includes('w')) {
+          const candidateWidth = Math.max(minWidth, startWidth - dX);
+          newLeft = startLeft + (startWidth - candidateWidth);
+          newWidth = candidateWidth;
+        }
+        if (direction.includes('s')) newHeight = Math.max(minHeight, startHeight + dY);
+        if (direction.includes('n')) {
+          const candidateHeight = Math.max(minHeight, startHeight - dY);
+          newTop = Math.max(vp.top, startTop + (startHeight - candidateHeight));
+          newHeight = candidateHeight;
+        }
+        const maxHeightFromTop = Math.max(minHeight, vp.h - vp.bottom - newTop);
+        const maxWidthFromLeft = Math.max(minWidth, vp.w - vp.right - newLeft);
+        newHeight = Math.min(newHeight, maxHeightFromTop);
+        newWidth = Math.min(newWidth, maxWidthFromLeft);
+        el.style.width = `${newWidth}px`;
+        el.style.height = `${newHeight}px`;
+        if (direction.includes('w')) el.style.left = `${newLeft}px`;
+        if (direction.includes('n')) el.style.top = `${newTop}px`;
+        if (el.classList.contains('is-snapped')) {
+          el.classList.remove('is-snapped');
+          el.removeAttribute('data-snap-zone');
+          if (win.stored) {
+            win.stored.width = null;
+            win.stored.height = null;
+          }
+        }
+      }
 
       function onMouseMove(moveEvent) {
         if (!resizing) return;
-        const dX = moveEvent.clientX - startX;
-        const dY = moveEvent.clientY - startY;
-        if (!rAFQueued) {
-          rAFQueued = true;
-          requestAnimationFrame(() => {
-            rAFQueued = false;
-            let newWidth = startWidth;
-            let newHeight = startHeight;
-            let newLeft = startLeft;
-            let newTop = startTop;
-            if (direction.includes('e')) newWidth = Math.max(CONST.MIN_WIDTH, startWidth + dX);
-            if (direction.includes('w')) {
-              const candidateWidth = Math.max(CONST.MIN_WIDTH, startWidth - dX);
-              newLeft = startLeft + (startWidth - candidateWidth);
-              newWidth = candidateWidth;
-            }
-            if (direction.includes('s')) newHeight = Math.max(CONST.MIN_HEIGHT, startHeight + dY);
-            if (direction.includes('n')) {
-              const candidateHeight = Math.max(CONST.MIN_HEIGHT, startHeight - dY);
-              newTop = Math.max(insets.top, startTop + (startHeight - candidateHeight));
-              newHeight = candidateHeight;
-            }
-            const maxHeightFromTop = Math.max(CONST.MIN_HEIGHT, vp.h - insets.bottom - newTop);
-            const maxWidthFromLeft = Math.max(CONST.MIN_WIDTH, vp.w - newLeft);
-            newHeight = Math.min(newHeight, maxHeightFromTop);
-            newWidth = Math.min(newWidth, maxWidthFromLeft);
-            el.style.width = `${newWidth}px`;
-            el.style.height = `${newHeight}px`;
-            if (direction.includes('w')) el.style.left = `${newLeft}px`;
-            if (direction.includes('n')) el.style.top = `${newTop}px`;
-            if (el.classList.contains('is-snapped')) {
-              el.classList.remove('is-snapped');
-              el.removeAttribute('data-snap-zone');
-              if (win.stored) {
-                win.stored.width = null;
-                win.stored.height = null;
-              }
-            }
-          });
+        pendingDX = moveEvent.clientX - startX;
+        pendingDY = moveEvent.clientY - startY;
+        hasPendingResize = true;
+        if (!resizeRaf) {
+          resizeRaf = requestAnimationFrame(applyResize);
         }
       }
 
       function onMouseUp() {
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        applyResize();
         resizing = false;
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
@@ -634,25 +913,36 @@ export function createWindowManager({
     });
   }
 
-  function applySnapPreview(clientX, clientY) {
+  function applySnapPreview(clientX, clientY, { dragStartX = clientX, dragStartY = clientY } = {}) {
     if (!snapPreviewEl) return;
-    const surfaceRect = surfaceEl.getBoundingClientRect();
-    const x = clientX - surfaceRect.left;
-    const y = clientY - surfaceRect.top;
-    const vw = surfaceRect.width;
-    const vh = surfaceRect.height;
+    const layerRect = windowLayer.getBoundingClientRect();
+    const vp = getViewport();
+    const x = clientX - layerRect.left;
+    const y = clientY - layerRect.top;
+    const leftEdge = vp.left;
+    const rightEdge = vp.w - vp.right;
+    const topEdge = vp.top;
+    const bottomEdge = vp.h - vp.bottom;
     const edge = CONST.SNAP_EDGE;
     const corner = CONST.SNAP_CORNER;
+    const horizontalDrag = Math.abs(clientX - dragStartX) > Math.abs(clientY - dragStartY) + 12;
     let zone = null;
-    let style = null;
-    if (y < corner && x < corner) { zone = 'top-left'; style = { top: '0', left: '0', width: '50%', height: '50%' }; }
-    else if (y < corner && x > vw - corner) { zone = 'top-right'; style = { top: '0', left: '50%', width: '50%', height: '50%' }; }
-    else if (y > vh - corner && x < corner) { zone = 'bottom-left'; style = { top: '50%', left: '0', width: '50%', height: '50%' }; }
-    else if (y > vh - corner && x > vw - corner) { zone = 'bottom-right'; style = { top: '50%', left: '50%', width: '50%', height: '50%' }; }
-    else if (y < edge) { zone = 'top'; style = { top: '0', left: '0', width: '100%', height: '50%' }; }
-    else if (y > vh - edge) { zone = 'bottom'; style = { top: '50%', left: '0', width: '100%', height: '50%' }; }
-    else if (x < edge) { zone = 'left'; style = { top: '0', left: '0', width: '50%', height: '100%' }; }
-    else if (x > vw - edge) { zone = 'right'; style = { top: '0', left: '50%', width: '50%', height: '100%' }; }
+    if (y < topEdge || y > bottomEdge || x < leftEdge || x > rightEdge) {
+      snapPreviewEl.removeAttribute('data-snap');
+      snapPreviewEl.classList.remove('is-visible');
+      snapPreviewEl.hidden = true;
+      return;
+    }
+    if (horizontalDrag && x < leftEdge + edge) zone = 'left';
+    else if (horizontalDrag && x > rightEdge - edge) zone = 'right';
+    else if (y < topEdge + corner && x < leftEdge + corner) zone = 'top-left';
+    else if (y < topEdge + corner && x > rightEdge - corner) zone = 'top-right';
+    else if (y > bottomEdge - corner && x < leftEdge + corner) zone = 'bottom-left';
+    else if (y > bottomEdge - corner && x > rightEdge - corner) zone = 'bottom-right';
+    else if (y < topEdge + edge) zone = 'top';
+    else if (y > bottomEdge - edge) zone = 'bottom';
+    else if (x < leftEdge + edge) zone = 'left';
+    else if (x > rightEdge - edge) zone = 'right';
 
     if (!zone) {
       snapPreviewEl.removeAttribute('data-snap');
@@ -661,13 +951,13 @@ export function createWindowManager({
       return;
     }
     snapPreviewEl.dataset.snap = zone;
-    Object.assign(snapPreviewEl.style, style);
+    Object.assign(snapPreviewEl.style, snapTargetStyles(zone));
     snapPreviewEl.hidden = false;
     requestAnimationFrame(() => snapPreviewEl.classList.add('is-visible'));
   }
 
   function commitSnap(win) {
-    if (!snapPreviewEl || !snapPreviewEl.classList.contains('is-visible')) {
+    if (!snapPreviewEl || snapPreviewEl.hidden || !snapPreviewEl.dataset.snap) {
       snapPreviewEl?.classList.remove('is-visible');
       if (snapPreviewEl) snapPreviewEl.hidden = true;
       return;
@@ -743,8 +1033,10 @@ export function createWindowManager({
     setChromeLayout,
     setInsets,
     setAlwaysOnTop,
+    setAppMode,
     snapTo,
     getViewport,
+    getMinimumWorkArea,
   };
 }
 
@@ -764,6 +1056,54 @@ function renderControls(controlsEl, layout, translate) {
   }
 }
 
+function updateMaximizeControl(win, translate) {
+  if (!win?.element) return;
+  const maximized = win.state === 'maximized';
+  win.element.classList.toggle('is-maximized', maximized);
+  const button = win.element.querySelector('[data-window-controls] [data-action="maximize"]');
+  if (!button) return;
+  button.textContent = maximized ? CONTROL_GLYPHS.restore : CONTROL_GLYPHS.maximize;
+  button.setAttribute(
+    'aria-label',
+    maximized
+      ? translate('windowRestore', 'restore')
+      : translate('windowMaximize', 'maximize'),
+  );
+}
+
+function renderHeaderItems(container, items, kind) {
+  if (!container) return;
+  container.replaceChildren();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.hidden === true) continue;
+    const actionable = Boolean(item.id);
+    const node = document.createElement(actionable ? 'button' : 'span');
+    if (actionable) {
+      node.type = 'button';
+      node.dataset.windowHeaderAction = String(item.id);
+    }
+    node.className = `shell-window-header-${kind}`;
+    if (item.state) node.dataset.state = String(item.state);
+    if (item.title) node.title = String(item.title);
+    if (item.ariaLabel || item.label) node.setAttribute('aria-label', String(item.ariaLabel || item.label));
+    if (item.icon) {
+      const icon = document.createElement('span');
+      icon.className = 'shell-window-header-item-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = String(item.icon);
+      node.appendChild(icon);
+    }
+    if (item.label) {
+      const label = document.createElement('span');
+      label.className = 'shell-window-header-item-label';
+      label.textContent = String(item.label);
+      node.appendChild(label);
+    }
+    container.appendChild(node);
+  }
+  container.hidden = container.childElementCount === 0;
+}
+
 function composeTitle(options, translate) {
   const icon = options.icon ? `${options.icon} ` : '';
   const title = options.title || translate('defaultWindowTitle', 'Fenster');
@@ -776,6 +1116,15 @@ function parsePx(value) {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
+}
+
+function geometryStyles(element) {
+  return {
+    width: element?.style?.width || '',
+    height: element?.style?.height || '',
+    top: element?.style?.top || '',
+    left: element?.style?.left || '',
+  };
 }
 
 function secureToken() {

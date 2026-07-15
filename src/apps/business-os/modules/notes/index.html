@@ -187,7 +187,7 @@
       <div class="nn-note-meta-left">
         <!-- Notizbuch Zuweisung -->
         <div class="nn-meta-select-wrap">
-          <button class="nn-meta-btn nn-notebook-select-btn" type="button" data-action="select-notebook-trigger">
+          <button class="nn-meta-btn nn-notebook-select-btn" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
             <span data-note-notebook-label>Kein Notizbuch</span>
             <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
@@ -199,7 +199,7 @@
 
         <!-- Tags Zuweisung -->
         <div class="nn-meta-select-wrap">
-          <button class="nn-meta-btn nn-tags-select-btn" type="button" data-action="select-tags-trigger">
+          <button class="nn-meta-btn nn-tags-select-btn" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7l9 9-7 7-9-9V4ZM8.5 8.5h.01"></path></svg>
             <span>Tags verwalten</span>
             <svg class="nn-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
@@ -272,11 +272,13 @@
         <div class="notes-note-date" data-note-date></div>
 
         <!-- WYSIWYG Editor Container -->
-        <div class="notes-tab-panel" style="display: block; flex: 1; min-height: 550px;">
-          <div class="notes-textarea notes-wysiwyg-editor nn-wysiwyg-editor"
-               data-notes-editor
-               contenteditable="true"
-               placeholder="Schreib etwas…"></div>
+        <div class="notes-tab-panel" style="display: flex; flex: 1; min-height: 550px;">
+          <div class="nn-wysiwyg-editor-host">
+            <div class="notes-textarea notes-wysiwyg-editor nn-wysiwyg-editor"
+                 data-notes-editor
+                 contenteditable="true"
+                 placeholder="Schreib etwas…"></div>
+          </div>
         </div>
       </div>
     </div>

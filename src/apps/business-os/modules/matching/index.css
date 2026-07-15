@@ -632,7 +632,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 
 /* ---- Responsive tweaks ---- */
-@media (min-width:480px){
+@container business-app-window (min-width:480px){
   .module-root[data-module-root="matching"] .chat-log{ min-height:220px; }
   .module-root[data-module-root="matching"] .docs-list{ max-height:240px; }
   .module-root[data-module-root="matching"] .panel-header-right .project-select{ max-width:260px; }
@@ -1693,7 +1693,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 /* Small badges in headers: .ctox-badge (base.css §10) */
 
 /* etwas freundlichere Overlays auf sehr kleinen Screens */
-@media (max-width: 820px){
+@container business-app-window (max-width: 820px){
   .module-root[data-module-root="matching"]{
     --overlay-col-width: min(100vw, 520px);
   }
@@ -1888,7 +1888,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   border-color:color-mix(in srgb, var(--matchColor) 60%, var(--line));
 }
 
-@media (max-width:900px){
+@container business-app-window (max-width:900px){
   .module-root[data-module-root="matching"] .match-bar{
     left:8px;
     right:8px;
@@ -2008,7 +2008,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 
 /* Breakpoints für diese Ansicht neutralisieren */
-@media (max-width: 1200px){
+@container business-app-window (max-width: 1200px){
   .module-root[data-module-root="matching"] .app.app-scrape{
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -2016,7 +2016,7 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   }
 }
 
-@media (max-width: 900px){
+@container business-app-window (max-width: 900px){
   .module-root[data-module-root="matching"] .app.app-scrape{
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: minmax(0, 1fr);
@@ -2282,7 +2282,9 @@ body > #sync-feedback-host-matching-view.sync-feedback-host{
   position:fixed;
   right:14px;
   bottom:14px;
-  z-index:2147483000;
+  /* App feedback must never sit above OS chrome. The shell window layer starts
+     at z-index 50; keeping this below it preserves resize handles and headers. */
+  z-index:45;
   display:flex;
   flex-direction:column;
   gap:8px;
@@ -2483,7 +2485,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   border-radius:8px;
 }
 
-@media (max-width: 760px){
+@container business-app-window (max-width: 760px){
   .module-root[data-module-root="matching"] #objectCvEditor textarea[data-object-field]{
     min-height:148px;
   }
@@ -3315,28 +3317,27 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   background: color-mix(in srgb, var(--line) 75%, transparent);
 }
 
-/* Premium micro-animations for buttons and elements */
+/* Operational Instrument contract: no spring lifts or card shadows. */
 .module-root[data-module-root="matching"] .btn,
 .module-root[data-module-root="matching"] .btn-pill {
-  transition: transform 0.2s var(--spring-bounce), 
-              background var(--spring-duration-fast) var(--spring-ease), 
-              border-color var(--spring-duration-fast) var(--spring-ease), 
-              box-shadow var(--spring-duration-fast) var(--spring-ease) !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .module-root[data-module-root="matching"] .btn:hover,
 .module-root[data-module-root="matching"] .btn-pill:hover {
-  transform: translateY(-1.5px) scale(1.02) !important;
+  transform: none !important;
   border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
 }
 
 .module-root[data-module-root="matching"] .btn-primary:hover {
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
+  box-shadow: none !important;
 }
 
 .module-root[data-module-root="matching"] .btn:active,
 .module-root[data-module-root="matching"] .btn-pill:active {
-  transform: translateY(0) scale(0.97) !important;
+  transform: none !important;
 }
 
 /* Modern inputs focus behaviors (kit inputs keep base.css focus styling) */
@@ -3347,47 +3348,44 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .input-select,
 .module-root[data-module-root="matching"] .input-textarea {
   transition: border-color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease),
-              transform 0.2s var(--spring-ease) !important;
+              background-color 0.2s var(--spring-ease) !important;
 }
 
 .module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):not([class*="ctox-"]):focus-visible {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
-  transform: translateY(-0.5px);
+  box-shadow: none !important;
+  transform: none;
 }
 
-/* Elegant spring card transforms for interactive workbenches */
+/* Flat workbench cards. */
 .module-root[data-module-root="matching"] .match-item-card,
 .module-root[data-module-root="matching"] .source-card,
 .module-root[data-module-root="matching"] .object-card,
 .module-root[data-module-root="matching"] .import-status-card {
-  transition: transform 0.2s var(--spring-bounce), 
-              background-color 0.2s ease, 
-              border-color 0.2s ease, 
-              box-shadow 0.2s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+  box-shadow: none !important;
 }
 
 .module-root[data-module-root="matching"] .match-item-card:hover,
 .module-root[data-module-root="matching"] .source-card:hover,
 .module-root[data-module-root="matching"] .object-card:hover,
 .module-root[data-module-root="matching"] .import-status-card:hover {
-  transform: translateY(-2px) scale(1.01) !important;
+  transform: none !important;
   border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  box-shadow: none !important;
 }
 
 .module-root[data-module-root="matching"] .match-item-card:active,
 .module-root[data-module-root="matching"] .source-card:active,
 .module-root[data-module-root="matching"] .object-card:active,
 .module-root[data-module-root="matching"] .import-status-card:active {
-  transform: translateY(0) scale(0.98) !important;
+  transform: none !important;
 }
 
 .module-root[data-module-root="matching"] .match-item-card.is-active,
 .module-root[data-module-root="matching"] .object-card.is-active {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 1px var(--accent), 0 8px 24px rgba(0,0,0,.4) !important;
+  box-shadow: none !important;
 }
 
 /* PIPELINE-1 candidate Kanban board (candidateBoard.js) */
@@ -3399,3 +3397,196 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .candidate-board .cb-col-body { min-height: 40px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .candidate-board .cb-card { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 13px; cursor: grab; }
 .candidate-board .cb-card:active { cursor: grabbing; }
+
+/* ==========================================================================
+   Revision 30 compact OS layer
+
+   Matching still owns a complex domain UI, but its visual primitives now map
+   back to the Business OS shell: flat panes, compact controls, no decorative
+   gradients, and no hover motion. Signature matching/CTOX execution controls
+   may use accent, routine filters and cards stay quiet.
+   ========================================================================== */
+.module-root[data-module-root="matching"] {
+  color-scheme: light dark;
+  --bg-app: var(--surface);
+  --surf-0: var(--surface);
+  --surf-1: var(--surface-2);
+  --surf-2: var(--surface);
+  --txt-1: var(--text);
+  --txt-2: var(--muted);
+  --txt-dim: color-mix(in srgb, var(--muted) 72%, transparent);
+  --bd-hair: var(--line);
+  --bd-soft: var(--line);
+  --sh-flat: none;
+  --sh-subtle: none;
+  --inset-strong: none;
+  --r-10: var(--control-radius);
+  --r-14: var(--surface-radius);
+  --r-16: var(--surface-radius);
+  --pill: var(--control-radius);
+  --space-3: 8px;
+  --space-4: 12px;
+  --header-h: 44px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.module-root[data-module-root="matching"] > .app {
+  padding: 8px;
+  background: var(--surface);
+}
+
+.module-root[data-module-root="matching"] .panel-header,
+.module-root[data-module-root="matching"] .panel-footer,
+.module-root[data-module-root="matching"] .gear-btn,
+.module-root[data-module-root="matching"] .settings-dropdown,
+.module-root[data-module-root="matching"] #execution-quickbar,
+.module-root[data-module-root="matching"] .settings-card,
+.module-root[data-module-root="matching"] .chat-card,
+.module-root[data-module-root="matching"] .docs-card,
+.module-root[data-module-root="matching"] .chat-card-header,
+.module-root[data-module-root="matching"] .chat-log,
+.module-root[data-module-root="matching"] select:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] input:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] textarea:not([class*="ctox-"]),
+.module-root[data-module-root="matching"] .input-text,
+.module-root[data-module-root="matching"] .input-select,
+.module-root[data-module-root="matching"] .input-textarea {
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+
+.module-root[data-module-root="matching"] .settings-card,
+.module-root[data-module-root="matching"] .chat-card,
+.module-root[data-module-root="matching"] .docs-card,
+.module-root[data-module-root="matching"] #execution-quickbar,
+.module-root[data-module-root="matching"] .settings-dropdown,
+.module-root[data-module-root="matching"] .chat-log {
+  border: 1px solid var(--line);
+  border-radius: var(--surface-radius);
+}
+
+.module-root[data-module-root="matching"] .panel-main {
+  gap: 8px;
+  padding: 8px;
+}
+
+.module-root[data-module-root="matching"] .panel-header,
+.module-root[data-module-root="matching"] .panel-footer,
+.module-root[data-module-root="matching"] .chat-card-header {
+  min-height: 36px;
+}
+
+.module-root[data-module-root="matching"] .footer-update-btn,
+.module-root[data-module-root="matching"] .gear-btn,
+.module-root[data-module-root="matching"] .btn,
+.module-root[data-module-root="matching"] .btn-pill,
+.candidate-board .cb-card {
+  border-radius: var(--control-radius) !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.module-root[data-module-root="matching"] .footer-update-btn {
+  color: var(--accent);
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+}
+
+.module-root[data-module-root="matching"] .footer-update-btn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.module-root[data-module-root="matching"] .btn-primary,
+.module-root[data-module-root="matching"] .btn.ctox-run,
+.module-root[data-module-root="matching"] [data-run-matching],
+.module-root[data-module-root="matching"] [data-ctox-run] {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line)) !important;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface)) !important;
+  color: var(--accent) !important;
+  font-weight: 800;
+}
+
+.module-root[data-module-root="matching"] .match-item-card,
+.module-root[data-module-root="matching"] .source-card,
+.module-root[data-module-root="matching"] .object-card,
+.module-root[data-module-root="matching"] .import-status-card,
+.candidate-board .cb-col,
+.candidate-board .cb-card {
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+  box-shadow: none !important;
+}
+
+@container business-app-window (max-width: 760px) {
+  .module-root[data-module-root="matching"] > .app {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0 !important;
+    overflow: auto;
+    padding: 4px;
+  }
+
+  .module-root[data-module-root="matching"] #left,
+  .module-root[data-module-root="matching"] #center,
+  .module-root[data-module-root="matching"] #right {
+    grid-column: 1 !important;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .module-root[data-module-root="matching"] #left {
+    grid-row: 1;
+  }
+
+  .module-root[data-module-root="matching"] #center {
+    grid-row: 2;
+  }
+
+  .module-root[data-module-root="matching"] #right {
+    grid-row: 3;
+  }
+
+  .module-root[data-module-root="matching"] .col-resizer {
+    display: none !important;
+  }
+
+  .module-root[data-module-root="matching"] .panel-main {
+    padding: 6px;
+  }
+
+  .module-root[data-module-root="matching"] .panel-header {
+    align-items: stretch;
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    padding: 6px;
+  }
+
+  .module-root[data-module-root="matching"] .panel-header-left,
+  .module-root[data-module-root="matching"] .panel-header-right {
+    width: 100%;
+  }
+
+  .module-root[data-module-root="matching"] .project-select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .module-root[data-module-root="matching"] .column-tools,
+  .module-root[data-module-root="matching"] .source-tools,
+  .module-root[data-module-root="matching"] .toolbar,
+  .module-root[data-module-root="matching"] .object-tools {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .module-root[data-module-root="matching"] .column-sort {
+    grid-template-columns: minmax(0, 1fr) 28px;
+  }
+
+  .module-root[data-module-root="matching"] .chat-log {
+    height: auto;
+    min-height: 180px;
+  }
+}

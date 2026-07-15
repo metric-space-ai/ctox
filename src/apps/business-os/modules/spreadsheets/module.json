@@ -36,12 +36,33 @@
     "summary": "XLSX spreadsheet workspace with the CTOX Spreadsheets ESM fork, native Rust roundtrip, versions, and automation runbooks.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/spreadsheets",
-    "installable": false,
+    "installable": true,
     "editable_after_install": true,
-    "distribution": "starter-module"
+    "distribution": "catalog-module"
   },
-  "install_scope": "starter",
-  "default_installed": true,
+  "install_scope": "store",
+  "default_installed": false,
   "launch_kind": "desktop-app",
-  "presentation": { "default_mode": "window", "supported_modes": ["window", "maximized", "focus"], "initial_size": { "width": 1280, "height": 820 }, "minimum_size": { "width": 640, "height": 480 }, "multi_instance": false, "auto_restore": false }
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1280,
+      "height": 820
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  },
+  "source": "catalog",
+  "core": false,
+  "editable": true,
+  "deletable": true
 }

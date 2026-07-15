@@ -140,10 +140,23 @@ export async function mount(ctx) {
   // Initialize EventCalendar View Instance
   initCalendarView();
 
-  // Load Data & Setup Realtime Sync
-  await seedDefaultDataIfNeeded();
-  await loadDataFromDb();
-  wireRealtimeSync();
+  // Render the workbench before demand reads and optional first-run seed
+  // writes. A calendar window must be usable even while sync is catching up.
+  renderAll();
+  let disposed = false;
+  Promise.resolve()
+    .then(async () => {
+      await seedDefaultDataIfNeeded();
+      if (disposed || state.ctx !== ctx) return;
+      await loadDataFromDb();
+      if (disposed || state.ctx !== ctx) return;
+      wireRealtimeSync();
+    })
+    .catch((error) => {
+      if (disposed || state.ctx !== ctx) return;
+      console.warn('[calendar] background initialization failed', error);
+      renderAll();
+    });
 
   // Presence (advisory UX): publish which event this user has open in the
   // edit drawer, and surface a hint when someone else edits the same event.
@@ -157,6 +170,7 @@ export async function mount(ctx) {
   }
 
   return () => {
+    disposed = true;
     state.presenceCleanup?.();
     state.presenceCleanup = null;
     try { state.ctx?.presence?.clear?.(); } catch {}
@@ -645,7 +659,7 @@ function renderCalendarsSidebar() {
     const checked = state.selectedCalendarIds.has(cal.id);
     const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
     html += `
-      <div class="calendar-item" data-id="${escapeHtml(cal.id)}">
+      <div class="calendar-item" data-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
         <div class="calendar-item-left">
           <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
           <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
@@ -696,7 +710,7 @@ function renderBookingPagesSidebar() {
     const isActive = bp.status === 'active';
     const isSelected = bp.id === state.selectedBookingPageId;
     html += `
-      <div class="booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
+      <div class="booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" data-context-record-id="${escapeHtml(bp.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(bp.title || bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
         <div class="booking-page-item-left">
           <div class="booking-page-item-title">
             <span>${escapeHtml(bp.title)}</span>
@@ -868,6 +882,16 @@ function initCalendarView() {
       });
     }
   });
+  const viewLabels = {
+    'ec-dayGridMonth': state.t('viewMonth', 'Monat'),
+    'ec-timeGridWeek': state.t('viewWeek', 'Woche'),
+    'ec-timeGridDay': state.t('viewDay', 'Tag'),
+    'ec-listWeek': state.t('viewList', 'Liste'),
+  };
+  for (const [className, label] of Object.entries(viewLabels)) {
+    const button = els.eventCalendarMount.querySelector(`.${className}`);
+    if (button) button.setAttribute('aria-label', label);
+  }
 }
 
 // ----------------------------------------------------

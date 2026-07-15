@@ -69,7 +69,7 @@ const registryJson = JSON.parse(await readFile(new URL('../registry.json', impor
 
 assert.equal(moduleJson.id, 'iot');
 assert.equal(moduleJson.entry, 'modules/iot/index.html');
-assert.equal(moduleJson.layout.shell, 'full-workspace');
+assert.equal(moduleJson.layout.shell, 'windowed');
 assert.equal(moduleJson.install_scope, 'store');
 assert.equal(moduleJson.collections[0], 'business_commands');
 assert.deepEqual(

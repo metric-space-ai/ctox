@@ -53,6 +53,14 @@ my-app/
     en.json
 ```
 
+Business OS has three installation classes. The ten non-removable system apps
+are listed once in `src/apps/business-os/system-apps.json` and use
+`install_scope: "core"`. Public optional apps use `install_scope: "store"`;
+their checked-in source is only App Store inventory until installation copies
+the package to `runtime/business-os/installed-modules/`. Private/customer apps
+use `install_scope: "local"` and exist only below the target instance's
+git-ignored `runtime/business-os/local-modules/`. There is no starter class.
+
 For private development, place the directory under:
 
 ```text
@@ -281,6 +289,29 @@ ctox business-os app access grant my-app \
 `reconcile --apply` performs a supervised in-process peer reconfiguration.
 Grant/revoke commands go through the native policy and audit path; they never
 write access tables directly from the browser.
+
+The app-facing command contract is deliberately narrow:
+
+- call `ctx.commandBus.dispatch(command, { until })`; never insert or patch
+  `business_commands` directly and never construct a private sync fallback;
+- set `command_type` to the registered command identifier. The historical
+  input key `type` is accepted only as a compatibility alias. If both are
+  present they must be identical; the persisted v2 document contains the
+  canonical `command_type`;
+- use `until: 'local'` only when the UI explicitly continues tracking the
+  returned `command_id`; use `accepted` for native acceptance and `terminal`
+  only when the interaction really needs the final result;
+- use `submit`, `waitForAccepted`, `waitForTerminal`, `resumeTracking`,
+  `subscribe`, `getStatus` and `cancel` from the same facade for lifecycle
+  handling. Apps must not poll private projection fields or rebuild the
+  cancellation command themselves;
+- authorization is fail-closed. If the shell cannot obtain a current native
+  capability, the action reports that state instead of persisting an intent
+  that can never be authorized.
+
+Commands have three server-owned execution routes: native control handlers,
+browser-runtime handlers and durable CTOX queue/harness work. An app chooses a
+registered `command_type`; it does not choose or emulate the route.
 
 ## Offline, conflicts and recovery
 

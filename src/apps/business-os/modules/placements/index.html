@@ -1,28 +1,30 @@
-<section class="ats-module ats-placements" data-ats-root>
-  <header class="ctox-pane-header ctox-pane-band ats-head">
+<section class="ats-module ats-placements ctox-record-workbench" data-ats-root>
+  <header class="ctox-pane-header ctox-pane-band ats-head ctox-record-workbench__header">
     <div class="ctox-pane-title-row">
       <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker">Vermittlungen</span>
+        <span class="ctox-pane-kicker" data-copy="kicker">Vermittlungen</span>
         <h1 class="ctox-pane-title" data-ats-title></h1>
       </div>
     </div>
-    <p class="ats-sub" data-ats-sub></p>
+    <p class="ats-sub ctox-record-workbench__subtitle" data-ats-sub></p>
   </header>
-  <div class="ats-body">
-    <form class="ats-form" data-ats-form>
-      <input class="ctox-input" type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f />
-      <input class="ctox-input" type="text" name="client_account_id" placeholder="Kunden-Account-ID" data-f />
-      <select class="ctox-select" name="placement_type" data-f>
-        <option value="">Festanstellung (Personalvermittlung)</option>
-        <option value="arbeitnehmerueberlassung">Arbeitnehmerüberlassung (Zeitarbeit)</option>
-      </select>
-      <input class="ctox-input" type="text" name="required_types" placeholder="Pflicht-Qualifikationen (Komma)" data-f />
-      <input class="ctox-input" type="number" name="fee" placeholder="Honorar" data-f />
-      <input class="ctox-input" type="number" name="guarantee_days" placeholder="Garantie (Tage)" data-f />
-      <button class="ctox-button is-primary" type="submit">Anlegen</button>
+  <div class="ats-body ctox-record-workbench__body">
+    <form class="ats-form ctox-compact-form" data-ats-form>
+      <div class="ctox-compact-form__fields">
+        <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f data-copy-placeholder="candidate" /></label>
+        <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" placeholder="Kunden-Account-ID" data-f data-copy-placeholder="client" /></label>
+        <label class="ctox-compact-field"><span data-copy="placementType">Vermittlungsart</span><select class="ctox-select" name="placement_type" data-f>
+          <option value="" data-copy="directHire">Festanstellung (Personalvermittlung)</option>
+          <option value="arbeitnehmerueberlassung" data-copy="temporary">Arbeitnehmerüberlassung (Zeitarbeit)</option>
+        </select></label>
+        <label class="ctox-compact-field"><span data-copy="qualifications">Pflicht-Qualifikationen</span><input class="ctox-input" type="text" name="required_types" placeholder="Pflicht-Qualifikationen (Komma)" data-f data-copy-placeholder="qualifications" /></label>
+        <label class="ctox-compact-field"><span data-copy="fee">Honorar</span><input class="ctox-input" type="number" name="fee" placeholder="Honorar" data-f data-copy-placeholder="fee" /></label>
+        <label class="ctox-compact-field"><span data-copy="guarantee">Garantie (Tage)</span><input class="ctox-input" type="number" name="guarantee_days" placeholder="Garantie (Tage)" data-f data-copy-placeholder="guarantee" /></label>
+      </div>
+      <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
     </form>
     <div class="ats-gate" data-ats-gate></div>
-    <div class="ats-count" data-ats-count></div>
-    <div class="ats-list" data-ats-list></div>
+    <div class="ats-count ctox-record-workbench__status" data-ats-count></div>
+    <div class="ats-list ctox-record-list" data-ats-list></div>
   </div>
 </section>

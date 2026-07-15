@@ -54,8 +54,6 @@ const state = {
   unsubscribe: null,
   viewMode: 'grid',
   drawerOpen: false,
-  contextMenu: null,
-  contextMenuCleanup: null,
 };
 
 const els = {};
@@ -89,10 +87,6 @@ export async function mount(ctx) {
     }) || null;
   render();
 
-  // 5. Initialize CTOX unified context menu
-  state.contextMenuCleanup?.();
-  state.contextMenuCleanup = initAppStoreContextMenu(state);
-
   // Setup resizer
   const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
   const resizerEl = ctx.host.querySelector('.app-store-col-resizer');
@@ -116,9 +110,6 @@ export async function mount(ctx) {
 
   return () => {
     try { state.unsubscribe?.unsubscribe?.(); } catch {}
-    state.contextMenuCleanup?.();
-    state.contextMenu?.remove();
-    state.contextMenu = null;
     resizerCleanup?.();
   };
 }
@@ -227,11 +218,7 @@ async function triggerCardAction(appId, actionType) {
   if (!item || (state.busy && !['details', 'repository', 'versions'].includes(actionType))) return;
 
   if (actionType === 'install') {
-    if (isPackagedCatalogTab(item)) {
-      await setModuleVisible(item, true);
-    } else {
-      await installMarketplaceItem(item);
-    }
+    await installMarketplaceItem(item);
   } else if (actionType === 'update') {
     if (!canInstallAppStoreItem(state, item)) return;
     const customized = item.modification_status === 'modified' || item.modification_status === 'customized';
@@ -259,12 +246,8 @@ async function triggerCardAction(appId, actionType) {
     if (!canReleaseAppStoreItem(state, item)) return;
     await openReleaseDialog(item);
   } else if (actionType === 'uninstall') {
-    if (isPackagedCatalogTab(item)) {
-      await setModuleVisible(item, false);
-    } else {
-      if (!canUninstallAppStoreItem(state, item)) return;
-      await uninstallInstalledItem(item);
-    }
+    if (!canUninstallAppStoreItem(state, item)) return;
+    await uninstallInstalledItem(item);
   } else if (actionType === 'repository') {
     if (item.homepage) {
       window.open(item.homepage, '_blank', 'noopener,noreferrer');
@@ -298,7 +281,7 @@ function mergeShellModulesIntoCatalog(catalog) {
     modules.push({
       ...module,
       source: module.source || (module.core ? 'core' : 'shell'),
-      install_scope: module.install_scope || (module.core ? 'core' : 'starter'),
+      install_scope: module.install_scope || (module.core ? 'core' : 'installed'),
       default_installed: module.default_installed !== false,
     });
     known.add(module.id);
@@ -356,7 +339,7 @@ async function manifestPathToMarketplaceItem(path) {
   if (!manifestResponse.ok) return null;
   const manifest = await manifestResponse.json();
   const moduleId = sanitizeId(manifest.id || path.split('/').at(-2));
-  if (!moduleId) return null;
+  if (!moduleId || String(manifest.install_scope || '').trim().toLowerCase() !== 'store') return null;
   const repoSourcePath = path.replace('/module.json', '');
   return normalizeMarketplaceItem({
     id: moduleId,
@@ -374,6 +357,8 @@ async function manifestPathToMarketplaceItem(path) {
     download_url: CTOX_DOWNLOAD_URL,
     homepage: `https://github.com/${CTOX_REPO}/tree/${CTOX_BRANCH}/${path.replace('/module.json', '')}`,
     permissions: manifest.collections || [],
+    install_scope: 'store',
+    store: manifest.store || {},
     installable: manifest.store?.installable !== false,
     updated_at: '',
   });
@@ -421,7 +406,11 @@ function rawCatalogItems() {
 }
 
 function isLaunchableModule(item) {
-  return item?.id && item.id !== 'desktop' && item.id !== 'notizen' && item.install_scope !== 'internal';
+  const scope = String(item?.install_scope || '').trim().toLowerCase();
+  return item?.id
+    && item.id !== 'desktop'
+    && item.id !== 'notizen'
+    && !['internal', 'store', 'starter'].includes(scope);
 }
 
 function canSeeModuleForAppVersion(item) {
@@ -435,7 +424,6 @@ function canSeeAppStoreModuleForAppVersion(permissionState, item) {
 function moduleKind(item) {
   if (item?.core) return 'system';
   if (item?.install_scope === 'internal') return 'system';
-  if (item?.install_scope === 'starter' || item?.source === 'starter') return 'starter';
   if (item?.source === 'installed') return 'installed';
   return 'local';
 }
@@ -582,7 +570,6 @@ function statusForItem(item, kind) {
   }
   if (kind === 'template') return 'template';
   if (kind === 'system') return 'system';
-  if (kind === 'starter') return 'starter';
   if (kind === 'installed') return 'installed';
   return 'local';
 }
@@ -625,8 +612,8 @@ function isInstalledCatalogItem(item) {
   if (!item) return false;
   if (item.id === 'create-scratch') return false;
   if (item.kind === 'marketplace') return item.status === 'installed';
-  return ['installed', 'local', 'starter', 'system'].includes(item.kind)
-    || ['installed', 'local', 'starter', 'system'].includes(item.status);
+  return ['installed', 'local', 'system'].includes(item.kind)
+    || ['installed', 'local', 'system'].includes(item.status);
 }
 
 function uniqueCatalogItems(items) {
@@ -645,9 +632,8 @@ function chooseCanonicalCatalogItem(existing, candidate) {
     system: 0,
     local: 1,
     installed: 2,
-    starter: 3,
-    template: 4,
-    marketplace: 5,
+    template: 3,
+    marketplace: 4,
   };
   const existingRank = rank[existing.kind] ?? 9;
   const candidateRank = rank[candidate.kind] ?? 9;
@@ -745,9 +731,6 @@ function renderCard(item) {
   } else if (item.kind === 'system') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     actionsHtml += versionsButtonHtml(item);
-  } else if (item.kind === 'starter') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
-    actionsHtml += actionButtonsForManagedItem(item, state);
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
@@ -1140,31 +1123,6 @@ async function installFromZip() {
       file_id: fileId,
       subpath,
     },
-  });
-}
-
-function isPackagedCatalogTab(item) {
-  return !item.download_url
-    && !item.repo
-    && !item.app_source
-    && item.kind !== 'installed'
-    && item.kind !== 'marketplace'
-    && item.kind !== 'template'
-    && item.launch_kind !== 'desktop-app';
-}
-
-async function setModuleVisible(item, visible) {
-  if (!canInstallAppStoreItem(state, item)) {
-    state.status = { kind: 'error', text: 'Du darfst diese App nicht installieren oder entfernen.' };
-    render();
-    return;
-  }
-  await runStoreCommand({
-    label: visible ? `Installiere ${item.title}...` : `Entferne ${item.title}...`,
-    success: visible ? `${item.title} als Tab installiert.` : `${item.title} aus den Tabs entfernt.`,
-    commandType: 'ctox.module.set_visible',
-    moduleId: item.id,
-    payload: { module_id: item.id, visible },
   });
 }
 
@@ -1595,7 +1553,6 @@ function countsByScope() {
     marketplace: scopedCatalogItems('marketplace').length,
     template: scopedCatalogItems('template').length,
     installed: scopedCatalogItems('installed').length,
-    starter: scopedCatalogItems('starter').length,
     system: scopedCatalogItems('system').length,
     local: scopedCatalogItems('local').length,
   };
@@ -1728,7 +1685,7 @@ function updateStateFor(item, remote, kind, moduleClass) {
         : 'Eine neuere Katalog-Version ist verfügbar.',
     };
   }
-  if (!['installed', 'local', 'starter'].includes(kind)) {
+  if (!['installed', 'local'].includes(kind)) {
     return { available: false, reason: kind === 'system' ? 'System-Module werden über CTOX selbst aktualisiert.' : '' };
   }
   // Fork-class apps are developed locally; never offer a destructive
@@ -1945,7 +1902,7 @@ function mergeMarketplace(primary, fallback) {
 }
 
 function sortItems(left, right) {
-  const rank = { marketplace: 0, template: 1, installed: 2, starter: 3, local: 4, system: 5 };
+  const rank = { marketplace: 0, template: 1, installed: 2, local: 3, system: 4 };
   return (rank[left.kind] ?? 9) - (rank[right.kind] ?? 9)
     || left.title.localeCompare(right.title);
 }
@@ -1957,7 +1914,6 @@ function scopeTitle(scope) {
     marketplace: t('scopeTitleMarketplace', 'GitHub Marketplace'),
     template: t('scopeTitleTemplate', 'Templates'),
     installed: t('scopeTitleInstalled', 'Installierte Apps'),
-    starter: t('scopeTitleStarter', 'Starter Apps'),
     system: t('scopeTitleSystem', 'System Apps'),
     local: t('scopeTitleLocal', 'Local Modules'),
   }[scope] || t('scopeTitleFallback', 'Applications');
@@ -1984,7 +1940,6 @@ function iconGlyphForItem(item) {
   if (item.kind === 'marketplace') return item.status === 'installed' ? '✓' : 'GH';
   if (item.kind === 'template') return '+';
   if (item.kind === 'installed') return '✓';
-  if (item.kind === 'starter') return '★';
   if (item.kind === 'system') return '◆';
   return '*';
 }
@@ -2029,7 +1984,6 @@ function statusLabel(status) {
     installed: 'Installed',
     installing: 'Installing',
     error: 'Fehler',
-    starter: 'Starter',
     template: 'Template',
     system: 'System',
     local: 'Local',
@@ -2223,47 +2177,6 @@ export const __appStoreTestHooks = {
   updateStateFor,
   versionsButtonHtml,
 };
-
-function initAppStoreContextMenu(state) {
-  state.contextMenu?.remove();
-  const host = state.ctx.host;
-  const previousLocalContextMenu = host?.getAttribute('data-ctox-local-context-menu') ?? null;
-  host?.setAttribute('data-ctox-local-context-menu', 'app-store');
-  ensureAppStoreContextMenuElement(state);
-
-  const handleContextMenu = (event) => {
-    const context = appStoreCommandContextFromElement(state, event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    ensureAppStoreContextMenuElement(state);
-    renderAppStoreContextMenu(state, context, event.clientX, event.clientY);
-  };
-  const handleOutsideClick = (event) => {
-    if (state.contextMenu?.contains(event.target)) return;
-    hideAppStoreContextMenu(state);
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') hideAppStoreContextMenu(state);
-  };
-
-  host?.addEventListener('contextmenu', handleContextMenu);
-  window.addEventListener('click', handleOutsideClick, { capture: true });
-  window.addEventListener('keydown', handleEscape);
-
-  return () => {
-    if (previousLocalContextMenu === null) {
-      host?.removeAttribute('data-ctox-local-context-menu');
-    } else {
-      host?.setAttribute('data-ctox-local-context-menu', previousLocalContextMenu);
-    }
-    host?.removeEventListener('contextmenu', handleContextMenu);
-    window.removeEventListener('click', handleOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleEscape);
-    hideAppStoreContextMenu(state);
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-  };
-}
 
 function ensureAppStoreContextMenuElement(state) {
   if (state.contextMenu?.isConnected) return state.contextMenu;

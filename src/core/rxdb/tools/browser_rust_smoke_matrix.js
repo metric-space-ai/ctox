@@ -70,6 +70,11 @@ const defaultModes = [
   'browser-to-rust',
   'command-browser-to-rust',
   'tickets-browser-to-rust',
+  'outbound-active-ui',
+  'spreadsheets-active-ui',
+  'documents-active-ui',
+  'invoices-active-ui',
+  'buchhaltung-active-ui',
   'business-os-ui-regression',
   'business-os-roles-permissions-ui',
   'business-os-dynamic-apps-ui',
@@ -121,6 +126,87 @@ const modeEvidenceRequirements = {
       status: 'completed',
       ticket_source: 'local',
     },
+  },
+  'outbound-active-ui': {
+    keys: [
+      'outbound_active_ui_campaign_id',
+      'outbound_active_ui_pipeline_id',
+      'outbound_active_ui_engagement_id',
+      'outbound_active_ui_message_id',
+      'outbound_active_ui_approval_id',
+      'outbound_active_ui_approval_gate_verified',
+      'outbound_active_ui_final_send_status',
+      'outbound_active_ui_provider_message_id',
+      'outbound_active_ui_reply_message_key',
+      'outbound_active_ui_reply_classification',
+      'outbound_active_ui_meeting_status',
+      'outbound_active_ui_meeting_url',
+    ],
+    values: {
+      outbound_active_ui_approval_gate_verified: 1,
+      outbound_active_ui_final_send_status: 'queued_for_provider',
+      outbound_active_ui_reply_classification: 'positive',
+      outbound_active_ui_meeting_status: 'booked',
+    },
+  },
+  'spreadsheets-active-ui': {
+    keys: [
+      'spreadsheets_active_ui_spreadsheet_id',
+      'spreadsheets_active_ui_version_id',
+      'spreadsheets_active_ui_blob_id',
+      'spreadsheets_active_ui_chunk_count',
+      'spreadsheets_active_ui_resume_visible',
+      'spreadsheets_active_ui_native_projected',
+    ],
+    values: {
+      spreadsheets_active_ui_resume_visible: 1,
+      spreadsheets_active_ui_native_projected: 1,
+    },
+    minimums: {
+      spreadsheets_active_ui_chunk_count: 1,
+    },
+  },
+  'documents-active-ui': {
+    keys: [
+      'documents_active_ui_document_id',
+      'documents_active_ui_version_id',
+      'documents_active_ui_blob_id',
+      'documents_active_ui_chunk_count',
+      'documents_active_ui_resume_visible',
+      'documents_active_ui_native_projected',
+    ],
+    values: {
+      documents_active_ui_resume_visible: 1,
+      documents_active_ui_native_projected: 1,
+    },
+    minimums: { documents_active_ui_chunk_count: 1 },
+  },
+  'invoices-active-ui': {
+    keys: [
+      'invoices_active_ui_customer_id',
+      'invoices_active_ui_invoice_id',
+      'invoices_active_ui_command_id',
+      'invoices_active_ui_command_status',
+      'invoices_active_ui_resume_visible',
+      'invoices_active_ui_native_projected',
+    ],
+    values: {
+      invoices_active_ui_resume_visible: 1,
+      invoices_active_ui_native_projected: 1,
+    },
+  },
+  'buchhaltung-active-ui': {
+    keys: [
+      'buchhaltung_active_ui_entry_id',
+      'buchhaltung_active_ui_line_count',
+      'buchhaltung_active_ui_resume_visible',
+      'buchhaltung_active_ui_native_projected',
+    ],
+    values: {
+      buchhaltung_active_ui_resume_visible: 1,
+      buchhaltung_active_ui_native_projected: 1,
+    },
+    minimums: { buchhaltung_active_ui_line_count: 2 },
   },
   'coding-agents-ui': {
     keys: [
@@ -180,10 +266,10 @@ const modeEvidenceRequirements = {
     },
     values: {
       business_os_ui_rendered_modules: 'ctox,documents,knowledge,research',
-      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,iot,nachweise,placements,submissions,support,threads',
-      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,iot,nachweise,placements,submissions,support,threads',
-      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,iot,nachweise,placements,submissions,support,threads',
-      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,policy-denied-render-skipped,policy-denied-render-skipped,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,policy-denied-render-skipped,app-store-view-scope,browser-address-refresh,policy-denied-render-skipped,creator-expert-accordion,policy-denied-render-skipped,reports-filter-controls,policy-denied-render-skipped,appsec-coverage-findings-tabs,consent-primary-form-input,credentials-write-only-form-input,policy-denied-render-skipped,policy-denied-render-skipped,esign-primary-form-input,intake-primary-form-input,interviews-primary-form-input,policy-denied-render-skipped,nachweise-primary-form-input,placements-primary-form-input,submissions-primary-form-input,policy-denied-render-skipped,threads-search-and-filter',
+      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets,appsec-pentest,consent,credentials,customers,cv-print-builder,esign,intake,interviews,invoices,iot,nachweise,placements,submissions,support,threads',
+      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,conversations-channel-filter,outbound-outreach-view-toggle,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,coding-agents-settings-modal,app-store-view-scope,browser-address-refresh,calendar-new-event-drawer,creator-expert-accordion,notes-nav-filter,reports-filter-controls,spreadsheets-search-filter,appsec-coverage-findings-tabs,consent-primary-form-input,credentials-write-only-form-input,customers-search-filter,cv-print-search-filter,esign-primary-form-input,intake-primary-form-input,interviews-primary-form-input,invoices-state-filter,iot-create-asset-form,nachweise-primary-form-input,placements-primary-form-input,submissions-primary-form-input,support-search-and-context-navigation,threads-search-and-filter',
       business_os_ui_interacted_modules: 'ctox,documents,knowledge,research',
       business_os_ui_interaction_names: 'ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
       business_os_ui_desktop_opened: 1,
@@ -1160,21 +1246,10 @@ function readGitStatusPorcelain() {
 }
 
 function sha256File(filePath) {
-  let descriptor;
   try {
-    descriptor = fs.openSync(filePath, 'r');
-    const hash = crypto.createHash('sha256');
-    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
-    while (true) {
-      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-    return hash.digest('hex');
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
   } catch {
     return null;
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
@@ -1221,9 +1296,7 @@ function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationO
     if (candidate.source.artifactHashes && typeof candidate.source.artifactHashes === 'object') {
       require(isSha256(candidate.source.artifactHashes.browserBundleSha256), 'source.artifactHashes.browserBundleSha256');
       require(typeof candidate.source.artifactHashes.smokeBinaryPath === 'string' && candidate.source.artifactHashes.smokeBinaryPath.length > 0, 'source.artifactHashes.smokeBinaryPath');
-      if (!configurationFailed || options.final) {
-        require(isSha256(candidate.source.artifactHashes.smokeBinarySha256), 'source.artifactHashes.smokeBinarySha256');
-      }
+      require(isSha256(candidate.source.artifactHashes.smokeBinarySha256), 'source.artifactHashes.smokeBinarySha256');
     }
   }
   require(typeof candidate.ctoxBin === 'string' && candidate.ctoxBin.length > 0, 'ctoxBin');

@@ -48,28 +48,27 @@ const SUPPORT_COMMAND_SET = new Set(SUPPORT_COMMAND_TYPES);
 
 export function buildSupportCommand({
   id = '',
-  type,
+  commandType,
   recordId = '',
   payload = {},
   actor = {},
   surface = '',
 } = {}) {
-  if (!SUPPORT_COMMAND_SET.has(type)) {
-    throw new Error(`unsupported support command type: ${type}`);
+  if (!SUPPORT_COMMAND_SET.has(commandType)) {
+    throw new Error(`unsupported support command type: ${commandType}`);
   }
   const commandId = id || `cmd_support_${cryptoRandomId()}`;
   return {
     id: commandId,
     module: 'support',
-    type,
-    command_type: type,
+    command_type: commandType,
     record_id: recordId || '',
     inbound_channel: 'support',
     payload: { ...payload },
     client_context: withOptionalActor({
       source: 'business-os.support',
       module: 'support',
-      surface: surface || type,
+      surface: surface || commandType,
     }, actor),
   };
 }
@@ -93,7 +92,6 @@ export function buildSupportAgentTaskCommand({
   return {
     id: commandId,
     module: 'support',
-    type: 'business_os.chat.task',
     command_type: 'business_os.chat.task',
     record_id: conversationId,
     inbound_channel: 'support',
@@ -148,7 +146,7 @@ export function buildAgentWritebackCommand({
   }
   return buildSupportCommand({
     id: id || `cmd_support_agent_writeback_${cryptoRandomId()}`,
-    type: 'support.agent.writeback',
+    commandType: 'support.agent.writeback',
     recordId: conversationId,
     actor,
     surface: 'support.agent.writeback',

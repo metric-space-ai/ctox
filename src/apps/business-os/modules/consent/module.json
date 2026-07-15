@@ -7,12 +7,12 @@
     "business_commands",
     "business_consents"
   ],
-  "source": "local",
+  "source": "catalog",
   "core": false,
   "editable": true,
   "deletable": true,
   "layout": {
-    "shell": "full-workspace",
+    "shell": "windowed",
     "left": "Filter",
     "center": "Einwilligungen"
   },
@@ -32,6 +32,25 @@
     "editable_after_install": true,
     "distribution": "catalog-module"
   },
-  "install_scope": "starter",
-  "default_installed": false
+  "install_scope": "store",
+  "default_installed": false,
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 960,
+      "height": 680
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  }
 }

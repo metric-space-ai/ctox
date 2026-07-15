@@ -327,15 +327,15 @@ export async function mount(ctx) {
   const leftStorageKey = 'ctox.conversations.layout.leftWidth';
   const rightStorageKey = 'ctox.conversations.layout.rightWidth';
 
-  const savedLeftWidth = localStorage.getItem(leftStorageKey) || '320';
-  const savedRightWidth = localStorage.getItem(rightStorageKey) || '320';
+  const savedLeftWidth = ctx.storageScope.get(leftStorageKey) || '320';
+  const savedRightWidth = ctx.storageScope.get(rightStorageKey) || '320';
 
   root.style.setProperty('--conversations-left-width', `${savedLeftWidth}px`);
   root.style.setProperty('--conversations-right-width', `${savedRightWidth}px`);
 
   // Column resizing is now owned by the shell-global resizer (setupModuleResizers
   // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handles in
-  // index.html declaratively (drag + keyboard + per-module localStorage). We must
+  // index.html declaratively (drag + keyboard + shell-scoped persistence). We must
   // NOT DIY-wire them here or each handle gets double-wired. Leave the references in
   // place (null) so the unmount cleanup below stays valid.
   const resizerL = null;
@@ -388,6 +388,7 @@ export async function mount(ctx) {
   view.highlightedMessageKey = view.deepLink.message_key || '';
 
   const cleanups = [];
+  let disposed = false;
   if (resizerL) cleanups.push(() => resizerL.destroy());
   if (resizerR) cleanups.push(() => resizerR.destroy());
   cleanups.push(() => {
@@ -418,15 +419,28 @@ export async function mount(ctx) {
     if (view.selectedBucketKey) refreshTimelineForActiveBucket();
   });
 
-  await Promise.all([loadAccounts(), loadThreads(), probeMessages()]);
+  // A module window must become usable independently of the first native/RxDB
+  // snapshot. Render the empty/loading-capable frame now and hydrate it in the
+  // background; otherwise a cold projection can make the shell believe that
+  // opening Conversations failed.
   rebuildBuckets();
   populateAccountFilter();
-  await applyConversationDeepLink();
   renderList();
+
+  Promise.resolve().then(async () => {
+    await Promise.all([loadAccounts(), loadThreads(), probeMessages()]);
+    if (disposed) return;
+    rebuildBuckets();
+    populateAccountFilter();
+    await applyConversationDeepLink();
+    if (disposed) return;
+    renderList();
+  }).catch((error) => console.error('[conversations] initial hydration failed:', error));
 
   if (threadsCollection?.$) {
     const sub = threadsCollection.$.subscribe(() => {
       loadThreads().then(() => {
+        if (disposed) return;
         rebuildBuckets();
         populateAccountFilter();
         renderList();
@@ -438,7 +452,10 @@ export async function mount(ctx) {
 
   if (messagesCollection?.$) {
     const sub = messagesCollection.$.subscribe((change) => {
-      probeMessages().then(() => renderList()).catch(() => {});
+      probeMessages().then(() => {
+        if (!disposed) renderList();
+      }).catch(() => {});
+      if (disposed) return;
       const doc = change?.documentData || change?.doc?._data || change?.doc;
       if (!doc) return;
       const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
@@ -452,6 +469,7 @@ export async function mount(ctx) {
   if (accountsCollection?.$) {
     const sub = accountsCollection.$.subscribe(() => {
       loadAccounts().then(() => {
+        if (disposed) return;
         populateAccountFilter();
         if (view.selectedBucketKey) renderRightPane();
       }).catch((error) => console.error('[conversations] account refresh failed:', error));
@@ -481,6 +499,7 @@ export async function mount(ctx) {
   cleanups.push(() => window.removeEventListener('hashchange', hashChangeHandler));
 
   return () => {
+    disposed = true;
     for (const dispose of cleanups) {
       try { dispose?.(); } catch (error) { console.error('[conversations] cleanup:', error); }
     }
@@ -1223,12 +1242,6 @@ export async function mount(ctx) {
 
     el.appendChild(buildDetailsBlock(msg));
 
-    el.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openMessageContextMenu(event, msg);
-    });
-
     return el;
   }
 
@@ -1303,11 +1316,7 @@ export async function mount(ctx) {
     if (workId) params.set('work_id', workId);
     if (sourceModule) params.set('source', sourceModule);
     const next = `#ctox?${params.toString()}`;
-    if (location.hash === next) {
-      window.dispatchEvent(new HashChangeEvent('hashchange'));
-    } else {
-      location.hash = next;
-    }
+    location.hash = next;
   }
 
   function buildRecipientsBlock(msg) {
@@ -1512,7 +1521,7 @@ export async function mount(ctx) {
     };
     document.addEventListener('click', handleOutside, true);
 
-    form?.addEventListener('submit', (event) => {
+    form?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const instruction = String(textarea?.value || '').trim();
       if (!instruction) {
@@ -1532,34 +1541,11 @@ export async function mount(ctx) {
         text: (msg.body_text || msg.preview || '').slice(0, 240)
       };
 
-      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-        detail: {
-          text: instruction,
-          module: 'conversations',
-          source_title: 'Conversations',
-          command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-          record_id: msg.message_key || 'conversations',
-          title,
-          instruction,
-          payload: {
-            title,
-            instruction,
-            prompt: instruction,
-            user_message: instruction,
-            mode,
-            target: mode === 'app' ? 'app' : 'data',
-            selected_message: msg,
-            context,
-            thread_key: 'business-os/conversations',
-          },
-          client_context: {
-            action: 'context-chat',
-            mode,
-            column: msg.channel,
-            message_key: msg.message_key,
-          },
-        },
-      }));
+      await ctx.contextActions.dispatch(mode === 'app' ? 'app' : 'data', {
+        title,
+        prompt: instruction,
+        context,
+      });
 
       setTimeout(() => {
         menu.remove();
@@ -1982,11 +1968,7 @@ export async function mount(ctx) {
     if (engagementId) params.set('engagement_id', engagementId);
     if (messageId) params.set('message_id', messageId);
     const next = params.toString() ? `#outbound?${params.toString()}` : '#outbound';
-    if (location.hash === next) {
-      window.dispatchEvent(new HashChangeEvent('hashchange'));
-    } else {
-      location.hash = next;
-    }
+    location.hash = next;
   }
 
   async function approveOutboundMessageFromConversations(messageId) {
@@ -2089,17 +2071,14 @@ export async function mount(ctx) {
       created_at_ms: Date.now(),
       updated_at_ms: Date.now(),
     };
-    const dispatched = ctx.commandBus?.dispatch
-      ? await withTimeout(ctx.commandBus.dispatch(command), options.timeoutMs || 5000, null).catch((error) => {
-          console.warn('[conversations] outbound command bus dispatch failed, using RxDB fallback:', error);
-          return null;
-        })
-      : null;
-    if (!dispatched) {
-      await insertOutboundCommandFallback(command);
+    if (!ctx.commandBus?.dispatch) {
+      throw new Error('CTOX command bus is unavailable. The outbound action was not submitted.');
     }
+    const dispatched = options.waitForOutcome === false
+      ? await ctx.commandBus.dispatch(command, { until: 'local' })
+      : await ctx.commandBus.dispatch(command, { timeoutMs: options.timeoutMs || 5000 });
     if (options.waitForOutcome === false) {
-      return dispatched || { id: commandId, command_id: commandId, status: 'pending_sync', pending: true };
+      return dispatched;
     }
     const outcome = await waitForOutboundCommandOutcome(commandId);
     ctx.notifications?.show?.({
@@ -2204,18 +2183,6 @@ export async function mount(ctx) {
       await sleep(750);
     }
     throw lastError || new Error(`${label} timed out`);
-  }
-
-  async function insertOutboundCommandFallback(command) {
-    if (!businessCommandsCollection) {
-      throw new Error('business_commands collection is required for Conversations outbound command fallback');
-    }
-    const existing = await findOneJson(businessCommandsCollection, command.id).catch(() => null);
-    if (existing) return;
-    await businessCommandsCollection.insert({
-      ...command,
-      status: 'pending_sync',
-    });
   }
 
   function withTimeout(promise, timeoutMs, fallback) {

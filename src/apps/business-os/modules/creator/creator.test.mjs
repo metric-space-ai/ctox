@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 const {
   buildAppCreateCommand,
@@ -12,6 +13,11 @@ const {
   normalizeModuleId,
   validateCreatorSpec,
 } = await import('./index.js');
+
+const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+const presentationSource = `${css}\n${html}`;
+const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
 test('empty request blocks app creation', () => {
   const state = computeCreatorActionState({
@@ -106,7 +112,8 @@ test('creator builds an app create command instead of writing module source dire
     appTitle: 'Inventar',
     appDesc: 'Bestand verwalten',
     appCategory: 'Management',
-    appLayout: 'full-workspace',
+    appArchetype: 'queue-workflow',
+    appLayout: 'windowed',
     appCollections: ['items', 'stock events'],
     appVersion: '0.2.0',
     instruction: 'Baue eine Inventar App.',
@@ -114,7 +121,7 @@ test('creator builds an app create command instead of writing module source dire
     now: 1234,
   });
 
-  assert.equal(command.type, 'ctox.business_os.app.create');
+  assert.equal(command.command_type, 'ctox.business_os.app.create');
   assert.equal(command.command_type, 'ctox.business_os.app.create');
   assert.equal(command.record_id, 'meine-inventar-app');
   assert.equal(command.payload.module_id, 'meine-inventar-app');
@@ -122,8 +129,14 @@ test('creator builds an app create command instead of writing module source dire
   assert.equal(command.payload.target, 'app');
   assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
   assert.deepEqual(command.payload.collections_hint, ['items', 'stock_events']);
+  assert.equal(command.payload.layout_hint, 'windowed');
+  assert.equal(command.payload.archetype, 'queue-workflow');
+  assert.equal(command.payload.presentation.default_mode, 'window');
+  assert.deepEqual(command.payload.presentation.supported_modes, ['window', 'maximized', 'focus']);
+  assert.deepEqual(command.payload.presentation.minimum_size, { width: 640, height: 480 });
   assert.equal(command.client_context.source, 'business-os-creator');
   assert.equal(command.client_context.install_target, 'runtime-installed-module');
+  assert.equal(command.client_context.archetype, 'queue-workflow');
 });
 
 test('creator command keeps app structure agent-led when only a request is provided', () => {
@@ -132,12 +145,26 @@ test('creator command keeps app structure agent-led when only a request is provi
     now: 1234,
   });
 
-  assert.equal(command.type, 'ctox.business_os.app.create');
+  assert.equal(command.command_type, 'ctox.business_os.app.create');
   assert.equal(command.record_id, 'baue-eine-vertragsverwaltung-mit-fristen');
   assert.equal(command.payload.module_id, 'baue-eine-vertragsverwaltung-mit-fristen');
   assert.equal(command.payload.instruction, 'Baue eine Vertragsverwaltung mit Fristen und CTOX Follow-up.');
   assert.equal(command.payload.install_target, 'runtime-installed-module');
   assert.deepEqual(command.payload.collections_hint, []);
   assert.equal(command.payload.layout_hint, '');
+  assert.equal(command.payload.archetype, 'record-workbench');
   assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
+});
+
+test('presentation layer stays compact and shell-native', () => {
+  assert.doesNotMatch(presentationSource, forbiddenSurfacePattern);
+  assert.doesNotMatch(presentationSource, /backdrop-filter/);
+  assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(presentationSource, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix|var\(--panel-shadow\))/);
+  assert.match(css, /grid-template-columns: var\(--creator-left-width, 320px\) 6px minmax\(0, 1fr\) 6px var\(--creator-right-width, 300px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 980px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 560px\)/);
+  assert.match(html, /data-resizer-var="--creator-left-width"/);
+  assert.match(html, /data-resizer-var="--creator-right-width"/);
 });

@@ -67,14 +67,19 @@
 }
 
 html {
+  width: 100%;
+  min-width: 360px;
   height: 100%;
   overflow: hidden;
 }
 
 body {
   margin: 0;
-  height: 100svh;
-  min-height: 100svh;
+  width: 100%;
+  min-width: 360px;
+  max-width: none;
+  height: 100dvh;
+  min-height: 100dvh;
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
@@ -95,7 +100,13 @@ button {
 .app-shell {
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
-  height: 100svh;
+  width: 100dvw;
+  min-width: 360px;
+  max-width: none;
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
 }
 
 .topbar {
@@ -912,6 +923,9 @@ button {
   display: grid;
   grid-template-columns: minmax(210px, 0.72fr) minmax(420px, 1.9fr) minmax(260px, 0.9fr);
   height: 100%;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   min-height: 0;
   overflow: hidden;
   position: relative;
@@ -4199,6 +4213,9 @@ body[data-auth-state="locked"] .topbar {
 .shell-window-layer {
   position: fixed;
   inset: 0;
+  width: 100dvw;
+  height: 100dvh;
+  min-width: 360px;
   pointer-events: none;
   z-index: 50;
 }
@@ -4437,6 +4454,43 @@ body[data-auth-state="locked"] .topbar {
   overflow: hidden;
 }
 
+.shell-app-recovery {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  min-height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.shell-app-recovery strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.shell-app-recovery span {
+  max-width: 42ch;
+  font-size: 12px;
+}
+
+.shell-app-recovery button {
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell-app-recovery button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 /* 8-direction resize handles. The corner handles overlap the edge handles and
    win because of source order — same pattern as native OS chrome. */
 .shell-window-resize {
@@ -7055,7 +7109,6 @@ button.shell-window-header-meta:focus-visible,
   .shell-taskbar-group {
     flex: 0 0 auto;
   }
-
   .drawer-left,
   .drawer-right,
   .drawer-bottom {
@@ -7064,5 +7117,408 @@ button.shell-window-header-meta:focus-visible,
     max-width: none !important;
     max-height: none !important;
     border-radius: 0 !important;
+  }
+}
+/* The top module strip is the single app switcher. Keep stale installed
+   index files from resurrecting the retired bottom window taskbar. */
+.shell-taskbar,
+[data-shell-taskbar] {
+  display: none !important;
+}
+
+/* App-owned developer tools stay inside the running app window. The original
+   app remains mounted underneath so selection, drafts and scroll state survive
+   App/Source/Versions switches. */
+.shell-window-content > .shell-window-module-root[hidden],
+.module-integrated-tools[hidden],
+.module-integrated-source[hidden],
+.module-integrated-versions[hidden] {
+  display: none !important;
+}
+
+.module-integrated-tools {
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.module-integrated-tools-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding-inline: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.module-integrated-tools-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.module-integrated-tools-identity strong,
+.module-integrated-tools-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-integrated-tools-identity strong {
+  font-size: 12px;
+}
+
+.module-integrated-tools-identity span {
+  color: var(--muted);
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.module-integrated-tools-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.module-integrated-tools-tabs button {
+  min-height: 26px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  padding-inline: 8px;
+  font: 600 12px/1.2 system-ui, sans-serif;
+}
+
+.module-integrated-tools-tabs button:hover,
+.module-integrated-tools-tabs button:focus-visible {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.module-integrated-tools-tabs button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.shell-window-header-action.is-active {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.module-integrated-tools-content,
+.module-integrated-source,
+.module-integrated-versions {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.module-integrated-loading,
+.module-integrated-error,
+.module-integrated-empty {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.module-integrated-loading strong,
+.module-integrated-error strong,
+.module-integrated-empty strong {
+  color: var(--text);
+}
+
+.module-integrated-empty {
+  height: auto;
+  min-height: 150px;
+  border-bottom: 1px solid var(--line);
+}
+
+.module-integrated-error button {
+  justify-self: center;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding-inline: 10px;
+}
+
+.module-integrated-version-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.module-integrated-version-list {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.module-integrated-version-list > header {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.module-integrated-version-list > header strong {
+  font-size: 13px;
+}
+
+.module-integrated-version-list > header span,
+.module-integrated-version-scroll p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.module-integrated-version-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+.module-integrated-version-row {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.module-integrated-version-row:hover,
+.module-integrated-version-row:focus-visible {
+  background: var(--surface);
+}
+
+.module-integrated-version-row.is-active {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.module-integrated-version-row span,
+.module-integrated-version-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-integrated-version-row small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.module-integrated-version-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.module-integrated-version-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.module-integrated-version-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.module-integrated-version-summary strong {
+  font-size: 14px;
+}
+
+.module-integrated-version-summary small,
+.module-integrated-kicker,
+.module-integrated-release header span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.module-integrated-kicker {
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.module-integrated-switch-version,
+.module-integrated-release button {
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  padding-inline: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.module-integrated-version-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.module-integrated-version-facts > div {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+}
+
+.module-integrated-version-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.module-integrated-version-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.module-integrated-release {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.55fr) minmax(130px, 0.45fr) minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding-top: 12px;
+}
+
+.module-integrated-release > header {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+}
+
+.module-integrated-release label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.module-integrated-release input,
+.module-integrated-release select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding-inline: 8px;
+}
+
+.module-integrated-release > p {
+  grid-column: 1 / -1;
+  min-height: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@container business-app-window (max-width: 760px) {
+  .module-integrated-version-layout {
+    grid-template-columns: minmax(150px, 38%) minmax(0, 1fr);
+  }
+
+  .module-integrated-version-facts,
+  .module-integrated-release {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .module-integrated-release > header,
+  .module-integrated-release > p {
+    grid-column: 1;
+  }
+}
+
+@container business-app-window (max-width: 520px) {
+  .module-integrated-tools {
+    grid-template-rows: 44px minmax(0, 1fr);
+  }
+
+  .module-integrated-tools-identity span {
+    display: none;
+  }
+
+  .module-integrated-tools-tabs button {
+    min-width: 44px;
+    min-height: 44px;
+    padding-inline: 6px;
+  }
+
+  .module-integrated-version-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(126px, 34%) minmax(0, 1fr);
+  }
+
+  .module-integrated-version-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .module-integrated-version-detail {
+    padding: 10px;
+  }
+
+  .module-integrated-version-summary {
+    display: grid;
+  }
+
+  .module-integrated-switch-version {
+    justify-self: stretch;
+    min-height: 44px;
+  }
+
+  .module-integrated-release input,
+  .module-integrated-release select,
+  .module-integrated-release button {
+    min-height: 44px;
   }
 }

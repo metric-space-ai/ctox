@@ -15,6 +15,8 @@ const labels = {
     known_title: 'Bekannte Zugangsdaten',
     extra_title: 'Weitere Zugangsdaten',
     add_title: 'Eigene Zugangsdaten hinzufügen',
+    key_label: 'Schlüssel',
+    value_label: 'Wert',
     add_btn: 'Hinzufügen',
     add_hint: 'Schlüssel im Format UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     status_set: 'Gesetzt',
@@ -42,6 +44,8 @@ const labels = {
     known_title: 'Known credentials',
     extra_title: 'Other credentials',
     add_title: 'Add a custom credential',
+    key_label: 'Key',
+    value_label: 'Value',
     add_btn: 'Add',
     add_hint: 'Key must be UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     status_set: 'Set',
@@ -103,9 +107,14 @@ export async function mount(ctx) {
   applyStaticLabels();
   wireEvents();
 
-  await refresh();
+  // Listing credentials is a command-bus round trip and can legitimately
+  // take seconds while the shared business_commands projection is busy. The
+  // shell window must be usable before that hydration completes.
+  render();
+  void refresh(ctx);
 
   return () => {
+    if (state.ctx === ctx) state.ctx = null;
     styleLink.remove();
   };
 }
@@ -154,6 +163,8 @@ function applyStaticLabels() {
   set('[data-cred-known-title]', 'known_title');
   set('[data-cred-extra-title]', 'extra_title');
   set('[data-cred-add-title]', 'add_title');
+  set('[data-cred-key-label]', 'key_label');
+  set('[data-cred-value-label]', 'value_label');
   set('[data-cred-add-btn]', 'add_btn');
   set('[data-cred-add-hint]', 'add_hint');
   if (els.addKey) els.addKey.placeholder = 'CUSTOM_KEY';
@@ -181,8 +192,9 @@ function wireEvents() {
   });
 }
 
-async function refresh() {
+async function refresh(expectedCtx = state.ctx) {
   if (!state.canManage) {
+    if (state.ctx !== expectedCtx) return;
     showNotice(state.t('no_permission'));
     state.catalog = [];
     state.extra = [];
@@ -193,9 +205,11 @@ async function refresh() {
   hideNotice();
   try {
     const { outcome } = await sendCommand('ctox.secret.list', {});
+    if (state.ctx !== expectedCtx) return;
     state.catalog = Array.isArray(outcome?.catalog) ? outcome.catalog : [];
     state.extra = Array.isArray(outcome?.extra) ? outcome.extra : [];
   } catch (error) {
+    if (state.ctx !== expectedCtx) return;
     toast(error?.message || state.t('load_failed'), true);
     state.catalog = [];
     state.extra = [];

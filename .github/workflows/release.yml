@@ -36,6 +36,12 @@ jobs:
           name: rxdb-soak-summary
           path: .
 
+      - name: Download RxDB release soak evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: rxdb-soak-summary
+          path: .
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
@@ -198,6 +204,7 @@ jobs:
           name: business-os-release-production-smoke-evidence
           path: |
             runtime/build/business-os-smoke-matrix-summary.json
+            runtime/build/ctox-office-release-candidate-evidence.json
             runtime/build/business-os-release-docs-dry-run.json
             runtime/build/business-os-security-privacy-signoff-validation.json
             runtime/build/ctox-sync-production-readiness-95-validation.json

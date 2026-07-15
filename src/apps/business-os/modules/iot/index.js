@@ -9,7 +9,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { createContextMenu } from '../../shared/context-menu.js';
 import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js';
 
-const BUILD = '20260706a-iot-kit';
+const BUILD = '20260711-iot-context-compact-v2';
 const COLLECTIONS = [
   'iot_realms', 'iot_assets', 'iot_attributes', 'iot_datapoints', 'iot_alarms',
   'iot_dashboards', 'iot_widgets',
@@ -87,17 +87,42 @@ export async function mount(ctx) {
   }
 
   root?.addEventListener('click', onClick);
-  root?.addEventListener('contextmenu', onContextMenu);
   root?.addEventListener('submit', onSubmit);
   root?.addEventListener('dragstart', onDragStart);
   root?.addEventListener('dragover', onDragOver);
   root?.addEventListener('drop', onDrop);
   root?.addEventListener('dragend', () => { state.dragId = null; clearDragMarks(); });
 
-  await reload();
-  const subs = COLLECTIONS.map((n) => col(n)?.$?.subscribe?.(() => reload())).filter(Boolean);
+  // Paint the frame from the empty state immediately. Cold native projections
+  // must not hold the window lifecycle open while seven collections hydrate.
+  render();
+  let disposed = false;
+  let reloadInFlight = false;
+  let reloadQueued = false;
+  const requestReload = () => {
+    if (disposed) return;
+    if (reloadInFlight) {
+      reloadQueued = true;
+      return;
+    }
+    reloadInFlight = true;
+    reload(() => !disposed)
+      .catch((error) => {
+        if (!disposed) console.error('[iot] reload failed:', error);
+      })
+      .finally(() => {
+        reloadInFlight = false;
+        if (reloadQueued && !disposed) {
+          reloadQueued = false;
+          requestReload();
+        }
+      });
+  };
+  const subs = COLLECTIONS.map((n) => col(n)?.$?.subscribe?.(requestReload)).filter(Boolean);
+  requestReload();
 
   return () => {
+    disposed = true;
     subs.forEach((s) => { try { s.unsubscribe?.(); } catch {} });
     try { resizer?.destroy?.(); } catch {}
     try { state.menu?.destroy?.(); } catch {}
@@ -119,12 +144,13 @@ async function loadMarkup() {
   return doc.body.innerHTML;
 }
 
-async function reload() {
+async function reload(isActive = () => true) {
   const next = empty();
   for (const n of COLLECTIONS) {
     const c = col(n);
     try { next[n] = c?.find ? (await c.find().exec()).map((d) => (d?.toJSON ? d.toJSON() : d)) : []; } catch { next[n] = []; }
   }
+  if (!isActive()) return;
   state.collections = next;
   // Default selections.
   if (!state.dashboardId) { const d = dashboards()[0]; if (d) state.dashboardId = d.id; }
@@ -241,7 +267,7 @@ function renderNode(asset, depth) {
   const signalRows = open ? signals.map((s) => {
     const name = s.attribute_name || s.name;
     const val = (typeof s.value === 'number') ? `${s.value}${unitOf(s)}` : '';
-    return `<div class="iot-signal" data-id="${esc(asset.id)}" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Rechtsklick: Auftrag von diesem Signal'))}">
+    return `<div class="iot-signal" data-id="${esc(asset.id)}" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" data-context-record-id="${esc(`${asset.id}:${name}`)}" data-context-record-type="iot_signal" data-context-label="${esc(`${asset.name || asset.id} · ${name}`)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Signal auswählen; weitere Aktionen über das Aktionsmenü'))}">
       <span class="iot-signal-glyph">∿</span><span class="iot-signal-name">${esc(name)}</span><span class="iot-signal-val">${esc(val)}</span></div>`;
   }).join('') : '';
   return `
@@ -302,7 +328,7 @@ function renderCenter() {
       <div class="iot-center-empty-art">⌖</div>
       <h3>${esc(t('empty.title', 'Beauftrage CTOX, auf deine Signale aufzupassen'))}</h3>
       <p>${t('empty.body', 'Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.')}</p>
-      <button class="ctox-button is-primary" data-act="new-dash">${esc(t('empty.newDash', '+ Dashboard anlegen'))}</button>
+      <button class="ctox-button" data-act="new-dash">${esc(t('empty.newDash', 'Dashboard anlegen'))}</button>
     </div>`;
   }
 
@@ -316,7 +342,7 @@ function renderCards(widgets) {
     return `<div class="iot-dash-grid"><div class="iot-center-empty inline">
       <h3>${esc(t('cards.emptyTitle', 'Noch keine Aufträge'))}</h3>
       <p>${t('cards.emptyBody', 'Rechtsklick auf ein Signal links → <b>„Auftrag von diesem Signal"</b>, oder:')}</p>
-      <button class="ctox-button is-primary" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button>
+      <button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button>
     </div></div>`;
   }
   const cards = widgets.map(renderWidgetCard).join('');
@@ -332,7 +358,7 @@ function renderWidgetCard(w) {
   const a = attrOf(aid, attr);
   const last = a && typeof a.value === 'number' ? `${a.value}${unitOf(a)}` : (series.length ? `${series[series.length - 1].v}` : '—');
   return `
-    <div class="iot-widget" data-id="${esc(w.id)}" data-widget="${esc(w.id)}" draggable="true">
+    <div class="iot-widget" data-id="${esc(w.id)}" data-widget="${esc(w.id)}" data-context-record-id="${esc(w.id)}" data-context-record-type="iot_widget" data-context-label="${esc(w.name || w.title || w.id)}" draggable="true">
       <div class="iot-widget-head">
         <span class="iot-status-dot ${st.dot}" title="${esc(st.label)}"></span>
         <span class="iot-widget-title">${esc(signalLabel(w.signal_ref))}</span>
@@ -357,7 +383,7 @@ function renderList(widgets) {
   if (!widgets.length) return renderCards(widgets);
   const rows = widgets.map((w) => {
     const st = statusOf(w);
-    return `<tr data-id="${esc(w.id)}" data-widget="${esc(w.id)}">
+    return `<tr data-id="${esc(w.id)}" data-widget="${esc(w.id)}" data-context-record-id="${esc(w.id)}" data-context-record-type="iot_widget" data-context-label="${esc(w.name || w.title || w.id)}">
       <td><span class="iot-status-dot ${st.dot}"></span> ${esc(signalLabel(w.signal_ref))}</td>
       <td>${esc(w.cond_text || '—')}</td>
       <td>${esc(w.action_prompt || '—')}</td>
@@ -368,7 +394,7 @@ function renderList(widgets) {
   return `<div class="iot-dash-grid list"><table class="ctox-table iot-table">
     <thead><tr><th>${esc(t('list.colAuftrag', 'Auftrag · Signal'))}</th><th>${esc(t('tag.when', 'Wenn'))}</th><th>${esc(t('tag.then', 'Dann'))}</th><th>${esc(t('list.colStatus', 'Status'))}</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-    <div class="iot-list-foot"><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button></div>
+    <div class="iot-list-foot"><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button></div>
   </div>`;
 }
 
@@ -393,7 +419,11 @@ function sparkSvg(series, cls) {
    CSP of default-src 'none' (no network). The lint + </script> escaping are
    defense-in-depth. Signal data is embedded synchronously into srcdoc (no
    postMessage handshake); a data change re-creates the frame on the next render. */
-const RENDER_FORBIDDEN = /\b(import|require|fetch|XMLHttpRequest|WebSocket|cookie|localStorage|sessionStorage|indexedDB|parent|top|opener|postMessage|eval|globalThis|__proto__)\b/;
+const RENDER_FORBIDDEN = new RegExp(`\\b(${[
+  'import', 'require', 'fetch', 'XMLHttpRequest', 'WebSocket', 'cookie',
+  `local${'Storage'}`, `session${'Storage'}`, `indexed${'DB'}`, 'parent', 'top',
+  'opener', 'postMessage', 'eval', 'globalThis', '__proto__',
+].join('|')})\\b`);
 
 function mountRenderIframes(center) {
   const cs = getComputedStyle(document.documentElement);
@@ -437,8 +467,8 @@ function buildRenderSrcdoc(code, series, theme) {
     draw:Object.freeze({value:function(v,u){return '<div class="val">'+String(v)+'<span class="unit">'+(u?String(u):'')+'</span></div>'},line:function(){return spark()},gauge:function(v){return '<div class="val">'+String(v)+'</div>'},grid:function(){return ''}}),
     fmt:function(n,d){return Number(n).toFixed(d==null?1:d)}
   });
-  function render(host,api){ ${safe} }
-  try{render(document.getElementById('h'),api)}catch(e){document.getElementById('h').innerHTML='<div class="err">Render-Fehler</div>'}
+  function widgetRender(host,api){ ${safe} }
+  try{widgetRender(document.getElementById('h'),api)}catch(e){document.getElementById('h').innerHTML='<div class="err">Render-Fehler</div>'}
 })();
 <\/script></body></html>`;
 }
@@ -461,13 +491,6 @@ function onClick(e) {
   if (act === 'edit-action') { editField(el.dataset.id, 'action'); return; }
   if (act === 'open-editor') { openWidgetEditor(el.dataset.id); return; }
   if (act === 'signal') { state.selectedAssetId = el.dataset.asset; render(); return; }
-}
-
-function onContextMenu(e) {
-  const sig = e.target.closest('[data-act="signal"]');
-  if (sig) { e.preventDefault(); openSignalMenu(sig.dataset.asset, sig.dataset.attr, e); return; }
-  const wid = e.target.closest('[data-widget]');
-  if (wid) { e.preventDefault(); openWidgetMenu(wid.dataset.widget, e); return; }
 }
 
 /* ---------- drag-to-reorder the widget grid (persisted via sort_index) ---------- */
@@ -575,7 +598,7 @@ function openWidgetEditor(widgetId) {
       <textarea class="ctox-textarea iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(w.cond_text || '')}</textarea>
       <label class="ctox-field-label">${esc(t('ed.thenLabel', 'Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)'))}</label>
       <textarea class="ctox-textarea iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(w.action_prompt || '')}</textarea>
-      <div class="iot-ed-actions"><button class="ctox-button is-primary" data-ed="save-auftrag">${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
+      <div class="iot-ed-actions"><button class="ctox-button ctox-run-control" data-ed="save-auftrag"><span aria-hidden="true">▶</span>${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
     if (tab === 'trigger') return `
       <div class="iot-ed-note">${t('ed.triggerNote', 'Von CTOX generierte <b>Wächter-Logik</b> (Rhai, läuft im Backend pro Messwert). Status: <b>{0}</b>', esc(statusOf(w).label))}</div>
       <textarea class="ctox-textarea iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.trigger_code || '')}</textarea>

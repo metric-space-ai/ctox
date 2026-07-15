@@ -17,12 +17,12 @@
     "iot_dashboards",
     "iot_widgets"
   ],
-  "source": "local",
+  "source": "catalog",
   "core": false,
   "editable": true,
   "deletable": true,
   "layout": {
-    "shell": "full-workspace",
+    "shell": "windowed",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
     "left": "Realm scope, asset/signal tree; right-click a signal to create an order or a webhook source",
     "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
@@ -32,15 +32,40 @@
   "version": "v1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
-  "tags": ["iot", "sensors", "assets", "alarms", "telemetry"],
+  "tags": [
+    "iot",
+    "sensors",
+    "assets",
+    "alarms",
+    "telemetry"
+  ],
   "store": {
     "summary": "Task CTOX in plain text (Wenn/Dann) to watch your signals and act. Each dashboard widget is a standing order CTOX programs in three parts (Rhai watcher · sandboxed render code · order prompt that spawns a chat on fire). Webhooks in & out; MQTT/HTTP/WS ingest; multi-realm isolation; sandboxed generated code.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/iot",
     "installable": true,
     "editable_after_install": true,
-    "distribution": "ctox-repo-module"
+    "distribution": "catalog-module"
   },
   "install_scope": "store",
-  "default_installed": false
+  "default_installed": false,
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1180,
+      "height": 780
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  }
 }

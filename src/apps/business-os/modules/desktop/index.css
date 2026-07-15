@@ -61,6 +61,8 @@
 .desktop-icon {
   position: absolute;
   width: 96px;
+  height: 112px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -146,9 +148,18 @@
   line-height: 1.3;
   width: 100%;
   max-width: 100%;
-  /* Use break-word but normal word breaks to prevent mid-word clips */
-  overflow-wrap: break-word;
+  box-sizing: border-box;
+  display: -webkit-box;
+  min-height: calc(2 * 1.3em);
+  max-height: calc(2 * 1.3em);
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  /* Prefer word boundaries; only split an actually unbreakable identifier. */
+  overflow-wrap: anywhere;
   word-break: normal;
+  hyphens: none;
   color: var(--text);
   letter-spacing: 0;
   text-shadow: 
@@ -423,10 +434,31 @@
   }
 
   .desktop-icon {
+    position: relative;
+    left: auto !important;
+    top: auto !important;
     width: 80px;
+    height: 92px;
     gap: 6px;
     padding: 6px 2px 8px;
     border-radius: 12px;
+  }
+
+  .desktop-icons {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-rows: var(--desktop-icon-cell-h);
+    align-content: start;
+    align-items: start;
+    justify-items: center;
+    gap: 8px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--desktop-icon-padding) var(--desktop-icon-padding) 104px;
+    scrollbar-width: thin;
   }
 
   .desktop-icon .desktop-icon-glyph {
@@ -439,6 +471,8 @@
     font-size: 10px;
     line-height: 1.25;
     padding: 2px;
+    min-height: calc(2 * 1.25em);
+    max-height: calc(2 * 1.25em);
   }
 
   .desktop-widget-container {

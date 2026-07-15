@@ -148,9 +148,6 @@ export async function mount(ctx) {
   els.billingStartDate.value = firstDay.toISOString().split('T')[0];
   els.billingEndDate.value = lastDay.toISOString().split('T')[0];
 
-  // Ensure DB collections exist and seed mock data if empty
-  await seedMockDataIfEmpty(ctx);
-
   // Setup reactive RxDB subscriptions
   setupSubscriptions(ctx, els);
 
@@ -166,11 +163,21 @@ export async function mount(ctx) {
   applyCenterViewState(els);
   applyTimelineState(els);
 
+  // Seeding is optional bootstrap work, not a prerequisite for mounting the
+  // planner. The reactive queries above paint both the empty and populated
+  // states and will pick up inserted seed records as they arrive.
+  let disposed = false;
+  Promise.resolve()
+    .then(() => seedMockDataIfEmpty(ctx))
+    .catch((error) => {
+      if (!disposed) console.error('[shiftflow] seed failed:', error);
+    });
+
   // 5. Initialize CTOX unified context menu
-  contextMenuCleanup = initShiftflowContextMenu(els, ctx);
 
   // Return unmount function
   return () => {
+    disposed = true;
     activeSubscriptions.forEach(sub => sub.unsubscribe?.());
     activeSubscriptions = [];
     resizeCleanup?.();
@@ -769,7 +776,7 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
     const isActive = activeEmpIds.has(emp.id);
 
     const cardHtml = `
-      <div class="employee-card ${isActive ? 'active' : ''} ${selectedEmployeeId === emp.id ? 'selected' : ''}" data-emp-id="${emp.id}" draggable="true">
+      <div class="employee-card ${isActive ? 'active' : ''} ${selectedEmployeeId === emp.id ? 'selected' : ''}" data-emp-id="${escapeHtml(emp.id)}" data-context-record-id="${escapeHtml(emp.id)}" data-context-record-type="planning_employee" data-context-label="${escapeHtml(emp.name || emp.id)}" draggable="true">
         <div class="emp-avatar" style="background: ${emp.avatar_color || 'var(--shiftflow-accent)'}">${initials}</div>
         <div class="emp-info">
           <div class="emp-name">${escapeHtml(emp.name)}</div>
@@ -823,7 +830,7 @@ function renderProjectsList(projects, els, ctx) {
     const activeBadge = proj.status === 'active' ? `<span class="project-card-badge" style="background:${proj.color || 'var(--shiftflow-accent)'};"></span>` : '';
 
     return `
-      <div class="project-card" data-proj-id="${proj.id}">
+      <div class="project-card" data-proj-id="${escapeHtml(proj.id)}" data-context-record-id="${escapeHtml(proj.id)}" data-context-record-type="planning_project" data-context-label="${escapeHtml(proj.name || proj.title || proj.id)}">
         <div class="project-card-info">
           <div class="project-card-name">${escapeHtml(proj.name)}</div>
           <div class="project-card-client">${escapeHtml(proj.client)} · ${escapeHtml(proj.location || '')}</div>
@@ -903,7 +910,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           const projColor = proj ? proj.color : 'var(--shiftflow-accent)';
 
           return `
-            <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${shift.id}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}">
+            <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${escapeHtml(shift.id)}" data-context-record-id="${escapeHtml(shift.id)}" data-context-record-type="planning_shift" data-context-label="${escapeHtml(shift.title || 'Schicht')}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}">
               <div class="shift-time">
                 <span>${startStr} - ${endStr}</span>
                 <span class="shift-tag">${shift.department}</span>
@@ -985,7 +992,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           const initials = emp ? emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : '?';
 
           return `
-            <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${shift.id}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}" style="display:flex; flex-direction:column;">
+            <button type="button" class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${escapeHtml(shift.id)}" data-context-record-id="${escapeHtml(shift.id)}" data-context-record-type="planning_shift" data-context-label="${escapeHtml(shift.title || 'Schicht')}" aria-label="${escapeHtml(shift.title || 'Schicht')} ${startStr} - ${endStr}" style="display:flex; flex-direction:column;">
               <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
                 <div class="emp-avatar" style="width:16px; height:16px; font-size:7px; background:${avatarColor};">${initials}</div>
                 <span style="font-weight:700; font-size:11px;">${escapeHtml(empName)}</span>
@@ -1705,7 +1712,7 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;">
           ${(emp.departments || ['Service']).map(dept => {
             const dMap = { 'Service': t('deptService', 'Service'), 'Küche': t('deptKitchen', 'Küche'), 'Bar': t('deptBar', 'Bar'), 'Verwaltung': t('deptAdmin', 'Verwaltung') };
-            return `<span style="background:var(--shiftflow-surface-3); font-size:11px; padding:3px 8px; border-radius:12px; font-weight:600; color:var(--shiftflow-text);">${escapeHtml(dMap[dept] || dept)}</span>`;
+            return `<span style="background:var(--shiftflow-surface-3); font-size:11px; padding:3px 8px; border-radius:var(--control-radius); font-weight:600; color:var(--shiftflow-text);">${escapeHtml(dMap[dept] || dept)}</span>`;
           }).join('')}
         </div>
       </div>
@@ -2786,12 +2793,10 @@ function initShiftflowContextMenu(els, ctx) {
     if (event.key === 'Escape') hideShiftflowContextMenu();
   };
 
-  ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideShiftflowContextMenu();

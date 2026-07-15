@@ -8,7 +8,7 @@
   display: grid;
   grid-template-columns: var(--reports-left-width, 320px) 12px minmax(0, 1fr);
   gap: 0;
-  padding: 12px;
+  padding: 8px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -26,12 +26,9 @@
 .reports-rail {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  box-shadow: var(--panel-shadow);
+  background: var(--reports-surface);
+  border: 1px solid var(--reports-line);
+  border-radius: var(--surface-radius);
 }
 
 :root[data-theme="dark"] .reports-module {
@@ -46,7 +43,7 @@
 .reports-module .ctox-pane-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .reports-module .ctox-pane-search {
@@ -56,7 +53,7 @@
 
 .reports-section,
 .reports-rollback {
-  padding: 16px;
+  padding: 12px;
 }
 
 .reports-section h3 {
@@ -74,41 +71,34 @@
 .reports-list {
   min-height: 0;
   overflow: auto;
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
 .report-row {
-  width: calc(100% - 16px);
-  margin: 4px 8px;
+  width: calc(100% - 8px);
+  margin: 2px 4px;
   display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 0;
-  border-radius: 12px;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--surface-radius);
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
   position: relative;
   box-sizing: border-box;
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s ease,
-              box-shadow 0.2s ease;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
 .report-row:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  transform: translateY(-1px);
-}
-
-.report-row:active {
-  transform: scale(0.98);
+  background: var(--reports-surface-2);
+  border-color: var(--reports-line);
 }
 
 .report-row.is-selected {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-sm);
-  border-left: none;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .report-row strong {
@@ -145,8 +135,7 @@
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--reports-surface);
   border: 1px solid var(--reports-line);
-  border-radius: 8px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
 }
 
 .reports-detail-scroll {
@@ -179,9 +168,8 @@
   max-height: 440px;
   object-fit: contain;
   border: 1px solid var(--reports-line);
-  border-radius: 12px;
+  border-radius: var(--surface-radius);
   background: var(--bg);
-  box-shadow: var(--shadow-sm);
 }
 
 .reports-rollback {
@@ -197,7 +185,9 @@
 }
 
 .reports-empty {
-  padding: 24px 16px;
+  display: grid;
+  gap: 4px;
+  padding: 14px 12px;
   line-height: 1.4;
 }
 
@@ -219,10 +209,12 @@
   }
 }
 
-@media (max-width: 880px) {
+@container business-app-window (max-width: 880px) {
   .reports-module {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(220px, 38vh) minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 1fr);
+    overflow-y: auto;
+    gap: 8px;
   }
 
   .reports-rail {

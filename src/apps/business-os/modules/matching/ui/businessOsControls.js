@@ -774,7 +774,7 @@ function requestMissingTranslation({ lang, kind, text }) {
   pendingTranslationRequests.add(key);
   dispatchCtoxCommand({
     module: 'matching',
-    type: 'business_os.i18n.translate',
+    command_type: 'business_os.i18n.translate',
     record_id: key.slice(0, 128),
     payload: {
       lang,
@@ -797,36 +797,15 @@ function requestMissingTranslation({ lang, kind, text }) {
   }, { timeoutMs: 1000 }).catch(() => {});
 }
 
+let commandBus = null;
+
+export function setBusinessOsCommandBus(nextCommandBus) {
+  commandBus = nextCommandBus?.dispatch ? nextCommandBus : null;
+}
+
 function dispatchCtoxCommand(command, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
-  const requestId = `ctox_cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      window.removeEventListener('message', onMessage);
-      resolve({ ok: false, status: 'timeout', requestId });
-    }, timeoutMs);
-
-    function onMessage(event) {
-      if (event.origin !== window.location.origin) return;
-      if (!isTrustedShellMessageSource(event)) return;
-      if (event.data?.type !== 'ctox-business-os-command-result') return;
-      if (event.data.requestId !== requestId) return;
-      done = true;
-      clearTimeout(timer);
-      window.removeEventListener('message', onMessage);
-      resolve(event.data);
-    }
-
-    window.addEventListener('message', onMessage);
-    parent.postMessage({
-      type: 'ctox-business-os-command',
-      requestId,
-      surface: 'matching',
-      command
-    }, window.location.origin);
-  });
+  if (!commandBus?.dispatch) return Promise.resolve({ ok: false, status: 'unavailable', error: 'CTOX command bus is unavailable' });
+  return commandBus.dispatch(command, { timeoutMs });
 }
 
 function isTrustedShellMessageSource(event) {
@@ -1291,14 +1270,6 @@ function initContextMenu() {
   menu.hidden = true;
   root.append(menu);
 
-  root.addEventListener('contextmenu', (event) => {
-    const target = event.target;
-    if (!target || target.closest?.('.ctox-context-menu')) return;
-    event.preventDefault();
-    const context = commandContextFromElement(target);
-    renderContextMenu(menu, context, event.clientX, event.clientY);
-  });
-
   document.addEventListener('click', () => {
     menu.hidden = true;
   });
@@ -1384,64 +1355,6 @@ function renderContextMenu(menu, context, x, y) {
     setTimeout(() => { menu.hidden = true; }, 650);
   });
   requestAnimationFrame(() => textarea?.focus());
-}
-
-function buildContextActions(context) {
-  const label = context.column ? getColumnMeta(context.column).label : 'App';
-  const actions = [
-    {
-      label: 'App modifizieren',
-      type: 'ctox.business_os.app.modify',
-      action: 'modify_app',
-      requested_change: 'Modify this Business OS module based on the selected UI context.'
-    }
-  ];
-
-  if (context.column) {
-    actions.push(
-      {
-        label: `${label} konfigurieren`,
-        type: 'business_os.column.configure',
-        action: 'configure_column'
-      },
-      {
-        label: `Parser und Datenstruktur für ${label} anpassen`,
-        type: 'business_os.definition.modify',
-        action: 'modify_parser_schema'
-      },
-      {
-        label: `Suche, Filter und Sortierung für ${label} anpassen`,
-        type: 'business_os.search_sort.modify',
-        action: 'modify_search_sort'
-      }
-    );
-  }
-
-  if (context.importSource) {
-    actions.push({
-      label: `Importtyp ${context.importSource} anpassen`,
-      type: 'business_os.import.modify',
-      action: 'modify_import_source'
-    });
-  }
-
-  if (context.fieldTag === 'input' || context.fieldTag === 'textarea' || context.fieldTag === 'select') {
-    actions.push({
-      label: 'Dieses Feld modifizieren',
-      type: 'business_os.field.modify',
-      action: 'modify_field'
-    });
-  }
-
-  if (context.column === 'matches' || context.role === 'match-item') {
-    actions.push({
-      label: 'Scoring-Regeln anpassen',
-      type: 'business_os.scoring.modify',
-      action: 'modify_scoring'
-    });
-  }
-
-  return actions;
 }
 
 function renderColumnDrawer(button) {

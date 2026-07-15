@@ -1,7 +1,12 @@
 export function createCtoxLauncher({ modules, apps, currentModuleId, openApp }) {
+  const appIds = new Set(
+    (apps || [])
+      .map((app) => app?.id)
+      .filter(Boolean)
+  );
   const moduleDirectory = new Map(
     (modules || [])
-      .filter((mod) => mod && mod.id && mod.id !== currentModuleId)
+      .filter((mod) => mod && mod.id && mod.id !== currentModuleId && !appIds.has(mod.id))
       .map((mod) => [mod.id, mod])
   );
   const appDirectory = new Map(

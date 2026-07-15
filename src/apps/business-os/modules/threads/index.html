@@ -17,30 +17,36 @@
       </div>
     </header>
     <nav class="threads-filter-list" aria-label="Thread Filter">
-      <button type="button" class="ctox-chip is-active" data-filter="inbox">Inbox</button>
-      <button type="button" class="ctox-chip" data-filter="mentions">Mentions</button>
-      <button type="button" class="ctox-chip" data-filter="waiting">Wartet</button>
+      <button type="button" class="ctox-chip is-active" data-filter="inbox">Jetzt handeln</button>
+      <button type="button" class="ctox-chip" data-filter="waiting">Wartet auf mich</button>
+      <button type="button" class="ctox-chip" data-filter="running">AI arbeitet</button>
+      <button type="button" class="ctox-chip" data-filter="delegated">Wartet auf andere</button>
+      <button type="button" class="ctox-chip" data-filter="snoozed">Später</button>
+      <button type="button" class="ctox-chip" data-filter="archived">Erledigt</button>
+      <button type="button" class="ctox-chip" data-filter="team">Team Queue</button>
+      <button type="button" class="ctox-chip" data-filter="mentions">Erwähnungen</button>
       <button type="button" class="ctox-chip" data-filter="approvals">Freigaben</button>
-      <button type="button" class="ctox-chip" data-filter="delegated">Delegiert</button>
-      <button type="button" class="ctox-chip" data-filter="running">CTOX läuft</button>
       <button type="button" class="ctox-chip" data-filter="failed">Blockiert</button>
-      <button type="button" class="ctox-chip" data-filter="watching">Watching</button>
-      <button type="button" class="ctox-chip" data-filter="snoozed">Snoozed</button>
       <button type="button" class="ctox-chip" data-filter="all">Alle</button>
       <button type="button" class="ctox-chip" data-filter="archived">Archiv</button>
     </nav>
+    <section class="threads-briefing" data-personal-briefing aria-label="Persönliches Briefing"></section>
     <div class="threads-list" data-thread-list></div>
   </section>
 
   <section class="threads-pane threads-center" aria-label="Thread Timeline">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
+        <button type="button" class="ctox-pane-icon threads-mobile-back" data-mobile-back aria-label="Zur Inbox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-thread-source>Kontext</span>
           <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
         </div>
         <div class="ctox-pane-actions">
           <span class="ctox-badge" data-thread-status>bereit</span>
+          <span class="ctox-badge threads-sync-state" data-sync-state>lokal</span>
           <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>
@@ -58,9 +64,47 @@
       <textarea class="ctox-textarea" data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
       <button type="submit" class="ctox-button is-primary">Senden</button>
     </form>
+    <nav class="threads-mobile-actions" aria-label="Thread Aktionen">
+      <button type="button" data-mobile-reply>Antworten</button>
+      <button type="button" data-thread-claim>Übernehmen</button>
+      <button type="button" data-mobile-snooze>Später</button>
+      <button type="button" data-mobile-more>Mehr</button>
+    </nav>
   </section>
 
   <aside class="threads-pane threads-right" aria-label="Thread Actions">
+    <section class="threads-panel">
+      <h3>Aufmerksamkeit</h3>
+      <form data-notification-preferences-form class="threads-form">
+        <label><span class="ctox-field-label">Mindestpriorität</span><input class="ctox-input" type="number" min="0" max="100" step="10" value="20" data-notification-threshold></label>
+        <label><span class="ctox-field-label">Ruhezeit von</span><input class="ctox-input" type="time" data-quiet-start></label>
+        <label><span class="ctox-field-label">Ruhezeit bis</span><input class="ctox-input" type="time" data-quiet-end></label>
+        <label class="threads-check"><input type="checkbox" checked data-notification-approvals> Freigaben</label>
+        <label class="threads-check"><input type="checkbox" checked data-notification-mentions> Erwähnungen</label>
+        <label class="threads-check"><input type="checkbox" checked data-notification-escalations> Eskalationen und Fehler</label>
+        <button type="submit" class="ctox-button">Speichern</button>
+      </form>
+    </section>
+
+    <section class="threads-panel">
+      <h3>Übergabe</h3>
+      <form data-handoff-form class="threads-form">
+        <label><span class="ctox-field-label">An User</span><input class="ctox-input" data-handoff-target required></label>
+        <label><span class="ctox-field-label">Erwartung</span><textarea class="ctox-textarea" data-handoff-body rows="3" required></textarea></label>
+        <label><span class="ctox-field-label">Frist</span><input class="ctox-input" type="datetime-local" data-handoff-due></label>
+        <label><span class="ctox-field-label">Rückgabe wenn</span><input class="ctox-input" data-handoff-return-reason placeholder="z. B. Evidenz fehlt"></label>
+        <button type="submit" class="ctox-button">Übergeben</button>
+      </form>
+    </section>
+
+    <section class="threads-panel">
+      <h3>AI beauftragen</h3>
+      <form data-ai-form class="threads-form">
+        <label><span class="ctox-field-label">Ziel</span><textarea class="ctox-textarea" data-ai-goal rows="3" required></textarea></label>
+        <button type="submit" class="ctox-button is-primary">AI starten</button>
+      </form>
+    </section>
+
     <section class="threads-panel">
       <h3>Neue Notiz</h3>
       <form data-note-form class="threads-form">

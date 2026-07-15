@@ -77,7 +77,7 @@
       <div class="workbench-chat-input-bar" style="padding: 14px 18px; border-top: 1px solid var(--line); background: var(--surface-2); flex-shrink:0;">
         <form id="workbench-prompt-form" style="display: flex; gap: 10px; width: 100%;">
           <input type="text" id="workbench-prompt-input" class="ctox-input" placeholder="Type instruction for active coding agent session..." required disabled>
-          <button type="submit" class="ctox-button is-primary" id="workbench-prompt-submit" disabled>Send Instruction</button>
+          <button type="submit" class="ctox-button ctox-run-control" id="workbench-prompt-submit" disabled><span aria-hidden="true">▶</span> Send Instruction</button>
         </form>
       </div>
     </div>
@@ -111,7 +111,7 @@
               <input type="number" id="daemon-port-input" value="8083" class="ctox-input" style="width: 80px;" placeholder="8083">
             </div>
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding: 8px 12px; background:var(--surface-2); border-radius:8px; font-size:11.5px;">
+          <div class="lifecycle-status-row">
             <span>Current Service Uptime: <strong id="diag-uptime">N/A</strong></span>
             <span>Resources: <strong id="diag-resources">N/A</strong></span>
             <span>Electron App: <strong id="diag-installed">Checking...</strong> (PID: <span id="diag-electron-pid">N/A</span>)</span>
@@ -150,7 +150,7 @@
           <div class="browser-log-card" style="margin-top: 14px;">
             <div class="browser-log-title" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Provider Authentication Logs</div>
             <div class="terminal-container small-terminal">
-              <div class="terminal-body" id="browser-log-box" style="height:120px; overflow-y:auto; padding:10px; background:#000; border-radius:6px; font-family:monospace; font-size:10.5px; color:#fff; display:flex; flex-direction:column;">
+              <div class="terminal-body browser-log-box" id="browser-log-box">
                 <span class="terminal-line dim">Awaiting subscription login trigger...</span>
               </div>
             </div>
@@ -203,14 +203,14 @@
 
   <!-- Hidden elements for E2E backwards compatibility -->
   <div style="position: absolute; left: 0; top: 0; width: 20px; height: 20px; opacity: 0.01; z-index: 1;" aria-hidden="true">
-    <button type="button" class="app-switch-btn" data-app="antigravity" id="diag-dot-antigravity" style="position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <button type="button" class="app-switch-btn" data-app="claude" id="diag-dot-claude" style="position: absolute; left: 2px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
-    <button type="button" class="app-switch-btn" data-app="codex" id="diag-dot-codex" style="position: absolute; left: 4px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="app-switch-btn" data-app="antigravity" id="diag-dot-antigravity" aria-label="Antigravity auswählen" style="position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="app-switch-btn" data-app="claude" id="diag-dot-claude" aria-label="Claude auswählen" style="position: absolute; left: 2px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="app-switch-btn" data-app="codex" id="diag-dot-codex" aria-label="Codex auswählen" style="position: absolute; left: 4px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
     <span id="diag-badge-antigravity">OFFLINE</span>
     <span id="diag-badge-claude">OFFLINE</span>
     <span id="diag-badge-codex">OFFLINE</span>
     <!-- Persistent third pane justification: session/history inspection must stay reachable while workspace selection and active prompting remain visible. -->
-    <button type="button" class="right-tab-btn" data-right-tab="subscription" style="position: absolute; left: 6px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="right-tab-btn" data-right-tab="subscription" aria-label="Abonnement anzeigen" style="position: absolute; left: 6px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
     <div id="diag-ls-pid">N/A</div>
     <div id="diag-active-port">8083</div>
     <form id="path-auth-form">

@@ -36,3 +36,9 @@
 .ats-consent .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
 .ats-consent .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
 .ats-consent .ats-gate .ats-export { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--hairline, var(--line)); background: var(--surface); font-size: 11px; line-height: 1.4; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* Canonical compact workbench owns body and form geometry. */
+.ats-consent .ctox-record-workbench__body { display: flex; padding: 8px; gap: 8px; }
+.ats-consent .ctox-compact-form { display: grid; }
+.ats-consent .ctox-compact-form .ctox-input { width: 100%; min-width: 0; }
+.ats-consent .ats-subject-actions { padding-top: 7px; border-top-style: solid; }

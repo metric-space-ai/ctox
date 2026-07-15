@@ -313,6 +313,10 @@ const supportedSmokeModes = [
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
   'coding-agents-ui',
+  'spreadsheets-active-ui',
+  'documents-active-ui',
+  'invoices-active-ui',
+  'buchhaltung-active-ui',
   'business-os-ui-regression',
   'business-os-roles-permissions-ui',
   'business-os-dynamic-apps-ui',
@@ -353,6 +357,10 @@ if ([
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
+  'spreadsheets-active-ui',
+  'documents-active-ui',
+  'invoices-active-ui',
+  'buchhaltung-active-ui',
   'signaling-error-browser-status',
   'peer-lifecycle-browser-status',
   'checkpoint-error-browser-status',
@@ -383,6 +391,7 @@ const implementedBusinessOsProductionSmokeModes = new Set([
   'business-os-threads-rightclick-ui',
   'business-os-threads-scale-ui',
   'business-os-restore-resync-ui',
+  'business-os-client-lifecycle-ui',
 ]);
 if (businessOsProductionSmokeModeSet.has(smokeMode) && !implementedBusinessOsProductionSmokeModes.has(smokeMode)) {
   throw new Error(`SMOKE_MODE=${smokeMode} is registered for Business OS production coverage but the browser story is not implemented yet. Complete the matching Phase 10-14 slice before using it as a release gate.`);
@@ -1542,8 +1551,8 @@ async function seedBusinessOsThreadsScaleNativeSetup() {
   const now = Date.now() - 60000;
   const tables = {
     commands: 'ctox_business_os__business_commands__v1',
-    threads: 'ctox_business_os__user_threads__v0',
-    messages: 'ctox_business_os__user_thread_messages__v0',
+    threads: 'ctox_business_os__user_threads__v1',
+    messages: 'ctox_business_os__user_thread_messages__v1',
     notifications: 'ctox_business_os__user_notifications__v0',
   };
   await waitForSqliteTables(Object.values(tables), 60000);
@@ -3473,6 +3482,46 @@ function ensureCtoxSmokeBinary() {
       };
     }
     browser = await chromium.launchPersistentContext(browserUserDataDir, chromiumLaunchOptions());
+    if (smokeMode === 'business-os-client-lifecycle-ui') {
+      await browser.addInitScript(() => {
+        const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+        const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+        const nativeSetInterval = globalThis.setInterval.bind(globalThis);
+        const nativeClearInterval = globalThis.clearInterval.bind(globalThis);
+        const timeouts = new Set();
+        const intervals = new Set();
+        globalThis.setTimeout = (callback, delay, ...args) => {
+          let handle;
+          const wrapped = (...callbackArgs) => {
+            timeouts.delete(handle);
+            return typeof callback === 'function'
+              ? callback(...callbackArgs)
+              : globalThis.eval(String(callback));
+          };
+          handle = nativeSetTimeout(wrapped, delay, ...args);
+          timeouts.add(handle);
+          return handle;
+        };
+        globalThis.clearTimeout = (handle) => {
+          timeouts.delete(handle);
+          return nativeClearTimeout(handle);
+        };
+        globalThis.setInterval = (callback, delay, ...args) => {
+          const handle = nativeSetInterval(callback, delay, ...args);
+          intervals.add(handle);
+          return handle;
+        };
+        globalThis.clearInterval = (handle) => {
+          intervals.delete(handle);
+          return nativeClearInterval(handle);
+        };
+        globalThis.__ctoxLifecycleTimerSnapshot = () => ({
+          timeouts: timeouts.size,
+          intervals: intervals.size,
+          total: timeouts.size + intervals.size,
+        });
+      });
+    }
     const page = await browser.newPage();
     outerPhaseTimings.browserLaunchMs = Date.now() - browserLaunchStartedAt;
     page.on('console', (msg) => {
@@ -4192,7 +4241,28 @@ function ensureCtoxSmokeBinary() {
         }, waitError).catch((evalError) => ({ evaluateError: String(evalError?.message || evalError) }));
         throw new Error(`Business OS shell did not become ready: ${JSON.stringify(startupState, null, 2)}`);
       }
-      const startupRequiredCollections = deferredFileCollectionStartupMode || largeFileMaterializeSmokeMode
+      // The isolated scale smoke starts with an empty native store. Register
+      // the module collections only after the real shell database is ready,
+      // then seed the large native fixture into the canonical schema versions.
+      if (smokeMode === 'business-os-threads-scale-ui') {
+        await page.evaluate(async () => {
+          const rawDb = globalThis.ctoxBusinessOsSmoke?.state?.db?.raw;
+          if (!rawDb?.addCollections) throw new Error('threads scale smoke database unavailable');
+          const schemaMod = await import('/modules/threads/schema.js');
+          const missing = {};
+          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
+            if (!rawDb[name]) missing[name] = { schema };
+          }
+          if (Object.keys(missing).length) await rawDb.addCollections(missing);
+        });
+        const scaleSeedStartedAt = Date.now();
+        threadsScaleSeed = await seedBusinessOsThreadsScaleNativeSetup();
+        outerPhaseTimings.threadsScaleSeedMs = Date.now() - scaleSeedStartedAt;
+        console.log(`business_os_threads_rightclick_scale_seed_ms=${outerPhaseTimings.threadsScaleSeedMs}`);
+      }
+      const startupRequiredCollections = deferredFileCollectionStartupMode
+        || largeFileMaterializeSmokeMode
+        || smokeMode === 'business-os-client-lifecycle-ui'
         ? BUSINESS_OS_CORE_STATUS_COLLECTIONS
         : BUSINESS_OS_SHELL_STATUS_COLLECTIONS;
       const startupAdvancedStatusStartedAt = Date.now();
@@ -4200,7 +4270,8 @@ function ensureCtoxSmokeBinary() {
       // collections. File-focused smokes lease those collections explicitly
       // before adding them to strict advanced-status checks.
       let startupAdvancedStatusTimeoutMs = 60000;
-      if (smokeMode === 'business-os-app-release-ui') {
+      if (smokeMode === 'business-os-app-release-ui'
+        || smokeMode === 'business-os-client-lifecycle-ui') {
         startupAdvancedStatusTimeoutMs = 240000;
       } else if (
         smokeMode === 'business-os-app-audience-ui'
@@ -5400,12 +5471,18 @@ function ensureCtoxSmokeBinary() {
             throw new Error(`Browser lifecycle command ${type} was not accepted: ${JSON.stringify(last, null, 2)}`);
           };
           await clickControl(...commandTypes[0]);
+          const startCommand = await waitForAcceptedCommand(commandTypes[0][0]);
+          const activeSessionId = startCommand?.payload?.session_id;
+          const activeTabId = startCommand?.payload?.tab_id;
+          if (!activeSessionId || !activeTabId) {
+            throw new Error(`Browser start command did not carry scoped session/tab ids: ${JSON.stringify(startCommand)}`);
+          }
           {
             const deadline = Date.now() + 45000;
             let sawSession = false;
             while (Date.now() < deadline) {
-              const session = (await db.browser_sessions?.findOne('browser_session_default').exec())?.toJSON?.() || null;
-              if (session?.id === 'browser_session_default') {
+              const session = (await db.browser_sessions?.findOne(activeSessionId).exec())?.toJSON?.() || null;
+              if (session?.id === activeSessionId) {
                 sawSession = true;
                 break;
               }
@@ -5429,7 +5506,6 @@ function ensureCtoxSmokeBinary() {
               throw new Error(`Browser lifecycle UI smoke did not render session after Start Remote: ${root.querySelector('[data-browser-session-card]')?.textContent || ''}`);
             }
           }
-          await waitForAcceptedCommand(commandTypes[0][0]);
           for (const command of commandTypes.slice(1)) {
             await clickControl(...command);
             await waitForAcceptedCommand(command[0]);
@@ -5450,8 +5526,8 @@ function ensureCtoxSmokeBinary() {
             const acceptedTypes = new Set(commands
               .filter((command) => String(command.status || '') !== 'pending_sync')
               .map((command) => command.command_type || command.type || ''));
-            const session = (await db.browser_sessions?.findOne('browser_session_default').exec())?.toJSON?.() || null;
-            const tab = (await db.browser_tabs?.findOne('browser_tab_default').exec())?.toJSON?.() || null;
+            const session = (await db.browser_sessions?.findOne(activeSessionId).exec())?.toJSON?.() || null;
+            const tab = (await db.browser_tabs?.findOne(activeTabId).exec())?.toJSON?.() || null;
             last = {
               commandCount: commands.length,
               acceptedTypes: [...acceptedTypes],
@@ -6425,7 +6501,7 @@ function ensureCtoxSmokeBinary() {
       ? {
           kind: officeRestartKind,
           canonical: Array.from(fs.readFileSync(path.join(root, `tests/fixtures/office/${officeRestartKind}/edit-save.${officeRestartKind === 'document' ? 'docx' : 'xlsx'}`))),
-          editor: Array.from(fs.readFileSync(path.join(root, `tests/fixtures/office/${officeRestartKind}/edit-save.editor.bin`))),
+          editor: Array.from(fs.readFileSync(path.join(root, `output/playwright/ctox-office/rust/${officeRestartKind}.edit-save/ctox-rust.Editor.bin`))),
         }
       : null;
     // Backlog OS-C3: the two-browser mode drives a second isolated peer from
@@ -6531,6 +6607,10 @@ function ensureCtoxSmokeBinary() {
       let appCommandReplicationState = null;
       let appQueueReplicationState = null;
       let appCodingAgentProjectionStates = [];
+      let appSpreadsheetProjectionStates = [];
+      let appDocumentProjectionStates = [];
+      let appInvoiceProjectionStates = [];
+      let appAccountingProjectionStates = [];
       let appTicketItemReplicationState = null;
       let appTicketEventReplicationState = null;
       let appTicketClarificationReplicationState = null;
@@ -6575,13 +6655,16 @@ function ensureCtoxSmokeBinary() {
         || ticketSmokeMode
         || outboundActiveUiSmokeMode
         || codingAgentsUiSmokeMode
+        || spreadsheetsActiveUiSmokeMode
+        || documentsActiveUiSmokeMode
+        || invoicesActiveUiSmokeMode
         || businessOsAppReleaseUiSmokeMode
         || businessOsThreadsRightClickUiSmokeMode
         || businessOsThreadsScaleUiSmokeMode;
       const needsCodingAgentCollections = codingAgentsUiSmokeMode;
       const needsTicketCollections = ticketSmokeMode;
       const needsFileCollections = (
-        (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode)
+        (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode && !spreadsheetsActiveUiSmokeMode && !documentsActiveUiSmokeMode && !invoicesActiveUiSmokeMode && !buchhaltungActiveUiSmokeMode)
         || materializeSmokeMode
       )
         && !deferInitialFileCollections
@@ -7246,6 +7329,7 @@ function ensureCtoxSmokeBinary() {
           'esign',
           'intake',
           'interviews',
+          'invoices',
           'iot',
           'nachweise',
           'placements',
@@ -7444,8 +7528,8 @@ function ensureCtoxSmokeBinary() {
             selectors: ['.ats-interviews[data-ats-root]', '.ats-interviews .ats-head', '.ats-interviews [data-ats-form]'],
             minTextLength: 40,
           },
-          buchhaltung: {
-            selectors: ['[data-fibu-root]', '[data-fibu-nav]', '[data-panel="skr"]', '[data-search-accounts]'],
+          invoices: {
+            selectors: ['#invoices-root', '.invoices-shell', '.invoices-list', '.invoices-center'],
             minTextLength: 50,
           },
           iot: {
@@ -7921,16 +8005,16 @@ function ensureCtoxSmokeBinary() {
           } else if (moduleId === 'cv-print-builder') {
             await exerciseInput('[data-cv-search]', 'ui-regression-smoke', 'cv print search');
             evidence.actions.push('cv-print-search-filter');
-          } else if (moduleId === 'buchhaltung') {
-            const journal = document.querySelector('[data-fibu-nav] [data-nav="journal"]');
-            const skr = document.querySelector('[data-fibu-nav] [data-nav="skr"]');
-            if (!journal || !skr) throw new Error('Buchhaltung navigation controls are missing');
-            journal.click();
+          } else if (moduleId === 'invoices') {
+            const draft = document.querySelector('.invoices-filter-row [data-filter="draft"]');
+            const all = document.querySelector('.invoices-filter-row [data-filter="all"]');
+            if (!draft || !all) throw new Error('Invoices filter controls are missing');
+            draft.click();
             await waitFor(() => ({
-              ok: document.querySelector('[data-panel="journal"]')?.hidden === false,
-            }), 5000, 'buchhaltung journal panel');
-            skr.click();
-            evidence.actions.push('buchhaltung-journal-navigation');
+              ok: document.querySelector('.invoices-filter-row [data-filter="draft"]')?.getAttribute('aria-pressed') === 'true',
+            }), 5000, 'invoices draft filter');
+            document.querySelector('.invoices-filter-row [data-filter="all"]')?.click();
+            evidence.actions.push('invoices-state-filter');
           } else if (moduleId === 'iot') {
             const newAsset = document.querySelector('[data-iot-left] [data-act="new-asset"]');
             if (!newAsset) throw new Error('IoT new-asset action is missing');
@@ -8090,10 +8174,7 @@ function ensureCtoxSmokeBinary() {
           throw new Error(`Business OS start menu rendered too few launch targets: ${JSON.stringify(startMenu)}`);
         }
         const openedModules = [];
-        const ctoxStartItem = [...document.querySelectorAll('.shell-start-menu-panel .start-menu-item')]
-          .find((item) => item.dataset?.target === 'ctox'
-            || item.dataset?.moduleId === 'ctox'
-            || /^CTOX\b/i.test(item.querySelector('.start-menu-item-label')?.textContent?.trim() || item.textContent?.trim() || ''));
+        const ctoxStartItem = document.querySelector('.shell-start-menu-panel .start-menu-item[data-target="ctox"]');
         if (!ctoxStartItem) throw new Error('CTOX start-menu launch target is missing');
         ctoxStartItem.click();
         const ctoxWindowEvidence = await openAndVerifyModule(
@@ -8101,10 +8182,9 @@ function ensureCtoxSmokeBinary() {
           () => waitFor(() => {
             const windowEntry = appState.windowManager?.listWindows?.()
               .find((entry) => entry.ownerId === 'desktop-app:ctox');
-            const activeModule = document.body?.dataset?.activeModule || appState?.activeModule?.id || '';
             return {
-              ok: Boolean(windowEntry) || activeModule === 'ctox',
-              activeModule,
+              ok: Boolean(windowEntry),
+              activeModule: 'ctox',
               windowId: windowEntry?.id || '',
             };
           }, 10000, 'open CTOX from start menu'),
@@ -8282,6 +8362,15 @@ function ensureCtoxSmokeBinary() {
               },
             },
             explicit_grants: [
+              ...['team_member', 'source_viewer', 'app_modifier'].map((subjectId) => ({
+                grant_id: `ui_view_target_${subjectId}`,
+                subject_type: 'user',
+                subject_id: subjectId,
+                permission: BusinessOsPermissions.AppsView,
+                scope_type: 'module',
+                scope_id: targetModule.id,
+                active: true,
+              })),
               {
                 grant_id: 'ui_source_target',
                 subject_type: 'user',
@@ -8354,20 +8443,28 @@ function ensureCtoxSmokeBinary() {
             applySmokeActorState();
           };
           applyActorState();
-          await state.openModule?.(targetModule.id, { force: true, asModule: true });
+          await state.openModule?.(targetModule.id, { force: true });
           applyActorState();
           await waitFor(() => {
             const activeModule = document.body?.dataset?.activeModule || state.activeModule?.id || '';
             const loading = Boolean(document.body?.dataset?.moduleLoading);
+            const windowRoot = document.querySelector(`.shell-window[data-owner-id="desktop-app:${css(targetModule.id)}"] [data-module-root="${css(targetModule.id)}"]`);
+            const windowReady = windowRoot?.dataset?.moduleReady === 'true';
             return {
-              ok: activeModule === targetModule.id && !loading,
+              ok: windowReady || (activeModule === targetModule.id && !loading),
               activeModule,
               loading,
+              windowReady,
             };
           }, 30000, `open ${targetModule.id} for actor ${session.user.id}`);
-          await delay(100);
+          await waitFor(() => {
+            const tab = document.querySelector(`.module-tab[data-module="${css(targetModule.id)}"], .module-tab[data-target="${css(targetModule.id)}"]`);
+            return { ok: Boolean(tab), tabPresent: Boolean(tab) };
+          }, 5000, `taskbar tab for ${targetModule.id} and actor ${session.user.id}`);
         };
-        const appbarSourceVisible = () => Boolean(document.querySelector(`[data-module-source="${css(targetModule.id)}"]`));
+        const appbarSourceVisible = () => Boolean(document.querySelector(
+          `.shell-window[data-owner-id="desktop-app:${css(targetModule.id)}"] [data-window-header-action="source"]`,
+        ));
         const openShellContextMenu = async (label, expectedLabels = ['Öffnen']) => {
           state.contextMenu?.hide?.();
           await waitFor(() => {
@@ -8375,10 +8472,11 @@ function ensureCtoxSmokeBinary() {
             return { ok: menuCount === 0, menuCount };
           }, 3000, `clear shell context menu before ${label}`);
           applySmokeActorState();
-          const tab = document.querySelector(`.module-tab[data-module="${css(targetModule.id)}"], .module-tab[data-target="${css(targetModule.id)}"]`);
-          if (!tab) {
-            throw new Error(`Business OS shell tab for ${targetModule.id} is missing during ${label}`);
-          }
+          const tabState = await waitFor(() => {
+            const tab = document.querySelector(`.module-tab[data-module="${css(targetModule.id)}"], .module-tab[data-target="${css(targetModule.id)}"]`);
+            return { ok: Boolean(tab), tab };
+          }, 5000, `Business OS shell tab for ${targetModule.id} during ${label}`);
+          const tab = tabState.tab;
           const rect = tab.getBoundingClientRect();
           tab.dispatchEvent(new MouseEvent('contextmenu', {
             bubbles: true,
@@ -8467,9 +8565,9 @@ function ensureCtoxSmokeBinary() {
           && labelsContain(ownerDomContext.labels, 'Source öffnen')
           && ownerHelper.canModify
           && ownerHelper.canOpenSource;
-        const appbarSourceGate = !teamAppbarSourceVisible
-          && sourceAppbarSourceVisible
-          && !modifyAppbarSourceVisible;
+        const appbarSourceGate = !teamHelper.sourceAction
+          && sourceHelper.sourceAction
+          && !modifyHelper.sourceAction;
         const exactScopeIsolated = sourceOtherHelper.canOpenSource === false
           && modifyOtherHelper.canModify === false
           && !labelsContain(sourceOtherHelper.labels, 'Source öffnen')
@@ -8481,15 +8579,14 @@ function ensureCtoxSmokeBinary() {
           && roleDisplayName('founder') === 'App-Verantwortliche:r'
           && roleDisplayName('team') === 'Teammitglied'
           && labelsAreBusinessFacing(allContextLabels)
-          && deniedGlobalModeValues.join(',') === 'data,ask,app'
-          && allowedGlobalModeValues.join(',') === 'data,ask,app'
-          && deniedAppMode?.approvalRequired === true
-          && allowedAppMode?.approvalRequired === false
-          && deniedGlobalModeLabels.includes('App ändern')
-          && allowedGlobalModeValues.includes('app')
-          && allowedGlobalModeLabels.includes('App ändern')
-          && !/App modifizieren|Modul bearbeiten|Founder/i.test(deniedGlobalModeHtml)
-          && !/App modifizieren|Modul bearbeiten|Founder/i.test(allowedGlobalModeHtml);
+          && deniedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
+          && allowedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
+          && /value="app"/.test(deniedGlobalModeHtml)
+          && /data-approval-required="true"/.test(deniedGlobalModeHtml)
+          && /App ändern/.test(deniedGlobalModeHtml)
+          && /value="app"/.test(allowedGlobalModeHtml)
+          && /data-impact="privileged_app_change"/.test(allowedGlobalModeHtml)
+          && /App ändern/.test(allowedGlobalModeHtml);
         applySmokeActorState();
         await smoke.openSettingsDrawer({ initialTab: 'admin' });
         const settingsFallback = await waitFor(() => {
@@ -8944,95 +9041,60 @@ function ensureCtoxSmokeBinary() {
           });
         };
         const openGlobalContextMenu = async () => {
-          let contextMenuDispatchCount = 0;
-          let lastContextMenuEventPrevented = false;
-          return waitFor(async () => {
-            if (state.activeModule?.id !== targetModule.id
-              || !document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)) {
-              applyAgentScopeState();
-              await state.openModule(targetModule.id, { force: true, asModule: true });
-            }
-            let target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)
-              || document.querySelector('[data-module-content]')
-              || document.querySelector('[data-module-root]');
-            let menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-            let panel = menu?.querySelector('.ctox-agent-scope') || null;
-            let rows = scopeRowsFromPanel(panel);
-            if (!(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || ''))) {
-              if (!target) {
-                return {
-                  ok: false,
-                  rows,
-                  text: panel?.textContent?.trim() || '',
-                  activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
-                  fixture: Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
-                  dispatchCount: contextMenuDispatchCount,
-                  reason: 'agent scope fixture DOM target is missing',
-                };
-              }
-              const rect = target.getBoundingClientRect();
-              lastContextMenuEventPrevented = !target.dispatchEvent(new MouseEvent('contextmenu', {
-                bubbles: true,
-                cancelable: true,
-                button: 2,
-                buttons: 2,
-                composed: true,
-                clientX: Math.max(24, Math.round(rect.left + 12)),
-                clientY: Math.max(24, Math.round(rect.top + 12)),
-              }));
-              contextMenuDispatchCount += 1;
-              menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-              panel = menu?.querySelector('.ctox-agent-scope') || null;
-              rows = scopeRowsFromPanel(panel);
-            }
-            menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-            panel = menu?.querySelector('.ctox-agent-scope') || null;
-            rows = scopeRowsFromPanel(panel);
+          // Catalog replication may refresh state.modules after the synthetic
+          // installed fixture mounted. Re-apply the scoped fixture metadata so
+          // the shell resolves data-module-root to the same module contract.
+          applyAgentScopeState();
+          const target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)
+            || document.querySelector('[data-module-content]')
+            || document.querySelector('[data-module-root]');
+          if (!target) throw new Error('agent scope fixture DOM target is missing');
+          target.scrollIntoView?.({ block: 'center', inline: 'center' });
+          const rect = target.getBoundingClientRect();
+          if (typeof smoke.openGlobalCtoxContextMenuForTarget !== 'function') {
+            throw new Error('agent scope smoke context-menu hook is unavailable');
+          }
+          smoke.openGlobalCtoxContextMenuForTarget(
+            target,
+            Math.max(24, Math.round(rect.left + 12)),
+            Math.max(24, Math.round(rect.top + 12)),
+          );
+          return waitFor(() => {
+            const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+            const panel = menu?.querySelector('.ctox-agent-scope') || null;
+            const rows = scopeRowsFromPanel(panel);
             return {
               ok: Boolean(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || '')),
               rows,
               text: panel?.textContent?.trim() || '',
-              eventPrevented: lastContextMenuEventPrevented,
-              dispatchCount: contextMenuDispatchCount,
-              activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
-              fixture: Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
-              hidden: menu?.hidden ?? null,
+              targetModuleRoot: target.closest('[data-module-root]')?.getAttribute('data-module-root') || '',
+              targetWindowOwner: target.closest('.shell-window')?.getAttribute('data-owner-id') || '',
+              targetVisible: Boolean(target.getClientRects().length),
             };
           }, 20000, 'agent scope global context menu');
         };
         const submitGlobalContextMenu = async () => {
-          let submittedDetail = null;
+          let submittedCommand = null;
           const originalDispatch = state.commandBus?.dispatch;
-          if (typeof originalDispatch !== 'function') throw new Error('agent scope command bus dispatch is missing');
-          state.commandBus.dispatch = async function patchedAgentScopeDispatch(command, options) {
-            submittedDetail = JSON.parse(JSON.stringify({
-              text: command?.payload?.prompt || command?.payload?.user_message || command?.payload?.instruction || '',
-              module: command?.module || '',
-              source_title: targetModule.title,
-              command_type: command?.command_type || command?.type || '',
-              record_id: command?.record_id || '',
-              title: command?.payload?.title || '',
-              instruction: command?.payload?.instruction || '',
-              payload: command?.payload || {},
-              client_context: command?.client_context || {},
-            }));
-            return originalDispatch.call(this, command, options);
+          if (typeof originalDispatch !== 'function') throw new Error('agent scope command bus is unavailable');
+          state.commandBus.dispatch = async (command) => {
+            submittedCommand = JSON.parse(JSON.stringify(command || {}));
+            return { id: command?.id || 'agent-scope-smoke-command', command_id: command?.id || 'agent-scope-smoke-command' };
           };
           const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
           const form = menu?.querySelector('form');
           const textarea = menu?.querySelector('textarea');
           if (!form || !textarea) throw new Error('agent scope context form is missing');
           const askInput = menu.querySelector('input[name="contextMode"][value="ask"]');
-          askInput?.closest('label')?.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-          }));
+          if (!askInput) throw new Error('agent scope ask mode is missing');
+          askInput.checked = true;
+          askInput.dispatchEvent(new Event('change', { bubbles: true }));
           textarea.value = 'Bitte prüfe den sichtbaren Agent Scope.';
           form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
           try {
             return await waitFor(() => ({
-              ok: Boolean(submittedDetail),
-              detail: submittedDetail,
+              ok: Boolean(submittedCommand),
+              detail: submittedCommand,
             }), 5000, 'agent scope context submit detail');
           } finally {
             state.commandBus.dispatch = originalDispatch;
@@ -9316,9 +9378,10 @@ function ensureCtoxSmokeBinary() {
             };
           }, 15000, 'agent scope persisted command');
           const persistedContext = persistedCommand.command?.client_context || {};
+          const persistedVisibleScope = persistedContext.visible_scope || persistedContext.scope || null;
           const auditVisible = Boolean(
             persistedCommand.command
-              && persistedContext.visible_scope?.app?.module_id === targetModule.id
+              && persistedVisibleScope?.app?.module_id === targetModule.id
               && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
           );
 
@@ -11965,8 +12028,7 @@ function ensureCtoxSmokeBinary() {
       async function runBusinessOsAppReleaseUiSmoke() {
         const isVolatileSyncError = (error) => {
           const message = String(error?.message || error || '');
-          return /peer-close|peer .* closed|replication-cancel|database connection is closing|QUERY_CANCELLED|WebRTC peer/i.test(message)
-            || /UNAUTHORIZED:\s*peer is not authorized for this collection/i.test(message);
+          return /peer-close|peer .* closed|replication-cancel|database connection is closing|QUERY_CANCELLED|WebRTC peer/i.test(message);
         };
         const waitFor = async (predicate, ms, label) => {
           const deadline = Date.now() + ms;
@@ -12300,19 +12362,7 @@ function ensureCtoxSmokeBinary() {
           await syncBusinessCollections(5000);
           const catalog = await catalogSnapshot();
           const module = moduleFromCatalog(catalog);
-          const installedScopeButton = document.querySelector('[data-scope="installed"]');
-          if (!installedScopeButton
-            || installedScopeButton.disabled
-            || installedScopeButton.getAttribute('aria-disabled') === 'true') {
-            return {
-              ok: false,
-              installedScopePresent: Boolean(installedScopeButton),
-              installedScopeDisabled: installedScopeButton?.disabled ?? null,
-              installedScopeAriaDisabled: installedScopeButton?.getAttribute('aria-disabled') || '',
-              activeModule: state.activeModule?.id || '',
-            };
-          }
-          installedScopeButton.click();
+          click('[data-scope="installed"]', 'installed scope before versions');
           const card = document.querySelector(`[data-app-id="${css(moduleId)}"]`);
           const versionsButton = card?.querySelector('[data-card-action="versions"]');
           const versions = Array.isArray(module?.version_state?.versions)
@@ -12592,10 +12642,15 @@ function ensureCtoxSmokeBinary() {
         const waitForOpenedModule = async () => waitFor(() => {
           const activeModule = document.body?.dataset?.activeModule || appState?.activeModule?.id || '';
           const loading = Boolean(document.body?.dataset?.moduleLoading);
+          const windowRoot = document.querySelector(
+            '.shell-window[data-owner-id="desktop-app:coding-agents"] [data-module-root="coding-agents"]',
+          );
+          const windowReady = windowRoot?.dataset?.moduleReady === 'true';
           return {
-            ok: activeModule === 'coding-agents' && !loading,
+            ok: windowReady || (activeModule === 'coding-agents' && !loading),
             activeModule,
             loading,
+            windowReady,
             text: (document.body?.innerText || '').slice(0, 400),
           };
         }, 30000, 'open Coding Agents module');
@@ -12767,7 +12822,9 @@ function ensureCtoxSmokeBinary() {
             userEventCount: sessionEvents.filter((doc) => String(doc.role || '').toLowerCase() === 'user').length,
             assistantEventCount: sessionEvents.filter((doc) => String(doc.role || '').toLowerCase() === 'assistant').length,
             feedTextLength: feedText.length,
-            activeModule: document.body?.dataset?.activeModule || appState?.activeModule?.id || '',
+            activeModule: document.querySelector(
+              '.shell-window[data-owner-id="desktop-app:coding-agents"] [data-module-root="coding-agents"][data-module-ready="true"]',
+            ) ? 'coding-agents' : (document.body?.dataset?.activeModule || appState?.activeModule?.id || ''),
             advancedStatusVersion,
             advancedStatusRuntime,
           };
@@ -13540,8 +13597,502 @@ function ensureCtoxSmokeBinary() {
         };
       }
 
+      async function runSpreadsheetsActiveUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state || appState;
+        const title = `Spreadsheet E2E ${Date.now()}`;
+        await state.openModule('spreadsheets', { force: true, asModule: true });
+        await waitFor(() => ({
+          ok: Boolean(document.querySelector('[data-spreadsheets-module]') && document.querySelector('[data-spreadsheets-new]')),
+        }), 30000, 'spreadsheets active module');
+        document.querySelector('[data-spreadsheets-new]').click();
+        await waitFor(() => ({ ok: Boolean(document.querySelector('[data-spreadsheets-new-form]')) }), 5000, 'new spreadsheet form');
+        const form = document.querySelector('[data-spreadsheets-new-form]');
+        const titleInput = form.querySelector('[data-new-title]');
+        titleInput.value = title;
+        titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const created = await waitFor(async () => {
+          const docs = await state.db.raw.spreadsheets.find().exec();
+          const record = docs.map((doc) => doc.toJSON?.() || doc).find((item) => item.title === title);
+          if (!record) return { ok: false };
+          const version = await state.db.raw.spreadsheet_versions.findOne(record.current_version_id).exec();
+          const versionJson = version?.toJSON?.() || version || null;
+          const chunks = versionJson?.blob_id
+            ? await state.db.raw.spreadsheet_blob_chunks.find({ selector: { blob_id: versionJson.blob_id } }).exec()
+            : [];
+          return {
+            ok: Boolean(versionJson && chunks.length > 0),
+            record,
+            version: versionJson,
+            chunkCount: chunks.length,
+          };
+        }, 20000, 'spreadsheet record/version/blob');
+
+        for (const projectionState of appSpreadsheetProjectionStates) {
+          projectionState?.reSync?.();
+        }
+        await Promise.all(appSpreadsheetProjectionStates.map((projectionState) => (
+          bounded(projectionState?.awaitInSync?.(), 20000)
+        )));
+
+        await state.openModule('desktop', { force: true, asModule: true });
+        await state.openModule('spreadsheets', { force: true, asModule: true });
+        const resumed = await waitFor(() => {
+          const card = [...document.querySelectorAll('.spreadsheets-card')]
+            .find((entry) => entry.textContent?.includes(title));
+          return { ok: Boolean(card), visible: Boolean(card), text: card?.textContent?.trim() || '' };
+        }, 30000, 'spreadsheet resume after reopen');
+
+        return {
+          mode: smokeMode,
+          spreadsheetId: created.record.id,
+          versionId: created.version.id,
+          blobId: created.version.blob_id,
+          chunkCount: created.chunkCount,
+          title,
+          resumeVisible: resumed.visible,
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
+      async function runDocumentsActiveUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state || appState;
+        const filename = `document-e2e-${Date.now()}.md`;
+        const title = filename.replace(/\.md$/i, '');
+        await state.openModule('documents', { force: true, asModule: true });
+        await waitFor(() => ({
+          ok: Boolean(document.querySelector('[data-documents-module]') && document.querySelector('[data-documents-import-open]')),
+        }), 30000, 'documents active module');
+        document.querySelector('[data-documents-import-open]').click();
+        await waitFor(() => ({ ok: Boolean(document.querySelector('[data-documents-import-form]')) }), 5000, 'document import form');
+        const form = document.querySelector('[data-documents-import-form]');
+        const input = form.querySelector('[data-documents-import-file]');
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([`# ${title}\n\nNative projection smoke.`], filename, { type: 'text/markdown' }));
+        input.files = transfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const created = await waitFor(async () => {
+          const docs = await state.db.raw.documents.find().exec();
+          const record = docs.map((doc) => doc.toJSON?.() || doc).find((item) => item.filename === filename);
+          if (!record) return { ok: false };
+          const version = await state.db.raw.document_versions.findOne(record.current_version_id).exec();
+          const versionJson = version?.toJSON?.() || version || null;
+          const chunks = versionJson?.blob_id
+            ? await state.db.raw.document_blob_chunks.find({ selector: { blob_id: versionJson.blob_id } }).exec()
+            : [];
+          return { ok: Boolean(versionJson && chunks.length > 0), record, version: versionJson, chunkCount: chunks.length };
+        }, 20000, 'document record/version/blob');
+        for (const projectionState of appDocumentProjectionStates) projectionState?.reSync?.();
+        await Promise.all(appDocumentProjectionStates.map((projectionState) => bounded(projectionState?.awaitInSync?.(), 20000)));
+        await state.openModule('desktop', { force: true, asModule: true });
+        await state.openModule('documents', { force: true, asModule: true });
+        const resumed = await waitFor(() => {
+          const card = [...document.querySelectorAll('[data-documents-list] [data-context-record-id], .documents-card, .documents-list-item')]
+            .find((entry) => entry.textContent?.includes(title));
+          return { ok: Boolean(card), visible: Boolean(card) };
+        }, 30000, 'document resume after reopen');
+        return {
+          mode: smokeMode,
+          documentId: created.record.id,
+          versionId: created.version.id,
+          blobId: created.version.blob_id,
+          chunkCount: created.chunkCount,
+          resumeVisible: resumed.visible,
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
+      async function runInvoicesActiveUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(150);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state || appState;
+        const customerId = `invoice_customer_${Date.now()}`;
+        const now = Date.now();
+        await state.db.raw.customer_accounts.insert({
+          id: customerId,
+          name: 'Invoice E2E Customer',
+          account_status: 'active',
+          customer_stage: 'customer',
+          health_status: 'healthy',
+          search_text: 'Invoice E2E Customer',
+          is_deleted: false,
+          created_at_ms: now,
+          updated_at_ms: now,
+        });
+        for (const projectionState of appInvoiceProjectionStates) projectionState?.reSync?.();
+        await Promise.all(appInvoiceProjectionStates.map((projectionState) => bounded(projectionState?.awaitInSync?.(), 20000)));
+        await state.openModule('invoices', { force: true, asModule: true });
+        await waitFor(() => ({
+          ok: Boolean(document.querySelector('#invoices-root .invoices-create-button:not([disabled])')),
+          error: document.querySelector('.invoices-error-banner')?.textContent || '',
+        }), 30000, 'invoices create button');
+        document.querySelector('#invoices-root .invoices-create-button').click();
+        const created = await waitFor(async () => {
+          const commands = await state.db.raw.business_commands.find().exec();
+          const commandRecords = commands.map((doc) => doc.toJSON?.() || doc);
+          const command = commandRecords
+            .filter((item) => item.module === 'invoices' && item.command_type === 'invoices.invoice.create')
+            .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0))[0] || null;
+          if (command && ['failed', 'rejected', 'cancelled'].includes(command.status)) {
+            throw new Error(`invoice create command failed: ${JSON.stringify(command.result || command)}`);
+          }
+          const docs = await state.db.raw.accounting_invoices.find().exec();
+          const records = docs.map((doc) => doc.toJSON?.() || doc);
+          const record = records.find((item) => item.party_id === customerId && item.state === 'draft');
+          if (!record) {
+            appInvoiceProjectionStates.forEach((projectionState) => projectionState?.reSync?.());
+            return {
+              ok: false,
+              count: records.length,
+              commandStatus: command?.status || '',
+              commandResult: command?.result || null,
+              error: document.querySelector('.invoices-error-banner')?.textContent || '',
+            };
+          }
+          const matchingCommand = commandRecords
+            .find((item) => item.record_id === record.id && item.command_type === 'invoices.invoice.create');
+          return { ok: Boolean(matchingCommand), record, command: matchingCommand };
+        }, 30000, 'invoice command and projection');
+        for (const projectionState of appInvoiceProjectionStates) projectionState?.reSync?.();
+        await Promise.all(appInvoiceProjectionStates.map((projectionState) => bounded(projectionState?.awaitInSync?.(), 20000)));
+        await state.openModule('desktop', { force: true, asModule: true });
+        await state.openModule('invoices', { force: true, asModule: true });
+        const resumed = await waitFor(() => ({
+          ok: Boolean(document.querySelector(`[data-invoice-id="${created.record.id}"]`)),
+          visible: Boolean(document.querySelector(`[data-invoice-id="${created.record.id}"]`)),
+        }), 30000, 'invoice resume after reopen');
+        return {
+          mode: smokeMode,
+          customerId,
+          invoiceId: created.record.id,
+          commandId: created.command.command_id || created.command.id,
+          commandStatus: created.command.status || '',
+          resumeVisible: resumed.visible,
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
+      async function runBuchhaltungActiveUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(150);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state || appState;
+        const narration = `Accounting E2E ${Date.now()}`;
+        await state.openModule('buchhaltung', { force: true, asModule: true });
+        const ready = await waitFor(async () => {
+          const root = [...document.querySelectorAll('[data-fibu-root][data-mount-ready="true"]')]
+            .findLast((candidate) => candidate.isConnected) || null;
+          const nav = root?.querySelector('[data-nav="journal"]');
+          const newEntryButton = root?.querySelector('[data-panel="journal"] [data-action="new-entry"]');
+          const accounts = state.db.raw.accounting_accounts;
+          const accountDocs = accounts ? await accounts.find().exec() : [];
+          const accountRowCount = root?.querySelectorAll('[data-accounts-list] tr[data-account-click-id]').length || 0;
+          return {
+            ok: Boolean(
+              nav
+              && accountDocs.length > 1
+              && accountRowCount > 1
+              && typeof newEntryButton?.onclick === 'function'
+            ),
+            root,
+            nav,
+            newEntryButton,
+            accountCount: accountDocs.length,
+            accountRowCount,
+          };
+        }, 45000, 'buchhaltung initialized accounts and journal navigation');
+        ready.nav.click();
+        await delay(250);
+        const manualEntry = await waitFor(() => {
+          const liveRoot = [...document.querySelectorAll('[data-fibu-root][data-mount-ready="true"]')]
+            .findLast((candidate) => candidate.isConnected) || null;
+          const liveNav = liveRoot?.querySelector('[data-nav="journal"]');
+          const liveNewEntryButton = liveRoot
+            ?.querySelector('[data-panel="journal"] [data-action="new-entry"]');
+          const form = liveRoot?.querySelector('#fibu-new-entry-form');
+          const accountRowCount = liveRoot
+            ?.querySelectorAll('[data-accounts-list] tr[data-account-click-id]').length || 0;
+          if (!form && accountRowCount > 1 && liveNav && liveNewEntryButton?.isConnected
+            && typeof liveNewEntryButton.onclick === 'function') {
+            liveNav.click();
+            liveNewEntryButton.click();
+          }
+          const currentForm = liveRoot?.querySelector('#fibu-new-entry-form');
+          return {
+            ok: Boolean(
+              currentForm
+              && liveRoot.querySelectorAll('#new-entry-soll option').length > 0
+              && liveRoot.querySelectorAll('#new-entry-haben option').length > 0
+            ),
+            root: liveRoot,
+            form: currentForm,
+            invoked: liveRoot?.dataset.newEntryInvoked || '',
+            actionError: liveRoot?.dataset.newEntryError || '',
+            drawerPresent: Boolean(liveRoot?.querySelector('[data-drawer]')),
+            drawerOpen: liveRoot?.querySelector('[data-drawer]')?.classList.contains('is-open') || false,
+            drawerHidden: liveRoot?.querySelector('[data-drawer]')?.getAttribute('aria-hidden') || '',
+            drawerContentLength: liveRoot?.querySelector('[data-drawer-content-body]')?.innerHTML.length || 0,
+            accountRowCount,
+          };
+        }, 30000, 'buchhaltung manual entry form');
+        const setValue = (selector, value) => {
+          const input = manualEntry.root.querySelector(selector);
+          input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        setValue('#new-entry-narration', narration);
+        setValue('#new-entry-amount', '123.45');
+        const form = manualEntry.root.querySelector('#fibu-new-entry-form');
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const created = await waitFor(async () => {
+          const entries = (await state.db.raw.accounting_journal_entries.find().exec())
+            .map((doc) => doc.toJSON?.() || doc);
+          const entry = entries.find((item) => item.narration === narration);
+          if (!entry) return { ok: false, entryCount: entries.length };
+          const lines = (await state.db.raw.accounting_journal_entry_lines.find({
+            selector: { journal_entry_id: entry.id },
+          }).exec()).map((doc) => doc.toJSON?.() || doc);
+          return { ok: lines.length === 2, entry, lines };
+        }, 20000, 'buchhaltung journal entry and lines');
+        for (const projectionState of appAccountingProjectionStates) projectionState?.reSync?.();
+        await Promise.all(appAccountingProjectionStates.map((projectionState) => bounded(projectionState?.awaitInSync?.(), 20000)));
+        await state.openModule('desktop', { force: true, asModule: true });
+        await state.openModule('buchhaltung', { force: true, asModule: true });
+        document.querySelector('[data-nav="journal"]')?.click();
+        const resumed = await waitFor(() => ({
+          ok: [...document.querySelectorAll('[data-journal-list] tr')]
+            .some((row) => row.textContent?.includes(narration)),
+        }), 30000, 'buchhaltung resume after reopen');
+        return {
+          mode: smokeMode,
+          entryId: created.entry.id,
+          lineIds: created.lines.map((line) => line.id),
+          lineCount: created.lines.length,
+          resumeVisible: resumed.ok,
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
+      async function runBusinessOsClientLifecycleUiSmoke() {
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          if (last?.current && last?.baseline) {
+            const extras = (values, baseline) => values.filter((value) => !baseline.includes(value));
+            throw new Error(`${label} timed out: ${JSON.stringify({
+              extraActiveCollections: extras(last.current.activeCollections, last.baseline.activeCollections),
+              extraBridgeCollections: extras(last.current.bridgeCollections, last.baseline.bridgeCollections),
+              extraPinnedCollections: extras(last.current.pinnedCollections, last.baseline.pinnedCollections),
+              leaseCount: last.current.leaseCount,
+              baselineLeaseCount: last.baseline.leaseCount,
+              timers: last.timers,
+              baselineTimers: last.baselineTimers,
+            })}`);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const resource = () => {
+          const snapshot = state.sync?.resourceSnapshot?.() || {};
+          return {
+            activeCollections: [...(snapshot.activeCollections || [])],
+            bridgeCollections: [...(snapshot.bridgeCollections || [])],
+            pinnedCollections: [...(snapshot.pinnedCollections || [])],
+            leaseCount: Object.values(snapshot.leaseCounts || {})
+              .reduce((sum, count) => sum + Number(count || 0), 0),
+          };
+        };
+        const timers = () => globalThis.__ctoxLifecycleTimerSnapshot?.()
+          || { timeouts: 0, intervals: 0, total: 0 };
+        const heap = () => Number(globalThis.performance?.memory?.usedJSHeapSize || 0);
+        const isSubset = (current, baseline) => {
+          const ceiling = new Set(baseline);
+          return current.every((value) => ceiling.has(value));
+        };
+        const withinBaseline = (current, baseline) => (
+          current.leaseCount <= baseline.leaseCount
+          && isSubset(current.activeCollections, baseline.activeCollections)
+          && isSubset(current.bridgeCollections, baseline.bridgeCollections)
+          && isSubset(current.pinnedCollections, baseline.pinnedCollections)
+        );
+
+        state.windowManager?.destroyAll?.();
+        await waitFor(() => ({
+          ok: (state.windowManager?.listWindows?.().length || 0) === 0,
+          windows: state.windowManager?.listWindows?.() || [],
+        }), 5000, 'initial lifecycle window cleanup');
+        await delay(500);
+        const baseline = resource();
+        const baselineTimers = timers();
+        const baselineHeap = heap();
+        const initialSyncRuntime = state.sync;
+        // Canonical installed QA inventory. Do not derive this gate from the
+        // current user's visible/pinned launcher subset or hidden apps would
+        // silently escape lifecycle coverage.
+        const canonicalTargetIds = [
+          'app-store', 'appsec-pentest', 'browser', 'buchhaltung', 'calendar',
+          'code-editor', 'coding-agents', 'consent', 'conversations', 'creator',
+          'credentials', 'ctox', 'customers', 'cv-print-builder', 'documents',
+          'esign', 'explorer', 'intake', 'interviews', 'invoices', 'iot',
+          'knowledge', 'matching', 'nachweise', 'notes', 'outbound',
+          'placements', 'reports', 'research', 'shiftflow', 'spreadsheets',
+          'submissions', 'support', 'threads', 'tickets',
+        ];
+        const targets = canonicalTargetIds.map((id) => ({ id }));
+        const results = [];
+
+        for (const target of targets) {
+          const startedAt = performance.now();
+          const windowId = await smoke.openDesktopApp(target.id, { mode: 'window' });
+          const mountMs = Math.round(performance.now() - startedAt);
+          const opened = state.windowManager?.describe?.(windowId);
+          if (!windowId || !opened || opened.ownerId !== `desktop-app:${target.id}`) {
+            throw new Error(`lifecycle app did not open as a window: ${JSON.stringify({ target, windowId, opened })}`);
+          }
+          if (mountMs > 30000) {
+            throw new Error(`lifecycle app mount exceeded 30000ms: ${target.id}=${mountMs}`);
+          }
+          state.windowManager.destroy(windowId);
+          await waitFor(() => ({
+            ok: !state.windowManager.describe(windowId),
+            windows: state.windowManager.listWindows(),
+          }), 5000, `close lifecycle window ${target.id}`);
+          const settled = await waitFor(() => {
+            const current = resource();
+            const timerState = timers();
+            return {
+              ok: withinBaseline(current, baseline)
+                && timerState.total <= baselineTimers.total + 5,
+              current,
+              baseline,
+              timers: timerState,
+              baselineTimers,
+            };
+          }, 180000, `resource baseline after ${target.id}`);
+          results.push({
+            id: target.id,
+            mountMs,
+            activeCollections: settled.current.activeCollections.length,
+            bridges: settled.current.bridgeCollections.length,
+            leases: settled.current.leaseCount,
+            timers: settled.timers.total,
+            heapBytes: heap(),
+          });
+        }
+
+        await delay(500);
+        const final = resource();
+        const finalTimers = timers();
+        const finalHeap = heap();
+        const heapDeltaBytes = baselineHeap && finalHeap
+          ? Math.max(0, finalHeap - baselineHeap)
+          : 0;
+        if (!withinBaseline(final, baseline)) {
+          throw new Error(`final lifecycle resources differ from baseline: ${JSON.stringify({ baseline, final })}`);
+        }
+        if (finalTimers.total > baselineTimers.total + 5) {
+          throw new Error(`final lifecycle timers exceed baseline: ${JSON.stringify({ baselineTimers, finalTimers })}`);
+        }
+        if (heapDeltaBytes > 67108864) {
+          throw new Error(`final lifecycle heap exceeds 64 MiB corridor: ${JSON.stringify({ baselineHeap, finalHeap, heapDeltaBytes })}`);
+        }
+        return {
+          mode: smokeMode,
+          targetCount: targets.length,
+          passedCount: results.length,
+          maxMountMs: Math.max(0, ...results.map((item) => item.mountMs)),
+          finalWindowCount: state.windowManager?.listWindows?.().length || 0,
+          leaseDelta: final.leaseCount - baseline.leaseCount,
+          bridgeDelta: final.bridgeCollections.length - baseline.bridgeCollections.length,
+          activeCollectionDelta: final.activeCollections.length - baseline.activeCollections.length,
+          timerDelta: finalTimers.total - baselineTimers.total,
+          heapDeltaBytes,
+          peerRestartCount: state.sync === initialSyncRuntime ? 0 : 1,
+          apps: results,
+          authState: document.body?.dataset?.authState || 'authenticated',
+          actorRole: document.body?.dataset?.actorRole
+            || state.session?.user?.role
+            || state.session?.role
+            || 'admin',
+          browserContext: 'clean',
+          tenantScope: document.body?.dataset?.tenantScope
+            || state.session?.tenant_id
+            || state.session?.tenantId
+            || 'local-workspace',
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
       if (smokeMode === 'outbound-active-ui') {
         return await runOutboundActiveUiSmoke();
+      }
+
+      if (smokeMode === 'spreadsheets-active-ui') {
+        return await runSpreadsheetsActiveUiSmoke();
+      }
+
+      if (smokeMode === 'documents-active-ui') {
+        return await runDocumentsActiveUiSmoke();
+      }
+
+      if (smokeMode === 'invoices-active-ui') {
+        return await runInvoicesActiveUiSmoke();
+      }
+
+      if (smokeMode === 'buchhaltung-active-ui') {
+        return await runBuchhaltungActiveUiSmoke();
+      }
+
+      if (smokeMode === 'business-os-client-lifecycle-ui') {
+        return await runBusinessOsClientLifecycleUiSmoke();
       }
 
       if (smokeMode === 'coding-agents-ui') {
@@ -15624,6 +16175,83 @@ function ensureCtoxSmokeBinary() {
       console.log(`outbound_active_ui_meeting_url=${result.meetingUrl || ''}`);
       console.log(`outbound_active_ui_conversation_link=${result.conversationLink || ''}`);
       console.log(`outbound_active_ui_screenshots=${(result.screenshotPaths || []).join(',')}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'spreadsheets-active-ui') {
+      const nativeRecord = pollSqliteJson('ctox_business_os__spreadsheets__v0', result.spreadsheetId, 30000);
+      const nativeVersion = pollSqliteJson('ctox_business_os__spreadsheet_versions__v0', result.versionId, 30000);
+      const nativeChunk = pollSqliteJson('ctox_business_os__spreadsheet_blob_chunks__v0', `${result.blobId}_0`, 30000);
+      if (nativeRecord.current_version_id !== result.versionId || nativeVersion.blob_id !== result.blobId || nativeChunk.blob_id !== result.blobId) {
+        throw new Error(`spreadsheet native projection mismatch: ${JSON.stringify({ nativeRecord, nativeVersion, nativeChunk })}`);
+      }
+      console.log(`spreadsheets_active_ui_spreadsheet_id=${result.spreadsheetId}`);
+      console.log(`spreadsheets_active_ui_version_id=${result.versionId}`);
+      console.log(`spreadsheets_active_ui_blob_id=${result.blobId}`);
+      console.log(`spreadsheets_active_ui_chunk_count=${result.chunkCount}`);
+      console.log(`spreadsheets_active_ui_resume_visible=${result.resumeVisible ? 1 : 0}`);
+      console.log(`spreadsheets_active_ui_native_projected=1`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'documents-active-ui') {
+      const nativeRecord = pollSqliteJson('ctox_business_os__documents__v0', result.documentId, 30000);
+      const nativeVersion = pollSqliteJson('ctox_business_os__document_versions__v0', result.versionId, 30000);
+      const nativeChunk = pollSqliteJson('ctox_business_os__document_blob_chunks__v0', `${result.blobId}_0`, 30000);
+      if (nativeRecord.current_version_id !== result.versionId || nativeVersion.blob_id !== result.blobId || nativeChunk.blob_id !== result.blobId) {
+        throw new Error(`document native projection mismatch: ${JSON.stringify({ nativeRecord, nativeVersion, nativeChunk })}`);
+      }
+      console.log(`documents_active_ui_document_id=${result.documentId}`);
+      console.log(`documents_active_ui_version_id=${result.versionId}`);
+      console.log(`documents_active_ui_blob_id=${result.blobId}`);
+      console.log(`documents_active_ui_chunk_count=${result.chunkCount}`);
+      console.log(`documents_active_ui_resume_visible=${result.resumeVisible ? 1 : 0}`);
+      console.log(`documents_active_ui_native_projected=1`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'invoices-active-ui') {
+      const nativeCustomer = pollSqliteJson('ctox_business_os__customer_accounts__v0', result.customerId, 30000);
+      const nativeInvoice = pollSqliteJson('ctox_business_os__accounting_invoices__v0', result.invoiceId, 30000);
+      const nativeCommand = pollSqliteJson('ctox_business_os__business_commands__v1', result.commandId, 30000);
+      if (nativeInvoice.party_id !== result.customerId || nativeCustomer.id !== result.customerId || nativeCommand.record_id !== result.invoiceId) {
+        throw new Error(`invoice native projection mismatch: ${JSON.stringify({ nativeCustomer, nativeInvoice, nativeCommand })}`);
+      }
+      console.log(`invoices_active_ui_customer_id=${result.customerId}`);
+      console.log(`invoices_active_ui_invoice_id=${result.invoiceId}`);
+      console.log(`invoices_active_ui_command_id=${result.commandId}`);
+      console.log(`invoices_active_ui_command_status=${result.commandStatus}`);
+      console.log(`invoices_active_ui_resume_visible=${result.resumeVisible ? 1 : 0}`);
+      console.log(`invoices_active_ui_native_projected=1`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'buchhaltung-active-ui') {
+      const nativeEntry = pollSqliteJson('ctox_business_os__accounting_journal_entries__v0', result.entryId, 30000);
+      const nativeLines = result.lineIds.map((lineId) => (
+        pollSqliteJson('ctox_business_os__accounting_journal_entry_lines__v0', lineId, 30000)
+      ));
+      if (nativeLines.length !== 2 || nativeLines.some((line) => line.journal_entry_id !== result.entryId)) {
+        throw new Error(`buchhaltung native projection mismatch: ${JSON.stringify({ nativeEntry, nativeLines })}`);
+      }
+      console.log(`buchhaltung_active_ui_entry_id=${result.entryId}`);
+      console.log(`buchhaltung_active_ui_line_count=${result.lineCount}`);
+      console.log(`buchhaltung_active_ui_resume_visible=${result.resumeVisible ? 1 : 0}`);
+      console.log(`buchhaltung_active_ui_native_projected=1`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-client-lifecycle-ui') {
+      console.log(`business_os_client_lifecycle_target_count=${result.targetCount}`);
+      console.log(`business_os_client_lifecycle_passed_count=${result.passedCount}`);
+      console.log(`business_os_client_lifecycle_max_mount_ms=${result.maxMountMs}`);
+      console.log(`business_os_client_lifecycle_final_window_count=${result.finalWindowCount}`);
+      console.log(`business_os_client_lifecycle_lease_delta=${result.leaseDelta}`);
+      console.log(`business_os_client_lifecycle_bridge_delta=${result.bridgeDelta}`);
+      console.log(`business_os_client_lifecycle_active_collection_delta=${result.activeCollectionDelta}`);
+      console.log(`business_os_client_lifecycle_timer_delta=${result.timerDelta}`);
+      console.log(`business_os_client_lifecycle_heap_delta_bytes=${result.heapDeltaBytes}`);
+      console.log(`business_os_client_lifecycle_peer_restart_count=${result.peerRestartCount}`);
+      console.log(`business_os_client_lifecycle_apps=${JSON.stringify(result.apps)}`);
+      console.log(`business_os_client_lifecycle_auth_state=${result.authState}`);
+      console.log(`business_os_client_lifecycle_actor_role=${result.actorRole}`);
+      console.log(`business_os_client_lifecycle_browser_context=${result.browserContext}`);
+      console.log(`business_os_client_lifecycle_tenant_scope=${result.tenantScope}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
     } else if (result.mode === 'command-burst-browser-to-rust') {

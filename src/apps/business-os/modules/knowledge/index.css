@@ -9,9 +9,9 @@
   --knowledge-accent: var(--accent);
   --knowledge-line: var(--line);
   --knowledge-soft-line: color-mix(in srgb, var(--knowledge-line) 78%, transparent);
-  --knowledge-panel-radius: 14px;
-  --knowledge-control-radius: 6px;
-  --knowledge-shadow: var(--panel-shadow);
+  --knowledge-panel-radius: var(--surface-radius);
+  --knowledge-control-radius: var(--control-radius);
+  --knowledge-shadow: none;
   display: grid;
   /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. Der shell-globale
    * Resizer (.ctox-column-resizer[data-resizer-var="--knowledge-left-width"])
@@ -101,28 +101,37 @@
 
 .knowledge-module .knowledge-bundle-head {
   display: grid;
-  grid-template-columns: 12px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr);
   column-gap: 6px;
   width: 100%;
   min-width: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--knowledge-control-radius);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 8px;
+  padding: 6px 7px;
   text-align: left;
 }
 
 .knowledge-module .bundle-caret {
   grid-row: 1 / 4;
   align-self: center;
-  width: 0;
-  height: 0;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 5px solid currentColor;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0.72;
+  transform: rotate(0deg);
+  transition: transform 0.16s ease;
+}
+
+.knowledge-module .bundle-caret::before {
+  content: "›";
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1;
 }
 
 .knowledge-module .knowledge-bundle[data-open="true"] .bundle-caret {
@@ -192,11 +201,11 @@
   width: 100%;
   min-width: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--knowledge-control-radius);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 8px;
+  padding: 6px 7px;
   text-align: left;
 }
 
@@ -753,14 +762,14 @@
   font-size: 11px;
 }
 
-@media (max-width: 1120px) {
+@container business-app-window (max-width: 1120px) {
   .knowledge-module {
     grid-template-columns: minmax(280px, var(--knowledge-left-width, 340px)) 10px minmax(0, 1fr);
     padding: 10px;
   }
 }
 
-@media (max-width: 760px) {
+@container business-app-window (max-width: 760px) {
   .knowledge-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(240px, 42vh) minmax(360px, 1fr);

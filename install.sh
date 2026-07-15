@@ -194,6 +194,33 @@ tui_note() {
   printf '\n  %b%s%b\n' "$C_GREY" "$1" "$C_RESET" >&2
 }
 
+run_optional_soft_timeout() {
+  local label="$1"
+  local seconds="$2"
+  shift 2
+  local pid waited=0
+
+  "$@" >/dev/null 2>&1 &
+  pid="$!"
+
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    if (( waited >= seconds )); then
+      kill -TERM "$pid" >/dev/null 2>&1 || true
+      sleep 1
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -KILL "$pid" >/dev/null 2>&1 || true
+      fi
+      disown "$pid" >/dev/null 2>&1 || true
+      tui_note "$label timed out after ${seconds}s; continuing"
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  wait "$pid" >/dev/null 2>&1
+}
+
 tui_module_start() {
   printf '\n  %b%b▶ %s%b\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET" >&2
 }
@@ -1148,6 +1175,7 @@ install_ctox_launchd_service() {
   <string>$label</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/bin/bash</string>
     <string>$(plist_escape "$BIN_DIR/ctox")</string>
     <string>service</string>
     <string>--foreground</string>
@@ -1182,8 +1210,73 @@ PLISTEOF
   launchctl kickstart -k "$target" >/dev/null 2>&1 || true
 }
 
+install_ctox_signaling_launchd_service() {
+  [[ "$PLATFORM" == "darwin" ]] || return 0
+  command -v launchctl >/dev/null 2>&1 || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  local wrapper_root="$1"
+  local label="com.metric-space.ctox.signaling"
+  local service_dir="$HOME/Library/LaunchAgents"
+  local plist_path="$service_dir/$label.plist"
+  local runtime_dir="$wrapper_root/runtime"
+  local log_path="$runtime_dir/ctox_signaling.log"
+  local signaling_script="$wrapper_root/src/core/rxdb/tools/local_signaling_server.js"
+  local signaling_port="${CTOX_BUSINESS_OS_LOCAL_SIGNALING_PORT:-20876}"
+  local node_bin; node_bin="$(command -v node)"
+  local uid; uid="$(id -u)"
+  local domain="gui/$uid"
+  local target="$domain/$label"
+  local launch_path="${PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+
+  [[ -f "$signaling_script" ]] || return 0
+  mkdir -p "$service_dir" "$runtime_dir"
+
+  cat > "$plist_path" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(plist_escape "$node_bin")</string>
+    <string>$(plist_escape "$signaling_script")</string>
+    <string>$(plist_escape "$signaling_port")</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$(plist_escape "$wrapper_root")</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SIGNALING_HOST</key>
+    <string>127.0.0.1</string>
+    <key>SIGNALING_PORT</key>
+    <string>$(plist_escape "$signaling_port")</string>
+    <key>PATH</key>
+    <string>$(plist_escape "$launch_path")</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(plist_escape "$log_path")</string>
+  <key>StandardErrorPath</key>
+  <string>$(plist_escape "$log_path")</string>
+</dict>
+</plist>
+PLISTEOF
+
+  printf 'installed\n' > "$runtime_dir/ctox_signaling_launchd_user.installed"
+  launchctl bootout "$target" >/dev/null 2>&1 || true
+  launchctl enable "$target" >/dev/null 2>&1 || true
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$target" >/dev/null 2>&1 || true
+}
+
 install_ctox_service() {
   if [[ "$PLATFORM" == "darwin" ]]; then
+    install_ctox_signaling_launchd_service "$1"
     install_ctox_launchd_service "$1"
     return 0
   fi
@@ -1710,7 +1803,17 @@ build_ctox() {
   fi
   local -a workspace_cargo_env=()
   if [[ "${#cargo_env[@]}" -gt 0 ]]; then
-    workspace_cargo_env=(env "${cargo_env[@]}")
+    if [[ "$managed_release_build" -eq 1 ]]; then
+      local cargo_assignment
+      for cargo_assignment in "${cargo_env[@]}"; do
+        export "$cargo_assignment"
+      done
+    else
+      workspace_cargo_env=(env "${cargo_env[@]}")
+    fi
+  fi
+  if [[ "$managed_release_build" -ne 1 ]]; then
+    prepare_cargo_target_cache "$main_target_dir" "ctox-main"
   fi
   if [[ -z "$configured_target_dir" ]]; then
     prepare_cargo_target_cache "$main_target_dir" "ctox-main"
@@ -1718,7 +1821,11 @@ build_ctox() {
   clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
   # 1. Build main CTOX binary
-  run_build_module "ctox CLI" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --bin ctox
+  if [[ "$managed_release_build" -eq 1 ]]; then
+    run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
+  else
+    run_build_module "ctox CLI" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --bin ctox
+  fi
   mkdir -p "$source_root/bin"
   local ctox_built_binary=""
   for candidate in \
@@ -1735,7 +1842,11 @@ build_ctox() {
 
   if [[ -f "$source_root/src/apps/desktop/Cargo.toml" && "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" != "1" && "$skip_optional_runtime_builds" -ne 1 ]]; then
     prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
-    run_build_module "ctox desktop host" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
+    if [[ "$managed_release_build" -eq 1 ]]; then
+      run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
+    else
+      run_build_module "ctox desktop host" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
+    fi
     local desktop_built_binary=""
     for candidate in \
       "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
@@ -1879,6 +1990,7 @@ build_ctox() {
     printf '  %b%bintegrated agent-runtime kept in-process; no standalone runtime CLI built%b\n' \
       "$C_BOLD" "$C_GREY" "$C_RESET" >&2
   fi
+
 }
 
 # Prefer the built binary's embedded version, then git tags, then Cargo.toml.
@@ -1976,16 +2088,21 @@ sync_business_os_shell_assets() {
   [[ -d "$source_business_os_root" ]] || return 0
 
   mkdir -p "$state_business_os_root"
+  # Runtime-installed and operator-owned apps are tenant state. Shell upgrades
+  # must neither delete them nor replace them with files from a new release.
   rsync -a --delete \
     --exclude='/app-creation-bench/***' \
     --exclude='/installed-modules/***' \
+    --exclude='/local-modules/***' \
     --exclude='/node_modules/***' \
     --exclude='/notes/***' \
     "$source_business_os_root/" "$state_business_os_root/"
 
   if [[ -d "$source_business_os_root/installed-modules" ]]; then
     mkdir -p "$state_business_os_root/installed-modules"
-    rsync -a --exclude='/node_modules/***' \
+    # One-way legacy migration only: import apps missing from managed state,
+    # but never overwrite an app that is already installed there.
+    rsync -a --ignore-existing --exclude='/node_modules/***' \
       "$source_business_os_root/installed-modules/" \
       "$state_business_os_root/installed-modules/"
   fi
@@ -2828,8 +2945,13 @@ main() {
   # Write Jami DBus env file so the Jami adapter can reach the daemon
   write_jami_dbus_env "$STATE_ROOT"
 
-  # Set update channel
-  "$BIN_DIR/ctox" update channel set-github --repo metric-space-ai/ctox 2>/dev/null || true
+  # Set update channel. This is an optional finalizer; it must not keep a
+  # completed managed install open if the local service/runtime is wedged.
+  run_optional_soft_timeout \
+    "update channel finalizer" \
+    15 \
+    "$BIN_DIR/ctox" update channel set-github --repo metric-space-ai/ctox \
+    || true
   ensure_command_shim
   local final_detail="PATH + command shim + Update-Channel"
   if ensure_greppy_tool; then

@@ -1,0 +1,9 @@
+{
+  "id": "timeline-thread",
+  "title": "Timeline / Thread",
+  "description": "Timeline-oriented workspace for contextual records, follow-ups and delegated actions.",
+  "category": "Collaboration",
+  "starter_archetype": "timeline-thread",
+  "default_title": "Timeline Thread",
+  "tags": ["timeline", "thread", "context", "delegation"]
+}

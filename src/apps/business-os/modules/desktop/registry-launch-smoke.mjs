@@ -6,23 +6,26 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const businessOsRoot = resolve(here, '../..');
 const registryPath = resolve(businessOsRoot, 'modules/registry.json');
+const systemAppsPath = resolve(businessOsRoot, 'system-apps.json');
 const appPath = resolve(businessOsRoot, 'app.js');
 const appStorePath = resolve(businessOsRoot, 'modules/app-store/index.js');
 const desktopPath = resolve(businessOsRoot, 'modules/desktop/index.js');
+const desktopLauncherPath = resolve(businessOsRoot, 'modules/desktop/ctoxLauncher.js');
 
 const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+const systemApps = JSON.parse(readFileSync(systemAppsPath, 'utf8'));
 const appSource = readFileSync(appPath, 'utf8');
 const appStoreSource = readFileSync(appStorePath, 'utf8');
 const desktopSource = readFileSync(desktopPath, 'utf8');
+const desktopLauncherSource = readFileSync(desktopLauncherPath, 'utf8');
 
 const modules = Array.isArray(registry.modules) ? registry.modules : [];
 const moduleIds = modules.map((mod) => mod.id).filter(Boolean);
+const systemAppIds = Array.isArray(systemApps.apps) ? systemApps.apps : [];
 assert.equal(new Set(moduleIds).size, moduleIds.length, 'registry module ids must be unique');
+assert.equal(new Set(systemAppIds).size, systemAppIds.length, 'system app ids must be unique');
 
-const launchableModuleIds = moduleIds.filter((id) => {
-  const mod = modules.find((candidate) => candidate.id === id);
-  return id !== 'desktop' && id !== 'notizen' && mod?.install_scope !== 'internal';
-});
+const launchableModuleIds = systemAppIds.filter((id) => id !== 'desktop');
 
 const desktopAppIds = [...appSource.matchAll(/id:\s*'([^']+)'/g)]
   .map((match) => match[1])
@@ -32,8 +35,12 @@ const desktopAppIds = [...appSource.matchAll(/id:\s*'([^']+)'/g)]
 const launchIds = [...launchableModuleIds, ...desktopAppIds];
 assert.equal(new Set(launchIds).size, launchIds.length, 'launch target ids must be unique');
 
-for (const requiredId of ['explorer', 'conversations', 'outbound', 'creator', 'app-store']) {
+for (const requiredId of ['explorer', 'code-editor', 'ctox', 'tickets', 'threads', 'knowledge', 'browser', 'credentials', 'app-store', 'creator', 'reports']) {
   assert.ok(launchIds.includes(requiredId), `launch targets must include ${requiredId}`);
+}
+
+for (const storeOnlyId of ['conversations', 'outbound', 'research']) {
+  assert.ok(!launchIds.includes(storeOnlyId), `uninstalled store app must not be a launch target: ${storeOnlyId}`);
 }
 
 assert.equal(
@@ -42,14 +49,25 @@ assert.equal(
   'App Creator must have exactly one launch target'
 );
 
-for (const requiredId of ['explorer', 'conversations', 'outbound']) {
+for (const requiredId of ['explorer', 'code-editor']) {
   assert.ok(
     appSource.includes(requiredId),
     `Start menu source must explicitly include or discover ${requiredId}`
   );
 }
 assert.ok(appSource.includes('uncategorized'), 'Start menu must render uncategorized launch targets');
-assert.ok(appSource.includes('!moduleIds.has(app.id)'), 'Desktop app launcher must skip module id collisions');
+assert.ok(
+  appSource.includes('nonWindowedModuleIds.has(app.id)'),
+  'Desktop app launcher must skip static desktop apps shadowed by non-windowed modules'
+);
+assert.ok(
+  appSource.includes('moduleAppearsAsWindowTarget'),
+  'Windowed module launcher must expose module-backed desktop app targets'
+);
+assert.ok(
+  desktopLauncherSource.includes('!appIds.has(mod.id)'),
+  'Desktop launcher must not render a module icon when the same id is a window app'
+);
 assert.ok(
   appSource.includes('moduleBypassesInstanceAllowlist(mod)'),
   'Tenant allowlist must not hide native-visible runtime-installed apps before lifecycle policy filtering'

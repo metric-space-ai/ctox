@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -159,6 +160,21 @@ test('right-click context resolves the clicked report before selected fallback',
     visibleReports: reports,
     allReports: reports,
   }).id, 'selected-report');
+});
+
+test('presentation layer stays compact and shell-native', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const source = `${css}\n${html}`;
+  const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
+
+  assert.doesNotMatch(source, forbiddenSurfacePattern);
+  assert.doesNotMatch(source, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
+  assert.doesNotMatch(source, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+  assert.doesNotMatch(source, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+  assert.match(css, /@container business-app-window \(max-width: 880px\)/);
+  assert.match(css, /\.reports-module[\s\S]*grid-template-columns: var\(--reports-left-width, 320px\) 12px minmax\(0, 1fr\)/);
+  assert.match(css, /\.reports-module \[data-resizer\][\s\S]*display: none !important/);
 });
 
 let passed = 0;

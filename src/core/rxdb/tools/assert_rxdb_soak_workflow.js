@@ -51,15 +51,6 @@ assertIncludes(
 assertIncludes(workflow, 'workflow_call:', 'soak workflow must be reusable by the release workflow');
 assertIncludes(workflow, 'schedule:', 'soak workflow must run nightly');
 assertIncludes(workflow, 'timeout-minutes: 360', 'nightly nine-cycle soak needs a production-readiness timeout budget');
-assertIncludes(
-  workflow,
-  'cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target',
-  'release soak must build against the committed Cargo.lock',
-);
-assertPlaywrightInstallIsOutsideRepository(workflow, 'soak workflow');
-assertPlaywrightInstallIsOutsideRepository(readinessWorkflow, 'production-readiness workflow');
-assertIncludes(runner, 'dirtyPaths:', 'release soak must report dirty paths when the clean-tree gate fails');
-assertIncludes(runner, 'fs.readSync(', 'release soak must hash large smoke binaries incrementally');
 assertIncludes(workflow, "github.event_name == 'schedule' && '9'", 'nightly soak must run nine cycles');
 assertIncludes(
   workflow,

@@ -48,7 +48,9 @@ Required `ctx` boundary:
    with `ctx.db.collection('<module_scoped_collection>')`.
 4. Replace automation/follow-up calls with `ctx.commandBus.dispatch(...)`.
 5. Add record right-click annotations to every row/card/tree node.
-6. Set `module.json` `layout.shell` to `"full-workspace"`.
+6. Set root `launch_kind` to `"desktop-app"`, write the canonical root
+   `presentation` object, and retain `layout.shell: "windowed"` only as the
+   compatibility hint.
 7. Validate with `ctox business-os app validate <module-id> --installed` or
    `--source`, then smoke in the real shell.
 

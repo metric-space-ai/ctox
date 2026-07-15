@@ -307,10 +307,8 @@ try {
 
   await scenario(page, 'delete-renders-before-db-delay', { count: 1, dbDelay: 500 }, async () => {
     const deleteLatency = await page.evaluate(async () => {
-      document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
-      await window.chatHarness.waitFor(() => document.querySelector('[data-dialog-confirm]'));
       const start = performance.now();
-      document.querySelector('[data-dialog-confirm]').click();
+      document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
       await window.chatHarness.waitFor(() => document.querySelectorAll('.ctox-chat-window').length === 0, 1200);
       return performance.now() - start;
     });
@@ -321,11 +319,24 @@ try {
     expect(after.storedChats === 0, `deleted chat must leave local state, got ${after.storedChats}`);
   });
 
+  await scenario(page, 'delete-non-empty-chat-still-confirms', { count: 1, messagesPerChat: 1 }, async () => {
+    const confirmState = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('[data-dialog-confirm]'));
+      const metrics = window.chatHarness.collect();
+      const hasConfirm = Boolean(document.querySelector('[data-dialog-confirm]'));
+      document.querySelector('[data-dialog-cancel]')?.click();
+      return { hasConfirm, metrics };
+    });
+    results.push({ scenario: 'delete-non-empty-confirm-state', confirmState });
+    expect(confirmState.hasConfirm === true, 'non-empty chat deletion must still show confirmation');
+    expect(confirmState.metrics.windowCount === 1, `non-empty chat must remain visible before confirmation, got ${confirmState.metrics.windowCount}`);
+    expect(confirmState.metrics.storedChats === 1, `non-empty chat must remain in local state before confirmation, got ${confirmState.metrics.storedChats}`);
+  });
+
   await scenario(page, 'delete-tombstone-blocks-rxdb-resurrection', { count: 1, dbDeleteError: true }, async () => {
     const after = await page.evaluate(async () => {
       document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
-      await window.chatHarness.waitFor(() => document.querySelector('[data-dialog-confirm]'));
-      document.querySelector('[data-dialog-confirm]').click();
       await window.chatHarness.waitFor(() => document.querySelectorAll('.ctox-chat-window').length === 0);
       await window.chatHarness.emitChats();
       await window.chatHarness.waitForPaint();
@@ -359,6 +370,7 @@ try {
   await scenario(page, 'transient-command-timeout-keeps-chat-trackable', {
     count: 1,
     commandError: 'transient',
+    selectedOffset: -1,
   }, async () => {
     const after = await page.evaluate(async () => {
       const input = document.querySelector('.ctox-chat-window.is-active textarea');

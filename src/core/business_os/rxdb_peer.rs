@@ -31,8 +31,8 @@ use notify::Watcher;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
-    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook,
+    DocumentWriteAuthzHook, RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
@@ -2808,6 +2808,19 @@ async fn run_native_peer(
                 },
             ))
         };
+        let document_write_authz: Option<DocumentWriteAuthzHook> = {
+            let doc_write_authz_root = root.clone();
+            Some(std::sync::Arc::new(
+                move |token: &str, collection: &str, document: &Value| {
+                    super::threads::may_accept_peer_document_write(
+                        &doc_write_authz_root,
+                        token,
+                        collection,
+                        document,
+                    )
+                },
+            ))
+        };
         let mut bringup = tokio::spawn(async move {
             rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
                 collection_list,
@@ -2819,6 +2832,7 @@ async fn run_native_peer(
                 collection_authz,
                 collection_write_authz,
                 document_read_authz,
+                document_write_authz,
                 20,
                 20,
                 5_000,

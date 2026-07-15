@@ -521,10 +521,15 @@ async function clickAutomation(page, rootSelector, marker) {
     const root = document.querySelector(selector);
     if (!root) return null;
     const scopes = [];
-    for (const el of Array.from(root.querySelectorAll('*')).filter(visible)) {
-      if (!String(el.innerText || '').includes(marker)) continue;
-      const scope = el.closest('[data-record-id], article, li, tr, section, .record-card, .module-card, .card, .item, .row, div');
-      if (scope && root.contains(scope) && !scopes.includes(scope)) scopes.push(scope);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (!String(walker.currentNode.nodeValue || '').includes(marker)) continue;
+      let scope = walker.currentNode.parentElement;
+      while (scope && scope !== root) {
+        if (visible(scope) && automationControls(scope, 0).length > 0) break;
+        scope = scope.parentElement;
+      }
+      if (scope && scope !== root && !scopes.includes(scope)) scopes.push(scope);
     }
     const controls = [
       ...scopes.flatMap((scope, index) => automationControls(scope, index)),

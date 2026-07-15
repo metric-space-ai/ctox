@@ -2,7 +2,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260709-cv-print-parser-v26';
+const BUILD = '20260711-responsive-pane-grid-v28';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -24,6 +24,11 @@ const REQUIRED_COLLECTIONS = [
 const LIVE_COLLECTIONS = [
   ...REQUIRED_COLLECTIONS,
 ];
+let ACTIVE_LOCALE = 'de';
+
+function tr(de, en) {
+  return ACTIVE_LOCALE === 'en' ? en : de;
+}
 
 const TEMPLATES = [
   { id: 'minimal', label: 'Minimal', description: 'Zeitloses Qualifikationsprofil ohne Schmuck.' },
@@ -79,9 +84,11 @@ const COMMON_FIRST_NAMES = new Set([
 ]);
 
 export async function mount(ctx) {
+  ACTIVE_LOCALE = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
   await ensureStyles();
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
+  applyStaticLocale(ctx.host);
   ctx.host.dataset.cvPrintBuilder = 'native';
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
@@ -109,15 +116,29 @@ export async function mount(ctx) {
   bindStaticEvents(state);
   subscribeToCollections(state);
   setModuleBusy(state, true);
-  state.ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 120000);
-  setModuleBusy(state, !state.ready);
-  await refresh(state);
-  if (!state.ready) {
-    notify(state, 'error', 'CV-Daten noch nicht synchronisiert', 'Import und Parsing bleiben gesperrt, bis die Business-OS Collections bereit sind.');
-    scheduleReadinessRetry(state);
-  }
+  render(state);
+  let disposed = false;
+  Promise.resolve()
+    .then(async () => {
+      state.ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 120000);
+      if (disposed) return;
+      setModuleBusy(state, !state.ready);
+      await refresh(state);
+      if (disposed) return;
+      if (!state.ready) {
+        notify(state, 'error', tr('CV-Daten noch nicht synchronisiert', 'CV data is not synchronized yet'), tr('Import und Parsing bleiben gesperrt, bis die Business-OS Collections bereit sind.', 'Import and parsing remain locked until the Business OS collections are ready.'));
+        scheduleReadinessRetry(state);
+      }
+    })
+    .catch((error) => {
+      if (disposed) return;
+      console.warn('[cv-print-builder] background initialization failed', error);
+      setModuleBusy(state, true);
+      render(state);
+    });
 
   return () => {
+    disposed = true;
     state.disposers.forEach((dispose) => dispose?.());
     state.originalUrls.forEach((url) => URL.revokeObjectURL(url));
     state.originalUrls.clear();
@@ -125,6 +146,34 @@ export async function mount(ctx) {
     ctx.host.replaceChildren();
     delete ctx.host.dataset.cvPrintBuilder;
   };
+}
+
+function applyStaticLocale(host) {
+  const root = host.querySelector('[data-cv-print-builder]');
+  if (!root) return;
+  root.setAttribute('lang', ACTIVE_LOCALE);
+  if (ACTIVE_LOCALE !== 'en') return;
+  const text = new Map([
+    ['Kandidaten', 'Candidates'], ['Suchen', 'Search'], ['Neueste', 'Newest'], ['Status', 'Status'], ['Template', 'Template'],
+    ['Alle reparsen', 'Reparse all'], ['Neuer CV', 'New CV'], ['PDF als Kandidat anlegen', 'Create candidate from PDF'],
+  ]);
+  const attrs = new Map([
+    ['Kandidaten', 'Candidates'], ['Kandidaten suchen', 'Search candidates'], ['Kandidaten sortieren', 'Sort candidates'],
+    ['Kandidatenspalte anpassen', 'Resize candidate column'], ['CV Arbeitsbereich', 'CV workspace'], ['Suchen', 'Search'],
+  ]);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const raw = node.nodeValue || '';
+    const value = raw.trim();
+    if (text.has(value)) node.nodeValue = raw.replace(value, text.get(value));
+  }
+  root.querySelectorAll('[aria-label],[placeholder],[title]').forEach((element) => {
+    for (const attr of ['aria-label', 'placeholder', 'title']) {
+      const value = element.getAttribute(attr);
+      if (attrs.has(value)) element.setAttribute(attr, attrs.get(value));
+    }
+  });
 }
 
 async function ensureStyles() {
@@ -139,7 +188,7 @@ async function ensureStyles() {
 function bindStaticEvents(state) {
   state.host.querySelector('[data-cv-new]')?.addEventListener('click', () => {
     if (!state.ready) {
-      notify(state, 'info', 'Synchronisierung läuft', 'CVs können importiert werden, sobald die Arbeitsdaten geladen sind.');
+      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('CVs können importiert werden, sobald die Arbeitsdaten geladen sind.', 'CVs can be imported once the workspace data is loaded.'));
       return;
     }
     state.host.querySelector('[data-cv-upload]')?.click();
@@ -155,14 +204,17 @@ function bindStaticEvents(state) {
   state.host.querySelector('[data-cv-reparse-all]')?.addEventListener('click', async () => {
     const candidates = reparseCandidates(state);
     if (!state.ready && !candidates.length) {
-      notify(state, 'info', 'Synchronisierung läuft', 'Parsing kann starten, sobald die Arbeitsdaten geladen sind.');
+      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Parsing kann starten, sobald die Arbeitsdaten geladen sind.', 'Parsing can start once the workspace data is loaded.'));
       return;
     }
     if (!candidates.length) {
-      notify(state, 'info', 'Keine PDFs zum Parsen', 'Es wurden keine CVs mit lokaler PDF-Quelle gefunden.');
+      notify(state, 'info', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
       return;
     }
-    const confirmed = window.confirm(`${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`);
+    const confirmed = window.confirm(tr(
+      `${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`,
+      `Reparse ${candidates.length} CV PDF${candidates.length === 1 ? '' : 's'}? Existing parser tasks remain and each CV receives a new parser task.`,
+    ));
     if (!confirmed) return;
     await reparseAllPdfs(state, candidates);
   });
@@ -172,13 +224,13 @@ function bindStaticEvents(state) {
     event.target.value = '';
     if (!files.length) return;
     if (!state.ready) {
-      notify(state, 'info', 'Synchronisierung läuft', 'Bitte kurz warten, bis die CV-Liste geladen ist.');
+      notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
       return;
     }
     try {
       await importPdfs(state, files);
     } catch (error) {
-      notify(state, 'error', 'PDF konnte nicht importiert werden', String(error?.message || error));
+      notify(state, 'error', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
     }
   });
   state.host.querySelector('[data-cv-logo-upload]')?.addEventListener('change', async (event) => {
@@ -317,7 +369,7 @@ function scheduleReadinessRetry(state) {
     state.ready = true;
     setModuleBusy(state, false);
     await refresh(state);
-    notify(state, 'success', 'CV-Daten synchronisiert', 'Import und Parsing sind bereit.');
+    notify(state, 'success', tr('CV-Daten synchronisiert', 'CV data synchronized'), tr('Import und Parsing sind bereit.', 'Import and parsing are ready.'));
   }, 3000);
 }
 
@@ -384,7 +436,7 @@ function renderSidebar(state) {
     : `${state.items.length} CV${state.items.length === 1 ? '' : 's'}`;
   list.innerHTML = visible.length
     ? visible.map((item) => renderCandidateCard(state, item)).join('')
-    : '<div class="ctox-empty">Keine Kandidaten gefunden.</div>';
+    : '<div class="ctox-empty">' + escapeHtml(tr('Keine Kandidaten gefunden.', 'No candidates found.')) + '</div>';
   list.querySelectorAll('[data-cv-select]').forEach((button) => {
     button.addEventListener('click', (event) => {
       if (event.target.closest('[data-cv-action],[data-cv-view],[data-cv-template],[data-cv-toggle-anon],[data-cv-logo-control],[data-cv-open-task]')) return;
@@ -411,7 +463,7 @@ function renderSidebar(state) {
           window.print();
         }
       } catch (error) {
-        notify(state, 'error', 'Aktion fehlgeschlagen', String(error?.message || error));
+        notify(state, 'error', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
       }
     });
   });
@@ -610,13 +662,13 @@ function renderCandidateCard(state, item) {
   const selected = item.record.id === state.selectedId;
   const viewMode = selected ? state.viewMode : defaultViewMode(model);
   const action = actionForPhase(phase);
-  const role = candidate.currentRole || 'CV Profil';
+  const role = candidate.currentRole || tr('CV Profil', 'CV profile');
   const location = [candidate.location, candidate.availability].filter(Boolean).join(' · ');
   const template = normalizeTemplateId(model.print?.template || 'modern');
   const controlsDisabled = !state.ready || phase === 'uploaded' || phase === 'parsing';
   const approved = phase === 'approved';
   const templateOptions = TEMPLATES.map((entry) => (
-    `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(entry.label)}</option>`
+    `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(templateLabel(entry.id))}</option>`
   )).join('');
   return `
     <article class="cv-card${selected ? ' is-selected' : ''}" data-cv-select="${escapeHtml(item.record.id)}" data-context-record-id="${escapeHtml(item.record.id)}" data-context-record-type="cv_profile" data-context-label="${escapeHtml(item.record.title || item.record.name || item.record.id)}">
@@ -636,18 +688,18 @@ function renderCandidateCard(state, item) {
             <button class="cv-icon-btn is-primary" type="button" title="${escapeHtml(action.title)}" aria-label="${escapeHtml(action.title)}" data-cv-action ${phase === 'parsing' ? 'disabled' : ''}>
               ${action.icon}
             </button>
-            <div class="ctox-pane-tabs" role="tablist" aria-label="Ansicht">
+            <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttr(tr('Ansicht', 'View'))}">
               ${Object.entries(VIEW_LABELS).map(([key, label]) => `
-                <button type="button" data-cv-view="${key}" class="ctox-pane-tab${viewMode === key ? ' is-active' : ''}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(label)}</button>
+                <button type="button" data-cv-view="${key}" class="ctox-pane-tab${viewMode === key ? ' is-active' : ''}" ${viewAllowed(model, key) && !approved ? '' : 'disabled'}>${escapeHtml(key === 'split' ? tr('Beide', 'Both') : label)}</button>
               `).join('')}
             </div>
           </div>
           <div class="cv-template-row">
-            <select class="ctox-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="Print Template">
+            <select class="ctox-select" data-cv-template ${controlsDisabled || approved ? 'disabled' : ''} aria-label="${escapeAttr(tr('Print Template', 'Print template'))}">
               ${templateOptions}
             </select>
-            <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="Anonymisieren" aria-label="Anonymisieren" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
-            <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" aria-label="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
+            <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
+            <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" aria-label="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
           </div>
         </div>
         <div class="cv-card-foot">${phaseFootnoteHtml(model)}</div>
@@ -663,8 +715,8 @@ function renderStage(state) {
     stage.innerHTML = `
       <div class="ctox-empty">
         <div>
-          <strong>Kein CV ausgewählt</strong>
-          <div>Links einen PDF-CV anlegen.</div>
+          <strong>${escapeHtml(tr('Kein CV ausgewählt', 'No CV selected'))}</strong>
+          <div>${escapeHtml(tr('Links einen PDF-CV anlegen.', 'Create a candidate from a PDF on the left.'))}</div>
         </div>
       </div>
     `;
@@ -687,7 +739,7 @@ function renderStage(state) {
     })
     .catch((error) => {
       const fileId = item.model.source?.desktop_file_id || '';
-      if (fileId) state.originalErrors.set(fileId, error?.message || String(error || 'Original-PDF konnte nicht geladen werden.'));
+      if (fileId) state.originalErrors.set(fileId, error?.message || String(error || tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.')));
       if (serial === state.renderSerial) renderOriginalFrame(state, item);
     });
 }
@@ -696,11 +748,11 @@ function renderOriginalPane(state, item) {
   return `
     <section class="cv-pane" data-cv-original-pane>
       <header class="cv-pane-head">
-        <strong>Original PDF</strong>
+        <strong>${escapeHtml(tr('Original PDF', 'Original PDF'))}</strong>
         <span>${escapeHtml(item.model.source?.filename || item.record.filename || '')}</span>
       </header>
       <div class="cv-pane-body" data-cv-original-body>
-        <div class="cv-original-placeholder">PDF wird geladen.</div>
+        <div class="cv-original-placeholder">${escapeHtml(tr('PDF wird geladen.', 'Loading PDF.'))}</div>
       </div>
     </section>
   `;
@@ -714,7 +766,7 @@ function renderOriginalFrame(state, item) {
   if (error) {
     body.innerHTML = `
       <div class="cv-original-placeholder">
-        <strong>Original-PDF konnte nicht geladen werden.</strong>
+        <strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong>
         <span>${escapeHtml(error)}</span>
       </div>
     `;
@@ -722,7 +774,7 @@ function renderOriginalFrame(state, item) {
   }
   const url = state.originalUrls.get(fileId);
   if (!url) {
-    body.innerHTML = '<div class="cv-original-placeholder">Original-PDF ist noch nicht lokal materialisiert.</div>';
+    body.innerHTML = '<div class="cv-original-placeholder">' + escapeHtml(tr('Original-PDF ist noch nicht lokal materialisiert.', 'Original PDF has not been materialized locally yet.')) + '</div>';
     return;
   }
   body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`;
@@ -735,8 +787,8 @@ function renderPrintPane(item) {
   return `
     <section class="cv-pane">
       <header class="cv-pane-head">
-        <strong>Druckansicht</strong>
-        <span>${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · Korrekturmodus' : ''}</span>
+        <strong>${escapeHtml(tr('Druckansicht', 'Print preview'))}</strong>
+        <span>${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · ' + escapeHtml(tr('Korrekturmodus', 'Review mode')) : ''}</span>
       </header>
       <div class="cv-pane-body">
         <div class="cv-print-workarea${editor ? ' has-editor' : ''}">
@@ -817,7 +869,7 @@ function getQualificationPrintData(model, options = {}) {
     ...(candidate.cv?.meta || {}),
     ...(additionalValue(additional, 'cv.meta') || {}),
   };
-  const role = candidate.currentRole || candidate.desiredPosition || cvMeta.currentPosition || 'CV Profil';
+  const role = candidate.currentRole || candidate.desiredPosition || cvMeta.currentPosition || tr('CV Profil', 'CV profile');
   const facts = buildQualificationFacts(candidate, cvMeta, anonymize);
   const skills = normalizeCvSkillsObject(candidate);
   const methods = buildMethodsFromCvSkills(skills, {
@@ -829,7 +881,7 @@ function getQualificationPrintData(model, options = {}) {
   const footer = {
     userName: 'Steffen Ratschan',
     companyLine: 'pmX GmbH | Kegelenstr. 3 | 70372 Stuttgart',
-    contactLine: anonymize ? 'Anonymisiert' : contactLine(candidate),
+    contactLine: anonymize ? tr('Anonymisiert', 'Anonymized') : contactLine(candidate),
   };
   return { candidate, editable, anonymize, logo, name, role, facts, methods, career, education, footer };
 }
@@ -839,7 +891,7 @@ function renderQualificationHeader(data, theme) {
   return `
     <header class="cv-q-head">
       <div>
-        <h1>QUALIFIKATIONSPROFIL</h1>
+        <h1>${escapeHtml(tr('QUALIFIKATIONSPROFIL', 'QUALIFICATION PROFILE'))}</h1>
         <div class="cv-q-rule"></div>
       </div>
       ${logo}
@@ -870,14 +922,14 @@ function renderQualificationProfile(data) {
 function renderQualificationMethods(data) {
   return `
     <section class="cv-q-section">
-      <h3>METHODEN- / SYSTEMKOMPETENZ / SPRACHKENNTNISSE</h3>
+      <h3>${escapeHtml(tr('METHODEN- / SYSTEMKOMPETENZ / SPRACHKENNTNISSE', 'METHODS / SYSTEM EXPERTISE / LANGUAGES'))}</h3>
       <dl class="cv-q-methods">
         ${data.methods.length ? data.methods.map((item) => `
           <div>
             <dt>${escapeHtml(item.label)}</dt>
             <dd>${escapeHtml(item.value)}</dd>
           </div>
-        `).join('') : '<div><dt>Kompetenzen</dt><dd>Nach Parsing korrigieren</dd></div>'}
+        `).join('') : '<div><dt>' + escapeHtml(tr('Kompetenzen', 'Skills')) + '</dt><dd>' + escapeHtml(tr('Nach Parsing korrigieren', 'Review after parsing')) + '</dd></div>'}
       </dl>
     </section>
   `;
@@ -891,7 +943,7 @@ function renderQualificationEntries(title, entries, kind) {
         ${entries.length ? entries.map((entry) => renderQualificationEntry(entry, kind)).join('') : `
           <article class="cv-q-entry">
             <div class="cv-q-when">-</div>
-            <div><strong>Keine Einträge hinterlegt</strong></div>
+            <div><strong>${escapeHtml(tr('Keine Einträge hinterlegt', 'No entries recorded'))}</strong></div>
           </article>
         `}
       </div>
@@ -908,7 +960,7 @@ function renderQualificationEntry(entry, kind) {
     <article class="cv-q-entry">
       <div class="cv-q-when">${escapeHtml([entry.from, entry.to].filter(Boolean).join(' - ') || '-')}</div>
       <div class="cv-q-entry-main">
-        <strong>${escapeHtml(title || 'Station')}</strong>
+        <strong>${escapeHtml(title || tr('Station', 'Entry'))}</strong>
         ${org ? `<span>${escapeHtml(org)}</span>` : ''}
         ${extra.map((item) => `<em>${escapeHtml(item)}</em>`).join('')}
         ${bullets.length ? `<ul>${bullets.map((bullet) => `<li>${escapeHtml(bullet.text || bullet)}</li>`).join('')}</ul>` : ''}
@@ -926,7 +978,7 @@ function renderQualificationFooter(data) {
         <span>${escapeHtml(line)}</span>
         <span>${escapeHtml(data.footer.contactLine || '-')}</span>
       </div>
-      <div>${escapeHtml(new Date().toLocaleDateString('de-DE'))}</div>
+      <div>${escapeHtml(new Date().toLocaleDateString(ACTIVE_LOCALE === 'en' ? 'en-US' : 'de-DE'))}</div>
     </footer>
   `;
 }
@@ -938,21 +990,21 @@ function buildQualificationFacts(candidate, cvMeta, anonymize) {
   const birthDate = candidate.birthDate || cvMeta.birthDate || '';
   const nationality = candidate.nationality || cvMeta.nationality || '';
   const availability = candidate.availability || cvMeta.availabilityFrom || '';
-  if (highestDegree) facts.push({ label: 'Höchster Abschluss', value: highestDegree });
-  if (degree) facts.push({ label: 'Fachrichtung', value: degree });
-  if (birthDate) facts.push({ label: anonymize ? 'Geburtsjahr' : 'Geburtsdatum', value: anonymize ? yearFromDateText(birthDate) : formatCvDisplayDate(birthDate) });
-  if (nationality) facts.push({ label: 'Nationalität', value: nationality });
-  if (availability) facts.push({ label: 'Verfügbarkeit', value: formatCvDisplayDate(availability) });
-  if (!facts.length) facts.push({ label: 'Profil', value: 'Felder prüfen' });
+  if (highestDegree) facts.push({ label: tr('Höchster Abschluss', 'Highest qualification'), value: highestDegree });
+  if (degree) facts.push({ label: tr('Fachrichtung', 'Field of study'), value: degree });
+  if (birthDate) facts.push({ label: anonymize ? tr('Geburtsjahr', 'Year of birth') : tr('Geburtsdatum', 'Date of birth'), value: anonymize ? yearFromDateText(birthDate) : formatCvDisplayDate(birthDate) });
+  if (nationality) facts.push({ label: tr('Nationalität', 'Nationality'), value: nationality });
+  if (availability) facts.push({ label: tr('Verfügbarkeit', 'Availability'), value: formatCvDisplayDate(availability) });
+  if (!facts.length) facts.push({ label: tr('Profil', 'Profile'), value: tr('Felder prüfen', 'Review fields') });
   return facts;
 }
 
 function normalizeExperienceToCareerEntries(experience) {
   return (Array.isArray(experience) ? experience : []).map((entry) => {
-    const title = firstNonEmpty(entry?.job_title, entry?.title, entry?.role, entry?.jobTitle, entry?.position) || 'Position';
+    const title = firstNonEmpty(entry?.job_title, entry?.title, entry?.role, entry?.jobTitle, entry?.position) || tr('Position', 'Position');
     const employer = firstNonEmpty(entry?.employer, entry?.company, entry?.companyName, entry?.org) || '';
     const from = firstNonEmpty(entry?.start_date, entry?.startDate, entry?.start, entry?.from);
-    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || 'heute';
+    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || tr('heute', 'present');
     const bullets = valueToLines(entry?.job_description || entry?.description || entry?.summary)
       .slice(0, 12)
       .map((text) => ({ text }));
@@ -962,10 +1014,10 @@ function normalizeExperienceToCareerEntries(experience) {
 
 function normalizeEducationToEntries(education) {
   return (Array.isArray(education) ? education : []).map((entry) => {
-    const title = firstNonEmpty(entry?.degree, entry?.title, entry?.program) || 'Ausbildung';
+    const title = firstNonEmpty(entry?.degree, entry?.title, entry?.program) || tr('Ausbildung', 'Education');
     const org = firstNonEmpty(entry?.institution, entry?.school, entry?.university, entry?.provider, entry?.org) || '';
     const from = firstNonEmpty(entry?.start_date, entry?.startDate, entry?.start, entry?.from);
-    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || 'dato';
+    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || tr('dato', 'present');
     const extra = [entry?.major, entry?.location, entry?.specialization].filter((item) => String(item || '').trim());
     const bullets = valueToLines(entry?.details || entry?.description || entry?.summary)
       .slice(0, 8)
@@ -979,15 +1031,15 @@ function buildMethodsFromCvSkills(cvSkills, candidateMeta) {
   const fach = cvSkills.Fachkenntnisse || cvSkills.fachkenntnisse || cvSkills.skills;
   const sprachen = cvSkills.Sprachkenntnisse || cvSkills.sprachkenntnisse || cvSkills.languages;
   const other = cvSkills['Weitere Fähigkeiten'] || cvSkills['Weitere Faehigkeiten'] || cvSkills.other_skills;
-  if (fach) out.push({ label: 'Fachkenntnisse', value: valueToLines(fach).join(', ') });
-  if (other) out.push({ label: 'Weitere Fähigkeiten', value: valueToLines(other).join(', ') });
-  if (sprachen) out.push({ label: 'Sprachkenntnisse', value: valueToLines(sprachen).join(', ') });
+  if (fach) out.push({ label: tr('Fachkenntnisse', 'Professional skills'), value: valueToLines(fach).join(', ') });
+  if (other) out.push({ label: tr('Weitere Fähigkeiten', 'Additional skills'), value: valueToLines(other).join(', ') });
+  if (sprachen) out.push({ label: tr('Sprachkenntnisse', 'Languages'), value: valueToLines(sprachen).join(', ') });
   if (!sprachen) {
     const languageText = normalizeLanguageItems(candidateMeta?.languages || [])
       .map((item) => [item.label || item.code || item.language || item.name, item.level].filter(Boolean).join(' '))
       .filter(Boolean)
       .join(', ');
-    if (languageText) out.push({ label: 'Sprachkenntnisse', value: languageText });
+    if (languageText) out.push({ label: tr('Sprachkenntnisse', 'Languages'), value: languageText });
   }
   return out.filter((item) => item.value);
 }
@@ -998,25 +1050,25 @@ function renderFieldEditor(model) {
   return `
     <aside class="cv-field-editor" data-cv-field-editor>
       <header>
-        <strong>Felder</strong>
-        <span>Ninja CV-Profil</span>
+        <strong>${escapeHtml(tr('Felder', 'Fields'))}</strong>
+        <span>${escapeHtml(tr('Ninja CV-Profil', 'Ninja CV profile'))}</span>
       </header>
       <section class="cv-editor-block">
-        <h4>Stammdaten</h4>
+        <h4>${escapeHtml(tr('Stammdaten', 'Core data'))}</h4>
         <div class="cv-editor-grid">
           ${renderEditorInput('Name', 'candidate.name', displayCandidateName(model))}
-          ${renderEditorInput('Rolle', 'candidate.currentRole', candidate.currentRole || '')}
-          ${renderEditorInput('Ort', 'candidate.location', candidate.location || '')}
-          ${renderEditorInput('Verfügbarkeit', 'candidate.availability', candidate.availability || '')}
-          ${renderEditorInput('Abschluss', 'candidate.highestDegree', candidate.highestDegree || '')}
-          ${renderEditorInput('Fachrichtung', 'candidate.degree', candidate.degree || '')}
-          ${renderEditorInput('Geburtsdatum', 'candidate.birthDate', candidate.birthDate || '')}
-          ${renderEditorInput('Nationalität', 'candidate.nationality', candidate.nationality || '')}
+          ${renderEditorInput(tr('Rolle', 'Role'), 'candidate.currentRole', candidate.currentRole || '')}
+          ${renderEditorInput(tr('Ort', 'Location'), 'candidate.location', candidate.location || '')}
+          ${renderEditorInput(tr('Verfügbarkeit', 'Availability'), 'candidate.availability', candidate.availability || '')}
+          ${renderEditorInput(tr('Abschluss', 'Qualification'), 'candidate.highestDegree', candidate.highestDegree || '')}
+          ${renderEditorInput(tr('Fachrichtung', 'Field of study'), 'candidate.degree', candidate.degree || '')}
+          ${renderEditorInput(tr('Geburtsdatum', 'Date of birth'), 'candidate.birthDate', candidate.birthDate || '')}
+          ${renderEditorInput(tr('Nationalität', 'Nationality'), 'candidate.nationality', candidate.nationality || '')}
         </div>
       </section>
       <section class="cv-editor-block">
         <div class="cv-editor-title-row">
-          <h4>Beruflicher Werdegang</h4>
+          <h4>${escapeHtml(tr('Beruflicher Werdegang', 'Professional experience'))}</h4>
           <button type="button" data-cv-editor-action="add-experience">+</button>
         </div>
         <div data-cv-editor-list="experience">
@@ -1025,7 +1077,7 @@ function renderFieldEditor(model) {
       </section>
       <section class="cv-editor-block">
         <div class="cv-editor-title-row">
-          <h4>Ausbildung</h4>
+          <h4>${escapeHtml(tr('Ausbildung', 'Education'))}</h4>
           <button type="button" data-cv-editor-action="add-education">+</button>
         </div>
         <div data-cv-editor-list="education">
@@ -1495,7 +1547,6 @@ async function startParsing(state, item) {
       id: commandId,
       module: MODULE_ID,
       command_type: 'business_os.chat.task',
-      type: 'business_os.chat.task',
       record_id: item.record.id,
       inbound_channel: MODULE_ID,
       sync_collections: [
@@ -2138,18 +2189,18 @@ function viewAllowed(model, view) {
 }
 
 function actionForPhase(phase) {
-  if (phase === 'review') return { title: 'Print freigeben', icon: iconCheck() };
-  if (phase === 'approved') return { title: 'Drucken', icon: iconPrinter() };
-  return { title: 'Parsing starten', icon: iconPlay() };
+  if (phase === 'review') return { title: tr('Print freigeben', 'Approve print'), icon: iconCheck() };
+  if (phase === 'approved') return { title: tr('Drucken', 'Print'), icon: iconPrinter() };
+  return { title: tr('Parsing starten', 'Start parsing'), icon: iconPlay() };
 }
 
 function phaseLabel(phase) {
   return ({
-    uploaded: 'PDF geladen',
-    parsing: 'Parsing läuft',
-    review: 'Korrektur',
-    approved: 'Freigegeben',
-    error: 'Fehler',
+    uploaded: tr('PDF geladen', 'PDF uploaded'),
+    parsing: tr('Parsing läuft', 'Parsing'),
+    review: tr('Korrektur', 'Review'),
+    approved: tr('Freigegeben', 'Approved'),
+    error: tr('Fehler', 'Error'),
   })[phase] || phase;
 }
 
@@ -2157,33 +2208,33 @@ function statusShort(phase) {
   return ({
     uploaded: 'PDF',
     parsing: 'Parsing',
-    review: 'Korrektur',
-    approved: 'Freigabe',
-    error: 'Fehler',
+    review: tr('Korrektur', 'Review'),
+    approved: tr('Freigabe', 'Approved'),
+    error: tr('Fehler', 'Error'),
   })[phase] || 'CV';
 }
 
 function phaseFootnoteHtml(model) {
   const phase = workflowPhase(model);
-  if (phase === 'uploaded') return 'PDF geladen. Als Nächstes Parsing starten.';
+  if (phase === 'uploaded') return tr('PDF geladen. Als Nächstes Parsing starten.', 'PDF uploaded. Start parsing next.');
   if (phase === 'parsing') {
-    if (model.workflow?.task_status === 'syncing') return 'PDF wird an CTOX synchronisiert. Flow wird angelegt.';
+    if (model.workflow?.task_status === 'syncing') return tr('PDF wird an CTOX synchronisiert. Flow wird angelegt.', 'PDF is synchronizing with CTOX. The flow is being created.');
     const tracking = taskTracking(model);
-    if (!tracking.taskId && !tracking.commandId) return 'Task läuft. Flow wird angelegt.';
+    if (!tracking.taskId && !tracking.commandId) return tr('Task läuft. Flow wird angelegt.', 'Task is running. The flow is being created.');
     const label = tracking.taskId ? shortTaskId(tracking.taskId) : shortTaskId(tracking.commandId);
-    return `Task läuft · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">Flow öffnen <span>${escapeHtml(label)}</span></button>`;
+    return `${escapeHtml(tr('Task läuft', 'Task running'))} · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">${escapeHtml(tr('Flow öffnen', 'Open flow'))} <span>${escapeHtml(label)}</span></button>`;
   }
-  if (phase === 'review') return `${escapeHtml(templateLabel(model.print?.template))} · Korrektur und Template prüfen.`;
-  if (phase === 'approved') return `${escapeHtml(templateLabel(model.print?.template))} · Druckansicht freigegeben.`;
+  if (phase === 'review') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Korrektur und Template prüfen.', 'Review corrections and template.'))}`;
+  if (phase === 'approved') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Druckansicht freigegeben.', 'Print view approved.'))}`;
   if (phase === 'error') {
     const tracking = taskTracking(model);
-    const error = clipText(model.workflow?.error || 'Parser-Task fehlgeschlagen.', 74);
+    const error = clipText(model.workflow?.error || tr('Parser-Task fehlgeschlagen.', 'Parser task failed.'), 74);
     const link = tracking.taskId || tracking.commandId
-      ? ` · <button class="cv-task-link is-error" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">Flow öffnen</button>`
+      ? ` · <button class="cv-task-link is-error" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">${escapeHtml(tr('Flow öffnen', 'Open flow'))}</button>`
       : '';
-    return `Parsing fehlgeschlagen: ${escapeHtml(error)}${link}`;
+    return `${escapeHtml(tr('Parsing fehlgeschlagen', 'Parsing failed'))}: ${escapeHtml(error)}${link}`;
   }
-  return 'Status prüfen.';
+  return tr('Status prüfen.', 'Check status.');
 }
 
 function taskTracking(model) {
@@ -2231,7 +2282,9 @@ function openCtoxTask(taskId, commandId) {
 }
 
 function templateLabel(id) {
-  return TEMPLATES.find((entry) => entry.id === normalizeTemplateId(id))?.label || 'Modern';
+  const normalized = normalizeTemplateId(id);
+  if (ACTIVE_LOCALE === 'en') return ({ minimal: 'Minimal', classic: 'Classic', modern: 'Modern' })[normalized] || 'Modern';
+  return TEMPLATES.find((entry) => entry.id === normalized)?.label || 'Modern';
 }
 
 function normalizeTemplateId(id) {

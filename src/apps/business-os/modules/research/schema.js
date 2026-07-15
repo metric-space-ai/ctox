@@ -117,9 +117,7 @@ const researchNoteSchema = {
 const knowledgeRecordSchema = knowledgeCollections.knowledge_tables;
 
 export const collections = {
-  business_commands: commandSchema,
   business_chats: ctoxCollections.business_chats,
-  ctox_queue_tasks: ctoxQueueTaskSchema,
   research_tasks: researchTaskSchema,
   research_runs: researchRunSchema,
   research_notes: researchNoteSchema,
@@ -129,11 +127,4 @@ export const collections = {
   document_blob_chunks: documentCollections.document_blob_chunks,
 };
 
-export const migrationStrategies = {
-  business_commands: {
-    1: (oldDoc) => ({
-      ...oldDoc,
-      inbound_channel: oldDoc.inbound_channel || oldDoc.module || '',
-    }),
-  },
-};
+export const migrationStrategies = {};

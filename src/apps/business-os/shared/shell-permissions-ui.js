@@ -486,6 +486,26 @@ export function renderGlobalCtoxAgentScopeHtml(options = {}) {
   `;
 }
 
+export function renderCompactGlobalCtoxAgentScopeHtml(options = {}) {
+  const view = options.view && typeof options.view === 'object'
+    ? options.view
+    : buildGlobalCtoxAgentScopeView(options);
+  const title = options.labels?.scopeTitle || 'CTOX Zugriff';
+  return `
+    <details class="ctox-agent-scope ctox-agent-scope--compact" aria-label="${escapeAttr(title)}">
+      <summary class="ctox-agent-scope-title">${escapeHtml(title)}</summary>
+      <dl>
+        ${view.rows.map((row) => `
+          <div data-agent-scope-row="${escapeAttr(row.key)}">
+            <dt>${escapeHtml(row.label)}</dt>
+            <dd>${escapeHtml(row.value)}</dd>
+          </div>
+        `).join('')}
+      </dl>
+    </details>
+  `;
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;',

@@ -168,12 +168,7 @@ export async function mount(ctx) {
   renderCenter(state);
   Promise.resolve()
     .then(() => ensureSeedRunbooks(ctx))
-    .then(() => Promise.all([
-      refreshRunbooks(state),
-      refreshKnowledge(state),
-      refreshDocuments(state),
-      refreshOfficeEngineSettings(state),
-    ]))
+    .then(() => Promise.all([refreshRunbooks(state), refreshDocuments(state), refreshOfficeEngineSettings(state)]))
     .then(() => {
       if (state.disposed) return;
       renderLeft(state);
@@ -1884,16 +1879,39 @@ function defaultRunbookId(state) {
   return state.runbooks[0]?.id || state.runbooks[0]?.command_type || 'research.report.auto';
 }
 
-function openKnowledgeRunbooks(state) {
-  const recordLink = documentKnowledgeLink(selectedRecord(state));
-  const candidate = recordLink?.id
-    ? state.knowledgeItems.find((item) => item.id === recordLink.id)
-    : knowledgeCandidates(state)[0];
-  if (candidate?.id) sessionStorage.setItem('ctox.businessOs.knowledge.openId', candidate.id);
-  const domain = candidate?.domain || recordLink?.domain || '';
-  if (domain) sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', domain);
-  location.hash = 'knowledge';
-  document.querySelector('[data-module="knowledge"]')?.click();
+async function openKnowledgeRunbooks(state) {
+  const result = await state.ctx.commandBus.dispatch({
+    module: 'ctox',
+    command_type: 'ctox.knowledge.runbooks.manage',
+    payload: {
+      title: state.t('manageDocumentRunbooksTitle', 'Document runbooks verwalten'),
+      instruction: state.t('manageDocumentRunbooksInstruction', 'Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.'),
+      knowledge_scope: {
+        form: 'procedural',
+        cli_namespace: 'ctox knowledge skill',
+        related_tables: ['knowledge_main_skills', 'knowledge_skillbooks', 'knowledge_runbooks', 'knowledge_runbook_items'],
+        module_local_seed_collection: 'document_runbooks',
+      },
+      current_document_runbooks: state.runbooks.map((runbook) => ({
+        id: runbook.id,
+        command_type: runbook.command_type,
+        title: state.t(`runbooks.${runbook.id}.title`, runbook.title || runbook.command_type),
+        prompt_template: runbook.prompt_template,
+      })),
+    },
+    client_context: {
+      module: 'documents',
+      surface: 'documents-runbook-navigation',
+      target: 'ctox-knowledge-system',
+    },
+  });
+  sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
+    commandId: result.command_id || '',
+    taskId: result.task_id || '',
+    taskStatus: result.task_status || result.status || 'queued',
+  }));
+  location.hash = 'ctox?focus=knowledge-runbooks';
+  document.querySelector('[data-module="ctox"]')?.click();
 }
 
 function renderCenter(state) {

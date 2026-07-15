@@ -12,8 +12,8 @@ const registryEntry = registry.modules.find((item) => item.id === 'cv-print-buil
 
 assert.equal(manifest.id, 'cv-print-builder');
 assert.equal(manifest.entry, 'modules/cv-print-builder/index.html');
-assert.equal(manifest.install_scope, 'starter');
-assert.equal(manifest.default_installed, true);
+assert.equal(manifest.install_scope, 'store');
+assert.equal(manifest.default_installed, false);
 assert.ok(manifest.collections.includes('documents'));
 assert.ok(manifest.collections.includes('document_versions'));
 assert.ok(manifest.collections.includes('desktop_files'));
@@ -45,7 +45,7 @@ assert.match(source, /label:\s*'Minimal'/);
 assert.match(source, /label:\s*'Klassisch'/);
 assert.match(source, /label:\s*'Modern'/);
 assert.match(source, /async function importPdfs/);
-assert.match(source, /title:\s*'Print freigeben'/);
+assert.match(source, /title:\s*tr\('Print freigeben',\s*'Approve print'\)/);
 assert.match(source, /phase:\s*'approved'/);
 assert.match(source, /view_mode:\s*'print'/);
 assert.match(source, /applyLiveWorkflowState/);
@@ -53,7 +53,7 @@ assert.match(source, /buildLiveStatusIndex/);
 assert.match(source, /const commandId = `cmd_\$\{crypto\.randomUUID\(\)\}`/);
 assert.match(source, /id:\s*commandId/);
 assert.match(source, /command_type:\s*'business_os\.chat\.task'/);
-assert.match(source, /type:\s*'business_os\.chat\.task'/);
+assert.match(source, /command_type:\s*'business_os\.chat\.task'/);
 assert.match(source, /task_status:\s*'queued'/);
 assert.match(source, /ctx\.commandBus\.dispatch/);
 assert.match(source, /Flow öffnen/);

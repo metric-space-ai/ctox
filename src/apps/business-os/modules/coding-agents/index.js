@@ -136,7 +136,11 @@ function startInitialLoadWithTimeout() {
     showWorkspacesTimeoutState();
   }, INITIAL_LOAD_TIMEOUT_MS);
 
-  refreshAllData()
+  // Opening a read surface must not enqueue provider commands. Hydrate the
+  // workbench from the server-authoritative projections only; explicit user
+  // actions (refresh, workspace selection, lifecycle controls) may still use
+  // the command bus when a projection is unavailable.
+  refreshProjectedData()
     .catch((err) => console.warn('[coding-agents] initial refresh failed', err))
     .finally(() => {
       state.initialLoadDone = true;
@@ -389,6 +393,7 @@ function wireEvents() {
         state.isAutomating = false;
       }
       if (res && res.ok) {
+        await restartCodingAgentProjectionSync(['coding_agent_sessions', 'coding_agent_events']);
         await waitForSessionEvents(state.activeSession, expectedCount, 120000)
           .catch((err) => appendTerminalOutput(`Session event projection is still catching up: ${err.message || err}`));
         await loadSessionDetails(state.activeSession, state.activeApp);
@@ -444,6 +449,7 @@ function wireEvents() {
         closeDialog(els.newSessionModal, els.newSessionBtn);
         const createdSessionId = String(res?.data?.session_id || res?.session_id || '').trim();
         if (createdSessionId) state.activeSession = createdSessionId;
+        await restartCodingAgentProjectionSync(['coding_agent_sessions', 'coding_agent_events']);
         await waitForSessionRecord(createdSessionId, state.activeApp, state.activeWorkspace, 60000)
           .then((session) => {
             if (session?.id) state.activeSession = session.id;
@@ -650,9 +656,9 @@ function subscribeProjectionUpdates() {
     if (subscription) subscriptions.push(subscription);
   };
 
-  subscribe('coding_agent_workspace_grants', () => refreshBypassData());
+  subscribe('coding_agent_workspace_grants', () => refreshBypassData({ allowCommandFallback: false }));
   subscribe('coding_agent_sessions', () => {
-    if (state.activeWorkspace) return refreshSessions();
+    if (state.activeWorkspace) return refreshSessions({ allowCommandFallback: false });
     return undefined;
   });
   subscribe('coding_agent_events', () => {
@@ -863,6 +869,20 @@ async function refreshAllData() {
   }
 }
 
+async function refreshProjectedData() {
+  if (state.isRefreshing) return;
+  state.isRefreshing = true;
+
+  try {
+    await refreshBypassData({ allowCommandFallback: false });
+    await refreshSessions({ allowCommandFallback: false });
+  } catch (err) {
+    console.warn('[coding-agents] Projection hydration failed: ', err);
+  } finally {
+    state.isRefreshing = false;
+  }
+}
+
 async function refreshDiagnosticsSilently() {
   const apps = ['antigravity', 'claude', 'codex'];
   for (const app of apps) {
@@ -934,12 +954,21 @@ function diagnosticsFromOutcome(outcome) {
   };
 }
 
-async function refreshBypassData() {
+async function refreshBypassData({ allowCommandFallback = true } = {}) {
   let grants = await workspaceGrantsFromProjection(state.activeApp);
   let res = null;
-  if (grants === null) {
+  if (grants === null && allowCommandFallback) {
     res = await dispatchAgyCommand(['config', 'get-grants']);
     grants = res && res.ok ? grantsFromOutcome(res) : null;
+  }
+
+  if (grants === null && !allowCommandFallback) {
+    state.trustedPaths = [];
+    state.workspaceLoadState = 'ready';
+    state.workspaceLoadError = '';
+    if (els.bypassToggle) els.bypassToggle.checked = false;
+    renderWorkspaces();
+    return;
   }
 
   if (Array.isArray(grants)) {
@@ -1063,7 +1092,7 @@ function renderWorkspaces() {
     el.dataset.contextLabel = shortName;
 
     // Load active mapped engine or default
-    const mappedApp = localStorage.getItem('workspace_agent_' + path) || 'antigravity';
+    const mappedApp = state.ctx.storageScope.get('workspace_agent_' + path) || 'antigravity';
 
     el.innerHTML = `
       <div class="workspace-info">
@@ -1085,7 +1114,7 @@ function renderWorkspaces() {
     select.addEventListener('change', (evt) => {
       evt.stopPropagation();
       const newAgent = select.value;
-      localStorage.setItem('workspace_agent_' + path, newAgent);
+      state.ctx.storageScope.set('workspace_agent_' + path, newAgent);
 
       // If this is the active workspace, switch theme immediately
       if (state.activeWorkspace === path) {
@@ -1117,7 +1146,7 @@ function renderWorkspaces() {
 
     // Select workspace click handler
     el.addEventListener('click', () => {
-      selectWorkspace(path, mappedApp);
+      selectWorkspace(path, select.value);
     });
 
     box.appendChild(el);
@@ -1126,7 +1155,7 @@ function renderWorkspaces() {
   // Default to selecting the first workspace if none selected yet
   if (!state.activeWorkspace && workspaces.length > 0) {
     const defaultPath = workspaces[0];
-    const defaultApp = localStorage.getItem('workspace_agent_' + defaultPath) || 'antigravity';
+    const defaultApp = state.ctx.storageScope.get('workspace_agent_' + defaultPath) || 'antigravity';
     selectWorkspace(defaultPath, defaultApp);
   } else if (state.activeWorkspace) {
     // Keep active workspace styled
@@ -1162,7 +1191,7 @@ function selectWorkspace(path, app) {
   refreshSessions();
 }
 
-async function refreshSessions() {
+async function refreshSessions({ allowCommandFallback = true } = {}) {
   if (!state.activeWorkspace) {
     state.sessions = [];
     renderSessions();
@@ -1172,9 +1201,11 @@ async function refreshSessions() {
   const projected = await sessionsFromProjection(app, state.activeWorkspace);
   if (projected !== null) {
     state.sessions = projected;
-  } else {
+  } else if (allowCommandFallback) {
     const res = await dispatchAgyCommand(['session', 'list']);
     state.sessions = res && res.ok ? sessionsFromOutcome(res, app) : [];
+  } else {
+    state.sessions = [];
   }
   renderSessions();
 }
@@ -1463,6 +1494,29 @@ async function waitForProjection(predicate, timeoutMs, label) {
     await delay(250);
   }
   throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+}
+
+async function restartCodingAgentProjectionSync(collections) {
+  const sync = state.ctx?.sync;
+  if (!sync) return;
+  try {
+    const restart = typeof sync.restartCollections === 'function'
+      ? sync.restartCollections(collections)
+      : Promise.all(collections.map((collection) => sync.restartCollection?.(collection)));
+    const bridges = await Promise.race([
+      restart,
+      delay(15000).then(() => { throw new Error('projection sync restart timed out'); }),
+    ]);
+    const states = (Array.isArray(bridges) ? bridges : [bridges])
+      .map((bridge) => bridge?.state || bridge)
+      .filter(Boolean);
+    await Promise.race([
+      Promise.all(states.map((projectionState) => projectionState.awaitInSync?.())),
+      delay(15000).then(() => { throw new Error('projection sync catch-up timed out'); }),
+    ]);
+  } catch (error) {
+    appendTerminalOutput(`Projection sync refresh failed: ${error?.message || error}`);
+  }
 }
 
 function delay(ms) {

@@ -23,17 +23,18 @@ const CONTRACT_VERSION = 'business-os-module-context-v1';
 
 // Keep sorted. Mirrors docs/business-os-module-context.md.
 const CONTRACT_FIELDS = [
-  'actor',
   'actions',
+  'actor',
   'args',
   'businessChat',
   'canModifyModule',
   'closeDrawers',
   'commandBus',
-  'contextMenu',
   'contextActions',
+  'contextMenu',
   'db',
   'desktopApps',
+  'documents',
   'eventBus',
   'getActionIcon',
   'getDesktopApps',

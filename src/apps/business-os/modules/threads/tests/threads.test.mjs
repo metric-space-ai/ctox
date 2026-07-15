@@ -10,6 +10,7 @@ import { collections } from '../schema.js';
 
 assert.ok(THREAD_COLLECTIONS.includes('user_threads'));
 assert.ok(collections.user_threads);
+assert.ok(collections.user_thread_states);
 assert.ok(collections.user_thread_messages);
 assert.ok(collections.ctox_task_approval_requests);
 
@@ -45,5 +46,13 @@ assert.equal(command.module, 'threads');
 assert.equal(command.command_type, 'threads.note.create');
 assert.equal(command.inbound_channel, 'tickets');
 assert.equal(command.client_context.module_id, 'threads');
+
+const claim = buildThreadsCommand({
+  commandType: 'threads.thread.claim',
+  recordId: 'thread-1',
+  payload: { thread_id: 'thread-1', expected_updated_at_ms: 42 },
+});
+assert.equal(claim.command_type, 'threads.thread.claim');
+assert.equal(claim.payload.expected_updated_at_ms, 42);
 
 console.log('threads module smoke ok');

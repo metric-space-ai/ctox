@@ -20,6 +20,10 @@ const moduleDir = resolve(testDir, '..');
 const manifest = JSON.parse(readFileSync(resolve(moduleDir, 'module.json'), 'utf8'));
 const schemaDocument = JSON.parse(readFileSync(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
 const collections = schemaDocument.collections || {};
+const css = readFileSync(resolve(moduleDir, 'index.css'), 'utf8');
+const html = readFileSync(resolve(moduleDir, 'index.html'), 'utf8');
+const source = `${css}\n${html}`;
+const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
 for (const name of manifest.collections) {
   if (name === 'business_commands' || name === 'ctox_queue_tasks') continue;
@@ -35,14 +39,21 @@ assert.ok(collections.desktop_files, 'support imports canonical desktop files fo
 assert.ok(collections.desktop_file_chunks, 'support imports canonical desktop file chunks for attachment content');
 assert.ok(collections.support_agent_suggestions, 'agent suggestions collection exists');
 assert.ok(SUPPORT_AGENT_SUGGESTION_KINDS.includes('draft_reply'), 'draft reply suggestions are allowed');
+assert.doesNotMatch(source, forbiddenSurfacePattern);
+assert.doesNotMatch(source, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
+assert.doesNotMatch(source, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
+assert.doesNotMatch(source, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
+assert.match(css, /@container business-app-window \(max-width: 1180px\)/);
+assert.match(css, /@container business-app-window \(max-width: 760px\)/);
+assert.match(css, /\.support-module[\s\S]*grid-template-columns: var\(--support-left-width\) minmax\(420px, 1fr\) var\(--support-right-width\)/);
 
 const command = buildSupportCommand({
-  type: 'support.conversation.claim',
+  commandType: 'support.conversation.claim',
   recordId: 'conv_1',
   payload: { conversation_id: 'conv_1' },
 });
 assert.equal(command.module, 'support');
-assert.equal(command.type, 'support.conversation.claim');
+assert.equal(command.command_type, 'support.conversation.claim');
 assert.equal(command.command_type, 'support.conversation.claim');
 assert.equal(command.payload.conversation_id, 'conv_1');
 assert.equal(Object.hasOwn(command.client_context, 'actor'), false);
@@ -52,7 +63,7 @@ const taskCommand = buildSupportAgentTaskCommand({
   title: 'Support summary',
   instruction: 'Summarize',
 });
-assert.equal(taskCommand.type, 'business_os.chat.task');
+assert.equal(taskCommand.command_type, 'business_os.chat.task');
 assert.equal(taskCommand.command_type, 'business_os.chat.task');
 assert.equal(taskCommand.payload.thread_key, 'business-os/support/conv_1');
 assert.equal(taskCommand.payload.writeback_contract.command_type, 'support.agent.writeback');
@@ -64,20 +75,20 @@ const writeback = buildAgentWritebackCommand({
   suggestionKind: 'summary',
   payload: { summary: 'Customer waits for contract data.' },
 });
-assert.equal(writeback.type, 'support.agent.writeback');
+assert.equal(writeback.command_type, 'support.agent.writeback');
 assert.equal(writeback.payload.source_command_id, taskCommand.id);
 assert.equal(writeback.payload.required_human_action, 'review');
 
 const bulkCommand = buildSupportCommand({
-  type: 'support.bulk.resolve',
+  commandType: 'support.bulk.resolve',
   payload: { conversation_ids: ['conv_1', 'conv_2'] },
 });
-assert.equal(bulkCommand.type, 'support.bulk.resolve');
+assert.equal(bulkCommand.command_type, 'support.bulk.resolve');
 
 const reportingCommand = buildSupportCommand({
-  type: 'support.reporting.rebuild_rollups',
+  commandType: 'support.reporting.rebuild_rollups',
 });
-assert.equal(reportingCommand.type, 'support.reporting.rebuild_rollups');
+assert.equal(reportingCommand.command_type, 'support.reporting.rebuild_rollups');
 
 const conversations = [
   { id: 'conv_a', status: 'open', assignee_id: '', priority: 'high', unread_count: 1, updated_at_ms: 1, last_activity_at_ms: 20, search_text: 'alpha contract' },

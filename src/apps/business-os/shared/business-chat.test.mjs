@@ -28,6 +28,146 @@ test('business chat renders no agent scope panel without visible scope context',
   assert.equal(renderChatAgentScopeHtml({ client_context: { module: 'inventory' } }), '');
 });
 
+test('business chat task submission returns the real queue id after rendering pending feedback', async () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  const state = { ownerUserId: 'user-1', chats: [] };
+  const chat = { id: 'chat-1', title: 'Recherche', messages: [], contextMeta: {} };
+  let pendingRendered = false;
+  try {
+    const submission = await __businessChatTestInternals.submitChatMessage({
+      state,
+      chat,
+      text: 'Recherchiere WITTENSTEIN SE.',
+      commandBus: {
+        async dispatch(command) {
+          assert.equal(pendingRendered, true);
+          assert.equal(command.payload.prompt, 'Recherchiere WITTENSTEIN SE.');
+          return { status: 'queued', command_id: command.id, task_id: 'queue-real-42' };
+        },
+      },
+      db: null,
+      sync: null,
+      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      meta: { command_id: 'cmd-research-42' },
+      onPending: () => { pendingRendered = true; },
+    });
+    assert.deepEqual(submission, {
+      status: 'queued',
+      command_id: 'cmd-research-42',
+      task_id: 'queue-real-42',
+      queue_id: 'queue-real-42',
+    });
+    assert.equal(chat.messages[0].role, 'user');
+    assert.equal(chat.messages[0].text, 'Recherchiere WITTENSTEIN SE.');
+    assert.equal(chat.messages[1].taskId, 'queue-real-42');
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
+test('business chat tracks a terminal native control command without inventing a queue task', async () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  const state = { ownerUserId: 'user-1', chats: [] };
+  const chat = { id: 'chat-control', title: 'Nachrecherche', messages: [], contextMeta: {} };
+  try {
+    const submission = await __businessChatTestInternals.submitChatMessage({
+      state,
+      chat,
+      text: 'Recherchiere WITTENSTEIN SE.',
+      commandBus: {
+        async dispatch(command) {
+          assert.equal(command.type, 'web_stack.person_research');
+          return {
+            status: 'completed',
+            terminal_status: 'completed',
+            execution_mode: 'control',
+            command_id: command.id,
+            task_id: '',
+          };
+        },
+      },
+      db: null,
+      sync: null,
+      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      meta: {
+        command_id: 'cmd-control-research',
+        command_type: 'web_stack.person_research',
+      },
+    });
+    assert.deepEqual(submission, {
+      status: 'completed',
+      command_id: 'cmd-control-research',
+      task_id: '',
+      queue_id: '',
+    });
+    assert.equal(chat.messages[1].text, 'CTOX hat die Automatisierung ausgeführt.');
+    assert.equal(chat.messages[1].commandId, 'cmd-control-research');
+    assert.equal(chat.messages[1].taskId, '');
+    assert.equal(chat.messages[1].status, 'completed');
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
+test('business chat acknowledges a declared long-running control command locally', async () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  const state = { ownerUserId: 'user-1', chats: [] };
+  const chat = { id: 'chat-control-local', title: 'Nachrecherche', messages: [], contextMeta: {} };
+  try {
+    const submission = await __businessChatTestInternals.submitChatMessage({
+      state,
+      chat,
+      text: 'Recherchiere WITTENSTEIN SE.',
+      commandBus: {
+        async dispatch(command, options) {
+          assert.equal(command.type, 'web_stack.person_research');
+          assert.deepEqual(options, { until: 'local' });
+          return { status: 'pending_sync', command_id: command.id };
+        },
+      },
+      db: null,
+      sync: null,
+      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      meta: {
+        command_id: 'cmd-control-local',
+        command_type: 'web_stack.person_research',
+        control_command: true,
+      },
+    });
+    assert.deepEqual(submission, {
+      status: 'pending_sync',
+      command_id: 'cmd-control-local',
+      task_id: '',
+      queue_id: '',
+    });
+    assert.equal(chat.messages[1].text, 'CTOX führt die Automatisierung aus.');
+    assert.equal(chat.messages[1].commandId, 'cmd-control-local');
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
+test('business chat resolves a queue id that is projected after command dispatch', async () => {
+  const commands = makeBatchCollection([{ id: 'cmd-delayed', task_id: '' }]);
+  const queue = makeBatchCollection([{ id: 'queue-delayed', command_id: 'cmd-delayed', status: 'queued' }]);
+  const taskId = await __businessChatTestInternals.waitForSubmittedTaskId({
+    raw: { business_commands: commands, ctox_queue_tasks: queue },
+  }, 'cmd-delayed', { timeoutMs: 0 });
+  assert.equal(taskId, 'queue-delayed');
+});
+
 test('business chat renders business-facing visible scope rows from client context', () => {
   const html = renderChatAgentScopeHtml({
     client_context: {
@@ -283,7 +423,7 @@ test('business chat does not defer remote hydration while a tracked command is a
   }
 });
 
-test('business chat hydration focuses a newly replicated CTOX reply', async () => {
+test('business chat hydration focuses a newly replicated CTOX reply inside an open dock', async () => {
   const previousLocalStorage = globalThis.localStorage;
   const store = new Map();
   globalThis.localStorage = {
@@ -302,7 +442,8 @@ test('business chat hydration focuses a newly replicated CTOX reply', async () =
     ownerUserId: 'user-1',
     selectedDate: '2026-06-23',
     activeChatId: 'chat-empty-old',
-    dockCollapsed: true,
+    dockCollapsed: false,
+    remoteHydrationComplete: true,
     deletedChatIds: {},
     chats: [
       {
@@ -378,6 +519,147 @@ test('business chat hydration focuses a newly replicated CTOX reply', async () =
     assert.equal(chat.minimized, false);
     assert.equal(chat.messages.at(-1).role, 'ctox');
     assert.equal(chat.messages.at(-1).text, 'CTOX ist verbunden und antwortet sichtbar im Chat.');
+  } finally {
+    if (previousLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
+});
+
+test('business chat hydration never reopens a dock the user collapsed', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  const createdAt = Date.now();
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: __businessChatTestInternals.getLocalDateString(createdAt),
+    activeChatId: 'chat-collapsed',
+    dockCollapsed: true,
+    remoteHydrationComplete: true,
+    deletedChatIds: {},
+    chats: [{
+      id: 'chat-collapsed',
+      owner_user_id: 'user-1',
+      createdAt,
+      open: true,
+      minimized: true,
+      messages: [{
+        id: 'status-collapsed',
+        role: 'ctox',
+        commandId: 'cmd-collapsed',
+        taskId: 'queue-collapsed',
+        status: 'queued',
+        createdAt,
+      }],
+    }],
+  };
+  const remoteChat = {
+    ...state.chats[0],
+    updated_at_ms: createdAt + 1000,
+    minimized: false,
+    messages: [{
+      id: 'reply-collapsed',
+      role: 'ctox',
+      text: 'Fertig, ohne den Arbeitsbereich zu stehlen.',
+      replyFor: 'queue-collapsed',
+      commandId: 'cmd-collapsed',
+      taskId: 'queue-collapsed',
+      status: 'completed',
+      createdAt: createdAt + 1000,
+    }],
+  };
+
+  try {
+    const changed = await __businessChatTestInternals.hydrateChatsFromRxDb({
+      state,
+      session: { user: { id: 'user-1' } },
+      db: { raw: { business_chats: makeFindCollection([remoteChat]) } },
+    });
+
+    assert.equal(changed, true);
+    assert.equal(state.dockCollapsed, true);
+    assert.equal(state.activeChatId, 'chat-collapsed');
+  } finally {
+    if (previousLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
+});
+
+test('business chat first remote hydration keeps historical replies collapsed', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  const createdAt = Date.now() - 60_000;
+  const state = {
+    ownerUserId: 'user-1',
+    selectedDate: __businessChatTestInternals.getLocalDateString(createdAt),
+    activeChatId: '',
+    dockCollapsed: true,
+    remoteHydrationComplete: false,
+    deletedChatIds: {},
+    chats: [],
+  };
+  const historical = {
+    id: 'chat-historical-reply',
+    owner_user_id: 'user-1',
+    title: 'Historische QA Antwort',
+    createdAt,
+    updated_at_ms: createdAt + 1000,
+    open: true,
+    minimized: false,
+    maximized: true,
+    messages: [{
+      id: 'reply-historical',
+      role: 'ctox',
+      text: 'Dieser bereits vorhandene Abschluss darf kein frisches Profil aufklappen.',
+      replyFor: 'queue-historical',
+      commandId: 'cmd-historical',
+      taskId: 'queue-historical',
+      status: 'completed',
+      createdAt: createdAt + 1000,
+    }],
+  };
+
+  try {
+    const changed = await __businessChatTestInternals.hydrateChatsFromRxDb({
+      state,
+      session: { user: { id: 'user-1' } },
+      db: { raw: { business_chats: makeFindCollection([historical]) } },
+    });
+
+    assert.equal(changed, true);
+    assert.equal(state.remoteHydrationComplete, true);
+    assert.equal(state.dockCollapsed, true);
+    assert.equal(state.activeChatId, '');
+    assert.equal(state.chats.length, 1);
+    assert.equal(state.chats[0].minimized, true);
+    assert.equal(state.chats[0].maximized, false);
   } finally {
     if (previousLocalStorage === undefined) {
       delete globalThis.localStorage;

@@ -68,7 +68,7 @@ const registryEntry = registryJson.modules.find((mod) => mod.id === 'customers')
 
 assert.equal(moduleJson.id, 'customers');
 assert.equal(moduleJson.entry, 'modules/customers/index.html');
-assert.equal(moduleJson.layout.shell, 'full-workspace');
+assert.equal(moduleJson.layout.shell, 'windowed');
 assert.ok(moduleJson.layout.icon_svg.includes('svg-customers'));
 assert.ok(registryEntry, 'customers registry entry exists');
 assert.deepEqual(registryEntry.collections, moduleJson.collections);
@@ -354,8 +354,8 @@ assert.deepEqual(hooks.buildOpportunityCreateCommand({
   source: 'business-os-customers-ui',
 });
 assert.deepEqual(hooks.buildOpportunityMoveStageCommand('opp-a', 'committed').payload, { opportunity_id: 'opp-a', stage: 'committed' });
-assert.equal(hooks.buildOpportunityCloseCommand('opp-a', 'won').type, 'customers.opportunity.close_won');
-assert.equal(hooks.buildOpportunityCloseCommand('opp-a', 'lost').type, 'customers.opportunity.close_lost');
+assert.equal(hooks.buildOpportunityCloseCommand('opp-a', 'won').command_type, 'customers.opportunity.close_won');
+assert.equal(hooks.buildOpportunityCloseCommand('opp-a', 'lost').command_type, 'customers.opportunity.close_lost');
 assert.equal(hooks.buildOpportunityCloseCommand('opp-a', 'lost').payload.lost_reason, 'Closed lost');
 assert.equal(hooks.validateTaskDraft({ account_id: 'acct-a', title: '' }).valid, false);
 assert.deepEqual(hooks.buildTaskCreateCommand({

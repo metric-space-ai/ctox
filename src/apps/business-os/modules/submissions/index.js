@@ -3,8 +3,20 @@ const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const TITLE = 'submissions';
 const PRESENT_COMMAND = 'ats.submission.present';
+const COPY = {
+  de: {
+    candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', vacancy: 'Vakanz-ID (optional)', contact: 'Kontakt-ID (optional)', present: 'Vorstellen', entries: 'Einträge', empty: 'Noch keine Einträge.', idCopied: 'ID kopiert', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', blocked: 'Blockiert.', idsRequired: 'Kandidat-ID und Kunden-Account-ID sind erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', presented: 'Vorgestellt.', submission: 'Submission', vacancyLabel: 'Vakanz', contactLabel: 'Kontakt', consent: 'Consent', feedback: 'Feedback', sent: 'Gesendet', copyId: 'ID kopieren', unknown: 'unbekannt', conflict: 'Konflikt'
+  },
+  en: {
+    candidate: 'Candidate ID', client: 'Client account ID', vacancy: 'Vacancy ID (optional)', contact: 'Contact ID (optional)', present: 'Present candidate', entries: 'records', empty: 'No submissions yet.', idCopied: 'ID copied', offlineService: 'Offline: command service unavailable.', blocked: 'Blocked.', idsRequired: 'Candidate ID and client account ID are required.', offlineSend: 'Offline: command could not be sent.', presented: 'Candidate presented.', submission: 'Submission', vacancyLabel: 'Vacancy', contactLabel: 'Contact', consent: 'Consent', feedback: 'Feedback', sent: 'Sent', copyId: 'Copy ID', unknown: 'unknown', conflict: 'Conflict'
+  }
+};
+let text = COPY.de;
+let locale = 'de';
 
 export async function mount(ctx) {
+  locale = ctx.locale === 'en' ? 'en' : 'de';
+  text = COPY[locale];
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
   ctx.host.dataset.atsModule = MODULE_ID;
@@ -19,6 +31,7 @@ export async function mount(ctx) {
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
   if (subEl) subEl.textContent = ctx.manifest?.description || '';
+  applyStaticCopy(root);
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
@@ -38,8 +51,8 @@ export async function mount(ctx) {
     }
     rows.sort((a, b) => Number(b?.sent_at_ms || b?.created_at_ms || 0) - Number(a?.sent_at_ms || a?.created_at_ms || 0));
     rowsCache = rows;
-    if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => submissionRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
+    if (countEl) countEl.textContent = `${rows.length} ${text.entries}`;
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => submissionRow(r)).join('') : `<div class="ctox-empty">${esc(text.empty)}</div>`;
   }
 
   // The submissions module has exactly one native command (ats.submission.present);
@@ -49,7 +62,7 @@ export async function mount(ctx) {
     const copyBtn = event.target?.closest?.('[data-copy-id]');
     if (copyBtn) {
       const id = copyBtn.getAttribute('data-copy-id') || '';
-      if (id) { try { await navigator.clipboard?.writeText?.(id); } catch {} setGate('<strong>ID kopiert:</strong> <span class="ats-result-row">' + esc(id) + '</span>', 'ok'); }
+      if (id) { try { await navigator.clipboard?.writeText?.(id); } catch {} setGate(`<strong>${esc(text.idCopied)}:</strong> <span class="ats-result-row">` + esc(id) + '</span>', 'ok'); }
     }
   }
   listEl?.addEventListener('click', onListClick);
@@ -59,7 +72,7 @@ export async function mount(ctx) {
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
     if (typeof dispatch !== 'function') {
-      setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline');
+      setGate(text.offlineService, 'offline');
       return;
     }
     const data = new FormData(formEl);
@@ -67,7 +80,7 @@ export async function mount(ctx) {
     const candidate_id = String(f.candidate_id || '').trim();
     const client_account_id = String(f.client_account_id || '').trim();
     if (!candidate_id || !client_account_id) {
-      setGate('<strong>Blockiert.</strong><div class="ats-result-row">Kandidat-ID und Kunden-Account-ID sind erforderlich.</div>', 'block');
+      setGate(`<strong>${esc(text.blocked)}</strong><div class="ats-result-row">${esc(text.idsRequired)}</div>`, 'block');
       return;
     }
     const payload = {
@@ -81,13 +94,12 @@ export async function mount(ctx) {
     try {
       outcome = await ctx.commandBus?.dispatch?.({
         module: MODULE_ID,
-        type: PRESENT_COMMAND,
         command_type: PRESENT_COMMAND,
         payload,
       });
     } catch (e) {
       console.error('[submissions] present dispatch failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(text.offlineSend, 'offline');
       return;
     }
 
@@ -105,14 +117,14 @@ export async function mount(ctx) {
         .filter(Boolean)
         .map((b) => '<li>' + esc(blockerText(b)) + '</li>')
         .join('');
-      setGate('<strong>Blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      setGate(`<strong>${esc(text.blocked)}</strong>` + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
       return;
     }
 
     const submissionId = result?.submission_id ?? result?.data?.submission_id ?? null;
     setGate(
-      '<strong>Vorgestellt.</strong>'
-      + '<div class="ats-result-row">Submission: ' + esc(submissionId ?? '—') + '</div>',
+      `<strong>${esc(text.presented)}</strong>`
+      + `<div class="ats-result-row">${esc(text.submission)}: ` + esc(submissionId ?? '—') + '</div>',
       'ok'
     );
     try { formEl.reset(); } catch {}
@@ -141,17 +153,17 @@ async function loadMarkup() {
 }
 
 function blockerText(b) {
-  if (b == null) return 'unknown';
+  if (b == null) return text.unknown;
   if (typeof b === 'string') return b;
-  const reason = b.reason || b.message || 'unknown';
-  if (b.conflicting_submission_id) return reason + ' (Konflikt: ' + b.conflicting_submission_id + ')';
+  const reason = b.reason || b.message || text.unknown;
+  if (b.conflicting_submission_id) return reason + ` (${text.conflict}: ` + b.conflicting_submission_id + ')';
   return reason;
 }
 
 function fmtTime(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return '';
-  try { return new Date(n).toLocaleString(); } catch { return ''; }
+  try { return new Date(n).toLocaleString(locale === 'en' ? 'en' : 'de'); } catch { return ''; }
 }
 
 // Status → kit badge state (base.css .ctox-badge modifiers).
@@ -174,15 +186,15 @@ function submissionRow(r) {
   const sentAt = fmtTime(r?.sent_at_ms || r?.created_at_ms);
   const feedbackOutcome = r?.feedback && typeof r.feedback === 'object' ? r.feedback.outcome : '';
   const meta = [];
-  meta.push('Submission: ' + esc(r?.id || '—'));
-  if (r?.vacancy_id) meta.push('Vakanz: ' + esc(r.vacancy_id));
-  if (r?.client_contact_id) meta.push('Kontakt: ' + esc(r.client_contact_id));
-  if (r?.consent_id) meta.push('Consent: ' + esc(r.consent_id));
-  if (feedbackOutcome) meta.push('Feedback: ' + esc(feedbackOutcome));
-  if (sentAt) meta.push('Gesendet: ' + esc(sentAt));
+  meta.push(`${esc(text.submission)}: ` + esc(r?.id || '—'));
+  if (r?.vacancy_id) meta.push(`${esc(text.vacancyLabel)}: ` + esc(r.vacancy_id));
+  if (r?.client_contact_id) meta.push(`${esc(text.contactLabel)}: ` + esc(r.client_contact_id));
+  if (r?.consent_id) meta.push(`${esc(text.consent)}: ` + esc(r.consent_id));
+  if (feedbackOutcome) meta.push(`${esc(text.feedback)}: ` + esc(feedbackOutcome));
+  if (sentAt) meta.push(`${esc(text.sent)}: ` + esc(sentAt));
   const main = esc(r?.candidate_id || '—') + ' &rarr; ' + esc(r?.client_account_id || '—');
   const action = r?.id
-    ? '<div class="ats-actions"><button type="button" class="ctox-button" data-copy-id="' + esc(r.id) + '">ID kopieren</button></div>'
+    ? '<div class="ats-actions"><button type="button" class="ctox-button" data-copy-id="' + esc(r.id) + '">' + esc(text.copyId) + '</button></div>'
     : '';
   const ctxLabel = r?.candidate_id || r?.id || '';
   return ''
@@ -197,6 +209,11 @@ function submissionRow(r) {
     + '</div>'
     + action
     + '</div>';
+}
+
+function applyStaticCopy(root) {
+  root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
+  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

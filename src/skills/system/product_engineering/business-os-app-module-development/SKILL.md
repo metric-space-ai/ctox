@@ -11,6 +11,9 @@ This file is a resource index. Use the linked contracts and checklists as the wo
 
 ## Tool Boundary
 
+- Remote MCP agents read advertised `business-os-skill://…` resources with
+  `business_os.read_app_skill_resource`; local filesystem access is not assumed.
+
 - Product entry points may use `ctox business-os app create --instruction <text>`
   or `ctox business-os app modify <module-id> --instruction <text>` to enqueue
   a real Business OS app task.
@@ -30,6 +33,7 @@ This file is a resource index. Use the linked contracts and checklists as the wo
 
 - `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract, agent right-click context.
 - `references/design-guide.md`: Business OS token contract, custom branding rules, UX patterns, and anti-patterns.
+- `references/impeccable-preflight.md`: mandatory frontend preflight for operational density, signature automation, windows, panes, and mobile.
 - `references/standalone-porting.md`: how to keep standalone vanilla apps portable into Business OS with `mount(ctx)` and mock context boundaries.
 - `references/dos-and-donts.md`: short rules for correct Business OS app implementation.
 - `references/green-checklist.md`: finalization checklist before a task can be considered done.
@@ -60,14 +64,22 @@ records so the agent knows what was clicked.
 
 ## Required Context
 
+- Before frontend design or CSS changes, run the contract in
+  `references/impeccable-preflight.md`. Treat root `PRODUCT.md`, `DESIGN.md`,
+  and `.impeccable/design.json` as the CTOX-specific input to
+  `IMPECCABLE_PREFLIGHT`; emit its exact pass line before implementation.
+
 - Inspect three existing shipped Business OS apps selected for similar workflow, data model, and UI shape.
 - Use `ctox business-os app references --query "<workflow data keywords>" --json --limit 8` when a local reference catalog is needed.
 - Runtime-created apps live in `runtime/business-os/installed-modules/<module-id>/`.
 - Source apps live in `src/apps/business-os/modules/<module-id>/` only when the task explicitly targets checked-in source.
-- Runtime-created business apps must own the visible workspace inside
-  `ctx.host`: set `module.json` `layout.shell` to `full-workspace`, do not rely
-  on the generic shell `Kontext`/`Themen` side panes, and do not duplicate those
-  panes inside the app.
+- Runtime-created business apps must own the visible work surface inside
+  `ctx.host` and launch as responsive desktop windows. Set `module.json`
+  root `launch_kind` to `desktop-app`, and the canonical root `presentation`
+  contract. `layout.shell: windowed` remains a temporary compatibility hint;
+  do not duplicate `launch_kind` below `layout`. Do not rely on generic shell
+  `Kontext`/`Themen` side panes.
+  Use the shared responsive workspace/pane patterns inside the window instead.
 - The Business OS shell already shows app identity, navigation, version/source
   controls, account state, and global chat. A normal business app may have at
   most one compact app-level command/header row for its own filters and primary
@@ -85,6 +97,11 @@ records so the agent knows what was clicked.
   command-bus buttons by default. Add visible automation only when the user asks
   for it or the workflow clearly needs it, and only when it dispatches a real
   command and shows a trackable result.
+- Build every command with canonical `command_type`. Do not emit the historical
+  `type` alias, do not write `business_commands` directly, and do not invent a
+  pending-intent fallback when the shell bus or authorization is unavailable.
+  Use the facade lifecycle (`until`, status/resume/subscription/cancel`) for
+  long-running CTOX queue/harness work.
 - Build the UI from the preloaded `shared/base.css` component kit — pane
   headers, `.ctox-button`/`.ctox-pane-icon` actions, kit form controls,
   `.ctox-table`, `.ctox-fields`, `.ctox-badge`, `.ctox-modal`, `.ctox-empty` —
@@ -109,7 +126,8 @@ records so the agent knows what was clicked.
 - Source app: `ctox business-os app validate <module-id> --source`
 - Browser proof: `ctox business-os app smoke <module-id> --installed`
 - Visual proof: inspect the mounted app in the real Business OS shell at a
-  desktop viewport and a narrow viewport, in light and dark theme. The app must
+  desktop viewport, a resized 640×480 window, and a 360px mobile sheet, in light
+  and dark theme. The app must
   use the central workspace, avoid useless side columns, keep text readable, and
   complete the primary workflow without clipped controls.
 

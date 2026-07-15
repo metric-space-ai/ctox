@@ -11,7 +11,7 @@ const runtimeFiles = walk(appRoot)
   .filter((file) => /\.(?:js|mjs)$/.test(file))
   .filter((file) => !excluded(relative(file)));
 
-const dispatchConsumers = matchingFiles(/(?:commandBus\?*\.|requireCommandBus\([^)]*\)\.)dispatch\s*\(/);
+const dispatchConsumers = matchingFiles(/commandBus(?:\?\.|\.)dispatch\b|requireCommandBus\([^)]*\)\.dispatch\b/);
 const projectionReaders = matchingFiles(
   /(?:collection\?*\.\(['"]business_commands['"]\)|\.business_commands\b|activeCollection\(['"]business_commands['"]\)|documentCollection\([^\n]+['"]business_commands['"]\))/,
 );
@@ -19,8 +19,8 @@ const legacyProjectionWaiters = matchingFiles(/function\s+waitForCommandProjecti
 const directIntentWriters = runtimeFiles
   .filter((file) => {
     const source = fs.readFileSync(file, 'utf8');
-    return /business_commands/.test(source)
-      && /incrementalUpsert\?*\.\s*\(\s*\{[\s\S]{0,500}status:\s*['"]pending_sync['"]/.test(source);
+    return /(?:businessCommandsCollection|commandsCollection|business_commands)(?:\?\.|\.)\s*(?:insert|upsert|incrementalUpsert)(?:\?\.)?\s*\(/.test(source)
+      || /upsertDoc\s*\(\s*[^,\n]{0,240}business_commands/.test(source);
   })
   .map(relative)
   .sort();

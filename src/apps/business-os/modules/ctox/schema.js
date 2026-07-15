@@ -13,6 +13,9 @@ export const collections = {
       inbound_channel: { type: 'string' },
       payload: { type: 'object', additionalProperties: true },
       client_context: { type: 'object', additionalProperties: true },
+      result: { type: 'object', additionalProperties: true },
+      task_id: { type: 'string' },
+      task_status: { type: 'string' },
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
@@ -25,7 +28,7 @@ export const collections = {
     additionalProperties: true
   },
   ctox_queue_tasks: {
-    version: 0,
+    version: 1,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -290,5 +293,8 @@ export const migrationStrategies = {
       ...oldDoc,
       inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
     })
+  },
+  ctox_queue_tasks: {
+    1: (oldDoc) => oldDoc
   }
 };

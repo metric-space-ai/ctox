@@ -16,7 +16,8 @@ export async function mount(ctx) {
       if (disposed) return;
       definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
     }
-    await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
+    const controls = await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
+    controls.setBusinessOsCommandBus?.(ctx.commandBus);
     if (disposed) return;
     const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
     if (disposed) return;

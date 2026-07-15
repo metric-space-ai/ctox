@@ -157,3 +157,11 @@
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 11px;
 }
+
+/* Canonical compact workbench owns frame, body and form geometry. */
+.ats-intake.ctox-record-workbench { display: grid; }
+.ats-intake .ctox-record-workbench__subtitle { margin: 4px 0 0; }
+.ats-intake .ctox-record-workbench__body { display: flex; padding: 8px; gap: 8px; }
+.ats-intake .ctox-compact-form { display: grid; }
+.ats-intake .ctox-compact-form .ctox-input,
+.ats-intake .ctox-compact-form .ctox-select { width: 100%; }

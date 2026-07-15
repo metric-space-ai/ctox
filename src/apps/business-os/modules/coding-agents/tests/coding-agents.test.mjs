@@ -4,6 +4,29 @@ import { readFileSync } from 'node:fs';
 
 import { __codingAgentsTestHooks as hooks } from '../index.js';
 
+test('presentation layer stays compact and shell-native', () => {
+  const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  const source = `${css}\n${html}\n${js}`;
+  const surfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'gla' + 'ss', 'Prem' + 'ium'].join('|'), 'i');
+  const sidePattern = new RegExp('border-' + '(?:left|right)\\s*:\\s*(?:[2-9]|[0-9]{2,})px');
+  const radiusPattern = new RegExp('border-' + 'radius:\\s*(?:8|10|12|14|16|18|20|24)px');
+  const shadowPattern = new RegExp('box-' + 'shadow:\\s*(?:0|inset|rgba|color-mix|var\\(--panel-shadow\\)|var\\(--shadow-sm\\)|var\\(--shadow-md\\))');
+  const gradientPattern = new RegExp(['linear-grad' + 'ient', 'radial-grad' + 'ient'].join('|'));
+  const hardNeutralPattern = new RegExp(['#00' + '0', '#ff' + 'f'].join('|'), 'i');
+
+  assert.doesNotMatch(source, surfacePattern);
+  assert.doesNotMatch(source, sidePattern);
+  assert.doesNotMatch(source, radiusPattern);
+  assert.doesNotMatch(source, shadowPattern);
+  assert.doesNotMatch(source, gradientPattern);
+  assert.doesNotMatch(source, hardNeutralPattern);
+  assert.match(css, /grid-template-columns: var\(--coding-agents-left-width, 300px\) 6px minmax\(0, 1fr\)/);
+  assert.match(css, /\.lifecycle-status-row/);
+  assert.match(css, /\.browser-log-box/);
+});
+
 test('workspace path validation blocks empty and relative paths', () => {
   assert.equal(hooks.validateWorkspacePath('').valid, false);
   assert.equal(hooks.validateWorkspacePath('relative/project').valid, false);
@@ -126,6 +149,9 @@ test('diagnostics status refresh does not create idle polling command traffic', 
 
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   assert.equal(source.includes('setInterval('), false);
+  const initialLoadBody = source.match(/function startInitialLoadWithTimeout\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(initialLoadBody, /refreshProjectedData\(\)/);
+  assert.doesNotMatch(initialLoadBody, /refreshAllData\(\)/);
 });
 
 test('structured command outcomes avoid stdout parsing where available', () => {

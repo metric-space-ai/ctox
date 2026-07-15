@@ -31,26 +31,64 @@ import {
 } from './commands/builders.js';
 import { validateInvoice } from './core/invoice-validate.js';
 
-const BUILD = '20260706-kit1';
+const BUILD = '20260711-responsive-pane-stack-v2';
 const MODULE_ID = 'invoices';
 const SKILL_TAG = 'product_engineering/business-os-app-module-development';
+const COPY = {
+  de: {
+    invoices: 'Rechnungen', all: 'Alle', overdue: 'Überfällig', open: 'Offen', drafts: 'Entwürfe', newInvoice: 'Neue Rechnung', unknown: 'unbekannt', newShort: 'NEU',
+    emptyHint: 'Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.', invoice: 'Rechnung', draft: 'Entwurf', customer: 'Kunde', chooseCustomer: '— bitte Kunde wählen —',
+    invoiceDate: 'Rechnungsdatum', type: 'Typ', lines: 'Positionen', addLine: '+ Position', net: 'Netto', tax: 'USt', gross: 'Brutto',
+    saveDraft: 'Entwurf speichern', deleteDraft: 'Entwurf löschen', post: 'Buchen (GoBD-post)', missingBeforePost: 'Vor dem Buchen fehlt',
+    removeLine: 'Position entfernen', invoiceNumber: 'Rechnungsnummer', date: 'Datum', due: 'Fällig', paid: 'Bezahlt', journal: 'Journal',
+    payments: 'Zahlungen', dunning: 'Mahnen', noJournal: 'Kein Journal-Eintrag verknüpft.', account: 'Konto', description: 'Beschreibung', debit: 'Soll', credit: 'Haben',
+    downloadXml: 'XRechnung-XML herunterladen', xmlFailed: 'XRechnung-Vorschau fehlgeschlagen', amountCents: 'Betrag (Cent)', discountCents: 'Skonto (Cent)',
+    paymentId: 'Zahlungs-ID', allocate: 'Zuordnen', discountHint: 'Skonto wird nur abgezogen, wenn das Zahlungsdatum vor dem Skonto-Deadline liegt. Das berechnet der native Handler.',
+    dunningOnlyOverdue: 'Dunning ist nur für überfällige Rechnungen verfügbar.', dunningHint: 'Diese Rechnung ist überfällig. Starte einen Mahnlauf, um einen Brief zu erzeugen.',
+    dunningRun: 'Mahnlauf für diese Rechnung', inspectorEmpty: 'Inspector: keine Rechnung ausgewählt.', inspector: 'Inspector', noAddress: 'Keine Adresse hinterlegt.',
+    openItems: 'Offene Posten', actions: 'Aktionen', actionsHint: 'Verfügbare Aktionen erscheinen hier, sobald sie in der Befehls-Schiene freigeschaltet sind.',
+    dependencyTitle: 'Rechnungen benötigt weitere Module', dependencyNote: 'Bitte installiere „buchhaltung“ (FIBU/Journal) und „customers“ (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.',
+    reload: 'Neu laden', missingDb: 'Invoices-Modul kann nicht starten: ctx.db fehlt.', noCustomer: 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im „customers“-Modul an, dann erstelle die Rechnung hier.',
+    deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden',
+    stateDraft: 'Entwurf', statePosted: 'Gebucht', statePartiallyPaid: 'Teilweise bezahlt', statePaid: 'Bezahlt', stateOverdue: 'Überfällig', stateCancelled: 'Storniert', stateCredited: 'Gutgeschrieben',
+    pos: 'Pos', quantity: 'Menge (‰)', unit: 'Einheit', unitPrice: 'Einzelpreis (Cent)',
+  },
+  en: {
+    invoices: 'Invoices', all: 'All', overdue: 'Overdue', open: 'Open', drafts: 'Drafts', newInvoice: 'New invoice', unknown: 'unknown', newShort: 'NEW',
+    emptyHint: 'Select an invoice from the list or create a new draft.', invoice: 'Invoice', draft: 'Draft', customer: 'Customer', chooseCustomer: '— select customer —',
+    invoiceDate: 'Invoice date', type: 'Type', lines: 'Line items', addLine: '+ Line item', net: 'Net', tax: 'VAT', gross: 'Gross',
+    saveDraft: 'Save draft', deleteDraft: 'Delete draft', post: 'Post (GoBD)', missingBeforePost: 'Required before posting',
+    removeLine: 'Remove line item', invoiceNumber: 'Invoice number', date: 'Date', due: 'Due', paid: 'Paid', journal: 'Journal',
+    payments: 'Payments', dunning: 'Dunning', noJournal: 'No journal entry linked.', account: 'Account', description: 'Description', debit: 'Debit', credit: 'Credit',
+    downloadXml: 'Download XRechnung XML', xmlFailed: 'XRechnung preview failed', amountCents: 'Amount (cents)', discountCents: 'Discount (cents)',
+    paymentId: 'Payment ID', allocate: 'Allocate', discountHint: 'The native handler applies the discount only when payment occurs before the discount deadline.',
+    dunningOnlyOverdue: 'Dunning is available only for overdue invoices.', dunningHint: 'This invoice is overdue. Start a dunning run to generate a letter.',
+    dunningRun: 'Run dunning for this invoice', inspectorEmpty: 'Inspector: no invoice selected.', inspector: 'Inspector', noAddress: 'No address recorded.',
+    openItems: 'Open items', actions: 'Actions', actionsHint: 'Available actions appear here when enabled on the command channel.',
+    dependencyTitle: 'Invoices requires additional modules', dependencyNote: 'Install “buchhaltung” (ledger/journal) and “customers” (party master data) from the App Store, then reload Invoices.',
+    reload: 'Reload', missingDb: 'Invoices cannot start: ctx.db is missing.', noCustomer: 'No customer exists in CRM. Create a customer in “customers” before creating an invoice.',
+    deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted',
+    stateDraft: 'Draft', statePosted: 'Posted', statePartiallyPaid: 'Partially paid', statePaid: 'Paid', stateOverdue: 'Overdue', stateCancelled: 'Cancelled', stateCredited: 'Credited',
+    pos: 'Pos', quantity: 'Quantity (‰)', unit: 'Unit', unitPrice: 'Unit price (cents)',
+  },
+};
 
 // Left-pane scope filters (rendered as .ctox-chip pills).
 const FILTERS = Object.freeze([
-  { id: 'all', label: 'Alle' },
-  { id: 'overdue', label: 'Überfällig' },
-  { id: 'open', label: 'Offen' },
-  { id: 'draft', label: 'Entwürfe' },
+  { id: 'all', labelKey: 'all' },
+  { id: 'overdue', labelKey: 'overdue' },
+  { id: 'open', labelKey: 'open' },
+  { id: 'draft', labelKey: 'drafts' },
 ]);
 
 // Editor/detail line table columns; `num` columns render right-aligned
 // (.ctox-table .is-num).
 const LINE_COLUMNS = Object.freeze([
-  { label: 'Pos' },
-  { label: 'Beschreibung' },
-  { label: 'Menge (‰)', num: true },
-  { label: 'Einheit' },
-  { label: 'Einzelpreis (Cent)', num: true },
+  { labelKey: 'pos' },
+  { labelKey: 'description' },
+  { labelKey: 'quantity', num: true },
+  { labelKey: 'unit' },
+  { labelKey: 'unitPrice', num: true },
   { label: 'USt %', num: true },
   { label: 'SKR' },
   { label: '' },
@@ -105,18 +143,21 @@ const STATE = {
   lineDraft: null,
   busy: false,
   lastError: null,
+  locale: 'de',
 };
 
 const REQUIRED_MODULES = ['buchhaltung', 'customers'];
-const STATE_LABELS = {
-  draft: 'Entwurf',
-  posted: 'Gebucht',
-  partially_paid: 'Teilweise bezahlt',
-  paid: 'Bezahlt',
-  overdue: 'Überfällig',
-  cancelled: 'Storniert',
-  credited: 'Gutgeschrieben',
-};
+const STATE_LABEL_KEYS = { draft: 'stateDraft', posted: 'statePosted', partially_paid: 'statePartiallyPaid', paid: 'statePaid', overdue: 'stateOverdue', cancelled: 'stateCancelled', credited: 'stateCredited' };
+
+function t(key, replacements = {}) {
+  let value = COPY[STATE.locale]?.[key] || COPY.de[key] || key;
+  for (const [name, replacement] of Object.entries(replacements)) value = value.replace(`{${name}}`, String(replacement));
+  return value;
+}
+
+function invoiceStateLabel(state) {
+  return t(STATE_LABEL_KEYS[state] || 'unknown');
+}
 
 function resolveCollection(name) {
   if (!STATE.ctx?.db) return null;
@@ -144,7 +185,7 @@ export async function mount(ctx) {
   resetState(ctx);
   await ensureMountedMarkup(ctx);
   if (!ctx?.db) {
-    renderError('Invoices-Modul kann nicht starten: ctx.db fehlt.');
+    renderError(t('missingDb'));
     return () => {};
   }
   if (!isReady()) {
@@ -181,6 +222,7 @@ function resetState(ctx) {
   STATE.lineDraft = null;
   STATE.busy = false;
   STATE.lastError = null;
+  STATE.locale = String(ctx.locale || globalThis.document?.documentElement?.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
 }
 
 function isReady() {
@@ -199,7 +241,7 @@ function renderDependencyBlocker() {
   const card = document.createElement('div');
   card.className = 'invoices-blocker';
   const title = document.createElement('h2');
-  title.textContent = 'Rechnungen benötigt weitere Module';
+  title.textContent = t('dependencyTitle');
   card.appendChild(title);
   const list = document.createElement('ul');
   for (const id of REQUIRED_MODULES) {
@@ -209,13 +251,12 @@ function renderDependencyBlocker() {
   }
   card.appendChild(list);
   const note = document.createElement('p');
-  note.textContent =
-    'Bitte installiere "buchhaltung" (FIBU/Journal) und "customers" (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.';
+  note.textContent = t('dependencyNote');
   card.appendChild(note);
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.className = 'ctox-button';
-  retry.textContent = 'Neu laden';
+  retry.textContent = t('reload');
   retry.addEventListener('click', () => {
     if (isReady()) {
       refresh().then(render).catch(reportError);
@@ -320,12 +361,12 @@ function renderList() {
   titles.className = 'ctox-pane-titles';
   const kicker = document.createElement('span');
   kicker.className = 'ctox-pane-kicker';
-  kicker.textContent = 'Rechnungen';
+  kicker.textContent = t('invoices');
   titles.appendChild(kicker);
   const title = document.createElement('h2');
   title.className = 'ctox-pane-title';
   const activeFilter = FILTERS.find((f) => f.id === STATE.filter) || FILTERS[0];
-  title.textContent = `${activeFilter.label} (${visibleInvoices().length})`;
+  title.textContent = `${t(activeFilter.labelKey)} (${visibleInvoices().length})`;
   titles.appendChild(title);
   titleRow.appendChild(titles);
 
@@ -335,8 +376,8 @@ function renderList() {
   createBtn.type = 'button';
   createBtn.className = 'ctox-pane-icon invoices-create-button';
   createBtn.innerHTML = actionIcon('add');
-  createBtn.setAttribute('aria-label', 'Neue Rechnung');
-  createBtn.title = 'Neue Rechnung';
+  createBtn.setAttribute('aria-label', t('newInvoice'));
+  createBtn.title = t('newInvoice');
   createBtn.disabled = STATE.busy;
   createBtn.addEventListener('click', () => createDraft());
   actions.appendChild(createBtn);
@@ -349,7 +390,7 @@ function renderList() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ctox-chip';
-    btn.textContent = f.label;
+    btn.textContent = t(f.labelKey);
     btn.dataset.filter = f.id;
     btn.setAttribute('aria-pressed', STATE.filter === f.id ? 'true' : 'false');
     if (STATE.filter === f.id) btn.classList.add('is-active');
@@ -374,9 +415,9 @@ function renderList() {
     item.dataset.contextRecordType = 'accounting_invoices';
     item.dataset.contextRecordId = inv.id;
     item.dataset.contextLabel = inv.invoice_number || inv.id;
-    const stateLabel = STATE_LABELS[inv.state] || inv.state || 'unbekannt';
+    const stateLabel = invoiceStateLabel(inv.state);
     item.innerHTML = `
-      <strong>${escapeHtml(inv.invoice_number || 'NEU')}</strong>
+      <strong>${escapeHtml(inv.invoice_number || t('newShort'))}</strong>
       <span>${escapeHtml(partyName(inv.party_id))}</span>
       <em>${escapeHtml(stateLabel)}</em>`;
     item.addEventListener('click', () => {
@@ -412,7 +453,7 @@ function renderCenter() {
   if (!inv) {
     const empty = document.createElement('div');
     empty.className = 'ctox-empty invoices-empty';
-    empty.textContent = 'Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.';
+    empty.textContent = t('emptyHint');
     pane.appendChild(empty);
     return pane;
   }
@@ -427,13 +468,13 @@ function renderCenter() {
   titles.className = 'ctox-pane-titles';
   const kicker = document.createElement('span');
   kicker.className = 'ctox-pane-kicker';
-  kicker.textContent = 'Rechnung';
+  kicker.textContent = t('invoice');
   titles.appendChild(kicker);
   const title = document.createElement('h2');
   title.className = 'ctox-pane-title';
   title.textContent = inv.invoice_number
     ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
-    : `Entwurf · ${partyName(inv.party_id)}`;
+    : `${t('draft')} · ${partyName(inv.party_id)}`;
   titles.appendChild(title);
   titleRow.appendChild(titles);
   const headerActions = document.createElement('div');
@@ -442,7 +483,7 @@ function renderCenter() {
   stateChip.className = ['ctox-badge', stateBadgeClass(inv.state), 'invoices-state-chip']
     .filter(Boolean).join(' ');
   stateChip.dataset.state = inv.state;
-  stateChip.textContent = STATE_LABELS[inv.state] || inv.state || 'unbekannt';
+  stateChip.textContent = invoiceStateLabel(inv.state);
   headerActions.appendChild(stateChip);
   titleRow.appendChild(headerActions);
   header.appendChild(titleRow);
@@ -467,7 +508,7 @@ function renderEditor(inv) {
   meta.className = 'invoices-editor-meta';
   const partyLabel = document.createElement('label');
   partyLabel.className = 'invoices-field';
-  partyLabel.textContent = 'Kunde';
+  partyLabel.textContent = t('customer');
   const partySelect = document.createElement('select');
   partySelect.className = 'ctox-select';
   // Always include a placeholder option so the user can intentionally clear
@@ -475,7 +516,7 @@ function renderEditor(inv) {
   // non-deletable default and silently leak to the post command.
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = '— bitte Kunde wählen —';
+  placeholder.textContent = t('chooseCustomer');
   if (!inv.party_id) placeholder.selected = true;
   partySelect.appendChild(placeholder);
   for (const p of Object.values(STATE.parties)) {
@@ -495,7 +536,7 @@ function renderEditor(inv) {
 
   const dateLabel = document.createElement('label');
   dateLabel.className = 'invoices-field';
-  dateLabel.textContent = 'Rechnungsdatum';
+  dateLabel.textContent = t('invoiceDate');
   const dateInput = document.createElement('input');
   dateInput.className = 'ctox-input';
   dateInput.type = 'date';
@@ -512,7 +553,7 @@ function renderEditor(inv) {
 
   const typeLabel = document.createElement('label');
   typeLabel.className = 'invoices-field';
-  typeLabel.textContent = 'Typ';
+  typeLabel.textContent = t('type');
   const typeSelect = document.createElement('select');
   typeSelect.className = 'ctox-select';
   for (const t of ['sale_out', 'sale_in', 'credit_note_out', 'credit_note_in', 'recurring_template']) {
@@ -531,7 +572,7 @@ function renderEditor(inv) {
   wrap.appendChild(meta);
 
   const linesHeader = document.createElement('h3');
-  linesHeader.textContent = 'Positionen';
+  linesHeader.textContent = t('lines');
   wrap.appendChild(linesHeader);
 
   const tableWrap = document.createElement('div');
@@ -550,7 +591,7 @@ function renderEditor(inv) {
   const addLineBtn = document.createElement('button');
   addLineBtn.type = 'button';
   addLineBtn.className = 'ctox-button';
-  addLineBtn.textContent = '+ Position';
+  addLineBtn.textContent = t('addLine');
   addLineBtn.addEventListener('click', () => {
     inv.lines = inv.lines || [];
     inv.lines.push({
@@ -571,9 +612,9 @@ function renderEditor(inv) {
   const totalsDiv = document.createElement('div');
   totalsDiv.className = 'invoices-totals';
   totalsDiv.innerHTML = `
-    <span>Netto: <strong>${formatCents(totals.subtotal_cents)}</strong></span>
-    <span>USt: <strong>${formatCents(totals.tax_cents)}</strong></span>
-    <span>Brutto: <strong>${formatCents(totals.total_cents)}</strong></span>
+    <span>${escapeHtml(t('net'))}: <strong>${formatCents(totals.subtotal_cents)}</strong></span>
+    <span>${escapeHtml(t('tax'))}: <strong>${formatCents(totals.tax_cents)}</strong></span>
+    <span>${escapeHtml(t('gross'))}: <strong>${formatCents(totals.total_cents)}</strong></span>
   `;
   wrap.appendChild(totalsDiv);
 
@@ -583,7 +624,7 @@ function renderEditor(inv) {
   const saveBtn = document.createElement('button');
   saveBtn.type = 'button';
   saveBtn.className = 'ctox-button';
-  saveBtn.textContent = 'Entwurf speichern';
+  saveBtn.textContent = t('saveDraft');
   saveBtn.disabled = STATE.busy;
   saveBtn.addEventListener('click', () => updateDraft(inv));
   actions.appendChild(saveBtn);
@@ -591,7 +632,7 @@ function renderEditor(inv) {
   const deleteBtn = document.createElement('button');
   deleteBtn.type = 'button';
   deleteBtn.className = 'ctox-button is-danger';
-  deleteBtn.textContent = 'Entwurf löschen';
+  deleteBtn.textContent = t('deleteDraft');
   deleteBtn.disabled = STATE.busy;
   deleteBtn.addEventListener('click', () => deleteDraft(inv));
   actions.appendChild(deleteBtn);
@@ -599,12 +640,12 @@ function renderEditor(inv) {
   const postBtn = document.createElement('button');
   postBtn.type = 'button';
   postBtn.className = 'ctox-button is-primary invoices-action-primary';
-  postBtn.textContent = 'Buchen (GoBD-post)';
+  postBtn.textContent = t('post');
   const issues = computeValidationIssues(inv);
   const postDisabled = STATE.busy || !issues.canPost;
   postBtn.disabled = postDisabled;
   postBtn.title = postDisabled && !STATE.busy
-    ? `Vor dem Buchen fehlt: ${issues.errors.map((i) => i.field).join(', ') || 'unbekannt'}`
+    ? `${t('missingBeforePost')}: ${issues.errors.map((i) => i.field).join(', ') || t('unknown')}`
     : '';
   postBtn.addEventListener('click', () => postInvoice(inv));
   actions.appendChild(postBtn);
@@ -630,7 +671,7 @@ function renderLineHeader() {
   for (const column of LINE_COLUMNS) {
     const th = document.createElement('th');
     if (column.num) th.className = 'is-num';
-    th.textContent = column.label;
+    th.textContent = column.labelKey ? t(column.labelKey) : (column.label || '');
     row.appendChild(th);
   }
   thead.appendChild(row);
@@ -662,9 +703,9 @@ function renderLineRow(inv, line) {
       const totalsEl = document.querySelector('.invoices-totals');
       if (totalsEl) {
         totalsEl.innerHTML = `
-          <span>Netto: <strong>${formatCents(totals.subtotal_cents)}</strong></span>
-          <span>USt: <strong>${formatCents(totals.tax_cents)}</strong></span>
-          <span>Brutto: <strong>${formatCents(totals.total_cents)}</strong></span>
+          <span>${escapeHtml(t('net'))}: <strong>${formatCents(totals.subtotal_cents)}</strong></span>
+          <span>${escapeHtml(t('tax'))}: <strong>${formatCents(totals.tax_cents)}</strong></span>
+          <span>${escapeHtml(t('gross'))}: <strong>${formatCents(totals.total_cents)}</strong></span>
         `;
       }
     });
@@ -676,8 +717,8 @@ function renderLineRow(inv, line) {
   removeBtn.type = 'button';
   removeBtn.className = 'ctox-icon-button';
   removeBtn.innerHTML = actionIcon('close');
-  removeBtn.setAttribute('aria-label', 'Position entfernen');
-  removeBtn.title = 'Position entfernen';
+  removeBtn.setAttribute('aria-label', t('removeLine'));
+  removeBtn.title = t('removeLine');
   removeBtn.addEventListener('click', () => {
     inv.lines = (inv.lines || []).filter((l) => l.id !== line.id);
     render();
@@ -730,20 +771,20 @@ function renderDetail(inv) {
   const summary = document.createElement('dl');
   summary.className = 'ctox-fields invoices-detail-summary';
   summary.innerHTML = `
-    <dt>Rechnungsnummer</dt><dd>${escapeHtml(inv.invoice_number || '—')}</dd>
-    <dt>Kunde</dt><dd>${escapeHtml(partyName(inv.party_id))}</dd>
-    <dt>Datum</dt><dd>${escapeHtml(isoDateInput(inv.invoice_date_ms))}</dd>
-    <dt>Fällig</dt><dd>${escapeHtml(isoDateInput(inv.due_date_ms))}</dd>
-    <dt>Netto</dt><dd>${formatCents(inv.subtotal_cents)}</dd>
-    <dt>USt</dt><dd>${formatCents(inv.tax_cents)}</dd>
-    <dt>Brutto</dt><dd>${formatCents(inv.total_cents)}</dd>
-    <dt>Bezahlt</dt><dd>${formatCents(inv.paid_cents)}</dd>
-    <dt>Offen</dt><dd>${formatCents(inv.open_cents)}</dd>
+    <dt>${escapeHtml(t('invoiceNumber'))}</dt><dd>${escapeHtml(inv.invoice_number || '—')}</dd>
+    <dt>${escapeHtml(t('customer'))}</dt><dd>${escapeHtml(partyName(inv.party_id))}</dd>
+    <dt>${escapeHtml(t('date'))}</dt><dd>${escapeHtml(isoDateInput(inv.invoice_date_ms))}</dd>
+    <dt>${escapeHtml(t('due'))}</dt><dd>${escapeHtml(isoDateInput(inv.due_date_ms))}</dd>
+    <dt>${escapeHtml(t('net'))}</dt><dd>${formatCents(inv.subtotal_cents)}</dd>
+    <dt>${escapeHtml(t('tax'))}</dt><dd>${formatCents(inv.tax_cents)}</dd>
+    <dt>${escapeHtml(t('gross'))}</dt><dd>${formatCents(inv.total_cents)}</dd>
+    <dt>${escapeHtml(t('paid'))}</dt><dd>${formatCents(inv.paid_cents)}</dd>
+    <dt>${escapeHtml(t('open'))}</dt><dd>${formatCents(inv.open_cents)}</dd>
   `;
   wrap.appendChild(summary);
 
   const linesHeader = document.createElement('h3');
-  linesHeader.textContent = 'Positionen';
+  linesHeader.textContent = t('lines');
   wrap.appendChild(linesHeader);
   const tableWrap = document.createElement('div');
   tableWrap.className = 'ctox-table-wrap';
@@ -779,10 +820,10 @@ function renderDetail(inv) {
   const tabs = document.createElement('div');
   tabs.className = 'ctox-pane-tabs invoices-tabs';
   const tabButtons = [
-    { id: 'journal', label: 'Journal' },
+    { id: 'journal', label: t('journal') },
     { id: 'xrechnung', label: 'XRechnung' },
-    { id: 'payments', label: 'Zahlungen' },
-    { id: 'dunning', label: 'Mahnen' },
+    { id: 'payments', label: t('payments') },
+    { id: 'dunning', label: t('dunning') },
   ];
   for (const t of tabButtons) {
     const btn = document.createElement('button');
@@ -816,7 +857,7 @@ function renderJournalTab(inv) {
   const wrap = document.createElement('div');
   wrap.className = 'invoices-tab';
   if (!inv.post_journal_entry_id) {
-    wrap.textContent = 'Kein Journal-Eintrag verknüpft.';
+    wrap.textContent = t('noJournal');
     return wrap;
   }
   const lines = (inv.lines || []).map((line) => {
@@ -836,7 +877,7 @@ function renderJournalTab(inv) {
     <h4>Journal ${escapeHtml(inv.post_journal_entry_id)}</h4>
     <div class="ctox-table-wrap">
       <table class="ctox-table invoices-journal-table">
-        <thead><tr><th>Konto</th><th>Beschreibung</th><th class="is-num">Soll</th><th class="is-num">Haben</th><th class="is-num">USt</th></tr></thead>
+        <thead><tr><th>${escapeHtml(t('account'))}</th><th>${escapeHtml(t('description'))}</th><th class="is-num">${escapeHtml(t('debit'))}</th><th class="is-num">${escapeHtml(t('credit'))}</th><th class="is-num">${escapeHtml(t('tax'))}</th></tr></thead>
         <tbody>${lines}</tbody>
       </table>
     </div>
@@ -856,7 +897,7 @@ function renderXRechnungTab(inv) {
     const download = document.createElement('button');
     download.type = 'button';
     download.className = 'ctox-button';
-    download.textContent = 'XRechnung-XML herunterladen';
+    download.textContent = t('downloadXml');
     download.addEventListener('click', () => {
       const blob = new Blob([xml], { type: 'application/xml' });
       const url = URL.createObjectURL(blob);
@@ -868,7 +909,7 @@ function renderXRechnungTab(inv) {
     });
     wrap.appendChild(download);
   } catch (err) {
-    wrap.textContent = `XRechnung-Vorschau fehlgeschlagen: ${err?.message || err}`;
+    wrap.textContent = `${t('xmlFailed')}: ${err?.message || err}`;
   }
   return wrap;
 }
@@ -878,14 +919,14 @@ function renderPaymentsTab(inv) {
   wrap.className = 'invoices-tab';
   const openCents = inv.open_cents ?? Math.max(0, (inv.total_cents || 0) - (inv.paid_cents || 0));
   wrap.innerHTML = `
-    <p>Offen: <strong>${formatCents(openCents)}</strong></p>
+    <p>${escapeHtml(t('open'))}: <strong>${formatCents(openCents)}</strong></p>
     <form class="invoices-payment-form">
-      <label>Betrag (Cent)<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
-      <label>Skonto (Cent)<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
-      <label>Zahlungs-ID<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
-      <button class="ctox-button is-primary" type="submit" ${STATE.busy ? 'disabled' : ''}>Zuordnen</button>
+      <label>${escapeHtml(t('amountCents'))}<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
+      <label>${escapeHtml(t('discountCents'))}<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
+      <label>${escapeHtml(t('paymentId'))}<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
+      <button class="ctox-button is-primary" type="submit" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('allocate'))}</button>
     </form>
-    <p class="invoices-hint">Skonto wird nur abgezogen, wenn das Zahlungsdatum vor dem Skonto-Deadline liegt. Das berechnet der native Handler.</p>
+    <p class="invoices-hint">${escapeHtml(t('discountHint'))}</p>
   `;
   const form = wrap.querySelector('form');
   form.addEventListener('submit', async (event) => {
@@ -913,12 +954,12 @@ function renderDunningTab(inv) {
   const wrap = document.createElement('div');
   wrap.className = 'invoices-tab';
   if (inv.state !== 'overdue') {
-    wrap.textContent = 'Dunning ist nur für überfällige Rechnungen verfügbar.';
+    wrap.textContent = t('dunningOnlyOverdue');
     return wrap;
   }
   wrap.innerHTML = `
-    <p>Diese Rechnung ist überfällig. Starte einen Mahnlauf, um einen Brief zu erzeugen.</p>
-    <button type="button" class="ctox-button is-primary invoices-action-primary" ${STATE.busy ? 'disabled' : ''}>Mahnlauf für diese Rechnung</button>
+    <p>${escapeHtml(t('dunningHint'))}</p>
+    <button type="button" class="ctox-button is-primary invoices-action-primary" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('dunningRun'))}</button>
   `;
   const btn = wrap.querySelector('button');
   btn.addEventListener('click', async () => {
@@ -944,7 +985,7 @@ function renderInspector() {
   if (!inv) {
     const empty = document.createElement('div');
     empty.className = 'ctox-empty';
-    empty.textContent = 'Inspector: keine Rechnung ausgewählt.';
+    empty.textContent = t('inspectorEmpty');
     pane.appendChild(empty);
     return pane;
   }
@@ -953,8 +994,8 @@ function renderInspector() {
   header.innerHTML = `
     <div class="ctox-pane-title-row">
       <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker">Rechnungen</span>
-        <h2 class="ctox-pane-title">Inspector</h2>
+        <span class="ctox-pane-kicker">${escapeHtml(t('invoices'))}</span>
+        <h2 class="ctox-pane-title">${escapeHtml(t('inspector'))}</h2>
       </div>
     </div>
   `;
@@ -968,7 +1009,7 @@ function renderInspector() {
   partyDiv.className = 'invoices-inspector-party';
   partyDiv.innerHTML = `
     <h3>${escapeHtml(party.name || inv.party_id)}</h3>
-    <p>${escapeHtml(party.address || 'Keine Adresse hinterlegt.')}</p>
+    <p>${escapeHtml(party.address || t('noAddress'))}</p>
     <p class="muted">${escapeHtml(party.email || '')}</p>
   `;
   body.appendChild(partyDiv);
@@ -977,21 +1018,20 @@ function renderInspector() {
   openDiv.className = 'invoices-inspector-open';
   const openCents = inv.open_cents ?? Math.max(0, (inv.total_cents || 0) - (inv.paid_cents || 0));
   openDiv.innerHTML = `
-    <h4>Offene Posten</h4>
+    <h4>${escapeHtml(t('openItems'))}</h4>
     <dl class="ctox-fields">
-      <dt>Offen</dt><dd><strong>${formatCents(openCents)}</strong></dd>
-      <dt>Bezahlt</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
+      <dt>${escapeHtml(t('open'))}</dt><dd><strong>${formatCents(openCents)}</strong></dd>
+      <dt>${escapeHtml(t('paid'))}</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
     </dl>
   `;
   body.appendChild(openDiv);
 
   const actionsHeader = document.createElement('h4');
-  actionsHeader.textContent = 'Aktionen';
+  actionsHeader.textContent = t('actions');
   body.appendChild(actionsHeader);
   const actionsList = document.createElement('div');
   actionsList.className = 'invoices-inspector-actions';
-  actionsList.textContent =
-    'Verfuegbare Aktionen erscheinen hier, sobald sie in der Befehls-Schiene freigeschaltet sind.';
+  actionsList.textContent = t('actionsHint');
   body.appendChild(actionsList);
   pane.appendChild(body);
   return pane;
@@ -1002,7 +1042,7 @@ async function createDraft() {
   // and the user gets a confusing failure. Refuse early and surface a hint.
   const partyId = Object.keys(STATE.parties)[0] || '';
   if (!partyId) {
-    STATE.lastError = 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im "customers"-Modul an, dann erstelle die Rechnung hier.';
+    STATE.lastError = t('noCustomer');
     render();
     return;
   }
@@ -1042,7 +1082,7 @@ async function updateDraft(inv) {
 }
 
 async function deleteDraft(inv) {
-  if (!confirm(`Entwurf ${inv.invoice_number || inv.id} löschen?`)) return;
+  if (!confirm(t('deleteConfirm', { id: inv.invoice_number || inv.id }))) return;
   await submitCommand(buildDeleteInvoiceCommand(inv.id));
   STATE.selectedInvoiceId = null;
   await refresh();
@@ -1057,7 +1097,7 @@ async function postInvoice(inv) {
   const totals = computeInvoiceTotals(inv);
   const issues = computeValidationIssues(inv);
   if (!issues.canPost) {
-    STATE.lastError = `Rechnung kann nicht gebucht werden: ${issues.errors.map((i) => i.message).join('; ')}`;
+    STATE.lastError = `${t('cannotPost')}: ${issues.errors.map((i) => i.message).join('; ')}`;
     render();
     return;
   }

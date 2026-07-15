@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
-import { makeIconDraggable } from './iconDrag.js?v=20260626-desktop-sync-idle-v4';
+import { makeIconDraggable } from './iconDrag.js?v=20260712-single-click-v2';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
 
 const STYLE_BUILD = '20260706-kit-tokens1';
@@ -446,7 +446,6 @@ export async function mount(ctx) {
     el.title = doc.label || titleForModule(doc.target_module);
     el.tabIndex = 0;
 
-    el.addEventListener('dblclick', () => launcher.open(doc.target_module));
     el.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -465,6 +464,7 @@ export async function mount(ctx) {
         }
         el.classList.add('selected');
       },
+      onActivate: () => launcher.open(doc.target_module),
       onMoved: async (iconId, position) => {
         const updatedAt = Date.now();
         rememberIconPosition(iconId, position, updatedAt);
@@ -755,13 +755,13 @@ export async function mount(ctx) {
 
   function isDatabaseClosingError(error) {
     const message = String(error?.message || error || '');
-    if (/IDBDatabase.*closing|database connection is closing/i.test(message)) return true;
     // Demand queries already publish durable authorization failures through
     // Sync/Advanced Status. During an internally supervised peer replacement,
     // an in-flight icon refresh can additionally observe the retiring peer's
     // authorization map. The desktop falls back to launcher icons here and
     // lets the status surface remain the single error owner.
-    return /UNAUTHORIZED: peer is not authorized for this collection/i.test(message);
+    if (/UNAUTHORIZED: peer is not authorized for this collection/i.test(message)) return true;
+    return /IDBDatabase.*closing|database connection is closing/i.test(message);
   }
 
   function subscribeCommandStream() {
@@ -1097,7 +1097,9 @@ async function loadModuleRegistry() {
     const response = await fetch(new URL('../registry.json', import.meta.url));
     if (!response.ok) return [];
     const data = await response.json();
-    return Array.isArray(data?.modules) ? data.modules : [];
+    return Array.isArray(data?.modules)
+      ? data.modules.filter((module) => ['core', 'internal'].includes(module?.install_scope))
+      : [];
   } catch (error) {
     console.error('[desktop] registry load failed:', error);
     return [];

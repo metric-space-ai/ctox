@@ -4,12 +4,12 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 
 assert.match(source, /commandBus\.dispatch\([\s\S]*\{ until: 'accepted' \}\)/);
-assert.match(source, /refs\.start[\s\S]*?new_session:\s*true/);
+assert.match(source, /startNewBrowserSession[\s\S]*?new_session:\s*true[\s\S]*?refs\.start[\s\S]*?startNewBrowserSession/);
 assert.match(source, /opensNewSession[\s\S]*?`browser_tab_\$\{now\}`/);
 assert.match(source, /result\?\.opensNewSession[\s\S]*?selectedSessionId\s*=\s*result\.sessionId/);
 assert.match(source, /requestedSessionId\s*=\s*result\.sessionId/);
 assert.match(source, /requestedSessionPending[\s\S]*?if \(!requestedSessionPending\)/);
-assert.match(source, /refs\.start[\s\S]*?requestedSessionId\s*=\s*sessionId[\s\S]*?session_id:\s*sessionId/);
+assert.match(source, /startNewBrowserSession[\s\S]*?requestedSessionId\s*=\s*sessionId[\s\S]*?session_id:\s*sessionId[\s\S]*?refs\.start/);
 assert.match(source, /applyLatestNavigationResult\(state, commands\)/);
 assert.match(source, /candidate\.result\?\.url/);
 assert.match(source, /renderSessionList\([^\n]*renderedTabs/);

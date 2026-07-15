@@ -23,6 +23,7 @@ const {
   resolveMonacoBaseUrl,
   sourceCommandErrorMessage,
   sourceEditorActionState,
+  sourceModelPath,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 
 test('module catalog exposes editable Business OS apps once each', () => {
@@ -152,6 +153,13 @@ test('monaco asset path resolves under the Business OS app bundle', () => {
   );
   assert.equal(isJavaScriptMime('text/html; charset=utf-8'), false);
   assert.equal(isJavaScriptMime('application/javascript; charset=utf-8'), true);
+});
+
+test('monaco model paths never create an authority-less double-slash URI', () => {
+  assert.equal(sourceModelPath('', 'empty.txt'), '/unselected/empty.txt');
+  assert.equal(sourceModelPath('notes', '/index.js'), '/notes/index.js');
+  assert.equal(sourceModelPath('/notes/', '\\locales\\de.json'), '/notes/locales/de.json');
+  assert.doesNotMatch(sourceModelPath('', '//empty.txt'), /^\/\//);
 });
 
 test('formatter handles json and low-risk whitespace cleanup', () => {

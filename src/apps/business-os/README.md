@@ -21,18 +21,40 @@ modules/<id>/
 
 `module.json` uses `install_scope` to decide how the app is shipped:
 
-- `core`: always included and not removable (`ctox`, `tickets`, `desktop`, `app-store`, `knowledge`, `reports`).
-- `starter`: included on first installation as the standard workspace pack (`documents`, `spreadsheets`, `calendar`, `notes`).
+- `core`: a system app, always installed and not removable. The canonical list
+  is `system-apps.json`: `desktop`, `ctox`, `tickets`, `threads`, `knowledge`,
+  `browser`, `credentials`, `app-store`, `creator`, `reports`.
 - `store`: discoverable in the App Store and installed into `installed-modules/` on demand.
 - `internal`: shipped for shell-owned workflows but hidden from normal launchers.
-- `sample`: ignored by the runtime; used only for checked-in example `installed-modules/`.
 - `installed`: runtime-installed via the App Creator/App Store into
   `runtime/business-os/installed-modules/` (git-ignored, survives upgrades).
 - `local`: operator-placed, git-ignored dev/customer modules (see below).
 
+There is no starter cohort and no database/history heuristic that installs
+apps. Old manifests with `install_scope: "starter"` are treated as Store apps
+for upgrade compatibility. Directory placement is the installation truth:
+system apps come from the source package, App Store apps exist under
+`installed-modules/`, and private apps exist under `local-modules/`.
+
+### Instance assignment
+
+The hostname does not select apps in browser code. Each CTOX instance gets the
+same ten system apps; its additional apps are determined only by its own
+runtime directories:
+
+| Instance | App Store installations | Private `local-modules/` |
+| --- | --- | --- |
+| `thesen.ctox.dev` | none required | `thesen-outbound`, `sellify` |
+| `infyoda.ctox.dev` | none required | exactly the five private REM apps |
+| `skf.ctox.dev` | `research` (Web Research) | none |
+
+The five REM source directories and their IDs intentionally do not live in the
+public repository. They must be deployed from the private package to
+`runtime/business-os/local-modules/` on the Infyoda instance.
+
 ### Local Modules (git-ignored dev and customer apps)
 
-`runtime/business-os/local-modules/<id>/` is the third module location:
+`runtime/business-os/local-modules/<id>/` is the private module location:
 hand-developed apps that must never land in the public repo — private test
 modules or per-customer apps (e.g. a `sellify` app). `runtime/` is already
 git-ignored, so no `.gitignore` entry per app is needed. Dropping the module

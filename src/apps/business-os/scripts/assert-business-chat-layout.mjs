@@ -124,6 +124,20 @@ expectIncludes(
 );
 expectIncludes(source, 'class="ctox-date-picker-trigger" role="button" tabindex="0"', 'Visible date trigger must be keyboard focusable');
 expectIncludes(source, 'data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" tabindex="-1" aria-hidden="true"', 'Hidden native date input must not enter tab order');
+expectIncludes(source, '@media (max-height: 680px)', 'Chat windows need a compact height breakpoint so app windows retain working space');
+expectIncludes(source, '@media (max-height: 479px)', 'Very short viewports must fall back to the dock-only chat surface');
+expectIncludes(
+  source,
+  '@media (max-width: 780px)',
+  'Mobile chat layout needs a dedicated viewport breakpoint'
+);
+expectIncludes(
+  source,
+  '.ctox-chat-window:not(.is-active) {\n        display: none !important;\n        pointer-events: none !important;',
+  'Mobile chat must hide inactive windows so old desktop carousel positions cannot block the shell'
+);
+expectIncludes(source, "const CHAT_LAYOUT_EVENT = 'ctox-business-os-chat-layout';", 'Chat must publish its measured shell layout contract');
+expectIncludes(source, 'left: rect.left,', 'Chat layout contract must expose its left edge for side-dock composition');
 
 if (failures.length) {
   console.error(`Business chat layout guard failed:\n${failures.map((failure) => `- ${failure}`).join('\n')}`);

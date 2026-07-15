@@ -1,9 +1,9 @@
 {
   "schema": "ctox.business_os.security_privacy_signoff.v1",
   "status": "pending-signoff",
-  "reviewer": "TBD",
+  "reviewer": "Codex CLI (gpt-5.6-sol, model_reasoning_effort=xhigh) — delegated maintainer-reviewer per docs/ai-evaluation-readiness-plan.md (operator decision 2026-07-13); review pending",
   "reviewed_at": "TBD",
-  "evidence_revision": "cab3b57859058fb9721cdb4fb5385b6b7e4f0463",
+  "evidence_revision": "4d1cc9e321030e1afa0260d137cab102b0366ece",
   "controls": {
     "dynamic_app_runtime_boundary": {
       "status": "pending",
@@ -96,22 +96,22 @@
     }
   },
   "source_hashes": {
-    ".github/workflows/release.yml": "5bde5a101de955a20bfe9dec2f803af5a618318c596f9d017ad1a9e475674bf1",
-    ".github/workflows/rxdb-production-readiness.yml": "db74d7bad158ecc24eb01d3cff6484687f72a41cd114fbd555df7d21926b9224",
-    "docs/ctox-sync-production-readiness-95.md": "f6faeeacec39982b2226fce04c4a16fe07b7d560799a4f223dd0e92da39f373d",
+    ".github/workflows/release.yml": "4f437bf7551deeddd42423f95d9c3614ad844380a4f76629f1ff2644c73a44a4",
+    ".github/workflows/rxdb-production-readiness.yml": "464c0ab63d61a2dd315c320290eb0296ae8554880cf98ebc050ad913392e4180",
+    "docs/ctox-sync-production-readiness-95.md": "ba0871bb612f242de3d395964c394a7f4a15098fd4f8c0f1bab83b94e91f298e",
     "docs/ctox-sync-production-readiness-runbooks.md": "ee9c8ab96b93f50582c61cdc3dc8efb66802ae6f3d07970307da4943eb6c30b2",
-    "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "03c2703e3460d62a71a8dead859315bb0ddf8c8d6e98b1b31de4ab77d5dfdcdb",
-    "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "d0ae0f5bdb534338b14a6bdb48106ce81da6d1726163109abb47eedba45dc265",
-    "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "ab08666e006f89ac70a1e2ad0ef1aa81608f3698b64538c15a581d79533096c7",
-    "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "15635199f05ea4b494a2b1e0088f567cda036cbd686ce96364667511b63073fa",
-    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "293baf5c79839131fb7bbf45531ea034c906266f5718d9a790fb40872b51db77",
+    "src/apps/business-os/scripts/assert-security-privacy-signoff.mjs": "30d761ec41f4ae8f44b867fc9eb77f79c578e71ec96995a50a6d6cb445776bee",
+    "src/core/rxdb/tools/assert_sync_production_readiness_95.js": "f9a38ae322476a2cd5f372c199d9dd98247b6a2b1174056f112be9b5154a5b9e",
+    "src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js": "6680689434597cfe5b812cb66b151f741553b18ee2041c5c28a82197c9619696",
+    "src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js": "fc9c3ed8efce75d9a1fb46f490bd2e8ae6cec12dbc71b6f65d3fcd75f947f868",
+    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "3df0f35fe6d0127d2f5a972991bc1bcbd650f5a77a62e7046522c607a913b28f",
     "src/core/rxdb/tools/business_os_production_smoke_registry.js": "ae944b995a6c0505d6f55ac8b7b269394bf60f719c9bbb5878ece9199d83978d",
     "src/core/rxdb/tools/print_sync_production_readiness_95_report.js": "b869981b857b2d7cfd9c13bbdaeab593e8c0727f838a0404befc060152d7bd14",
-    "src/core/rxdb/tools/print_sync_production_readiness_95_templates.js": "08cd1bc5ae6b40b067858264503c688ac4b6400964a65d49a65ccd4b12cf4ec2",
-    "src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js": "b3a0823efbad5de9e0458ed05b5eeabb57df38f31e3465c2e185fb831c6b37a5",
+    "src/core/rxdb/tools/print_sync_production_readiness_95_templates.js": "250a11b9db74046ae6a693eb5a89da290b00e058d51d4dedfe14eb9ac7bcb376",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js": "4dc82bea23b163b07f7f7adceeaef94c5c5a3e259df1b4276d336558b7aa077c",
     "src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js": "b02dd2ca2f6a2d9eebe0348dfb8fc91be5f912adb763618b9432ff68d3b4f389",
     "src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js": "5cd5cd0f28babaa593d2b8eed5bdb68fa7e53f5aa9224da10dc1a1e4d85edcc8",
-    "src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js": "db9d9c0def44c9388db6510ce61a8160e8b1d1660772362021bad4808b5fae72",
+    "src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js": "d2bdf35fddf02c14df36a052684d262a2a28b483e8a3df9a5bcd15e0164f0d35",
     "src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js": "18bc8865db683c380f4c8fcc7f5313ebb6f9222252aeb0005b91a4d2bb902d1e",
     "src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js": "fc4d09d3bdd6673e9bcbdcd42c5003524f4aba93633e8295a43456498122ef2e"
   },
@@ -119,7 +119,8 @@
     "Runtime-installed apps are same-origin trusted generated apps, not sandboxed iframes.",
     "MCP external effects remain blocked for the current rollout.",
     "Pending signoff intentionally blocks release tags.",
-    "9.5 sync readiness adds pending controls for recovery crypto, peer identity, Saga compensation, and runbook/evidence integrity; the human checklist names all eleven machine-required controls and the validator rejects future drift.",
-    "Automated evidence hashes were refreshed for cab3b57859058fb9721cdb4fb5385b6b7e4f0463 on 2026-07-13; controls remain pending until an explicit release/security reviewer signs off."
+    "9.5 sync readiness adds pending controls for recovery crypto, peer identity, Saga compensation, and runbook/evidence integrity.",
+    "Automated evidence hashes were prepared on 2026-06-18; controls remain pending until an explicit release/security reviewer signs off.",
+    "2026-07-13: reviewer named (Codex CLI gpt-5.6-sol, xhigh) via maintainer delegation recorded in docs/ai-evaluation-readiness-plan.md; status stays pending-signoff until the actual control-family review runs against a frozen commit."
   ]
 }

@@ -38,8 +38,8 @@ use crate::plugins::replication::{
     RxReplicationState, StreamFactory,
 };
 use crate::plugins::replication_webrtc::connection_handler_rs::{
-    CollectionAuthzHook, DocumentReadAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
-    WebRTCRsPeer,
+    CollectionAuthzHook, DocumentReadAuthzHook, DocumentWriteAuthzHook, WebRTCRsConfig,
+    WebRTCRsConnectionHandler, WebRTCRsPeer,
 };
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::webrtc_helper::{
@@ -530,6 +530,7 @@ pub async fn replicate_web_rtc_rs_multi(
         None,
         None,
         None,
+        None,
         pull_batch_size,
         push_batch_size,
         retry_time,
@@ -553,6 +554,7 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     collection_authz: Option<CollectionAuthzHook>,
     collection_write_authz: Option<CollectionAuthzHook>,
     document_read_authz: Option<DocumentReadAuthzHook>,
+    document_write_authz: Option<DocumentWriteAuthzHook>,
     pull_batch_size: u64,
     push_batch_size: u64,
     retry_time: u64,
@@ -568,6 +570,7 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     handler.set_collection_authz(collection_authz);
     handler.set_collection_write_authz(collection_write_authz);
     handler.set_document_read_authz(document_read_authz);
+    handler.set_document_write_authz(document_write_authz);
     replicate_web_rtc_inner(
         collections,
         handler,
@@ -819,6 +822,23 @@ where
                                     serde_json::json!({
                                         "collection": target_name,
                                         "message": "peer is not authorized to write collection",
+                                    }),
+                                    Vec::new(),
+                                )
+                            } else if method == "masterWrite"
+                                && !handler_task.are_documents_write_authorized_for_peer(
+                                    &item.peer,
+                                    &target_name,
+                                    &item.message.params,
+                                )
+                            {
+                                replication_error_result(
+                                    "RC_WEBRTC_PEER",
+                                    "replication-io",
+                                    "push",
+                                    serde_json::json!({
+                                        "collection": target_name,
+                                        "message": "peer is not authorized to write one or more documents",
                                     }),
                                     Vec::new(),
                                 )

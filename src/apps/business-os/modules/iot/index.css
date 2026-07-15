@@ -11,7 +11,7 @@
   grid-template-columns: var(--iot-left-width, 320px) 12px minmax(0, 1fr);
 }
 
-.iot-scroll { overflow: auto; min-height: 0; padding: 12px 14px 24px; }
+.iot-scroll { overflow: auto; min-height: 0; padding: 8px 10px 18px; }
 
 /* ---- left: realms + asset/signal tree ---- */
 .iot-section-label { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 14px 4px 6px; }
@@ -50,7 +50,7 @@
 .iot-status-dot.idle { background: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
 
 /* ---- asset create form (kit inputs/buttons inside a module card) ---- */
-.iot-form { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--panel-radius); padding: 12px; margin: 8px 2px; }
+.iot-form { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--surface-radius); padding: 10px; margin: 6px 2px; }
 .iot-form h4 { margin: 0 0 10px; font-size: 13px; }
 .iot-field { display: flex; flex-direction: column; margin-bottom: 10px; }
 .iot-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
@@ -63,12 +63,12 @@
 .iot-dash-tabs { flex-wrap: wrap; gap: 6px; }
 .iot-dash-sub { font-size: 13px; color: var(--muted); }
 
-.iot-dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; padding: 20px; align-content: start; align-items: start; overflow: auto; min-height: 0; }
-.iot-dash-grid.list { display: block; padding: 16px 20px; overflow: auto; }
+.iot-dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; padding: 10px; align-content: start; align-items: start; overflow: auto; min-height: 0; }
+.iot-dash-grid.list { display: block; padding: 10px; overflow: auto; }
 
 /* ---- the automation widget = one standing order to CTOX ---- */
-.iot-widget { background: var(--surface); border: 1px solid var(--line); border-radius: var(--panel-radius);
-  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; position: relative; }
+.iot-widget { background: var(--surface); border: 1px solid var(--line); border-radius: var(--surface-radius);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; position: relative; }
 .iot-widget[draggable="true"] { cursor: grab; }
 .iot-widget[draggable="true"]:active { cursor: grabbing; }
 .iot-widget.drag-over { outline: 2px dashed var(--accent); outline-offset: 3px; }
@@ -85,9 +85,9 @@
 .iot-viz-empty { font-size: 12px; color: var(--muted); }
 .iot-widget-last { position: absolute; right: 0; top: -2px; font-size: 16px; font-weight: 680; font-variant-numeric: tabular-nums; color: var(--text); }
 
-.iot-when, .iot-then { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.4; }
-.iot-when { border-left: 2px solid var(--accent); padding-left: 9px; }
-.iot-then { padding-left: 11px; }
+.iot-when, .iot-then { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.35; }
+.iot-when { padding-left: 0; }
+.iot-then { padding-left: 0; }
 .iot-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); flex: none; width: 32px; }
 .iot-tag.then { color: var(--muted); }
 .iot-when-text, .iot-then-text { color: var(--text); }
@@ -106,13 +106,13 @@
   color: var(--muted); cursor: pointer; gap: 6px; min-height: 120px; }
 .iot-add-card:hover { border-color: var(--accent); color: var(--accent); }
 .iot-add-plus { font-size: 26px; line-height: 1; }
-.iot-empty { color: var(--muted); font-size: 13px; padding: 24px; text-align: center; border: 1px dashed var(--line);
-  border-radius: var(--panel-radius); margin: 4px; }
+.iot-empty { color: var(--muted); font-size: 13px; padding: 14px 10px; text-align: center; border: 1px dashed var(--line);
+  border-radius: var(--surface-radius); margin: 4px; }
 .iot-center-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
-  gap: 12px; padding: 56px 32px; color: var(--muted); }
-.iot-center-empty.inline { padding: 32px; }
-.iot-center-empty-art { font-size: 44px; opacity: .45; }
-.iot-center-empty h3 { margin: 0; color: var(--text); font-size: 17px; font-weight: 650; }
+  gap: 8px; padding: 28px 18px; color: var(--muted); }
+.iot-center-empty.inline { padding: 18px; }
+.iot-center-empty-art { font-size: 28px; opacity: .55; }
+.iot-center-empty h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 650; }
 .iot-center-empty p { margin: 0; max-width: 400px; font-size: 13px; line-height: 1.5; }
 
 /* ---- editor modal (kit modal + the three CTOX-programmed parts) ---- */
@@ -124,3 +124,25 @@
 .iot-ed-note { font-size: 12px; color: var(--muted); background: var(--surface-2); border-radius: var(--control-radius); padding: 8px 10px; }
 .iot-ed-area.code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.5; }
 .iot-ed-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+
+@container business-app-window (max-width: 760px) {
+  .iot-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(360px, 1fr);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .iot-module > .ctox-column-resizer {
+    display: none !important;
+  }
+
+  .iot-dash-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px;
+  }
+}

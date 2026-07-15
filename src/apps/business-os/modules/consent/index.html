@@ -1,6 +1,6 @@
 <main class="ctox-workspace ctox-workspace--single ats-module ats-consent" data-ats-root>
-  <section class="ctox-pane">
-    <header class="ctox-pane-header ctox-pane-band">
+  <section class="ctox-pane ctox-record-workbench">
+    <header class="ctox-pane-header ctox-pane-band ctox-record-workbench__header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-ats-sub></span>
@@ -8,22 +8,28 @@
         </div>
       </div>
     </header>
-    <div class="ctox-pane-scroll ats-body">
-      <form class="ats-form" data-ats-form>
-        <input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID" required data-f />
-        <input class="ctox-input" type="text" name="purpose" placeholder="Zweck (optional — leer = nur Existenz)" data-f />
-        <button type="submit" class="ctox-button is-primary">Einwilligung prüfen</button>
+    <div class="ctox-pane-scroll ats-body ctox-record-workbench__body">
+      <form class="ats-form ctox-compact-form" data-ats-form>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-i18n="subjectLabel">Subjekt</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID" data-i18n-placeholder="subjectPlaceholder" required data-f /></label>
+          <label class="ctox-compact-field"><span data-i18n="purposeLabel">Zweck</span><input class="ctox-input" type="text" name="purpose" placeholder="Zweck (optional — leer = nur Existenz)" data-i18n-placeholder="purposePlaceholder" data-f /></label>
+        </div>
+        <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button is-primary" data-i18n="checkConsent">Einwilligung prüfen</button></div>
       </form>
 
-      <form class="ats-form ats-subject-actions" data-ats-subject-form>
-        <input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID für Betroffenenrechte" data-f />
-        <button type="submit" class="ctox-button" data-subject-action="ats.subject.export" title="Recht auf Auskunft (DSGVO Art. 15)">Auskunft (Art. 15)</button>
-        <button type="submit" class="ctox-button is-danger" data-subject-action="ats.subject.erase" title="Recht auf Löschung (DSGVO Art. 17)">Löschen (Art. 17)</button>
+      <form class="ats-form ats-subject-actions ctox-compact-form" data-ats-subject-form>
+        <div class="ctox-compact-form__fields">
+          <label class="ctox-compact-field"><span data-i18n="rightsLabel">Betroffenenrechte</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID für Betroffenenrechte" data-i18n-placeholder="rightsSubjectPlaceholder" data-f /></label>
+        </div>
+        <div class="ctox-compact-form__actions">
+          <button type="submit" class="ctox-button" data-subject-action="ats.subject.export" title="Recht auf Auskunft (DSGVO Art. 15)" data-i18n="exportArticle15" data-i18n-title="exportTitle">Auskunft (Art. 15)</button>
+          <button type="submit" class="ctox-button is-danger" data-subject-action="ats.subject.erase" title="Recht auf Löschung (DSGVO Art. 17)" data-i18n="eraseArticle17" data-i18n-title="eraseTitle">Löschen (Art. 17)</button>
+        </div>
       </form>
 
       <div class="ats-gate" data-ats-gate></div>
-      <div class="ats-count" data-ats-count></div>
-      <div class="ats-list" data-ats-list></div>
+      <div class="ats-count ctox-record-workbench__status" data-ats-count></div>
+      <div class="ats-list ctox-record-list" data-ats-list></div>
     </div>
   </section>
 </main>

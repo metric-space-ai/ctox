@@ -1,0 +1,16 @@
+{
+  "schema": "ctox.business_os.system_apps.v1",
+  "apps": [
+    "desktop",
+    "ctox",
+    "tickets",
+    "threads",
+    "knowledge",
+    "browser",
+    "credentials",
+    "app-store",
+    "creator",
+    "reports",
+    "appsec-pentest"
+  ]
+}

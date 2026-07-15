@@ -27,6 +27,39 @@ assert.doesNotMatch(
   'Matching must not register its legacy local CTOX context menu at module load'
 );
 
+assert.match(appSource, /e\.key === 'ContextMenu'/, 'keyboard ContextMenu key must open the central menu');
+assert.match(appSource, /e\.key === 'F10' && e\.shiftKey/, 'Shift+F10 must open the central menu');
+assert.match(
+  appSource,
+  /target\.closest\('\[data-module-root\]'\).*?dataset\?\.moduleRoot/s,
+  'windowed context attribution must derive the app from the clicked module root',
+);
+for (const field of [
+  "schema_version: 'business-os-context-v2'",
+  'window_instance_id:',
+  'surface_id:',
+  'pane_id:',
+  'presentation_mode:',
+  'entity,',
+  'field: { path: fieldPath }',
+  'ids: selectionIds',
+  'x: Number.isFinite(pointer.clientX)',
+]) {
+  assert.ok(appSource.includes(field), `Context v2 must include ${field}`);
+}
+assert.match(
+  appSource,
+  /register:\s*\(element, descriptor = \{\}\)/,
+  'ctx.contextActions must support explicit target registration',
+);
+for (const commandType of [
+  'business_os.context.ask',
+  'business_os.data.modify',
+  'ctox.business_os.app.modify',
+]) {
+  assert.ok(appSource.includes(commandType), `${commandType} must use the Typed Command Bus`);
+}
+
 assert.match(
   appSource,
   /removeLegacyCtoxContextMenus\(\);/,

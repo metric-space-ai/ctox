@@ -7,7 +7,10 @@ import {
   splitUserIds,
 } from './commands.js';
 
-const REFRESH_DEBOUNCE_MS = 80;
+const THREAD_LIST_LIMIT = 200;
+const THREAD_DETAIL_LIMIT = 600;
+const APPROVAL_LIST_LIMIT = 200;
+const NOTIFICATION_LIST_LIMIT = 50;
 
 const labels = {
   de: {
@@ -32,9 +35,10 @@ const state = {
   filter: 'inbox',
   search: '',
   selectedId: '',
+  mobileView: 'list',
+  requestedThreadId: '',
   data: emptyData(),
   cleanup: [],
-  refreshTimer: null,
   busy: false,
   status: '',
 };
@@ -46,6 +50,8 @@ export async function mount(ctx) {
   state.filter = 'inbox';
   state.search = '';
   state.selectedId = '';
+  state.mobileView = 'list';
+  state.requestedThreadId = String(ctx.args?.thread_id || ctx.args?.thread || '').trim();
   state.data = emptyData();
   state.status = '';
 
@@ -61,7 +67,8 @@ export async function mount(ctx) {
   bindElements(ctx.host);
   applyLabels();
   wireUi();
-  await startSync();
+  restoreDraft();
+  updateConnectivity();
   state.cleanup.push(wireRealtime());
   // Presence (advisory UX): publish which thread this user has open and show
   // who else is looking at the same thread. Cleared on unmount.
@@ -73,14 +80,27 @@ export async function mount(ctx) {
     }));
     state.cleanup.push(() => { try { ctx.presence.clear(); } catch {} });
   }
-  await refresh();
+  // The shell already starts manifest collections before mount. Do not keep
+  // the window-manager open promise pending while large thread collections
+  // catch up: the functional shell is usable immediately and data fills in
+  // asynchronously. A direct/dev mount still gets an explicit sync attempt.
+  render();
+  // The shell-owned module lease starts every manifest collection. A second
+  // fire-and-forget start can finish after a fast window close and recreate an
+  // unowned bridge, so module mounts must not start the same collections.
+  refresh().catch((error) => showError(error));
+  [5000].forEach((delayMs) => {
+    const timer = window.setTimeout(() => {
+      refresh().catch((error) => showError(error));
+    }, delayMs);
+    state.cleanup.push(() => window.clearTimeout(timer));
+  });
 
   return () => {
     state.cleanup.forEach((fn) => {
       try { fn?.(); } catch {}
     });
     state.cleanup = [];
-    if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
   };
 }
 
@@ -93,6 +113,7 @@ function emptyData() {
     approvals: [],
     commands: [],
     queue: [],
+    states: [],
   };
 }
 
@@ -100,7 +121,9 @@ async function ensureStyles() {
   if (document.querySelector('link[data-threads-style]')) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
+  const styleUrl = new URL('./index.css', import.meta.url);
+  styleUrl.searchParams.set('v', '20260711-work-inbox-v1');
+  link.href = styleUrl.href;
   link.dataset.threadsStyle = 'true';
   document.head.append(link);
 }
@@ -111,6 +134,7 @@ function bindElements(root) {
   els.search = root.querySelector('[data-thread-search]');
   els.filters = [...root.querySelectorAll('[data-filter]')];
   els.list = root.querySelector('[data-thread-list]');
+  els.briefing = root.querySelector('[data-personal-briefing]');
   els.title = root.querySelector('[data-thread-title]');
   els.source = root.querySelector('[data-thread-source]');
   els.status = root.querySelector('[data-thread-status]');
@@ -127,6 +151,26 @@ function bindElements(root) {
   els.watch = root.querySelector('[data-thread-watch]');
   els.snooze = root.querySelector('[data-thread-snooze]');
   els.archive = root.querySelector('[data-thread-archive]');
+  els.syncState = root.querySelector('[data-sync-state]');
+  els.mobileBack = root.querySelector('[data-mobile-back]');
+  els.mobileReply = root.querySelector('[data-mobile-reply]');
+  els.mobileSnooze = root.querySelector('[data-mobile-snooze]');
+  els.mobileMore = root.querySelector('[data-mobile-more]');
+  els.claim = root.querySelector('[data-thread-claim]');
+  els.handoffForm = root.querySelector('[data-handoff-form]');
+  els.handoffTarget = root.querySelector('[data-handoff-target]');
+  els.handoffBody = root.querySelector('[data-handoff-body]');
+  els.handoffDue = root.querySelector('[data-handoff-due]');
+  els.handoffReturnReason = root.querySelector('[data-handoff-return-reason]');
+  els.aiForm = root.querySelector('[data-ai-form]');
+  els.aiGoal = root.querySelector('[data-ai-goal]');
+  els.notificationPreferencesForm = root.querySelector('[data-notification-preferences-form]');
+  els.notificationThreshold = root.querySelector('[data-notification-threshold]');
+  els.quietStart = root.querySelector('[data-quiet-start]');
+  els.quietEnd = root.querySelector('[data-quiet-end]');
+  els.notificationApprovals = root.querySelector('[data-notification-approvals]');
+  els.notificationMentions = root.querySelector('[data-notification-mentions]');
+  els.notificationEscalations = root.querySelector('[data-notification-escalations]');
 }
 
 function applyLabels() {
@@ -183,6 +227,8 @@ function wireUi() {
     const row = target?.closest?.('[data-thread-id]');
     if (!row) return;
     state.selectedId = row.getAttribute('data-thread-id') || '';
+    state.mobileView = 'detail';
+    persistNavigationState();
     render();
   });
   els.context?.addEventListener('click', (event) => {
@@ -215,6 +261,16 @@ function wireUi() {
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
   els.snooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
   els.archive?.addEventListener('click', () => archiveSelectedThread().catch(showError));
+  els.mobileBack?.addEventListener('click', () => {
+    state.mobileView = 'list';
+    persistNavigationState();
+    render();
+  });
+  els.mobileReply?.addEventListener('click', () => els.messageBody?.focus());
+  els.mobileSnooze?.addEventListener('click', () => snoozeSelectedThread().catch(showError));
+  els.mobileMore?.addEventListener('click', () => els.root?.classList.toggle('is-context-open'));
+  els.claim?.addEventListener('click', () => claimSelectedThread().catch(showError));
+  els.messageBody?.addEventListener('input', persistDraft);
   els.messageForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     submitMessage().catch(showError);
@@ -227,42 +283,99 @@ function wireUi() {
     event.preventDefault();
     submitApprovalRequest().catch(showError);
   });
-}
-
-async function startSync() {
-  await Promise.all(THREAD_COLLECTIONS.map((name) => state.ctx?.sync?.startCollection?.(name).catch(() => null)));
+  els.handoffForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitHandoff().catch(showError);
+  });
+  els.aiForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitAiRequest().catch(showError);
+  });
+  els.notificationPreferencesForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitNotificationPreferences().catch(showError);
+  });
+  const onConnectivity = () => updateConnectivity();
+  window.addEventListener('online', onConnectivity);
+  window.addEventListener('offline', onConnectivity);
+  state.cleanup.push(() => window.removeEventListener('online', onConnectivity));
+  state.cleanup.push(() => window.removeEventListener('offline', onConnectivity));
+  const onHash = () => {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const requested = params.get('thread_id') || params.get('thread') || '';
+    if (requested) {
+      state.requestedThreadId = requested;
+      syncSelection();
+      render();
+    }
+  };
+  window.addEventListener('hashchange', onHash);
+  state.cleanup.push(() => window.removeEventListener('hashchange', onHash));
 }
 
 function wireRealtime() {
-  const subscriptions = THREAD_COLLECTIONS
-    .map((name) => collectionFor(name)?.$?.subscribe?.(() => scheduleRefresh()))
-    .filter(Boolean);
-  return () => subscriptions.forEach((subscription) => {
-    try { subscription.unsubscribe?.(); } catch {}
-  });
-}
-
-function scheduleRefresh() {
-  if (state.refreshTimer) return;
-  state.refreshTimer = window.setTimeout(() => {
-    state.refreshTimer = null;
+  // Demand-query writes also emit collection changes. Subscribing a refresh
+  // to those same queries creates a fetch -> change -> refresh feedback loop
+  // and continuously replaces clickable approval controls. A short bounded
+  // poll keeps cross-profile updates visible without render churn.
+  const timer = window.setInterval(() => {
     refresh().catch((error) => console.warn('[threads] refresh failed', error));
-  }, REFRESH_DEBOUNCE_MS);
+  }, 10000);
+  return () => window.clearInterval(timer);
 }
 
 async function refresh(options = {}) {
-  if (options.restartSync) await startSync();
-  const baseEntries = await Promise.all([
-    ['threads', loadCollection('user_threads')],
-    ['messages', loadCollection('user_thread_messages')],
-    ['links', loadCollection('user_thread_links')],
-    ['notifications', loadCollection('user_notifications')],
-    ['approvals', loadCollection('ctox_task_approval_requests')],
-  ].map(async ([key, promise]) => [key, await promise]));
-  const base = Object.fromEntries(baseEntries);
-  const commandIds = linkedCommandIds(base);
+  if (options.restartSync) startSync().catch((error) => showError(error));
+  const me = currentUserId();
+  const [recentThreads, pendingApprovals, recentApprovals, states] = await Promise.all([
+    loadCollection('user_threads', recentQuery(THREAD_LIST_LIMIT)),
+    loadCollection('ctox_task_approval_requests', recentQuery(APPROVAL_LIST_LIMIT, { status: 'pending' })),
+    loadCollection('ctox_task_approval_requests', recentQuery(APPROVAL_LIST_LIMIT)),
+    loadCollection('user_thread_states', recentQuery(THREAD_LIST_LIMIT, me ? { user_id: me } : {})),
+  ]);
+  const approvalCandidates = mergeRecords(pendingApprovals, recentApprovals);
+  const pendingCandidateIds = approvalCandidates
+    .filter((item) => item.status === 'pending')
+    .slice(0, 20)
+    .map((item) => item.id || item.approval_request_id)
+    .filter(Boolean);
+  const verifiedPendingCandidates = await loadRecordsByIds(
+    'ctox_task_approval_requests',
+    pendingCandidateIds,
+  );
+  const approvals = mergeRecords(approvalCandidates, verifiedPendingCandidates);
+  const approvalThreadIds = approvals.map((item) => item.thread_id).filter(Boolean);
+  const approvalThreads = await loadRecordsByIds('user_threads', approvalThreadIds);
+  const threads = mergeRecords(recentThreads, approvalThreads);
+  const threadIds = threads.map((item) => item.id || item.thread_id).filter(Boolean);
+  const [messages, links, notifications] = await Promise.all([
+    loadCollection('user_thread_messages', relatedQuery('thread_id', threadIds, THREAD_DETAIL_LIMIT)),
+    loadCollection('user_thread_links', relatedQuery('thread_id', threadIds, THREAD_DETAIL_LIMIT)),
+    loadCollection('user_notifications', recentQuery(
+      NOTIFICATION_LIST_LIMIT,
+      me ? { user_id: me } : {},
+    )),
+  ]);
+  const base = { threads, messages, links, notifications, approvals, states };
+  notifyActionRequired(notifications);
+  // Render the collaborative state before optional command/task enrichment.
+  // Historical tracking lookups must never hold the inbox or an approval
+  // decision card behind dozens of unrelated command-id demand reads.
+  state.data = { ...base, commands: [], queue: [] };
+  syncSelection();
+  render();
+
+  const selectedThreadId = state.selectedId;
+  const selectedBase = {
+    threads: base.threads.filter((item) => item.id === selectedThreadId),
+    messages: base.messages.filter((item) => item.thread_id === selectedThreadId),
+    links: base.links.filter((item) => item.thread_id === selectedThreadId),
+    notifications: base.notifications.filter((item) => item.thread_id === selectedThreadId),
+    approvals: base.approvals.filter((item) => item.thread_id === selectedThreadId),
+  };
+  const commandIds = linkedCommandIds(selectedBase).slice(0, 10);
   const commands = await loadRecordsByIds('business_commands', commandIds);
-  const taskIds = linkedTaskIds(base, commands);
+  const taskIds = linkedTaskIds(selectedBase, commands).slice(0, 10);
   const queue = await loadRecordsByIds('ctox_queue_tasks', taskIds);
   state.data = {
     ...base,
@@ -273,10 +386,10 @@ async function refresh(options = {}) {
   render();
 }
 
-async function loadCollection(name) {
+async function loadCollection(name, query = {}) {
   const collection = collectionFor(name);
   if (!collection?.find) return [];
-  const docs = await collection.find().exec();
+  const docs = await collection.find(query).exec();
   return docs
     .map((doc) => doc?.toJSON?.() || doc)
     .filter((doc) => doc && doc._deleted !== true && doc.is_deleted !== true);
@@ -290,16 +403,81 @@ async function loadRecordsByIds(name, ids) {
   const collection = collectionFor(name);
   const uniqueIds = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
   if (!collection?.findOne || !uniqueIds.length) return [];
+  // Primary-key lookups use the optimized single-document demand window.
+  // A Mango `$in` query over `id` scans large native collections and can hold
+  // the shared query collector until its transport deadline.
   const docs = await Promise.all(uniqueIds.map((id) => collection.findOne(id).exec().catch(() => null)));
   return docs
     .map((doc) => doc?.toJSON?.() || doc)
     .filter((doc) => doc && doc._deleted !== true && doc.is_deleted !== true);
 }
 
+function recentQuery(limit, selector = {}) {
+  return {
+    selector,
+    sort: [{ updated_at_ms: 'desc' }],
+    limit,
+  };
+}
+
+function relatedQuery(field, ids, limit) {
+  const uniqueIds = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!uniqueIds.length) return { selector: { id: '__ctox_no_record__' }, limit: 1 };
+  return {
+    selector: { [field]: { $in: uniqueIds } },
+    sort: [{ updated_at_ms: 'desc' }],
+    limit,
+  };
+}
+
+function mergeRecords(...groups) {
+  const byId = new Map();
+  groups.flat().forEach((item) => {
+    const id = String(item?.id || item?.thread_id || item?.approval_request_id || '').trim();
+    if (id) byId.set(id, item);
+  });
+  return [...byId.values()].sort((a, b) => Number(b?.updated_at_ms || 0) - Number(a?.updated_at_ms || 0));
+}
+
 function render() {
+  els.root?.classList.toggle('is-mobile-detail', state.mobileView === 'detail' && Boolean(state.selectedId));
   const threads = visibleThreads();
+  renderBriefing();
+  renderNotificationPreferences();
   renderList(threads);
   renderDetail(threads);
+}
+
+function renderNotificationPreferences() {
+  const prefs = personalPreferences();
+  if (!prefs || els.notificationPreferencesForm?.contains(document.activeElement)) return;
+  if (els.notificationThreshold) els.notificationThreshold.value = String(prefs.priority_threshold ?? 20);
+  if (els.quietStart) els.quietStart.value = prefs.quiet_start || '';
+  if (els.quietEnd) els.quietEnd.value = prefs.quiet_end || '';
+  const types = new Set(arrayField(prefs.notification_types));
+  if (els.notificationApprovals) els.notificationApprovals.checked = !types.size || types.has('approval');
+  if (els.notificationMentions) els.notificationMentions.checked = !types.size || types.has('mention');
+  if (els.notificationEscalations) els.notificationEscalations.checked = !types.size || types.has('escalation');
+}
+
+function renderBriefing() {
+  if (!els.briefing) return;
+  const me = currentUserId();
+  const role = currentUserRole();
+  const isAdmin = role === 'chef' || role === 'admin';
+  const relevant = state.data.threads.filter((thread) => isAdmin || !me || threadRelevantToUser(thread, me));
+  const decisions = relevant.filter((thread) => approvalsForThread(thread.id)
+    .some((approval) => approval.status === 'pending' && (isAdmin || approval.reviewer_user_id === me))).length;
+  const blocked = relevant.filter((thread) => thread.status === 'blocked' || threadHasFailedCtox(thread.id)).length;
+  const aiResults = relevant.filter((thread) => messagesForThread(thread.id)
+    .some((message) => message.actor_type === 'ai' && message.execution_status === 'completed')).length;
+  const items = [[decisions, 'Entscheidungen'], [blocked, 'Blockaden'], [aiResults, 'AI-Ergebnisse']];
+  els.briefing.innerHTML = items.map(([value, label]) => `
+    <div class="threads-briefing-item">
+      <span class="threads-briefing-value">${value}</span>
+      <span class="threads-briefing-label">${escapeHtml(label)}</span>
+    </div>
+  `).join('');
 }
 
 function visibleThreads() {
@@ -317,6 +495,7 @@ function visibleThreads() {
         return approvalsForThread(thread.id).some((item) => item.status === 'pending' && (!me || item.reviewer_user_id === me || isAdmin));
       }
       if (state.filter === 'mentions') return threadMentionsUser(thread.id, me);
+      if (state.filter === 'team') return !thread.assigned_user_id || thread.status === 'escalated';
       if (state.filter === 'waiting') return threadWaitingOnUser(thread.id, me, isAdmin);
       if (state.filter === 'delegated') return threadDelegatedByUser(thread, me);
       if (state.filter === 'running') return threadHasRunningCtox(thread.id);
@@ -341,11 +520,21 @@ function visibleThreads() {
       ].join(' ').toLowerCase();
       return haystack.includes(search);
     })
-    .sort((left, right) => Number(right.last_message_at_ms || right.updated_at_ms || 0) - Number(left.last_message_at_ms || left.updated_at_ms || 0));
+    .sort((left, right) => attentionScore(right) - attentionScore(left)
+      || Number(right.last_message_at_ms || right.updated_at_ms || 0) - Number(left.last_message_at_ms || left.updated_at_ms || 0));
 }
 
 function syncSelection() {
   const visible = visibleThreads();
+  if (state.requestedThreadId) {
+    const requested = visible.find((thread) => thread.id === state.requestedThreadId);
+    if (requested) {
+      state.selectedId = requested.id;
+      state.mobileView = 'detail';
+      state.requestedThreadId = '';
+      return;
+    }
+  }
   if (!visible.some((thread) => thread.id === state.selectedId)) {
     state.selectedId = visible[0]?.id || '';
   }
@@ -361,6 +550,7 @@ function renderList(threads) {
     const messages = messagesForThread(thread.id);
     const last = messages[messages.length - 1];
     const pending = approvalsForThread(thread.id).filter((item) => item.status === 'pending').length;
+    const reasons = attentionReasons(thread);
     return `
       <button type="button" class="threads-list-item ${thread.id === state.selectedId ? 'is-active' : ''}"
         data-thread-id="${escapeAttr(thread.id)}"
@@ -368,6 +558,7 @@ function renderList(threads) {
         data-record-type="thread"
         data-title="${escapeAttr(thread.title || '')}">
         <span class="threads-list-title">${escapeHtml(thread.title || thread.id)}</span>
+        <span class="threads-attention" aria-label="Priorität ${attentionScore(thread)}">${reasons.slice(0, 2).map(escapeHtml).join(' · ')}</span>
         <span class="threads-list-meta">${escapeHtml(thread.source_module || 'threads')} · ${escapeHtml(formatTime(thread.last_message_at_ms || thread.updated_at_ms))}${pending ? ` · ${pending} offen` : ''}</span>
         <span class="threads-list-preview">${escapeHtml(last?.body || thread.source_label || '')}</span>
       </button>
@@ -449,7 +640,7 @@ function renderTimeline(thread) {
     const mine = message.author_user_id && message.author_user_id === me;
     return `
       <article class="threads-message ${mine ? 'is-mine' : ''}" data-message-id="${escapeAttr(message.id)}">
-        <div class="threads-message-meta">${escapeHtml(message.author_display_name || message.author_user_id || 'system')} · ${escapeHtml(formatTime(message.created_at_ms || message.updated_at_ms))} · ${escapeHtml(message.kind || 'note')}</div>
+        <div class="threads-message-meta">${escapeHtml(message.actor_type === 'ai' ? 'AI' : (message.author_display_name || message.author_user_id || 'system'))} · ${escapeHtml(formatTime(message.created_at_ms || message.updated_at_ms))} · ${escapeHtml(message.event_type || message.kind || 'note')}</div>
         <div class="threads-message-body">${escapeHtml(message.body || '')}</div>
       </article>
     `;
@@ -462,10 +653,19 @@ function renderApproval(approval) {
   const me = currentUserId();
   const canDecide = approval.status === 'pending'
     && (approval.reviewer_user_id === me || currentUserRole() === 'admin' || currentUserRole() === 'chef');
+  const risk = approvalRisk(approval);
+  const impact = approvalImpact(approval);
+  const evidence = approvalEvidence(approval);
   return `
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
       <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))} · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
       <div class="threads-message-body">${escapeHtml(approval.prompt || '')}</div>
+      <dl class="threads-approval-facts">
+        <div><dt>Ziel</dt><dd>${escapeHtml(approval.target_module || approval.source_module || 'CTOX')}</dd></div>
+        <div><dt>Risiko</dt><dd>${escapeHtml(risk)}</dd></div>
+        <div><dt>Erwartete Auswirkung</dt><dd>${escapeHtml(impact)}</dd></div>
+        <div><dt>Evidenz</dt><dd>${escapeHtml(evidence)}</dd></div>
+      </dl>
       <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
       ${command ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
       ${task ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
@@ -484,7 +684,16 @@ function renderContext(thread) {
   const links = linksForThread(thread.id);
   const approvals = approvalsForThread(thread.id);
   const unread = unreadNotificationsForThread(thread.id, currentUserId());
+  const recentMessages = messagesForThread(thread.id);
+  const lastMessage = recentMessages[recentMessages.length - 1];
+  const openApproval = approvals.find((item) => item.status === 'pending');
+  const nextStep = openApproval
+    ? `Freigabe durch ${openApproval.reviewer_display_name || openApproval.reviewer_user_id}`
+    : (thread.next_step || (threadHasRunningCtox(thread.id) ? 'AI-Ergebnis abwarten' : 'Nächsten Schritt festlegen'));
   const rows = [
+    { label: 'Was ist passiert?', value: lastMessage?.body || thread.source_label || 'Noch keine Aktivität' },
+    { label: 'Was braucht mich?', value: attentionReasons(thread).join(', ') || 'Aktuell keine direkte Aktion' },
+    { label: 'Was passiert als Nächstes?', value: nextStep },
     { label: 'Quelle', value: contextLabel(thread) },
     { label: 'Record', value: [thread.source_record_type, thread.source_record_id].filter(Boolean).join(' / ') },
     { label: 'Deep Link', value: thread.source_deep_link, deepLink: thread.source_deep_link },
@@ -528,6 +737,64 @@ async function submitMessage() {
     sourceModule: thread.source_module || 'threads',
   });
   els.messageBody.value = '';
+  clearDraft();
+  await refresh();
+}
+
+async function claimSelectedThread() {
+  const thread = selectedThread();
+  if (!thread) return;
+  await dispatchThreadsCommand('threads.thread.claim', {
+    thread_id: thread.id,
+    expected_updated_at_ms: Number(thread.updated_at_ms || 0),
+  }, { recordId: thread.id });
+  await refresh();
+}
+
+async function submitHandoff() {
+  const thread = selectedThread();
+  const target = String(els.handoffTarget?.value || '').trim();
+  const expectation = String(els.handoffBody?.value || '').trim();
+  const dueAt = els.handoffDue?.value ? new Date(els.handoffDue.value).getTime() : 0;
+  const returnReason = String(els.handoffReturnReason?.value || '').trim();
+  if (!thread || !target || !expectation) return;
+  await dispatchThreadsCommand('threads.handoff.create', {
+    thread_id: thread.id,
+    target_user_id: target,
+    expectation,
+    due_at_ms: Number.isFinite(dueAt) ? dueAt : 0,
+    return_reason: returnReason,
+  }, { recordId: thread.id });
+  els.handoffBody.value = '';
+  if (els.handoffDue) els.handoffDue.value = '';
+  if (els.handoffReturnReason) els.handoffReturnReason.value = '';
+  await refresh();
+}
+
+async function submitAiRequest() {
+  const thread = selectedThread();
+  const goal = String(els.aiGoal?.value || '').trim();
+  if (!thread || !goal) return;
+  await dispatchThreadsCommand('threads.ai.request', {
+    thread_id: thread.id,
+    goal,
+    risk_class: 'internal',
+  }, { recordId: thread.id });
+  els.aiGoal.value = '';
+  await refresh();
+}
+
+async function submitNotificationPreferences() {
+  const notificationTypes = [];
+  if (els.notificationApprovals?.checked) notificationTypes.push('approval');
+  if (els.notificationMentions?.checked) notificationTypes.push('mention');
+  if (els.notificationEscalations?.checked) notificationTypes.push('escalation');
+  await dispatchThreadsCommand('threads.notification.preferences.update', {
+    priority_threshold: Number(els.notificationThreshold?.value || 20),
+    quiet_start: String(els.quietStart?.value || ''),
+    quiet_end: String(els.quietEnd?.value || ''),
+    notification_types: notificationTypes,
+  }, { recordId: currentUserId() });
   await refresh();
 }
 
@@ -572,6 +839,10 @@ async function decideApproval(approvalId, decision) {
   const approval = approvalById(approvalId);
   const expectedUpdatedAt = Number(approval?.updated_at_ms || 0);
   if (!expectedUpdatedAt) throw new Error('Approval version unavailable.');
+  if (decision === 'approve' && approvalNeedsExplicitConfirmation(approval)) {
+    const confirmed = window.confirm(`Riskante Aktion wirklich freigeben?\n\n${approvalImpact(approval)}`);
+    if (!confirmed) return;
+  }
   const note = decision === 'reject' ? window.prompt('Begründung oder Änderungswunsch:') || '' : '';
   await dispatchThreadsCommand(
     decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
@@ -583,9 +854,58 @@ async function decideApproval(approvalId, decision) {
     {
       recordId: approvalId,
       sourceModule: 'threads',
+      until: 'local',
     },
   );
-  await refresh();
+  // The command can reach terminal state just before the native approval
+  // projection is visible to a demand query. Re-read the immutable approval
+  // id directly; a cached `status=pending` list query cannot prove the latest
+  // state when historical pull is intentionally disabled.
+  for (let attempt = 0; attempt < 20 && approvalById(approvalId)?.status === 'pending'; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    const [latest] = await loadRecordsByIds('ctox_task_approval_requests', [approvalId]);
+    if (!latest) continue;
+    state.data.approvals = mergeRecords(
+      state.data.approvals.filter((item) => item.id !== approvalId && item.approval_request_id !== approvalId),
+      [latest],
+    );
+    syncSelection();
+    render();
+  }
+  refresh().catch((error) => showError(error));
+}
+
+function approvalRisk(approval) {
+  return String(
+    approval?.risk_class
+      || approval?.target_payload?.risk_class
+      || approval?.target_payload?.risk
+      || 'mittel',
+  ).trim().toLowerCase() || 'mittel';
+}
+
+function approvalImpact(approval) {
+  return String(
+    approval?.expected_impact
+      || approval?.target_payload?.expected_impact
+      || approval?.target_payload?.impact
+      || approval?.instruction
+      || approval?.prompt
+      || 'Ausführung des angeforderten Commands',
+  ).trim();
+}
+
+function approvalEvidence(approval) {
+  const refs = arrayField(approval?.evidence_refs || approval?.target_payload?.evidence_refs);
+  if (refs.length) return refs.slice(0, 3).join(', ');
+  return [approval?.source_module, approval?.source_record_type, approval?.source_record_id]
+    .filter(Boolean)
+    .join(' / ') || 'Thread-Verlauf';
+}
+
+function approvalNeedsExplicitConfirmation(approval) {
+  return ['high', 'critical', 'hoch', 'kritisch', 'external', 'financial', 'personal_data', 'irreversible']
+    .includes(approvalRisk(approval));
 }
 
 async function editApproval(approvalId) {
@@ -660,7 +980,11 @@ async function updateNotification(notificationId, action) {
   await refresh();
 }
 
-async function dispatchThreadsCommand(commandType, payload, { recordId = '', sourceModule = 'threads' } = {}) {
+async function dispatchThreadsCommand(
+  commandType,
+  payload,
+  { recordId = '', sourceModule = 'threads', until = 'accepted' } = {},
+) {
   if (!state.ctx?.commandBus?.dispatch) throw new Error('Command bus unavailable.');
   setBusy(true);
   try {
@@ -677,7 +1001,7 @@ async function dispatchThreadsCommand(commandType, payload, { recordId = '', sou
         },
       },
     });
-    const outcome = await state.ctx.commandBus.dispatch(command);
+    const outcome = await state.ctx.commandBus.dispatch(command, { until });
     state.status = outcome?.status || 'completed';
     return outcome;
   } finally {
@@ -687,7 +1011,7 @@ async function dispatchThreadsCommand(commandType, payload, { recordId = '', sou
 
 function setBusy(busy) {
   state.busy = busy;
-  [els.noteForm, els.approvalForm, els.messageForm].forEach((form) => {
+  [els.noteForm, els.approvalForm, els.messageForm, els.handoffForm, els.aiForm, els.notificationPreferencesForm].forEach((form) => {
     form?.querySelectorAll?.('button, input, textarea').forEach((control) => {
       if (control === els.messageBody && !state.selectedId) {
         control.disabled = true;
@@ -716,7 +1040,7 @@ function approvalById(approvalId) {
 
 function setThreadActionState(thread) {
   const disabled = !thread || state.busy;
-  [els.watch, els.snooze, els.archive].forEach((button) => {
+  [els.watch, els.snooze, els.archive, els.claim].forEach((button) => {
     if (button) button.disabled = disabled;
   });
   if (els.watch && thread) {
@@ -875,6 +1199,132 @@ function taskById(taskId) {
 
 function contextLabel(thread) {
   return [thread.source_module, thread.source_label || thread.source_record_id].filter(Boolean).join(' · ') || 'Threads';
+}
+
+function userStateForThread(threadId) {
+  return state.data.states?.find((item) => item.thread_id === threadId && item.user_id === currentUserId()) || null;
+}
+
+function attentionReasons(thread) {
+  const stored = arrayField(userStateForThread(thread.id)?.attention_reasons);
+  if (stored.length) return stored;
+  const reasons = [];
+  if (approvalsForThread(thread.id).some((item) => item.status === 'pending' && item.reviewer_user_id === currentUserId())) reasons.push('Freigabe');
+  if (threadMentionsUser(thread.id, currentUserId())) reasons.push('Erwähnung');
+  if (thread.assigned_user_id === currentUserId()) reasons.push('Zugewiesen');
+  if (thread.status === 'blocked' || threadHasFailedCtox(thread.id)) reasons.push('Blockiert');
+  if (Number(thread.due_at_ms || 0) > 0 && Number(thread.due_at_ms) < Date.now() + 86400000) reasons.push('Frist');
+  return reasons;
+}
+
+function attentionScore(thread) {
+  const stored = Number(userStateForThread(thread.id)?.attention_score);
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  const weights = { Freigabe: 100, Blockiert: 90, Frist: 80, Erwähnung: 70, Zugewiesen: 50 };
+  return attentionReasons(thread).reduce((score, reason) => score + (weights[reason] || 10), 0);
+}
+
+function draftKey() {
+  return `ctox:threads:draft:${currentUserId() || 'anonymous'}:${state.selectedId || 'new'}`;
+}
+
+function persistDraft() {
+  try { sessionStorage.setItem(draftKey(), String(els.messageBody?.value || '')); } catch {}
+}
+
+function restoreDraft() {
+  try {
+    const saved = sessionStorage.getItem(draftKey());
+    if (saved && els.messageBody) els.messageBody.value = saved;
+    const nav = JSON.parse(sessionStorage.getItem(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`) || '{}');
+    if (!state.requestedThreadId) state.requestedThreadId = String(nav.selectedId || '');
+    if (nav.filter && els.filters.some((button) => button.dataset.filter === nav.filter)) state.filter = nav.filter;
+    state.mobileView = nav.mobileView === 'detail' ? 'detail' : 'list';
+  } catch {}
+}
+
+function clearDraft() {
+  try { sessionStorage.removeItem(draftKey()); } catch {}
+}
+
+function persistNavigationState() {
+  try {
+    sessionStorage.setItem(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`, JSON.stringify({
+      selectedId: state.selectedId,
+      filter: state.filter,
+      mobileView: state.mobileView,
+    }));
+  } catch {}
+}
+
+function updateConnectivity() {
+  const online = navigator.onLine !== false;
+  if (els.syncState) {
+    els.syncState.textContent = online ? 'synchronisiert' : 'offline';
+    els.syncState.dataset.state = online ? 'online' : 'offline';
+  }
+  els.root?.classList.toggle('is-offline', !online);
+}
+
+function notifyActionRequired(notifications) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const preferences = personalPreferences();
+  if (isQuietTime(preferences)) return;
+  const enabledTypes = new Set(arrayField(preferences?.notification_types));
+  const threshold = Number(preferences?.priority_threshold ?? 20);
+  const allowed = new Set([
+    'approval_requested', 'approval_request', 'mention', 'mentioned',
+    'escalated', 'deadline', 'ctox_failed', 'ai_failed',
+  ]);
+  notifications
+    .filter((item) => item.status === 'unread' && allowed.has(item.notification_type || item.reason))
+    .filter((item) => notificationCategoryEnabled(item, enabledTypes))
+    .filter((item) => attentionScore(state.data.threads.find((thread) => thread.id === item.thread_id) || {}) >= threshold)
+    .slice(0, 3)
+    .forEach((item) => {
+      const dedupeKey = `ctox:threads:notified:${currentUserId()}:${item.id}`;
+      try {
+        if (sessionStorage.getItem(dedupeKey)) return;
+        sessionStorage.setItem(dedupeKey, '1');
+      } catch {}
+      const notice = new Notification(item.title || 'CTOX braucht deine Aufmerksamkeit', {
+        body: 'In Threads ist eine Aktion für dich offen.',
+        tag: `ctox-thread-${item.thread_id || item.id}`,
+      });
+      notice.onclick = () => {
+        window.focus();
+        location.hash = `threads?thread_id=${encodeURIComponent(item.thread_id || '')}`;
+        notice.close();
+      };
+    });
+}
+
+function personalPreferences() {
+  return state.data.states?.find((item) => item.user_id === currentUserId() && item.thread_id === '__preferences__')
+    ?.notification_preferences || null;
+}
+
+function notificationCategoryEnabled(item, enabledTypes) {
+  if (!enabledTypes.size) return true;
+  const type = String(item?.notification_type || item?.reason || '');
+  if (type.includes('approval')) return enabledTypes.has('approval');
+  if (type.includes('mention')) return enabledTypes.has('mention');
+  return enabledTypes.has('escalation');
+}
+
+function isQuietTime(preferences) {
+  const start = String(preferences?.quiet_start || '');
+  const end = String(preferences?.quiet_end || '');
+  if (!start || !end) return false;
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  const minutes = (value) => {
+    const [hour, minute] = value.split(':').map(Number);
+    return hour * 60 + minute;
+  };
+  const from = minutes(start);
+  const to = minutes(end);
+  return from <= to ? current >= from && current < to : current >= from || current < to;
 }
 
 function currentUserId() {

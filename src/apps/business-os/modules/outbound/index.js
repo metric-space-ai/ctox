@@ -656,7 +656,7 @@ Offen für ein 20‑minütiges, kostenloses YouTube-Strategiegespräch, um Poten
 
 Betreff: YouTube Ads habt ihr – wie nutzt ihr organisch für warme Anfragen?
 Hi Maren,
-auf eurer Leistungsseite zu YouTube Werbung und als Google Premium Partner setzt ihr Paid stark ein. Ergänzend sorgt ein eigener, organischer YouTube‑Kanal für Vertrauen vor dem Erstgespräch – mit regelmäßiger Reichweite statt kurzer Peaks. Wir richten das schlank ein: Analyse, Setup und Equipment, einfache Skripte sowie passende Themen, Titel und Thumbnails. Beleg: 600+ betreute Business‑Kanäle in 5+ Jahren.
+auf eurer Leistungsseite zu YouTube Werbung und als Google Ads Partner setzt ihr Paid stark ein. Ergänzend sorgt ein eigener, organischer YouTube‑Kanal für Vertrauen vor dem Erstgespräch – mit regelmäßiger Reichweite statt kurzer Peaks. Wir richten das schlank ein: Analyse, Setup und Equipment, einfache Skripte sowie passende Themen, Titel und Thumbnails. Beleg: 600+ betreute Business‑Kanäle in 5+ Jahren.
 Hast du Lust auf ein 15‑minütiges Beratungsgespräch, in dem ich dir 2–3 konkrete Formatideen für Hanseranking zeige?
 
 <Muster E-Mails Negativ>:
@@ -775,11 +775,11 @@ export async function mount(ctx) {
   await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
   if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
-  if (!state.viewMode) state.viewMode = 'expanded';
+  if (!state.viewMode) state.viewMode = 'compact';
   state.statusFilter = '';
   state.tagFilter = '';
   state.lastTbodyHtml = '';
-  if (!state.viewMode) state.viewMode = 'expanded';
+  if (!state.viewMode) state.viewMode = 'compact';
 
   state.isScrolling = false;
   state.scrollTimeout = null;
@@ -789,12 +789,10 @@ export async function mount(ctx) {
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
-  await ensureDefaultCampaign();
   configureActiveOutreach({ state, t, escapeHtml, rerender: () => render(true) });
-  await loadAll({ hydrateKnowledge: false });
-  await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
   wireEvents(ctx.host);
   wireRealtime();
+  let disposed = false;
 
   const scrollListener = (event) => {
     const scrollContainer = event.target.closest('.outbound-table-scroll-unified, .outbound-left .outbound-scroll');
@@ -843,8 +841,24 @@ export async function mount(ctx) {
   const resizeCleanup = setupOutboundColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
   render();
-  scheduleCampaignKnowledgeSetup(selectedCampaign());
+  Promise.resolve()
+    .then(async () => {
+      await ensureDefaultCampaign();
+      if (disposed || state.ctx !== ctx) return;
+      await loadAll({ hydrateKnowledge: false });
+      if (disposed || state.ctx !== ctx) return;
+      await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
+      if (disposed || state.ctx !== ctx) return;
+      render();
+      scheduleCampaignKnowledgeSetup(selectedCampaign());
+    })
+    .catch((error) => {
+      if (disposed || state.ctx !== ctx) return;
+      console.warn('[outbound] background initialization failed', error);
+      render();
+    });
   return () => {
+    disposed = true;
     state.centerResizeCleanup?.();
     state.centerResizeCleanup = null;
     if (state.centerRenderTimer) window.clearTimeout(state.centerRenderTimer);
@@ -956,7 +970,7 @@ async function knowledgeCommand(args) {
   const dispatched = await state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'knowledge',
-    type: 'knowledge.command',
+    command_type: 'knowledge.command',
     record_id: commandId,
     inbound_channel: 'business_os.outbound',
     payload: {
@@ -2173,7 +2187,7 @@ function wireEvents(root) {
         const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
-          type: 'ctox.mailserver.save_domain',
+          command_type: 'ctox.mailserver.save_domain',
           record_id: commandId,
           inbound_channel: 'business_os.outbound',
           payload: {
@@ -2216,7 +2230,7 @@ function wireEvents(root) {
         const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
-          type: 'ctox.mailserver.delete_domain',
+          command_type: 'ctox.mailserver.delete_domain',
           record_id: commandId,
           inbound_channel: 'business_os.outbound',
           payload: { domain_name: domainName },
@@ -2254,7 +2268,7 @@ function wireEvents(root) {
         const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
-          type: 'ctox.mailserver.save_user',
+          command_type: 'ctox.mailserver.save_user',
           record_id: commandId,
           inbound_channel: 'business_os.outbound',
           payload: { username, password },
@@ -2293,7 +2307,7 @@ function wireEvents(root) {
         const result = await state.ctx.commandBus.dispatch({
           id: commandId,
           module: 'ctox',
-          type: 'ctox.mailserver.delete_user',
+          command_type: 'ctox.mailserver.delete_user',
           record_id: commandId,
           inbound_channel: 'business_os.outbound',
           payload: { username },
@@ -3417,7 +3431,7 @@ function renderCRMCompanyRows(row) {
             <td class="col-name" colspan="${contactCols.length}" style="vertical-align: middle;">
               ${row.item
                 ? `<button class="ctox-button" type="button" style="width: 100%; border-color: var(--outbound-accent); color: var(--outbound-accent);" data-action="research-contacts" data-id="${escapeHtml(row.item.id)}">Ansprechpartner recherchieren</button>`
-                : `<button class="ctox-button" type="button" style="width: 100%; background: var(--outbound-accent); color:#000; font-weight:800;" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline übernehmen</button>`
+                : `<button class="ctox-button" type="button" style="width: 100%; background: var(--outbound-accent); color: var(--outbound-bg); font-weight:800;" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline übernehmen</button>`
               }
             </td>
           `;
@@ -4052,7 +4066,7 @@ function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
       </div>
       <footer class="outbound-automation-footer">
         <span class="outbound-muted">${openCount > OUTBOUND_BATCH_LIMIT ? escapeHtml(t('automationBatchWarning', 'Alle offenen Researches laufen als kontrollierte CTOX Runs mit je maximal {0} Datensätzen.', OUTBOUND_BATCH_LIMIT)) : escapeHtml(t('automationBatchInfo', 'Kontrollierter CTOX Batch-Run.'))}</span>
-        <button class="ctox-button is-primary" type="button" data-action="start-automation" ${openCount ? '' : 'disabled'}>${escapeHtml(definition.cta)}</button>
+        <button class="ctox-button ctox-run-control" type="button" data-action="start-automation" ${openCount ? '' : 'disabled'}><span aria-hidden="true">▶</span>${escapeHtml(definition.cta)}</button>
       </footer>
     </section>
   `;
@@ -4394,47 +4408,47 @@ function renderResearchSettingsDrawer(campaign) {
           const dkimTxtRecord = `v=DKIM1; k=rsa; p=${publicDkimClean}`;
           
           return `
-            <div class="outbound-mailserver-domain-card" style="border: 1px solid var(--outbound-line); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: color-mix(in srgb, var(--outbound-text) 2%, transparent);">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid color-mix(in srgb, var(--outbound-text) 5%, transparent); padding-bottom: 8px;">
-                <h4 style="margin: 0; font-size: 14px; color: var(--outbound-text); font-weight: 600;">${escapeHtml(dom.domain_name)}</h4>
+            <div class="outbound-mailserver-domain-card">
+              <div class="outbound-mailserver-domain-head">
+                <h4 class="outbound-mailserver-domain-title">${escapeHtml(dom.domain_name)}</h4>
                 <button class="ctox-button danger-link" type="button" data-action="mailserver-delete-domain" data-domain="${escapeHtml(dom.domain_name)}" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 13px; font-weight: 500; padding: 0;">
                   ${escapeHtml(t('delete', 'Löschen'))}
                 </button>
               </div>
               
-              <details class="outbound-dns-guide" style="cursor: pointer;">
-                <summary style="font-size: 13px; color: var(--outbound-accent); font-weight: 500; outline: none; margin-bottom: 8px;">
+              <details class="outbound-dns-guide">
+                <summary>
                   ${escapeHtml(t('dnsSetupGuide', 'DNS-Einrichtungsanleitung (DKIM, SPF, DMARC)'))}
                 </summary>
-                <div class="outbound-dns-records" style="padding-top: 10px; display: grid; gap: 12px;">
-                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: var(--outbound-muted);">1. DKIM (TXT Record)</strong>
-                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: ${escapeHtml(dom.dkim_selector || 'default')}._domainkey</span>
+                <div class="outbound-dns-records">
+                  <div class="outbound-dns-record-card">
+                    <div class="outbound-dns-record-head">
+                      <strong>1. DKIM (TXT Record)</strong>
+                      <span class="outbound-dns-record-host">Host: ${escapeHtml(dom.dkim_selector || 'default')}._domainkey</span>
                     </div>
-                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981; max-height: 80px; overflow-y: auto;">${escapeHtml(dkimTxtRecord)}</code>
+                    <code class="code-font outbound-dns-record-code">${escapeHtml(dkimTxtRecord)}</code>
                     <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dkimTxtRecord)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>
 
-                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: var(--outbound-muted);">2. SPF (TXT Record)</strong>
-                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: @</span>
+                  <div class="outbound-dns-record-card">
+                    <div class="outbound-dns-record-head">
+                      <strong>2. SPF (TXT Record)</strong>
+                      <span class="outbound-dns-record-host">Host: @</span>
                     </div>
-                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}</code>
+                    <code class="code-font outbound-dns-record-code">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}</code>
                     <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>
 
-                  <div style="background: var(--outbound-surface-2); padding: 10px; border-radius: 6px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
-                      <strong style="font-size: 11px; color: var(--outbound-muted);">3. DMARC (TXT Record)</strong>
-                      <span style="font-size: 10px; color: var(--outbound-muted); font-family: monospace;">Host: _dmarc</span>
+                  <div class="outbound-dns-record-card">
+                    <div class="outbound-dns-record-head">
+                      <strong>3. DMARC (TXT Record)</strong>
+                      <span class="outbound-dns-record-host">Host: _dmarc</span>
                     </div>
-                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}</code>
+                    <code class="code-font outbound-dns-record-code">${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}</code>
                     <button class="ctox-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
@@ -4478,16 +4492,16 @@ function renderResearchSettingsDrawer(campaign) {
       }
 
       msContent = `
-        <div class="outbound-mailserver-settings" style="display: flex; flex-direction: column; gap: 24px;">
+        <div class="outbound-mailserver-settings">
           <div class="outbound-settings-section">
             <h4 style="margin-top: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--outbound-muted);">${escapeHtml(t('customDomainsTitle', 'Custom Domains & DNS'))}</h4>
             <p style="font-size: 12px; color: var(--outbound-muted); margin-bottom: 16px; line-height: 1.4;">
               ${escapeHtml(t('customDomainsDesc', 'Füge deine Domains hinzu. CTOX generiert automatisch DKIM-Signaturen und liefert dir die SPF- und DMARC-Einträge für deinen Domain-Registrar.'))}
             </p>
             
-            <div class="outbound-mailserver-add-domain-form" style="background: color-mix(in srgb, var(--outbound-text) 2%, transparent); border: 1px dashed var(--outbound-line); border-radius: 8px; padding: 14px; margin-bottom: 20px;">
-              <div style="display: flex; gap: 8px;">
-                <input id="mailserver-new-domain-input" type="text" placeholder="z.B. meinefirma.de" style="flex: 1; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
+            <div class="outbound-mailserver-add-domain-form">
+              <div class="outbound-mailserver-form-row">
+                <input id="mailserver-new-domain-input" type="text" placeholder="z.B. meinefirma.de" />
                 <button class="ctox-button" type="button" data-action="mailserver-save-domain" style="white-space: nowrap; height: 32px; padding: 0 16px; font-size: 13px;">
                   ${escapeHtml(t('addDomainButton', 'Domain hinzufügen'))}
                 </button>
@@ -4505,12 +4519,12 @@ function renderResearchSettingsDrawer(campaign) {
               ${escapeHtml(t('emailAccountsDesc', 'Erstelle vollwertige Mail-Accounts für den Empfang und Versand über IMAP und SMTP.'))}
             </p>
             
-            <div class="outbound-mailserver-add-user-form" style="background: color-mix(in srgb, var(--outbound-text) 2%, transparent); border: 1px dashed var(--outbound-line); border-radius: 8px; padding: 14px; margin-bottom: 20px; display: grid; gap: 10px;">
-              <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px;">
-                <input id="mailserver-new-username-input" type="email" placeholder="name@meinefirma.de" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
-                <input id="mailserver-new-password-input" type="password" placeholder="Passwort" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-line); font-size: 13px; background: var(--outbound-surface-2); color: var(--outbound-text);" />
+            <div class="outbound-mailserver-add-user-form">
+              <div class="outbound-mailserver-form-row is-grid">
+                <input id="mailserver-new-username-input" type="email" placeholder="name@meinefirma.de" />
+                <input id="mailserver-new-password-input" type="password" placeholder="Passwort" />
               </div>
-              <div style="display: flex; justify-content: flex-end;">
+              <div class="outbound-mailserver-form-actions">
                 <button class="ctox-button" type="button" data-action="mailserver-save-user" style="height: 32px; padding: 0 16px; font-size: 13px;">
                   ${escapeHtml(t('addUserButton', 'Konto erstellen'))}
                 </button>
@@ -6719,7 +6733,7 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
   const command = {
     id: commandId,
     module: 'outbound',
-    type: 'outbound.source.import',
+    command_type: 'outbound.source.import',
     record_id: commandId,
     inbound_channel: 'business_os.outbound',
     sync_collections: OUTBOUND_IMPORT_SYNC_COLLECTIONS,
@@ -6811,7 +6825,7 @@ async function queueCompanyResearch(companyId, options = {}) {
   const command = {
     id: `cmd_${runId}`,
     module: 'outbound',
-    type: 'outbound.company.research',
+    command_type: 'outbound.company.research',
     record_id: company.id,
     inbound_channel: 'business_os.outbound',
     payload: {
@@ -6913,7 +6927,7 @@ async function queueContactResearch(pipelineId) {
   const command = {
     id: `cmd_${runId}`,
     module: 'outbound',
-    type: 'outbound.pipeline.contact_research',
+    command_type: 'outbound.pipeline.contact_research',
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {
@@ -6997,7 +7011,7 @@ async function queueLeadQualification(pipelineId) {
   const command = {
     id: `cmd_${runId}`,
     module: 'outbound',
-    type: 'outbound.pipeline.lead_qualification',
+    command_type: 'outbound.pipeline.lead_qualification',
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {
@@ -8085,7 +8099,7 @@ function showMultiSelectOverlay(hostCell, { currentValues, allOptions, labelSing
     </div>
     <div class="multi-editor-actions" style="display:flex; justify-content:flex-end; gap:6px;">
       <button type="button" class="btn-small" data-action="cancel-overlay" style="padding:4px 8px; font-size:10px; cursor:pointer;">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
-      <button type="button" class="btn-small btn-save" style="padding:4px 10px; font-size:10px; background:var(--outbound-accent); border-color:var(--outbound-accent); color:#000; font-weight:800; cursor:pointer;" data-action="save-overlay">${escapeHtml(t('save', 'Speichern'))}</button>
+      <button type="button" class="btn-small btn-save" style="padding:4px 10px; font-size:10px; background:var(--outbound-accent); border-color:var(--outbound-accent); color:var(--outbound-bg); font-weight:800; cursor:pointer;" data-action="save-overlay">${escapeHtml(t('save', 'Speichern'))}</button>
     </div>
   `;
 
@@ -8178,7 +8192,7 @@ async function loadMailserverConfig() {
     const result = await state.ctx.commandBus.dispatch({
       id: commandId,
       module: 'ctox',
-      type: 'ctox.mailserver.get_config',
+      command_type: 'ctox.mailserver.get_config',
       record_id: commandId,
       inbound_channel: 'business_os.outbound',
       payload: {},
@@ -8371,7 +8385,7 @@ async function generateOutreachForContact(itemId, contactIndex) {
   const command = {
     id: `cmd_outreach_${crypto.randomUUID()}`,
     module: 'outbound',
-    type: 'outbound.pipeline.outreach_draft',
+    command_type: 'outbound.pipeline.outreach_draft',
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {

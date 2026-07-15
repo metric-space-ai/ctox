@@ -93,6 +93,7 @@ pub type WebRTCRsPeer = PeerId;
 
 pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 pub type DocumentReadAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
+pub type DocumentWriteAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
 
 /// One peer's last presence report (ctox-presence-v1). Entries are opaque JSON
 /// objects the browser sent (`{collection, recordId, actor, …}`); the hub only
@@ -469,6 +470,7 @@ pub struct WebRTCRsConnectionHandler {
     collection_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
     collection_write_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
     document_read_authz: Arc<Mutex<Option<DocumentReadAuthzHook>>>,
+    document_write_authz: Arc<Mutex<Option<DocumentWriteAuthzHook>>>,
     peer_capability_tokens: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
@@ -524,6 +526,7 @@ impl WebRTCRsConnectionHandler {
             collection_authz: Arc::new(Mutex::new(None)),
             collection_write_authz: Arc::new(Mutex::new(None)),
             document_read_authz: Arc::new(Mutex::new(None)),
+            document_write_authz: Arc::new(Mutex::new(None)),
             peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
@@ -546,6 +549,12 @@ impl WebRTCRsConnectionHandler {
     /// the master returns the original unfiltered document batches.
     pub fn set_document_read_authz(&self, hook: Option<DocumentReadAuthzHook>) {
         *self.document_read_authz.lock() = hook;
+    }
+
+    /// Optional per-document write gate. Unlike collection grants this validates
+    /// the server-authoritative owner/tenant boundary of each pushed document.
+    pub fn set_document_write_authz(&self, hook: Option<DocumentWriteAuthzHook>) {
+        *self.document_write_authz.lock() = hook;
     }
 
     /// Phase 1: fetch (or lazily create) the backpressure signal for a peer.
@@ -1150,6 +1159,31 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         Some(Arc::new(move |document: &Value| {
             hook(&token, &collection, document)
         }))
+    }
+
+    fn are_documents_write_authorized_for_peer(
+        &self,
+        peer: &Self::Peer,
+        collection: &str,
+        params: &[Value],
+    ) -> bool {
+        let hook = self.document_write_authz.lock().clone();
+        let Some(check) = hook else { return true };
+        let token = self
+            .peer_capability_tokens
+            .lock()
+            .get(peer)
+            .cloned()
+            .unwrap_or_default();
+        params
+            .first()
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    row.get("newDocumentState")
+                        .is_some_and(|document| check(&token, collection, document))
+                })
+            })
     }
 
     fn filter_master_change_for_peer(
@@ -2867,6 +2901,11 @@ mod tests {
         assert!(handler
             .document_filter_for_peer(&peer, "user_threads")
             .is_none());
+        assert!(handler.are_documents_write_authorized_for_peer(
+            &peer,
+            "browser_input_events",
+            &[serde_json::json!([{ "newDocumentState": { "owner_user_id": "alice" } }])],
+        ));
 
         handler.set_collection_write_authz(Some(Arc::new(|token: &str, collection: &str| {
             token == "tok-abc" && collection == "business_commands"
@@ -2875,6 +2914,13 @@ mod tests {
             |token: &str, _collection: &str, document: &Value| {
                 token == "tok-abc"
                     && document.get("user_id").and_then(Value::as_str) == Some("alice")
+            },
+        )));
+        handler.set_document_write_authz(Some(Arc::new(
+            |token: &str, collection: &str, document: &Value| {
+                token == "tok-abc"
+                    && collection == "browser_input_events"
+                    && document.get("owner_user_id").and_then(Value::as_str) == Some("alice")
             },
         )));
         assert!(!handler.is_collection_write_authorized_for_peer(&peer, "business_commands"));
@@ -2886,6 +2932,16 @@ mod tests {
             .expect("document filter");
         assert!(filter(&serde_json::json!({ "user_id": "alice" })));
         assert!(!filter(&serde_json::json!({ "user_id": "bob" })));
+        assert!(handler.are_documents_write_authorized_for_peer(
+            &peer,
+            "browser_input_events",
+            &[serde_json::json!([{ "newDocumentState": { "owner_user_id": "alice" } }])],
+        ));
+        assert!(!handler.are_documents_write_authorized_for_peer(
+            &peer,
+            "browser_input_events",
+            &[serde_json::json!([{ "newDocumentState": { "owner_user_id": "bob" } }])],
+        ));
     }
 
     /// REGRESSION (52a1bf45): when the task draining a peer's send queue is

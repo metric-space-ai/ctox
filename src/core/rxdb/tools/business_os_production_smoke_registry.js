@@ -10,11 +10,49 @@ const businessOsProductionSmokeModes = Object.freeze([
   'business-os-threads-rightclick-ui',
   'business-os-threads-scale-ui',
   'business-os-restore-resync-ui',
+  'business-os-client-lifecycle-ui',
 ]);
 
 const businessOsProductionSmokeModeSet = new Set(businessOsProductionSmokeModes);
 
 const businessOsProductionSmokeEvidenceRequirements = Object.freeze({
+  'business-os-client-lifecycle-ui': freezeRequirement({
+    keys: [
+      'business_os_client_lifecycle_target_count',
+      'business_os_client_lifecycle_passed_count',
+      'business_os_client_lifecycle_max_mount_ms',
+      'business_os_client_lifecycle_final_window_count',
+      'business_os_client_lifecycle_lease_delta',
+      'business_os_client_lifecycle_bridge_delta',
+      'business_os_client_lifecycle_active_collection_delta',
+      'business_os_client_lifecycle_timer_delta',
+      'business_os_client_lifecycle_heap_delta_bytes',
+      'business_os_client_lifecycle_peer_restart_count',
+      'business_os_client_lifecycle_apps',
+      'business_os_client_lifecycle_auth_state',
+      'business_os_client_lifecycle_actor_role',
+      'business_os_client_lifecycle_browser_context',
+      'business_os_client_lifecycle_tenant_scope',
+      'advanced_status',
+    ],
+    values: {
+      business_os_client_lifecycle_target_count: 35,
+      business_os_client_lifecycle_passed_count: 35,
+      business_os_client_lifecycle_final_window_count: 0,
+      business_os_client_lifecycle_peer_restart_count: 0,
+      business_os_client_lifecycle_auth_state: 'authenticated',
+      business_os_client_lifecycle_browser_context: 'clean',
+      advanced_status: 'business-os-advanced-status-v1',
+    },
+    maximums: {
+      business_os_client_lifecycle_max_mount_ms: 30000,
+      business_os_client_lifecycle_lease_delta: 0,
+      business_os_client_lifecycle_bridge_delta: 0,
+      business_os_client_lifecycle_active_collection_delta: 0,
+      business_os_client_lifecycle_timer_delta: 5,
+      business_os_client_lifecycle_heap_delta_bytes: 67108864,
+    },
+  }),
   'business-os-app-release-ui': freezeRequirement({
     keys: [
       'business_os_app_release_target_module',

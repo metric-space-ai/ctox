@@ -37,7 +37,7 @@
     "support_reporting_rollups"
   ],
   "layout": {
-    "shell": "full-workspace",
+    "shell": "windowed",
     "left": "Support queue, saved views, and channel filters",
     "center": "Selected support conversation timeline and composer",
     "right": "Customer context, ticket links, SLA, macros, and CTOX Agent suggestions",
@@ -59,13 +59,32 @@
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/support",
     "installable": true,
-    "editable_after_install": false,
-    "distribution": "ctox-repo-module"
+    "editable_after_install": true,
+    "distribution": "catalog-module"
   },
-  "source": "local",
+  "source": "catalog",
   "core": false,
   "editable": true,
   "deletable": true,
   "install_scope": "store",
-  "default_installed": false
+  "default_installed": false,
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1180,
+      "height": 780
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  }
 }

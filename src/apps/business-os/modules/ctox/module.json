@@ -17,11 +17,15 @@
     "business_module_source_files"
   ],
   "layout": {
-    "shell": "full-workspace",
-    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-ctox\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-ctox\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#10b981\" /><stop offset=\"100%\" stop-color=\"#06b6d4\" /></linearGradient></defs><polygon points=\"12 2 22 8 22 16 12 22 2 16 2 8\" fill=\"url(#grad-ctox)\" fill-opacity=\"0.12\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><polyline points=\"12 22 12 12 22 8\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 12 2 8\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 2 12 12\" stroke=\"url(#grad-ctox)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><circle cx=\"12\" cy=\"12\" r=\"3.5\" fill=\"url(#grad-ctox)\" stroke=\"#ffffff\" stroke-width=\"1\"></circle></svg>",
+    "shell": "windowed",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-ctox\" xmlns=\"http://www.w3.org/2000/svg\"><polygon points=\"12 2 22 8 22 16 12 22 2 16 2 8\" fill=\"currentColor\" fill-opacity=\"0.12\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><polyline points=\"12 22 12 12 22 8\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 12 2 8\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 2 12 12\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><circle cx=\"12\" cy=\"12\" r=\"3.5\" fill=\"currentColor\" fill-opacity=\"0.88\"></circle></svg>",
     "left": "runtime scopes",
     "center": "active workbench",
-    "right": "agent context"
+    "right": "agent context",
+    "default_width": 1320,
+    "default_height": 860,
+    "min_width": 640,
+    "min_height": 480
   },
   "category": "System",
   "version": "v1",
@@ -42,5 +46,28 @@
     "distribution": "system-module"
   },
   "install_scope": "core",
-  "default_installed": true
+  "default_installed": true,
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1320,
+      "height": 860
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  },
+  "launch_kind": "desktop-app",
+  "source": "core",
+  "core": true,
+  "editable": true,
+  "deletable": false
 }

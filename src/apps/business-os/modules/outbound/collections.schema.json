@@ -1065,63 +1065,74 @@
     }
   },
   "migration_strategies": {
-    "business_commands": {},
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      }
+    },
     "outbound_messages": {
       "1": {
         "operations": [
           {
-            "op": "set_from_first_truthy",
+            "default": "email",
             "field": "channel",
+            "op": "set_from_first_truthy",
             "paths": [
               "channel",
-              "payload.channel"
-            ],
-            "default": ""
+              "payload.channel",
+              "payload.default_channel"
+            ]
           },
           {
-            "op": "set_from_first_truthy",
+            "default": "",
             "field": "recipient_address_text",
+            "op": "set_from_first_truthy",
             "paths": [
               "recipient_address_text",
               "payload.recipient_address_text"
-            ],
-            "default": ""
+            ]
           },
           {
-            "op": "set_from_first_truthy",
+            "default": "",
             "field": "document_id",
+            "op": "set_from_first_truthy",
             "paths": [
-              "document_id",
-              "payload.document_id"
-            ],
-            "default": ""
+              "document_id"
+            ]
           },
           {
-            "op": "set_from_first_truthy",
+            "default": "",
             "field": "document_version_id",
+            "op": "set_from_first_truthy",
             "paths": [
-              "document_version_id",
-              "payload.document_version_id"
-            ],
-            "default": ""
+              "document_version_id"
+            ]
           },
           {
-            "op": "set_from_first_truthy",
+            "default": "",
             "field": "document_pdf_url",
+            "op": "set_from_first_truthy",
             "paths": [
-              "document_pdf_url",
-              "payload.document_pdf_url"
-            ],
-            "default": ""
+              "document_pdf_url"
+            ]
           },
           {
-            "op": "set_from_first_truthy",
+            "default": 0,
             "field": "physical_sent_at_ms",
+            "op": "set_from_first_truthy",
             "paths": [
-              "physical_sent_at_ms",
-              "payload.physical_sent_at_ms"
-            ],
-            "default": 0
+              "physical_sent_at_ms"
+            ]
           }
         ]
       }

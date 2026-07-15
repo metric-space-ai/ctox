@@ -59,11 +59,23 @@
               </div>
 
               <div class="form-group">
+                <label class="ctox-field-label" for="select-app-archetype" data-t="fieldArchetype">App-Archetyp</label>
+                <select id="select-app-archetype" class="ctox-select">
+                  <option value="record-workbench" selected data-t="archetypeRecordWorkbench">Datensätze</option>
+                  <option value="queue-workflow" data-t="archetypeQueueWorkflow">Warteschlange / Workflow</option>
+                  <option value="editor-document" data-t="archetypeEditorDocument">Editor / Dokument</option>
+                  <option value="automation" data-t="archetypeAutomation">Automatisierung</option>
+                  <option value="timeline-thread" data-t="archetypeTimelineThread">Verlauf / Thread</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-group">
                 <label class="ctox-field-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
                 <select id="select-app-layout" class="ctox-select">
-                  <option value="" selected data-t="optionalChoice">Optional</option>
-                  <option value="pane" data-t="layoutPane">Standard-Spalten (links/center/rechts)</option>
-                  <option value="full-workspace" data-t="layoutFull">Volle Breite (Custom Columns)</option>
+                  <option value="windowed" selected data-t="layoutWindowed">Responsives App-Fenster</option>
+                  <option value="full-workspace" data-t="layoutFull">Legacy Vollfläche</option>
                 </select>
               </div>
             </div>
@@ -100,7 +112,7 @@
 
       <div class="creator-card-body">
         <div class="deploy-action-section">
-          <button type="button" id="btn-deploy-app" class="ctox-button is-primary" disabled>
+          <button type="button" id="btn-deploy-app" class="ctox-button ctox-run-control" disabled>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             <span data-t="deployButton">App-Erstellung starten</span>
           </button>

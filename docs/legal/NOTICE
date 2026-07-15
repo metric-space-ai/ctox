@@ -72,3 +72,13 @@ does not grant trademark rights or permission to present modified versions as
 official CTOX products. Forks and redistributed builds should use their own
 product branding unless they have separate permission to use the CTOX name,
 logos, or service marks.
+Research Graph browser runtime
+------------------------------
+
+The Business OS Web Research graph surface includes a locally bundled ESM
+closure rooted at 3d-force-graph, three.js, and three-spritetext. The closure
+is used only from `src/apps/business-os/vendor/research-graph.mjs` and has no
+runtime package-manager or CDN dependency. Exact versions, source URLs,
+integrity hashes, and component license texts are recorded in
+`src/apps/business-os/vendor/research-graph.provenance.json` and
+`src/apps/business-os/vendor/research-graph.LICENSES.txt`.

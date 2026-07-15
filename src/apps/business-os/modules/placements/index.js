@@ -3,8 +3,18 @@ const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
 const TITLE = 'placements';
 const CREATE_COMMAND = 'ats.placement.create';
+const COPY = {
+  de: {
+    kicker: 'Vermittlungen', candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', placementType: 'Vermittlungsart', directHire: 'Festanstellung (Personalvermittlung)', temporary: 'Arbeitnehmerüberlassung (Zeitarbeit)', qualifications: 'Pflicht-Qualifikationen (Komma)', fee: 'Honorar', guarantee: 'Garantie (Tage)', create: 'Anlegen', entries: 'Einträge', empty: 'Noch keine Einträge.', earlyLeaveBooked: 'Frühausstieg verbucht.', clawback: 'Clawback', credit: 'Gutschrift', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', candidateRequired: 'Kandidat-ID erforderlich.', blocked: 'Blockiert.', placementCreated: 'Placement angelegt.', placement: 'Placement', feeInvoice: 'Honorar-Rechnung', days: 'Tage', invoice: 'Rechnung', cancellation: 'Storno', earlyLeave: 'Frühausstieg'
+  },
+  en: {
+    kicker: 'Placements', candidate: 'Candidate ID', client: 'Client account ID', placementType: 'Placement type', directHire: 'Permanent placement', temporary: 'Temporary staffing', qualifications: 'Required qualifications (comma-separated)', fee: 'Fee', guarantee: 'Guarantee (days)', create: 'Create', entries: 'records', empty: 'No placements yet.', earlyLeaveBooked: 'Early leave recorded.', clawback: 'Clawback', credit: 'Credit note', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', candidateRequired: 'Candidate ID is required.', blocked: 'Blocked.', placementCreated: 'Placement created.', placement: 'Placement', feeInvoice: 'Fee invoice', days: 'days', invoice: 'Invoice', cancellation: 'Cancellation', earlyLeave: 'Early leave'
+  }
+};
+let text = COPY.de;
 
 export async function mount(ctx) {
+  text = COPY[ctx.locale === 'en' ? 'en' : 'de'];
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
   ctx.host.dataset.atsModule = MODULE_ID;
@@ -19,6 +29,7 @@ export async function mount(ctx) {
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
   if (subEl) subEl.textContent = ctx.manifest?.description || '';
+  applyStaticCopy(root);
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
@@ -37,10 +48,10 @@ export async function mount(ctx) {
       catch (e) { console.error('[placements] load failed:', e); }
     }
     rowsCache = rows;
-    if (countEl) countEl.textContent = rows.length + ' Einträge';
+    if (countEl) countEl.textContent = `${rows.length} ${text.entries}`;
     if (listEl) listEl.innerHTML = rows.length
       ? rows.map((r) => placementRow(r)).join('')
-      : '<div class="ctox-empty">Noch keine Einträge.</div>';
+      : `<div class="ctox-empty">${esc(text.empty)}</div>`;
   }
 
   async function onListClick(event) {
@@ -52,22 +63,21 @@ export async function mount(ctx) {
     try {
       const result = await ctx.commandBus?.dispatch?.({
         module: MODULE_ID,
-        type: 'ats.placement.early_leave',
         command_type: 'ats.placement.early_leave',
         payload: { placement_id: placementId, left_at_ms: Date.now() },
       });
       const cn = result?.credit_note_id ?? result?.data?.credit_note_id ?? null;
       const clawback = result?.clawback ?? result?.data?.clawback ?? null;
       setGate(
-        '<strong>Frühausstieg verbucht.</strong>'
-        + (clawback != null ? '<div class="ats-result-row">Clawback: ' + esc(String(clawback)) + '</div>' : '')
-        + (cn ? '<div class="ats-result-row">Gutschrift: ' + esc(cn) + '</div>' : ''),
+        `<strong>${esc(text.earlyLeaveBooked)}</strong>`
+        + (clawback != null ? `<div class="ats-result-row">${esc(text.clawback)}: ` + esc(String(clawback)) + '</div>' : '')
+        + (cn ? `<div class="ats-result-row">${esc(text.credit)}: ` + esc(cn) + '</div>' : ''),
         'ok',
       );
       await render();
     } catch (e) {
       console.error('[placements] early_leave dispatch failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(text.offlineSend, 'offline');
     }
   }
   listEl?.addEventListener('click', onListClick);
@@ -77,13 +87,13 @@ export async function mount(ctx) {
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
     if (typeof dispatch !== 'function') {
-      setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline');
+      setGate(text.offlineService, 'offline');
       return;
     }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const candidate_id = String(f.candidate_id || '').trim();
-    if (!candidate_id) { setGate('Kandidat-ID erforderlich.', 'block'); return; }
+    if (!candidate_id) { setGate(text.candidateRequired, 'block'); return; }
     const placementType = String(f.placement_type || '').trim();
     const requiredTypes = String(f.required_types || '')
       .split(',')
@@ -102,13 +112,12 @@ export async function mount(ctx) {
     try {
       result = await ctx.commandBus?.dispatch?.({
         module: MODULE_ID,
-        type: CREATE_COMMAND,
         command_type: CREATE_COMMAND,
         payload,
       });
     } catch (e) {
       console.error('[placements] dispatch failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(text.offlineSend, 'offline');
       return;
     }
 
@@ -121,16 +130,16 @@ export async function mount(ctx) {
         .filter(Boolean)
         .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
         .join('');
-      setGate('<strong>Blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      setGate(`<strong>${esc(text.blocked)}</strong>` + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
       return;
     }
 
     const placementId = result?.placement_id ?? result?.data?.placement_id ?? null;
     const feeInvoiceId = result?.fee_invoice_id ?? result?.data?.fee_invoice_id ?? null;
     setGate(
-      '<strong>Placement angelegt.</strong>'
-      + '<div class="ats-result-row">Placement: ' + esc(placementId ?? '—') + '</div>'
-      + '<div class="ats-result-row">Honorar-Rechnung: ' + esc(feeInvoiceId ?? '—') + '</div>',
+      `<strong>${esc(text.placementCreated)}</strong>`
+      + `<div class="ats-result-row">${esc(text.placement)}: ` + esc(placementId ?? '—') + '</div>'
+      + `<div class="ats-result-row">${esc(text.feeInvoice)}: ` + esc(feeInvoiceId ?? '—') + '</div>',
       'ok'
     );
     try { formEl.reset(); } catch {}
@@ -171,16 +180,20 @@ function placementRow(r) {
   const active = status !== 'early_leave' && status !== 'cancelled';
   const fee = r.fee == null ? '—' : esc(String(r.fee));
   const badgeClass = ('ctox-badge ' + statusBadgeClass(status)).trim();
-  return '<div class="ats-item ats-item--rich" data-id="' + esc(r.id || '') + '">'
+  return '<div class="ats-item ats-item--rich" data-id="' + esc(r.id || '') + '" data-context-record-id="' + esc(r.id || '') + '" data-context-record-type="placement" data-context-label="' + esc((r.candidate_id || '') + ' → ' + (r.client_account_id || '')) + '">'
     + '<div class="ats-item-main">'
     + '<span class="' + badgeClass + '" data-status="' + esc(status) + '">' + esc(status) + '</span> '
     + '<strong>' + esc(r.candidate_id || '—') + '</strong> &rarr; ' + esc(r.client_account_id || '—')
     + '</div>'
-    + '<div class="ats-item-meta">Honorar: ' + fee + ' &middot; Garantie: ' + esc(String(r.guarantee_days ?? '—')) + ' Tage'
-    + (r.fee_invoice_id ? ' &middot; Rechnung: ' + esc(r.fee_invoice_id) : '')
-    + (r.storno_credit_note_id ? ' &middot; Storno: ' + esc(r.storno_credit_note_id) : '')
+    + `<div class="ats-item-meta">${esc(text.fee)}: ` + fee + ` &middot; ${esc(text.guarantee)}: ` + esc(String(r.guarantee_days ?? '—')) + ` ${esc(text.days)}`
+    + (r.fee_invoice_id ? ` &middot; ${esc(text.invoice)}: ` + esc(r.fee_invoice_id) : '')
+    + (r.storno_credit_note_id ? ` &middot; ${esc(text.cancellation)}: ` + esc(r.storno_credit_note_id) : '')
     + '</div>'
-    + (active ? '<button type="button" class="ctox-button ats-action" data-early-leave="' + esc(r.id || '') + '">Fr&uuml;hausstieg</button>' : '')
+    + (active ? '<button type="button" class="ctox-button ats-action" data-early-leave="' + esc(r.id || '') + '">' + esc(text.earlyLeave) + '</button>' : '')
     + '</div>';
 }
-function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function applyStaticCopy(root) {
+  root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
+  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
+}
+function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }

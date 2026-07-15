@@ -13,7 +13,7 @@ export class CtoxResizer {
    * @param {number} [options.maxWidth=600] - Maximalbreite in Pixeln
    * @param {function} [options.onResize] - Optionaler Callback bei jeder Größenänderung
    */
-  constructor({ resizerEl, containerEl, cssVar, side = 'left', minWidth = 200, maxWidth = 600, onResize }) {
+  constructor({ resizerEl, containerEl, cssVar, side = 'left', orientation = 'vertical', minWidth = 200, maxWidth = 600, onResize }) {
     if (!resizerEl || !containerEl || !cssVar) {
       console.warn('[CtoxResizer] Missing required elements or variables.');
       return;
@@ -23,13 +23,15 @@ export class CtoxResizer {
     this.containerEl = containerEl;
     this.cssVar = cssVar;
     this.side = side;
+    this.orientation = orientation === 'horizontal' ? 'horizontal' : 'vertical';
     this.minWidth = minWidth;
     this.maxWidth = maxWidth;
     this.onResize = onResize;
 
-    this.startX = 0;
+    this.startPosition = 0;
     this.startWidth = 0;
     this.resizeRaf = 0;
+    this.pendingPointerPosition = null;
     this.step = 24;
 
     // Binde Event-Methoden fest an die Instanz
@@ -48,7 +50,7 @@ export class CtoxResizer {
     this.resizerEl.style.touchAction = 'none';
     if (!this.resizerEl.hasAttribute('role')) this.resizerEl.setAttribute('role', 'separator');
     if (!this.resizerEl.hasAttribute('tabindex')) this.resizerEl.setAttribute('tabindex', '0');
-    if (!this.resizerEl.hasAttribute('aria-orientation')) this.resizerEl.setAttribute('aria-orientation', 'vertical');
+    if (!this.resizerEl.hasAttribute('aria-orientation')) this.resizerEl.setAttribute('aria-orientation', this.orientation);
     this.resizerEl.setAttribute('aria-valuemin', String(this.minWidth));
     this.resizerEl.setAttribute('aria-valuemax', String(this.maxWidth));
     this.updateAriaValue(this.readCurrentWidth());
@@ -56,13 +58,14 @@ export class CtoxResizer {
 
   onPointerDown(e) {
     e.preventDefault();
-    this.startX = e.clientX;
+    this.startPosition = this.orientation === 'horizontal' ? e.clientY : e.clientX;
 
     // Hole die aktuelle Breite
     this.startWidth = this.readCurrentWidth();
 
     // Aktiviere globale Klassen
     document.body.classList.add('is-resizing');
+    document.body.classList.toggle('is-resizing-horizontal', this.orientation === 'horizontal');
     this.resizerEl.classList.add('is-active');
 
     // Registriere globale Listener für Move und Up, um flüssiges Ziehen außerhalb des Handles zu ermöglichen
@@ -73,38 +76,24 @@ export class CtoxResizer {
 
   onPointerMove(e) {
     if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+    this.pendingPointerPosition = this.orientation === 'horizontal' ? e.clientY : e.clientX;
 
     this.resizeRaf = requestAnimationFrame(() => {
       this.resizeRaf = 0;
-      
-      const deltaX = e.clientX - this.startX;
-      let newWidth = this.startWidth;
-
-      if (this.side === 'left') {
-        newWidth = this.startWidth + deltaX;
-      } else {
-        newWidth = this.startWidth - deltaX;
-      }
-
-      // Einhaltung der Grenzen
-      if (newWidth < this.minWidth) newWidth = this.minWidth;
-      if (newWidth > this.maxWidth) newWidth = this.maxWidth;
-
-      // Setze CSS-Variable
-      this.setWidth(newWidth);
-
-      if (this.onResize) {
-        this.onResize(newWidth);
-      }
+      this.applyPendingPointerPosition();
     });
   }
 
   onPointerUp() {
-    if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+    if (this.resizeRaf) {
+      cancelAnimationFrame(this.resizeRaf);
+      this.applyPendingPointerPosition();
+    }
     this.resizeRaf = 0;
 
     // Bereinige globale Klassen
     document.body.classList.remove('is-resizing');
+    document.body.classList.remove('is-resizing-horizontal');
     this.resizerEl.classList.remove('is-active');
 
     // Entferne globale Listener
@@ -113,8 +102,24 @@ export class CtoxResizer {
     window.removeEventListener('pointercancel', this.onPointerUp);
   }
 
+  applyPendingPointerPosition() {
+    if (!Number.isFinite(this.pendingPointerPosition)) return;
+    const delta = this.pendingPointerPosition - this.startPosition;
+    const newWidth = (this.side === 'left' || this.side === 'top')
+      ? this.startWidth + delta
+      : this.startWidth - delta;
+    this.pendingPointerPosition = null;
+    const width = this.setWidth(newWidth);
+    if (this.onResize) this.onResize(width);
+  }
+
   onKeyDown(e) {
-    const keyDeltas = {
+    const keyDeltas = this.orientation === 'horizontal' ? {
+      ArrowUp: this.side === 'top' ? -this.step : this.step,
+      ArrowDown: this.side === 'top' ? this.step : -this.step,
+      Home: -Infinity,
+      End: Infinity,
+    } : {
       ArrowLeft: this.side === 'left' ? -this.step : this.step,
       ArrowRight: this.side === 'left' ? this.step : -this.step,
       Home: -Infinity,
@@ -140,9 +145,16 @@ export class CtoxResizer {
     if (isNaN(parsedWidth)) {
       const panelSelector = this.side === 'left'
         ? '.knowledge-left, .matching-left, .shiftflow-left, .outbound-left, .customers-left, .research-left, .documents-left, .spreadsheets-left, .notes-left, .desktop-left, .ctox-left, .reports-left, .creator-left, .app-store-left, .fibu-left'
-        : '.knowledge-right, .matching-right, .shiftflow-right, .outbound-right, .customers-right, .research-right, .documents-right, .spreadsheets-right, .notes-right, .desktop-right, .ctox-right, .reports-right, .creator-right, .app-store-right, .fibu-right';
-      const panel = this.containerEl.querySelector(panelSelector) || this.resizerEl.previousElementSibling;
-      parsedWidth = panel ? panel.getBoundingClientRect().width : 280;
+        : this.side === 'right'
+          ? '.knowledge-right, .matching-right, .shiftflow-right, .outbound-right, .customers-right, .research-right, .documents-right, .spreadsheets-right, .notes-right, .desktop-right, .ctox-right, .reports-right, .creator-right, .app-store-right, .fibu-right'
+          : '';
+      const panel = panelSelector
+        ? this.containerEl.querySelector(panelSelector) || this.resizerEl.previousElementSibling
+        : this.side === 'bottom'
+          ? this.resizerEl.nextElementSibling
+          : this.resizerEl.previousElementSibling;
+      const rect = panel?.getBoundingClientRect();
+      parsedWidth = rect ? (this.orientation === 'horizontal' ? rect.height : rect.width) : 280;
     }
     return this.clampWidth(parsedWidth);
   }

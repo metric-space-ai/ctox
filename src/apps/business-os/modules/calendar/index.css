@@ -4,7 +4,7 @@
   display: grid;
   grid-template-columns: var(--calendar-left-width, 320px) 12px minmax(0, 1fr) 12px var(--calendar-right-width, 280px);
   gap: 0;
-  padding: 12px;
+  padding: 8px;
   height: 100%;
   width: 100%;
   background: var(--bg);
@@ -29,12 +29,9 @@
 /* Left Explorer Pane: Sidebar Calendars + Booking Links */
 .calendar-left-pane {
   min-width: 0;
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+  border-radius: var(--surface-radius);
   overflow: hidden;
 }
 
@@ -50,20 +47,16 @@
   min-width: 0;
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--surface-radius);
   overflow: hidden;
 }
 
 /* Right Panel */
 .calendar-right-pane {
   min-width: 0;
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  box-shadow: var(--panel-shadow);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+  border-radius: var(--surface-radius);
   overflow: hidden;
 }
 
@@ -78,11 +71,11 @@
 .calendar-sidebar-scrollable {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: 8px;
 }
 
 .calendar-sidebar-section {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .calendar-section-title-bar {
@@ -111,12 +104,12 @@
 .calendar-item, .booking-page-item {
   display: flex;
   align-items: center;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 7px 9px;
+  border-radius: var(--control-radius);
   cursor: pointer;
   font-size: 13px;
   color: var(--text);
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
   background: transparent;
   border: 1px solid transparent;
   justify-content: space-between;
@@ -169,7 +162,7 @@
   opacity: 0;
   transition: opacity 0.2s;
   display: flex;
-  gap: 4px;
+  gap: 3px;
 }
 
 .calendar-item:hover .calendar-item-actions,
@@ -204,7 +197,7 @@
 /* EventCalendar custom styling */
 .calendar-grid-container {
   flex: 1;
-  padding: 16px;
+  padding: 10px;
   overflow: auto;
   box-sizing: border-box;
   display: flex;
@@ -236,31 +229,66 @@
   color: color-mix(in srgb, var(--accent) 75%, var(--text));
 }
 
-/* Override EventCalendar styles for Business OS Premium dark/glass design */
-.ec-theme-business-os.ec {
+/* Override EventCalendar styles for the compact Business OS surface. */
+.ec-theme-business-os.ec,
+.ec-theme-business-os .ec {
+  --ec-bg-color: var(--surface);
+  --ec-text-color: var(--text);
+  --ec-border-color: color-mix(in srgb, var(--line) 42%, transparent);
+  --ec-button-bg-color: var(--surface);
+  --ec-button-border-color: var(--line);
+  --ec-button-text-color: var(--text);
+  --ec-button-active-bg-color: var(--accent-soft);
+  --ec-button-active-border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  --ec-button-active-text-color: var(--text-strong);
+  --ec-today-bg-color: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  --ec-highlight-color: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  --ec-event-bg-color: var(--accent);
+  --ec-event-text-color: var(--accent-contrast);
+  --ec-popup-bg-color: var(--surface);
+  color-scheme: light dark;
   background: transparent;
   border: none;
   font-family: inherit;
-  color: inherit;
+  color: var(--text);
   height: 100%;
 }
 
 .ec-theme-business-os .ec-header {
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  background: var(--surface);
 }
 
 .ec-theme-business-os .ec-day {
   border-right: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
 }
 
+.ec-theme-business-os .ec-main,
+.ec-theme-business-os .ec-sidebar,
+.ec-theme-business-os .ec-col-head,
+.ec-theme-business-os .ec-col-group,
+.ec-theme-business-os .ec-slots {
+  background-color: var(--surface);
+  color: var(--text);
+}
+
 .ec-theme-business-os .ec-event {
-  border-radius: 8px;
-  box-shadow: var(--shadow-sm);
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: var(--control-radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 68%, var(--line)) !important;
+  box-shadow: none;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 6px;
+  overflow: hidden;
+}
+
+.ec-theme-business-os .ec-event-body,
+.ec-theme-business-os .ec-event-time,
+.ec-theme-business-os .ec-event-title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Auditing Lists (Holds & Bookings) */
@@ -273,17 +301,16 @@
 .auditing-card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--surface-radius);
+  padding: 9px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: transform 0.2s;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
 }
 
 .auditing-card:hover {
-  transform: translateY(-1px);
+  background: var(--surface-2);
   border-color: var(--accent);
 }
 
@@ -331,7 +358,7 @@
 .calendar-booking-context-card,
 .calendar-booking-context-empty {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--surface-radius);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   color: var(--muted);
   padding: 10px 12px;
@@ -400,23 +427,30 @@
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
-@media (max-width: 1024px) {
+@container business-app-window (max-width: 1024px) {
   .calendar-app[data-calendar-root] {
-    grid-template-columns: var(--calendar-left-width, 320px) 12px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(420px, 1fr) auto;
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
   }
-  .calendar-right-pane,
-  [data-resizer="right"] {
+  .calendar-app[data-calendar-root] [data-resizer] {
     display: none !important;
+  }
+  .calendar-left-pane,
+  .calendar-center-pane,
+  .calendar-right-pane {
+    display: flex !important;
+    min-height: 220px;
   }
 }
 
-@media (max-width: 768px) {
+@container business-app-window (max-width: 768px) {
   .calendar-app[data-calendar-root] {
-    grid-template-columns: 1fr;
-  }
-  .calendar-left-pane,
-  [data-resizer] {
-    display: none !important;
+    grid-template-rows: auto minmax(380px, 1fr) auto;
+    padding: 6px;
+    gap: 6px;
   }
 }
 
@@ -558,7 +592,7 @@
   margin-left: auto;
 }
 
-@media (max-width: 768px) {
+@container business-app-window (max-width: 768px) {
   .ctox-bottom-drawer {
     bottom: var(--calendar-shell-dock-offset, 62px);
     height: min(620px, calc(100% - var(--calendar-shell-dock-offset, 62px) - 16px));

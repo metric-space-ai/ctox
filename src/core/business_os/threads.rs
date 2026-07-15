@@ -150,6 +150,11 @@ pub(super) fn is_threads_command(command_type: &str) -> bool {
             | "threads.thread.unwatch"
             | "threads.thread.archive"
             | "threads.thread.snooze"
+            | "threads.thread.state.update"
+            | "threads.thread.assign"
+            | "threads.thread.claim"
+            | "threads.handoff.create"
+            | "threads.ai.request"
             | "threads.ctox_approval.request"
             | "threads.ctox_approval.edit"
             | "threads.ctox_approval.approve"
@@ -159,6 +164,7 @@ pub(super) fn is_threads_command(command_type: &str) -> bool {
             | "threads.link.remove"
             | "threads.notification.mark_read"
             | "threads.notification.dismiss"
+            | "threads.notification.preferences.update"
     )
 }
 
@@ -176,12 +182,15 @@ pub(super) fn is_threads_owned_collection(collection: &str) -> bool {
             | "user_thread_messages"
             | "user_thread_links"
             | "user_notifications"
+            | "user_thread_states"
             | "ctox_task_approval_requests"
     )
 }
 
 pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) -> bool {
-    if is_threads_owned_collection(collection) {
+    if is_threads_owned_collection(collection)
+        || super::external_sql_sync::projection_collection_is_server_owned(root, collection)
+    {
         return false;
     }
     if collection == "ctox_queue_tasks" {
@@ -204,6 +213,24 @@ pub(super) fn may_replicate_document(
     collection: &str,
     document: &Value,
 ) -> bool {
+    let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
+        return false;
+    };
+    if is_browser_collection(collection) {
+        return browser_document_visible_to_actor(root, collection, document, &user_id);
+    }
+    if matches!(
+        super::policy::parse_role(&role),
+        BusinessOsRole::Chef | BusinessOsRole::Admin
+    ) {
+        return true;
+    }
+    // Personal projections are readable solely by their native-authenticated
+    // owner. They must remain available even before the module catalog has
+    // materialized ordinary collection grants for a newly created user.
+    if matches!(collection, "user_notifications" | "user_thread_states") {
+        return value_string(document, "user_id") == user_id;
+    }
     if !store::capability_allows_collection_permission(
         root,
         token,
@@ -211,15 +238,6 @@ pub(super) fn may_replicate_document(
         BusinessOsPermission::DataRead,
     ) {
         return false;
-    }
-    let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
-        return false;
-    };
-    if matches!(
-        super::policy::parse_role(&role),
-        BusinessOsRole::Chef | BusinessOsRole::Admin
-    ) {
-        return true;
     }
     if collection == "business_commands" {
         return ctox_command_document_visible_to_user(document, &user_id);
@@ -231,7 +249,7 @@ pub(super) fn may_replicate_document(
         return true;
     }
     match collection {
-        "user_notifications" => value_string(document, "user_id") == user_id,
+        "user_notifications" | "user_thread_states" => false,
         "ctox_task_approval_requests" => {
             value_string(document, "requester_user_id") == user_id
                 || value_string(document, "reviewer_user_id") == user_id
@@ -247,6 +265,64 @@ pub(super) fn may_replicate_document(
         "user_thread_links" => thread_document_visible_to_user(root, document, &user_id),
         _ => false,
     }
+}
+
+pub(super) fn may_accept_peer_document_write(
+    root: &Path,
+    token: &str,
+    collection: &str,
+    document: &Value,
+) -> bool {
+    let Some((user_id, _role)) = store::verify_capability_actor(root, token) else {
+        return false;
+    };
+    if !is_browser_collection(collection) {
+        return true;
+    }
+    if collection != "browser_input_events" {
+        return false;
+    }
+    let tenant_id = store::sync_config(root)
+        .ok()
+        .map(|config| config.instance_id)
+        .unwrap_or_default();
+    value_string(document, "tenant_id") == tenant_id
+        && value_string(document, "controller_user_id") == user_id
+        && document
+            .get("payload")
+            .and_then(|payload| payload.get("actor"))
+            .and_then(|actor| actor.get("user_id").or_else(|| actor.get("id")))
+            .and_then(Value::as_str)
+            == Some(user_id.as_str())
+}
+
+fn is_browser_collection(collection: &str) -> bool {
+    matches!(
+        collection,
+        "browser_sessions" | "browser_tabs" | "browser_frames" | "browser_input_events"
+    )
+}
+
+fn browser_document_visible_to_actor(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+) -> bool {
+    let tenant_id = store::sync_config(root)
+        .ok()
+        .map(|config| config.instance_id)
+        .unwrap_or_default();
+    if tenant_id.is_empty() || value_string(document, "tenant_id") != tenant_id {
+        return false;
+    }
+    if value_string(document, "owner_user_id") == user_id {
+        return true;
+    }
+    collection != "browser_input_events"
+        && array_strings(document.get("allowed_observer_user_ids"))
+            .iter()
+            .any(|observer| observer == user_id)
 }
 
 pub(super) fn project_ctox_relevance(
@@ -391,6 +467,11 @@ pub(super) fn handle_business_command(
         "threads.thread.unwatch" => update_thread_watch(root, session, command, false),
         "threads.thread.archive" => archive_thread(root, session, command),
         "threads.thread.snooze" => snooze_thread(root, session, command),
+        "threads.thread.state.update" => update_user_thread_state(root, session, command),
+        "threads.thread.assign" => assign_thread(root, session, command, false),
+        "threads.thread.claim" => assign_thread(root, session, command, true),
+        "threads.handoff.create" => create_handoff(root, session, command),
+        "threads.ai.request" => create_ai_request(root, session, command),
         "threads.ctox_approval.request" => request_approval(root, session, command),
         "threads.ctox_approval.edit" => edit_approval(root, session, command),
         "threads.ctox_approval.approve" => approve_approval(root, session, command),
@@ -403,6 +484,9 @@ pub(super) fn handle_business_command(
         }
         "threads.notification.dismiss" => {
             update_notification_status(root, session, command, "dismissed")
+        }
+        "threads.notification.preferences.update" => {
+            update_notification_preferences(root, session, command)
         }
         other => anyhow::bail!("unsupported threads command type: {other}"),
     }
@@ -595,6 +679,12 @@ fn create_message(
         .or_else(|| command.record_id.clone())
         .context("thread_id is required")?;
     let body = required_string(&command.payload, &["body", "message", "note"])?;
+    let kind = first_string_field(&command.payload, &["kind", "event_type"])
+        .unwrap_or_else(|| "message".to_owned());
+    anyhow::ensure!(
+        matches!(kind.as_str(), "message" | "handoff" | "ai_request"),
+        "invalid thread message kind"
+    );
     let target_user_ids = target_user_ids(&command.payload);
     let actor = actor_id(session);
     let thread = load_record(root, "user_threads", &thread_id)?
@@ -636,7 +726,7 @@ fn create_message(
         &conn,
         &thread_id,
         &message_id,
-        "message",
+        &kind,
         session,
         &target_user_ids,
         &body,
@@ -1240,6 +1330,232 @@ fn snooze_thread(
     }))
 }
 
+fn update_user_thread_state(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let now = now_ms();
+    let thread_id = first_string_field(&command.payload, &["thread_id"])
+        .or_else(|| command.record_id.clone())
+        .context("thread_id is required")?;
+    let thread = load_record(root, "user_threads", &thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    ensure_thread_participant_or_admin(session, &thread)?;
+    let user_id = actor_id(session);
+    let state_id = format!(
+        "thread_state_{}_{}",
+        slug_part(&user_id),
+        slug_part(&thread_id)
+    );
+    let mut next = load_record(root, "user_thread_states", &state_id)?.unwrap_or_else(|| {
+        json!({
+            "id": state_id,
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "created_at_ms": now,
+            "updated_at_ms": now,
+            "unread_count": 0,
+            "pinned": false,
+            "priority": "normal",
+            "attention_score": 0,
+            "attention_reasons": [],
+        })
+    });
+    for key in [
+        "pinned",
+        "unread_count",
+        "last_seen_at_ms",
+        "snoozed_until_ms",
+        "follow_up_at_ms",
+    ] {
+        if let Some(value) = command.payload.get(key) {
+            next[key] = value.clone();
+        }
+    }
+    if let Some(priority) = first_string_field(&command.payload, &["priority"]) {
+        anyhow::ensure!(
+            matches!(priority.as_str(), "low" | "normal" | "high" | "urgent"),
+            "invalid priority"
+        );
+        set_object_string(&mut next, "priority", &priority);
+    }
+    set_object_i64(&mut next, "updated_at_ms", now);
+    let conn = store::open_store(root)?;
+    store::upsert_business_record(&conn, "user_thread_states", &state_id, now, next)?;
+    Ok(json!({
+        "ok": true,
+        "thread_id": thread_id,
+        "user_id": user_id,
+        "state_id": state_id,
+        "projections": [{ "collection": "user_thread_states", "record_id": state_id }],
+    }))
+}
+
+fn assign_thread(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    claim: bool,
+) -> anyhow::Result<Value> {
+    let now = now_ms();
+    let thread_id = first_string_field(&command.payload, &["thread_id"])
+        .or_else(|| command.record_id.clone())
+        .context("thread_id is required")?;
+    let mut thread = load_record(root, "user_threads", &thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    ensure_thread_participant_or_admin(session, &thread)?;
+    let expected = command
+        .payload
+        .get("expected_updated_at_ms")
+        .and_then(Value::as_i64);
+    if let Some(expected) = expected {
+        anyhow::ensure!(
+            document_updated_at_ms(&thread) == expected,
+            "thread changed; refresh before assigning"
+        );
+    }
+    if claim {
+        let current = value_string(&thread, "assigned_user_id");
+        anyhow::ensure!(
+            current.is_empty() || current == actor_id(session),
+            "thread was already claimed"
+        );
+    }
+    let assignee = if claim {
+        actor_id(session)
+    } else {
+        required_string(&command.payload, &["assigned_user_id", "user_id"])?
+    };
+    active_business_user_display_name(root, &assignee)?;
+    let mut participants = array_strings(thread.get("participant_ids"));
+    participants.push(assignee.clone());
+    participants.sort();
+    participants.dedup();
+    set_object_array_strings(&mut thread, "participant_ids", &participants);
+    set_object_string(&mut thread, "assigned_user_id", &assignee);
+    set_object_string(&mut thread, "status", "open");
+    if let Some(due_at_ms) = command.payload.get("due_at_ms").and_then(Value::as_i64) {
+        set_object_i64(&mut thread, "due_at_ms", due_at_ms.max(0));
+    }
+    if let Some(next_step) = first_string_field(&command.payload, &["next_step"]) {
+        set_object_string(&mut thread, "next_step", &next_step);
+    }
+    set_object_i64(&mut thread, "updated_at_ms", now);
+    let conn = store::open_store(root)?;
+    store::upsert_business_record(&conn, "user_threads", &thread_id, now, thread)?;
+    Ok(json!({
+        "ok": true,
+        "thread_id": thread_id,
+        "assigned_user_id": assignee,
+        "projections": [{ "collection": "user_threads", "record_id": thread_id }],
+    }))
+}
+
+fn create_handoff(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let target = required_string(&command.payload, &["target_user_id", "assigned_user_id"])?;
+    let expectation = required_string(&command.payload, &["expectation", "body", "message"])?;
+    let return_reason =
+        first_string_field(&command.payload, &["return_reason"]).unwrap_or_default();
+    let due_at_ms = command
+        .payload
+        .get("due_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    let body = if return_reason.is_empty() {
+        expectation.clone()
+    } else {
+        format!("{expectation}\n\nRückgabe wenn: {return_reason}")
+    };
+    let mut delegated = command.clone();
+    delegated.command_type = "threads.message.create".to_owned();
+    delegated.payload["kind"] = Value::String("handoff".to_owned());
+    delegated.payload["body"] = Value::String(body);
+    delegated.payload["target_user_ids"] = json!([target.clone()]);
+    let result = create_message(root, session, &delegated)?;
+    let thread_id = value_string(&result, "thread_id");
+    let assign = BusinessCommand {
+        command_type: "threads.thread.assign".to_owned(),
+        record_id: Some(thread_id.clone()),
+        payload: json!({
+            "thread_id": thread_id,
+            "assigned_user_id": target,
+            "due_at_ms": due_at_ms,
+            "next_step": expectation,
+        }),
+        ..command.clone()
+    };
+    let assignment = assign_thread(root, session, &assign, false)?;
+    Ok(json!({ "ok": true, "thread_id": thread_id, "message": result, "assignment": assignment }))
+}
+
+fn create_ai_request(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let goal = required_string(&command.payload, &["goal", "prompt", "instruction"])?;
+    let mut delegated = command.clone();
+    delegated.command_type = "threads.message.create".to_owned();
+    delegated.payload["kind"] = Value::String("ai_request".to_owned());
+    delegated.payload["body"] = Value::String(goal.clone());
+    delegated.payload["target_user_ids"] = json!([]);
+    let message = create_message(root, session, &delegated)?;
+    let thread_id = value_string(&message, "thread_id");
+    let risk_class = first_string_field(&command.payload, &["risk_class"])
+        .unwrap_or_else(|| "internal".to_owned());
+    anyhow::ensure!(
+        risk_class == "internal",
+        "non-internal AI actions require a CTOX approval request"
+    );
+    let thread = load_record(root, "user_threads", &thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    let module = first_non_empty_owned([value_string(&thread, "source_module"), "ctox".to_owned()]);
+    let ai_command_id = format!("cmd_{}", Uuid::new_v4());
+    let ai_command = json!({
+        "id": ai_command_id,
+        "command_id": ai_command_id,
+        "module": module,
+        "command_type": "business_os.chat.task",
+        "record_id": value_string(&thread, "source_record_id"),
+        "status": "pending_sync",
+        "payload": {
+            "title": format!("AI: {}", truncate(&goal, 80)),
+            "prompt": goal.clone(),
+            "instruction": goal.clone(),
+            "user_message": goal,
+            "thread_key": format!("business-os/threads/{thread_id}"),
+            "thread_id": thread_id,
+            "risk_class": risk_class,
+            "context": thread_source_context(&thread).unwrap_or_else(|| json!({})),
+        },
+        "client_context": {
+            "actor": actor_payload(session),
+            "action": "threads.ai.request",
+            "source_module": "threads",
+            "module": module,
+            "module_id": module,
+            "app_id": module,
+        },
+    });
+    let accepted = store::accept_rxdb_business_command_with_origin(
+        root,
+        ai_command,
+        CommandOrigin::TrustedLocal,
+    )?;
+    Ok(json!({
+        "ok": true,
+        "thread_id": thread_id,
+        "message": message,
+        "ai_command": accepted,
+    }))
+}
+
 fn create_link(
     root: &Path,
     session: &BusinessOsSession,
@@ -1342,12 +1658,103 @@ fn update_notification_status(
     let mut next = notification.clone();
     set_object_string(&mut next, "status", status);
     store::upsert_business_record(&conn, "user_notifications", &notification_id, now, next)?;
+    let thread_id = value_string(&notification, "thread_id");
+    let state_id = format!(
+        "thread_state_{}_{}",
+        slug_part(&notification_user),
+        slug_part(&thread_id)
+    );
+    if let Some(mut user_state) = load_record(root, "user_thread_states", &state_id)? {
+        let unread = user_state
+            .get("unread_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .saturating_sub(1);
+        set_object_i64(&mut user_state, "unread_count", unread);
+        set_object_i64(&mut user_state, "last_seen_at_ms", now);
+        set_object_i64(&mut user_state, "updated_at_ms", now);
+        if unread == 0 {
+            user_state["attention_reasons"] = json!([]);
+            set_object_i64(&mut user_state, "attention_score", 0);
+        }
+        store::upsert_business_record(&conn, "user_thread_states", &state_id, now, user_state)?;
+    }
     Ok(json!({
         "ok": true,
         "notification_id": notification_id,
         "status": status,
-        "projections": [{ "collection": "user_notifications", "record_id": notification_id }],
+        "projections": [
+            { "collection": "user_notifications", "record_id": notification_id },
+            { "collection": "user_thread_states", "record_id": state_id }
+        ],
     }))
+}
+
+fn update_notification_preferences(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let now = now_ms();
+    let user_id = actor_id(session);
+    let threshold = command
+        .payload
+        .get("priority_threshold")
+        .and_then(Value::as_i64)
+        .unwrap_or(20);
+    anyhow::ensure!(
+        (0..=100).contains(&threshold),
+        "priority threshold must be 0..100"
+    );
+    let quiet_start = first_string_field(&command.payload, &["quiet_start"]).unwrap_or_default();
+    let quiet_end = first_string_field(&command.payload, &["quiet_end"]).unwrap_or_default();
+    anyhow::ensure!(valid_quiet_time(&quiet_start), "invalid quiet_start");
+    anyhow::ensure!(valid_quiet_time(&quiet_end), "invalid quiet_end");
+    let notification_types = array_strings(command.payload.get("notification_types"));
+    let state_id = format!("thread_state_{}_preferences", slug_part(&user_id));
+    let existing = load_record(root, "user_thread_states", &state_id)?.unwrap_or_else(|| json!({}));
+    let record = json!({
+        "id": state_id,
+        "thread_id": "__preferences__",
+        "user_id": user_id,
+        "unread_count": 0,
+        "last_seen_at_ms": existing.get("last_seen_at_ms").and_then(Value::as_i64).unwrap_or(0),
+        "pinned": false,
+        "snoozed_until_ms": 0,
+        "priority": "normal",
+        "follow_up_at_ms": 0,
+        "attention_score": 0,
+        "attention_reasons": [],
+        "notification_preferences": {
+            "priority_threshold": threshold,
+            "quiet_start": quiet_start,
+            "quiet_end": quiet_end,
+            "notification_types": notification_types,
+        },
+        "created_at_ms": existing.get("created_at_ms").and_then(Value::as_i64).unwrap_or(now),
+        "updated_at_ms": now,
+    });
+    let conn = store::open_store(root)?;
+    store::upsert_business_record(&conn, "user_thread_states", &state_id, now, record)?;
+    Ok(json!({
+        "ok": true,
+        "user_id": user_id,
+        "state_id": state_id,
+        "projections": [{ "collection": "user_thread_states", "record_id": state_id }],
+    }))
+}
+
+fn valid_quiet_time(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let Some((hour, minute)) = value.split_once(':') else {
+        return false;
+    };
+    hour.len() == 2
+        && minute.len() == 2
+        && hour.parse::<u8>().is_ok_and(|value| value < 24)
+        && minute.parse::<u8>().is_ok_and(|value| value < 60)
 }
 
 fn project_ctox_command_document(
@@ -2069,6 +2476,91 @@ fn upsert_app_status_notifications(
             record,
             projections,
         )?;
+        let state_id = format!(
+            "thread_state_{}_{}",
+            slug_part(user_id),
+            slug_part(thread_id)
+        );
+        let existing_state = conn
+            .query_row(
+                "SELECT payload_json FROM business_records WHERE collection = 'user_thread_states' AND record_id = ?1",
+                params![state_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+            .unwrap_or_else(|| json!({}));
+        let mut reasons = array_strings(existing_state.get("attention_reasons"));
+        let reason = match notification_type {
+            "approval_requested" | "approval_request" => "approval",
+            "mention" | "mentioned" => "mention",
+            "ctox_failed" | "ai_failed" => "ai_failed",
+            "escalated" => "escalation",
+            _ => "unread",
+        };
+        if !reasons.iter().any(|value| value == reason) {
+            reasons.push(reason.to_owned());
+        }
+        let weight = match reason {
+            "approval" => 100,
+            "ai_failed" | "escalation" => 90,
+            "mention" => 70,
+            _ => 20,
+        };
+        let unread_count = conn.query_row(
+            "SELECT COUNT(*) FROM business_records
+              WHERE collection = 'user_notifications'
+                AND deleted = 0
+                AND json_extract(payload_json, '$.user_id') = ?1
+                AND json_extract(payload_json, '$.thread_id') = ?2
+                AND json_extract(payload_json, '$.status') = 'unread'",
+            params![user_id, thread_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let previous_unread_count = existing_state
+            .get("unread_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let previous_score = existing_state
+            .get("attention_score")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let attention_score = previous_score.max(weight);
+        let state_changed = previous_unread_count != unread_count
+            || previous_score != attention_score
+            || array_strings(existing_state.get("attention_reasons")) != reasons;
+        let state_updated_at = if state_changed {
+            now
+        } else {
+            existing_state
+                .get("updated_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or(now)
+        };
+        let state_record = json!({
+            "id": state_id,
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "unread_count": unread_count,
+            "last_seen_at_ms": existing_state.get("last_seen_at_ms").and_then(Value::as_i64).unwrap_or(0),
+            "pinned": existing_state.get("pinned").and_then(Value::as_bool).unwrap_or(false),
+            "snoozed_until_ms": existing_state.get("snoozed_until_ms").and_then(Value::as_i64).unwrap_or(0),
+            "priority": value_string(&existing_state, "priority"),
+            "follow_up_at_ms": existing_state.get("follow_up_at_ms").and_then(Value::as_i64).unwrap_or(0),
+            "attention_score": attention_score,
+            "attention_reasons": reasons,
+            "notification_preferences": existing_state.get("notification_preferences").cloned().unwrap_or_else(|| json!({})),
+            "created_at_ms": existing_state.get("created_at_ms").and_then(Value::as_i64).unwrap_or(now),
+            "updated_at_ms": state_updated_at,
+        });
+        upsert_projection_record_if_changed(
+            conn,
+            "user_thread_states",
+            &state_id,
+            state_updated_at,
+            state_record,
+            projections,
+        )?;
     }
     Ok(())
 }
@@ -2455,6 +2947,12 @@ fn upsert_message(
         "message_id": message_id,
         "thread_id": thread_id,
         "kind": kind,
+        "event_type": kind,
+        "actor_type": if matches!(kind, "ctox_task" | "ctox_result" | "ai_result") { "ai" } else { "user" },
+        "actor_id": actor_id(session),
+        "parent_event_id": "",
+        "execution_status": if kind == "ai_request" { "requested" } else { "completed" },
+        "evidence_refs": [],
         "author_user_id": actor_id(session),
         "author_display_name": actor_display_name(session),
         "target_user_ids": target_user_ids,
@@ -3710,6 +4208,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     fn seed_threads_user(
@@ -3785,10 +4284,62 @@ mod tests {
     fn peer_write_gate_allows_command_admission_but_blocks_native_owned_records(
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
-        assert!(may_accept_peer_write(temp.path(), "", "business_commands"));
-        assert!(!may_accept_peer_write(temp.path(), "", "user_threads"));
-        assert!(!may_accept_peer_write(temp.path(), "", "ctox_queue_tasks"));
-        assert!(may_accept_peer_write(temp.path(), "", "support_notes"));
+        let app_root = temp.path().join("src/apps/business-os");
+        let local_module = temp
+            .path()
+            .join("runtime/business-os/local-modules/inventory");
+        fs::create_dir_all(&app_root)?;
+        fs::create_dir_all(&local_module)?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            local_module.join("module.json"),
+            serde_json::to_vec(&json!({
+                "id":"inventory",
+                "title":"Inventory",
+                "entry":"local-modules/inventory/index.html",
+                "source":"local",
+                "install_scope":"local",
+                "collections":["inventory_items","inventory_sync_status"],
+                "external_data_sources":[{
+                    "id":"erp",
+                    "connection":{"server":"sql.example.test","database":"erp","user":"sync","password_secret":"ERP_SQL_PASSWORD"},
+                    "status_collection":"inventory_sync_status",
+                    "projections":[{"id":"items","collection":"inventory_items","record_id_field":"item_id","query":"SELECT item_id FROM dbo.items ORDER BY item_id OFFSET @P1 ROWS FETCH NEXT @P2 ROWS ONLY"}]
+                }]
+            }))?,
+        )?;
+        store::ensure_legacy_collection_grants(
+            temp.path(),
+            &[
+                "business_commands".to_string(),
+                "support_notes".to_string(),
+                "inventory_items".to_string(),
+            ],
+        )?;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "external-sql-write-gate-test",
+            "External SQL Write Gate Test",
+            "user",
+            now_ms(),
+        )?;
+        assert!(may_accept_peer_write(
+            temp.path(),
+            &token,
+            "business_commands"
+        ));
+        assert!(!may_accept_peer_write(temp.path(), &token, "user_threads"));
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            &token,
+            "ctox_queue_tasks"
+        ));
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            &token,
+            "inventory_items"
+        ));
+        assert!(may_accept_peer_write(temp.path(), &token, "support_notes"));
         Ok(())
     }
 
@@ -4542,12 +5093,13 @@ mod tests {
     fn thread_document_replication_is_user_scoped() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let now = now_ms();
-        let (alice_token, _) = store::issue_business_os_capability_token_for_managed_user(
+        store::ensure_legacy_collection_grants(
             temp.path(),
-            "alice",
-            "Alice",
-            "user",
-            now,
+            &[
+                "user_notifications".to_owned(),
+                "user_thread_states".to_owned(),
+                "business_commands".to_owned(),
+            ],
         )?;
         let (admin_token, _) = store::issue_business_os_capability_token_for_managed_user(
             temp.path(),
@@ -4556,7 +5108,13 @@ mod tests {
             "admin",
             now,
         )?;
-
+        let (alice_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "alice",
+            "Alice",
+            "user",
+            now,
+        )?;
         assert!(may_replicate_document(
             temp.path(),
             &alice_token,
@@ -4568,6 +5126,18 @@ mod tests {
             &alice_token,
             "user_notifications",
             &json!({ "id": "n2", "user_id": "bob" }),
+        ));
+        assert!(may_replicate_document(
+            temp.path(),
+            &alice_token,
+            "user_thread_states",
+            &json!({ "id": "s1", "user_id": "alice", "thread_id": "t1" }),
+        ));
+        assert!(!may_replicate_document(
+            temp.path(),
+            &alice_token,
+            "user_thread_states",
+            &json!({ "id": "s2", "user_id": "bob", "thread_id": "t1" }),
         ));
         assert!(may_replicate_document(
             temp.path(),
@@ -4593,19 +5163,15 @@ mod tests {
                 "client_context": { "actor": { "id": "bob" } }
             }),
         ));
-        assert!(may_replicate_document(
-            temp.path(),
-            &alice_token,
-            "ctox_queue_tasks",
-            &json!({
-                "id": "task-alice",
-                "owner_user_id": "alice"
-            }),
-        ));
         assert!(!may_accept_peer_write(
             temp.path(),
             &alice_token,
             "user_threads"
+        ));
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            &alice_token,
+            "user_thread_states"
         ));
         assert!(may_accept_peer_write(
             temp.path(),
@@ -4617,6 +5183,50 @@ mod tests {
             temp.path(),
             &alice_token,
             "ctox_queue_tasks"
+        ));
+        let tenant_id = store::sync_config(temp.path())?.instance_id;
+        let alice_session = json!({
+            "id": "browser-alice",
+            "tenant_id": tenant_id,
+            "owner_user_id": "alice",
+            "allowed_observer_user_ids": ["bob"]
+        });
+        assert!(may_replicate_document(
+            temp.path(),
+            &alice_token,
+            "browser_sessions",
+            &alice_session,
+        ));
+        assert!(!may_replicate_document(
+            temp.path(),
+            &admin_token,
+            "browser_sessions",
+            &alice_session,
+        ));
+        let alice_input = json!({
+            "id": "input-alice",
+            "tenant_id": store::sync_config(temp.path())?.instance_id,
+            "owner_user_id": "alice",
+            "controller_user_id": "alice",
+            "payload": { "actor": { "id": "alice" } }
+        });
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "browser_input_events",
+            &alice_input,
+        ));
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &admin_token,
+            "browser_input_events",
+            &alice_input,
+        ));
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "browser_frames",
+            &alice_session,
         ));
 
         Ok(())

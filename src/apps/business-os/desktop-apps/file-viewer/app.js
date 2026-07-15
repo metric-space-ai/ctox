@@ -124,7 +124,7 @@ async function materializeStoredFile(ctx, file) {
   await ctx.commandBus.dispatch({
     id: commandId,
     module: 'desktop',
-    type: 'ctox.file.materialize',
+    command_type: 'ctox.file.materialize',
     record_id: file.fileId,
     inbound_channel: 'desktop',
     payload: {

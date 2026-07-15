@@ -54,9 +54,11 @@ const labels = {
     taskPromptRedacted: 'Prompt ausgeblendet, da er Code, Stack- oder Web-Stack-Daten enthält.',
     redactedTechnicalDetail: 'Technische Details ausgeblendet',
     saveTask: 'Speichern',
+    resumeTask: 'Als Folgeauftrag fortsetzen',
     deleteTask: 'Löschen',
     deleteTaskConfirm: 'Diesen CTOX Task wirklich löschen?',
     taskSaved: 'Task gespeichert.',
+    taskResumed: 'Folgeauftrag angelegt.',
     taskDeleted: 'Task gelöscht.',
     taskActionFailed: 'Aktion fehlgeschlagen.',
     chefAdminOnly: 'Nur Chef oder Admin dürfen Tasks ändern.',
@@ -187,9 +189,11 @@ const labels = {
     taskPromptRedacted: 'Prompt hidden because it contains code, stack, or Web Stack data.',
     redactedTechnicalDetail: 'Technical details hidden',
     saveTask: 'Save',
+    resumeTask: 'Continue as follow-up',
     deleteTask: 'Delete',
     deleteTaskConfirm: 'Delete this CTOX task?',
     taskSaved: 'Task saved.',
+    taskResumed: 'Follow-up task queued.',
     taskDeleted: 'Task deleted.',
     taskActionFailed: 'Action failed.',
     chefAdminOnly: 'Only chef or admin can change tasks.',
@@ -384,6 +388,8 @@ export async function mount(ctx) {
   await ensureStyles();
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
+  const launchFocusTask = normalizeFocusTask(ctx.args);
+  if (launchFocusTask) persistFocusTask(launchFocusTask);
 
   const state = {
     ctx,
@@ -397,7 +403,7 @@ export async function mount(ctx) {
     zoom: DEFAULT_ZOOM,
     statusMessage: '',
     runtimeStatus: 'Loading status',
-    focusTask: readFocusTask(),
+    focusTask: launchFocusTask || readFocusTask(),
     detailDrawer: null,
     openTaskSections: new Set(['current']),
     userNavigatedTimeline: false,
@@ -425,15 +431,14 @@ export async function mount(ctx) {
   applyHarnessColumnWidth(ctx.host, readStoredLeftColumnWidth());
   const harness = ctx.host.querySelector('[data-ctox-harness]');
   if (harness) harness.__ctoxState = state;
+  const teardownShellMessages = wireShellMessages(state);
   state.layoutResizeCleanup = wireColumnResize(state);
-  state.contextMenuCleanup = initCtoxContextMenu(state);
   await loadCtoxMessages(state.lang);
   await renderFromLocalCache(state);
   startLiveTicker(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
   refresh(state);
   state.refreshTimer = window.setInterval(() => refresh(state), HARNESS_REFRESH_MS);
-  const teardownShellMessages = wireShellMessages(state);
   return () => {
     window.clearInterval(state.liveTicker);
     window.clearInterval(state.refreshTimer);
@@ -2034,9 +2039,9 @@ function taskGroups(tasks) {
 
 function resolveSelectedTaskId(model, focusTask, previousId) {
   if (!model?.tasks?.length) return null;
-  if (previousId && model.tasks.some((task) => task.id === previousId)) return previousId;
   const focused = model.tasks.find((task) => isFocusedTask(task, focusTask));
   if (focused) return focused.id;
+  if (previousId && model.tasks.some((task) => task.id === previousId)) return previousId;
   const groups = taskGroups(model.tasks);
   return (groups.current[0] || groups.waiting[0] || groups.blocked[0] || groups.done[0] || model.tasks[0]).id;
 }
@@ -2227,6 +2232,7 @@ function taskDrawer(task, state) {
       </label>
       <footer>
         <button type="submit" class="ctox-task-save" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.saveTask)}</button>
+        ${canResumeCtoxTask(task) ? `<button type="button" class="ctox-task-resume" data-ctox-task-resume ${state.ctx?.commandBus?.dispatch ? '' : 'disabled'}>${escapeHtml(t.resumeTask)}</button>` : ''}
         <button type="button" class="ctox-task-delete" data-ctox-task-delete ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.deleteTask)}</button>
         <small data-ctox-task-action-status></small>
       </footer>
@@ -2267,12 +2273,63 @@ function taskDrawer(task, state) {
   body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
     await deleteCtoxTaskFromDrawer(state, task, body);
   });
+  body.querySelector('[data-ctox-task-resume]')?.addEventListener('click', async () => {
+    await resumeCtoxTaskFromDrawer(state, task, body);
+  });
   body.querySelectorAll('[data-drawer-task-step]').forEach((button) => {
     button.addEventListener('click', () => {
       setTaskTimelineStep(state, Number(button.dataset.drawerTaskStep), { center: true });
     });
   });
   return body;
+}
+
+function canResumeCtoxTask(task) {
+  return ['blocked', 'failed', 'cancelled', 'canceled', 'completed', 'done', 'handled']
+    .includes(normalizeCommandStatus(task?.status));
+}
+
+async function resumeCtoxTaskFromDrawer(state, task, body) {
+  const t = labels[state.lang];
+  const status = body.querySelector('[data-ctox-task-action-status]');
+  const button = body.querySelector('[data-ctox-task-resume]');
+  const sourceTaskId = nativeTaskId(task);
+  if (!sourceTaskId || !state.ctx?.commandBus?.dispatch) {
+    if (status) status.textContent = t.taskActionFailed;
+    return;
+  }
+  button?.setAttribute('disabled', 'disabled');
+  if (status) status.textContent = '';
+  try {
+    const title = taskDisplayTitle(task, state);
+    const commandId = `cmd_ctox_task_resume_${crypto.randomUUID()}`;
+    await state.ctx.commandBus.dispatch({
+      id: commandId,
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      record_id: sourceTaskId,
+      payload: {
+        title: `${t.resumeTask}: ${title}`,
+        instruction: `Continue the durable CTOX work from source task ${sourceTaskId}. Preserve its prior evidence and resolve the remaining or retryable work.`,
+        source_task_id: sourceTaskId,
+        source_command_id: task.commandId || '',
+        continuation: true,
+      },
+      client_context: {
+        source_module: 'ctox',
+        command_path: 'ctox_task_resume_follow_up',
+        source_task_id: sourceTaskId,
+        source_command_id: task.commandId || '',
+        actor: state.ctx.session?.user || {},
+      },
+    }, { until: 'accepted' });
+    if (status) status.textContent = t.taskResumed;
+    refresh(state).catch(() => {});
+  } catch (error) {
+    if (status) status.textContent = humanTaskActionError(error, t);
+  } finally {
+    button?.removeAttribute('disabled');
+  }
 }
 
 async function saveCtoxTaskFromDrawer(state, task, form) {
@@ -2300,7 +2357,7 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
   if (status) status.textContent = '';
   try {
     await dispatchCtoxTaskMutation(state, {
-      type: 'ctox.task.update',
+      commandType: 'ctox.task.update',
       payload,
       commandPath: 'ctox_task_update',
     });
@@ -2336,7 +2393,7 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
   if (status) status.textContent = '';
   try {
     await dispatchCtoxTaskMutation(state, {
-      type: 'ctox.task.delete',
+      commandType: 'ctox.task.delete',
       payload,
       commandPath: 'ctox_task_delete',
     });
@@ -2353,15 +2410,15 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
   }
 }
 
-async function dispatchCtoxTaskMutation(state, { type, payload, commandPath }) {
+async function dispatchCtoxTaskMutation(state, { commandType, payload, commandPath }) {
   if (!state.ctx?.commandBus?.dispatch) {
     throw new Error('RxDB command bus is not available');
   }
-  const commandId = `cmd_${type.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
+  const commandId = `cmd_${commandType.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
   return state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'ctox',
-    type,
+    command_type: commandType,
     record_id: payload.task_id || '',
     inbound_channel: 'business_os.ctox',
     payload,
@@ -2834,9 +2891,32 @@ function readFocusTask() {
   if (focusFromHash) return focusFromHash;
   try {
     const parsed = JSON.parse(sessionStorage.getItem('ctox.businessOs.focusTask') || 'null');
-    if (parsed && (parsed.taskId || parsed.commandId)) return parsed;
+    return normalizeFocusTask(parsed);
   } catch {}
   return null;
+}
+
+function normalizeFocusTask(value) {
+  if (!value || typeof value !== 'object') return null;
+  const taskId = String(value.taskId || value.task_id || '').trim();
+  const commandId = String(value.commandId || value.command_id || '').trim();
+  if (!taskId && !commandId) return null;
+  return {
+    taskId,
+    commandId,
+    taskStatus: String(value.taskStatus || value.task_status || value.status || '').trim(),
+    sourceModule: String(value.sourceModule || value.source_module || value.source || 'business-os').trim() || 'business-os',
+    openDrawer: Boolean(value.openDrawer || value.open_drawer || value.drawer === '1' || value.drawer === true),
+  };
+}
+
+function persistFocusTask(focusTask) {
+  const normalized = normalizeFocusTask(focusTask);
+  if (!normalized) return null;
+  try {
+    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(normalized));
+  } catch {}
+  return normalized;
 }
 
 function readFocusTaskFromHash() {
@@ -2846,13 +2926,13 @@ function readFocusTaskFromHash() {
   const taskId = params.get('task_id') || params.get('taskId') || '';
   const commandId = params.get('command_id') || params.get('commandId') || '';
   if (!taskId && !commandId) return null;
-  return {
+  return normalizeFocusTask({
     taskId,
     commandId,
     taskStatus: params.get('task_status') || params.get('status') || '',
     sourceModule: params.get('source') || 'matching',
     openDrawer: params.get('drawer') === '1' || params.get('open') === 'drawer',
-  };
+  });
 }
 
 function focusedTimelineIndex(model, focusTask) {
@@ -2997,7 +3077,7 @@ async function requestWebStackAuthAssist(state, source) {
   await state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'ctox',
-    type: 'web_stack.auth_assist.request',
+    command_type: 'web_stack.auth_assist.request',
     record_id: sourceId,
     inbound_channel: 'business_os.ctox.web_stack',
     payload: {
@@ -3089,12 +3169,10 @@ function initCtoxContextMenu(state) {
     if (event.key === 'Escape') hideCtoxContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     state.contextMenu?.remove?.();
@@ -3280,16 +3358,11 @@ function wireShellMessages(state) {
     applyLanguage(event.detail?.language);
   };
   const focusHandler = (event) => {
-    const detail = event.detail || {};
-    if (!detail.taskId && !detail.commandId) return;
-    state.focusTask = {
-      taskId: detail.taskId || '',
-      commandId: detail.commandId || '',
-      taskStatus: detail.taskStatus || '',
-      sourceModule: detail.sourceModule || 'business-os',
-      openDrawer: Boolean(detail.openDrawer),
-    };
-    state.focusTaskOpenDrawer = Boolean(detail.openDrawer);
+    const focusTask = persistFocusTask(event.detail);
+    if (!focusTask) return;
+    state.focusTask = focusTask;
+    state.focusTaskOpenDrawer = focusTask.openDrawer;
+    if (!state.model) return;
     reconcileSelection(state);
     openFocusedTaskDrawer(state);
     render(state);
@@ -3938,4 +4011,6 @@ export const __ctoxTestHooks = {
   timelinePanel,
   webStackStateFromRefreshResult,
   webStackProjectionMissing,
+  normalizeFocusTask,
+  resolveSelectedTaskId,
 };

@@ -91,10 +91,20 @@ export async function mount(ctx) {
   bindElements(ctx.host);
   wireEvents();
   state.resizeCleanup = setupKnowledgeColumnResizing();
-  await loadKnowledgeFromLocal({ initial: true });
+  let disposed = false;
+  renderKnowledgeList();
+  renderRunbooks();
+  renderEmptyKnowledgeSelection();
   state.localSubscriptionCleanup = wireLocalRealtime();
+  loadKnowledgeFromLocal({ initial: true }).catch((error) => {
+    if (disposed || state.ctx !== ctx) return;
+    state.loadError = error?.message || String(error);
+    renderKnowledgeList();
+    renderEmptyKnowledgeSelection();
+  });
   window.addEventListener('message', handleShellMessage);
   return () => {
+    disposed = true;
     window.removeEventListener('message', handleShellMessage);
     window.removeEventListener('click', handleContextOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleContextEscape);
@@ -280,7 +290,6 @@ function wireEvents() {
     event.preventDefault();
     queueRunbookSave();
   });
-  initKnowledgeContextMenu();
 }
 
 async function loadKnowledgeFromLocal(options = {}) {
@@ -429,16 +438,11 @@ function isActiveKnowledgeRecord(record) {
 }
 
 async function ensureKnowledgeDataSyncStarted() {
-  if (!state.ctx?.sync?.startCollection) return;
-  if (!state.syncWarmupPromise) {
-    state.syncWarmupPromise = Promise.allSettled(
-      KNOWLEDGE_DATA_COLLECTIONS.map((collectionName) => state.ctx.sync.startCollection(collectionName))
-    ).then((results) => {
-      if (results.some((result) => result.status === 'rejected')) state.syncWarmupPromise = null;
-      return results;
-    });
-  }
-  await promiseWithTimeout(state.syncWarmupPromise, KNOWLEDGE_SYNC_START_WAIT_MS).catch(() => {});
+  // The shell owns a scoped module lease for every declared collection before
+  // mount. Starting collections here would pin them as permanent shell
+  // consumers and leak their bridges after the Knowledge window closes.
+  // Reactive queries below drive foreground priority through the shared active
+  // collection registry; they do not need a second app-owned warm-up.
 }
 
 function promiseWithTimeout(promise, timeoutMs) {
@@ -1581,7 +1585,7 @@ async function queueMarkdownSave() {
   const item = state.items.find((entry) => entry.id === state.selectedId);
   const markdown = state.editing ? els.markdownEditor.value : els.markdownView.textContent;
   const result = await dispatchKnowledgeCommand({
-    type: 'ctox.knowledge.document.modify',
+    command_type: 'ctox.knowledge.document.modify',
     record_id: state.selectedId,
     payload: {
       title: `Knowledge Änderung · ${item?.title || state.selectedId}`,
@@ -1632,7 +1636,7 @@ async function queueRunbookSave() {
   const copy = state.messages || labels[state.lang];
   const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
   const result = await dispatchKnowledgeCommand({
-    type: 'ctox.knowledge.runbook.modify',
+    command_type: 'ctox.knowledge.runbook.modify',
     record_id: state.selectedRunbookId,
     payload: {
       title: `Runbook Änderung · ${els.runbookTitle.value || runbook?.title || state.selectedRunbookId}`,
@@ -1657,7 +1661,7 @@ async function executeRunbook() {
   const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
   const item = state.items.find((entry) => entry.id === state.selectedId);
   const result = await dispatchKnowledgeCommand({
-    type: 'ctox.knowledge.runbook.execute',
+    command_type: 'ctox.knowledge.runbook.execute',
     record_id: state.selectedRunbookId,
     payload: {
       title: `Runbook ausführen · ${runbook?.title || state.selectedRunbookId}`,
@@ -1948,12 +1952,6 @@ function initKnowledgeContextMenu() {
   els.root.append(menu);
   state.contextMenu = menu;
 
-  els.root.addEventListener('contextmenu', (event) => {
-    const context = commandContextFromElement(event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    renderKnowledgeContextMenu(context, event.clientX, event.clientY);
-  });
   window.addEventListener('click', handleContextOutsideClick, { capture: true });
   window.addEventListener('keydown', handleContextEscape);
 }

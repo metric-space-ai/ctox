@@ -3,8 +3,20 @@ const MODULE_ID = 'intake';
 const PRIMARY = 'applications';
 const TITLE = 'intake';
 const CAPTURE_COMMAND = 'ats.intake.capture';
+const COPY = {
+  de: {
+    kicker: 'Bewerbungseingang', name: 'Name', email: 'E-Mail', phone: 'Telefon', vacancy: 'Vakanz-ID', channel: 'Kanal', capture: 'Erfassen', entries: 'Einträge', empty: 'Noch keine Einträge.', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', nameRequired: 'Name ist erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', blocked: 'Eingang blockiert.', captured: 'Bewerbung erfasst.', application: 'Application', dedupeKey: 'Dedupe-Key', unnamed: '(ohne Namen)', dedupe: 'Dedupe', vacancyLabel: 'Vakanz', documents: 'Dok.', received: 'Empfangen'
+  },
+  en: {
+    kicker: 'Application intake', name: 'Name', email: 'Email', phone: 'Phone', vacancy: 'Vacancy ID', channel: 'Channel', capture: 'Capture', entries: 'records', empty: 'No applications yet.', offlineService: 'Offline: command service unavailable.', nameRequired: 'Name is required.', offlineSend: 'Offline: command could not be sent.', blocked: 'Intake blocked.', captured: 'Application captured.', application: 'Application', dedupeKey: 'Dedupe key', unnamed: '(unnamed)', dedupe: 'Dedupe', vacancyLabel: 'Vacancy', documents: 'docs', received: 'Received'
+  }
+};
+let text = COPY.de;
+let locale = 'de';
 
 export async function mount(ctx) {
+  locale = ctx.locale === 'en' ? 'en' : 'de';
+  text = COPY[locale];
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
   ctx.host.dataset.atsModule = MODULE_ID;
@@ -19,6 +31,7 @@ export async function mount(ctx) {
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
   if (subEl) subEl.textContent = ctx.manifest?.description || '';
+  applyStaticCopy(root);
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
@@ -38,8 +51,8 @@ export async function mount(ctx) {
     }
     rows.sort((a, b) => (Number(b.received_at_ms || b.created_at_ms || 0) - Number(a.received_at_ms || a.created_at_ms || 0)));
     rowsCache = rows;
-    if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => applicationRow(r)).join('') : '<div class="ctox-empty">Noch keine Einträge.</div>';
+    if (countEl) countEl.textContent = `${rows.length} ${text.entries}`;
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => applicationRow(r)).join('') : `<div class="ctox-empty">${esc(text.empty)}</div>`;
   }
 
   // Delegated row-action handler. The intake capture engine exposes no
@@ -58,13 +71,13 @@ export async function mount(ctx) {
     setGate('');
     const dispatch = ctx.commandBus?.dispatch;
     if (typeof dispatch !== 'function') {
-      setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline');
+      setGate(text.offlineService, 'offline');
       return;
     }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const name = String(f.name == null ? '' : f.name).trim();
-    if (!name) { setGate('Name ist erforderlich.', 'block'); return; }
+    if (!name) { setGate(text.nameRequired, 'block'); return; }
     const email = String(f.email == null ? '' : f.email).trim();
     const phone = String(f.phone == null ? '' : f.phone).trim();
     const vacancy_id = String(f.vacancy_id == null ? '' : f.vacancy_id).trim();
@@ -83,13 +96,12 @@ export async function mount(ctx) {
     try {
       result = await dispatch({
         module: MODULE_ID,
-        type: CAPTURE_COMMAND,
         command_type: CAPTURE_COMMAND,
         payload,
       });
     } catch (e) {
       console.error('[intake] dispatch failed:', e);
-      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      setGate(text.offlineSend, 'offline');
       return;
     } finally {
       if (submitBtn) submitBtn.disabled = false;
@@ -106,16 +118,16 @@ export async function mount(ctx) {
         .filter(Boolean)
         .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
         .join('');
-      setGate('<strong>Eingang blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      setGate(`<strong>${esc(text.blocked)}</strong>` + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
       return;
     }
 
     const appId = result?.application_id ?? result?.data?.application_id ?? null;
     const dedupeKey = result?.dedupe_key ?? result?.data?.dedupe_key ?? null;
     setGate(
-      '<strong>Bewerbung erfasst.</strong>'
-      + '<div class="ats-result-row">Application: ' + esc(appId ?? '—') + '</div>'
-      + '<div class="ats-result-row">Dedupe-Key: ' + esc(dedupeKey ?? '—') + '</div>',
+      `<strong>${esc(text.captured)}</strong>`
+      + `<div class="ats-result-row">${esc(text.application)}: ` + esc(appId ?? '—') + '</div>'
+      + `<div class="ats-result-row">${esc(text.dedupeKey)}: ` + esc(dedupeKey ?? '—') + '</div>',
       'ok'
     );
     try { formEl.reset(); } catch {}
@@ -149,7 +161,7 @@ function statusBadgeClass(status) {
 
 function applicationRow(r) {
   const candidate = r && typeof r.candidate === 'object' && r.candidate ? r.candidate : {};
-  const name = candidate.name || r.name || '(ohne Namen)';
+  const name = candidate.name || r.name || text.unnamed;
   const email = candidate.email || r.email || '';
   const phone = candidate.phone || r.phone || '';
   const status = String(r.status || 'new');
@@ -163,10 +175,10 @@ function applicationRow(r) {
   const contact = [email, phone].filter(Boolean).map(esc).join(' · ');
   const metaParts = [];
   if (id) metaParts.push('<span class="ats-tag">' + esc(id) + '</span>');
-  if (dedupe) metaParts.push('Dedupe: ' + esc(dedupe));
-  if (vacancy) metaParts.push('Vakanz: ' + esc(vacancy));
-  if (docs) metaParts.push(docs + ' Dok.');
-  if (ts) metaParts.push(esc(fmtDate(ts)));
+  if (dedupe) metaParts.push(`${esc(text.dedupe)}: ` + esc(dedupe));
+  if (vacancy) metaParts.push(`${esc(text.vacancyLabel)}: ` + esc(vacancy));
+  if (docs) metaParts.push(`${docs} ${esc(text.documents)}`);
+  if (ts) metaParts.push(`${esc(text.received)}: ${esc(fmtDate(ts))}`);
 
   const label = candidate.name || r.name || id;
 
@@ -187,7 +199,12 @@ function applicationRow(r) {
 }
 
 function fmtDate(ms) {
-  try { return new Date(ms).toISOString().slice(0, 16).replace('T', ' '); } catch { return ''; }
+  try { return new Date(ms).toLocaleString(locale === 'en' ? 'en' : 'de'); } catch { return ''; }
+}
+
+function applyStaticCopy(root) {
+  root.querySelectorAll('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
+  root.querySelectorAll('[data-copy-placeholder]').forEach((node) => { node.placeholder = text[node.dataset.copyPlaceholder] || node.placeholder; });
 }
 
 async function ensureStyles() {

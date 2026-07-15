@@ -79,7 +79,6 @@ export async function mount(ctx) {
   const resizeCleanup = setupResizers(ctx.host);
 
   window.addEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
-  state.contextMenuCleanup = initReportsContextMenu(state);
   return () => {
     state.cleanup?.();
     state.contextMenuCleanup?.();
@@ -348,12 +347,12 @@ function renderDiagnostics() {
 
 function renderListEmptyState(allItems) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="reports-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><span>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</span></div>`;
+    return `<div class="reports-empty"><strong>${escapeHtml(state.t('reportsListUnavailable', 'Noch keine Einträge'))}</strong><span>${escapeHtml(state.t('reportsListUnavailableDetail', 'Wird automatisch gefüllt.'))}</span></div>`;
   }
   if (allItems.length) {
     return `<p class="reports-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
   }
-  return `<p class="reports-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Bugs oder Features verfügbar.')))}</p>`;
+  return `<p class="reports-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Einträge.')))}</p>`;
 }
 
 function renderDetailEmptyState({ normalized, filtered }) {
@@ -397,7 +396,7 @@ function renderList() {
     return;
   }
   list.innerHTML = items.map((report) => `
-    <button type="button" class="report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}">
+    <button type="button" class="report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
       <div class="reports-badges">
         <span class="ctox-badge ${report.kind === 'bug' ? 'is-danger' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
         <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
@@ -942,12 +941,10 @@ function initReportsContextMenu(state) {
     if (event.key === 'Escape') hideReportsContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideReportsContextMenu(state);
@@ -1128,4 +1125,3 @@ async function dispatchReportsContextChat(state, context, message, mode = 'data'
   }));
   hideReportsContextMenu(state);
 }
-

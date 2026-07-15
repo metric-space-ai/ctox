@@ -6,12 +6,8 @@
   --ctox-surface: var(--surface);
   --ctox-surface-2: var(--surface-2);
   --ctox-canvas: color-mix(in srgb, var(--bg) 84%, var(--surface));
-  --ctox-app-bg: linear-gradient(180deg, var(--bg) 0%, color-mix(in srgb, var(--bg) 90%, var(--surface-2)) 100%);
-  --ctox-control-bg: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface) 88%, var(--surface-2)) 0%,
-    color-mix(in srgb, var(--surface) 74%, var(--surface-2)) 100%
-  );
+  --ctox-app-bg: var(--bg);
+  --ctox-control-bg: var(--surface-2);
   --ctox-canvas-grid-x: color-mix(in srgb, var(--text) 7%, transparent);
   --ctox-canvas-grid-y: color-mix(in srgb, var(--text) 5%, transparent);
   --ctox-canvas-glow: color-mix(in srgb, var(--ctox-accent) 9%, transparent);
@@ -23,16 +19,16 @@
   --ctox-flow-channel-fill: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
   --ctox-flow-channel-open-fill: color-mix(in srgb, var(--surface-2) 76%, var(--surface));
   --ctox-flow-muted-fill: color-mix(in srgb, var(--muted) 66%, transparent);
-  --ctox-shadow: var(--panel-shadow);
-  --ctox-drawer-bg: radial-gradient(760px 540px at 0% 0%, color-mix(in srgb, var(--ctox-accent) 8%, transparent), transparent 58%), var(--ctox-surface);
-  --ctox-radius-panel: var(--panel-radius);
-  --ctox-radius-control: var(--control-radius);
+  --ctox-shadow: none;
+  --ctox-drawer-bg: var(--ctox-surface);
+  --ctox-radius-panel: var(--surface-radius);
+  --ctox-radius-control: var(--control-radius, var(--surface-radius));
   --ctox-ok: var(--success);
   --ctox-blocked: var(--danger);
   --ctox-left-width: 340px;
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: var(--ctox-left-width) 10px minmax(0, 1fr);
+  grid-template-columns: var(--ctox-left-width) 6px minmax(0, 1fr);
   gap: 6px;
   height: 100%;
   min-height: 0;
@@ -49,8 +45,8 @@
   --ctox-line: var(--line);
   --ctox-hair: rgba(255, 255, 255, 0.055);
   --ctox-canvas: #0f1419;
-  --ctox-app-bg: radial-gradient(980px 760px at 18% -14%, #151c23 0%, var(--bg) 62%);
-  --ctox-control-bg: linear-gradient(180deg, #141a20 0%, #10161b 100%);
+  --ctox-app-bg: var(--bg);
+  --ctox-control-bg: var(--surface-2);
   --ctox-canvas-grid-x: rgba(255, 255, 255, 0.032);
   --ctox-canvas-grid-y: rgba(255, 255, 255, 0.026);
   --ctox-canvas-glow: color-mix(in srgb, var(--ctox-accent) 7%, transparent);
@@ -86,8 +82,8 @@
 
 .ctox-column-resizer {
   align-self: stretch;
-  width: 12px;
-  min-width: 12px;
+  width: 6px;
+  min-width: 6px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -107,14 +103,14 @@
   background: var(--line);
   opacity: 0.5;
   transform: translate(-50%, -50%);
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: opacity 120ms ease, background 120ms ease;
 }
 
 .ctox-column-resizer:hover::before,
 .ctox-column-resizer.is-dragging::before {
   background: var(--accent);
   opacity: 1;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ctox-accent) 18%, transparent);
+  box-shadow: none;
 }
 
 body.ctox-column-resizing {
@@ -324,7 +320,7 @@ body.ctox-column-resizing {
 
 .ctox-task-item {
   border: 1px solid var(--ctox-hair);
-  border-radius: 14px;
+  border-radius: var(--ctox-radius-panel);
   background: var(--ctox-control-bg);
   overflow: hidden;
 }
@@ -392,7 +388,7 @@ body.ctox-column-resizing {
   gap: 2px;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--ctox-radius-control);
   background: transparent;
   color: inherit;
   padding: 6px;
@@ -482,7 +478,7 @@ body.ctox-column-resizing {
   gap: 4px;
   padding: 6px 8px;
   border: 1px solid var(--ctox-hair);
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-panel);
   background: color-mix(in srgb, var(--ctox-surface) 20%, transparent);
   min-width: 0;
 }
@@ -528,7 +524,7 @@ body.ctox-column-resizing {
   font-weight: 700;
   background: color-mix(in srgb, var(--text) 6%, transparent);
   padding: 1px 5px;
-  border-radius: 12px;
+  border-radius: 999px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -596,7 +592,7 @@ body.ctox-column-resizing {
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--ctox-hair);
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-panel);
   background: color-mix(in srgb, var(--ctox-surface-2) 44%, transparent);
   padding: 7px 8px;
   scrollbar-width: thin;
@@ -781,7 +777,7 @@ body.ctox-column-resizing {
   font-size: 10px;
   font-weight: 700;
   padding: 1px 4px;
-  border-radius: 12px;
+  border-radius: 999px;
   text-align: center;
 }
 
@@ -794,7 +790,7 @@ body.ctox-column-resizing {
   display: grid;
   min-height: 0;
   border: 1px solid var(--ctox-hair);
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-panel);
   background: color-mix(in srgb, var(--ctox-surface-2) 28%, transparent);
   overflow: hidden;
 }
@@ -824,8 +820,8 @@ body.ctox-column-resizing {
   content: "";
   width: 7px;
   height: 7px;
-  border-right: 2px solid var(--ctox-muted);
-  border-bottom: 2px solid var(--ctox-muted);
+  border-right: 1px solid var(--ctox-muted);
+  border-bottom: 1px solid var(--ctox-muted);
   transform: rotate(-45deg);
   transition: transform 160ms ease, border-color 160ms ease;
 }
@@ -953,22 +949,22 @@ body.ctox-column-resizing {
   height: 8px;
   border-radius: 50%;
   background-color: var(--ctox-accent);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ctox-accent) 60%, transparent);
+  box-shadow: none;
   animation: ctox-status-pulse-anim 1.5s infinite;
 }
 
 @keyframes ctox-status-pulse-anim {
   0% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ctox-accent) 70%, transparent);
+    opacity: 0.74;
   }
   70% {
     transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(0, 0, 0, 0);
+    opacity: 1;
   }
   100% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+    opacity: 0.74;
   }
 }
 
@@ -976,14 +972,14 @@ body.ctox-column-resizing {
   color: var(--ctox-accent);
   background: color-mix(in srgb, var(--ctox-accent) 10%, var(--ctox-surface));
   border-color: color-mix(in srgb, var(--ctox-accent) 30%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--ctox-accent) 15%, transparent);
+  box-shadow: none;
 }
 
 .ctox-task-row.tone-ok .ctox-task-status-wrapper {
   color: var(--success);
   background: color-mix(in srgb, var(--success) 8%, transparent);
   border-color: color-mix(in srgb, var(--success) 25%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 10%, transparent);
+  box-shadow: none;
 }
 
 .ctox-task-row.tone-ok .ctox-status-icon.is-ok {
@@ -994,7 +990,7 @@ body.ctox-column-resizing {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
   border-color: color-mix(in srgb, var(--danger) 25%, transparent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 10%, transparent);
+  box-shadow: none;
 }
 
 .ctox-task-row.tone-blocked .ctox-status-icon.is-blocked {
@@ -1040,7 +1036,7 @@ body.ctox-column-resizing {
   gap: 2px 8px;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--ctox-radius-control);
   background: transparent;
   color: inherit;
   padding: 5px 4px;
@@ -1108,7 +1104,7 @@ body.ctox-column-resizing {
 .ctox-queue-lane article.is-focused-task,
 .ctox-recent-task-list article.is-focused-task {
   border: 1px solid color-mix(in srgb, var(--ctox-accent) 45%, transparent);
-  border-radius: 14px;
+  border-radius: var(--ctox-radius-panel);
   background: color-mix(in srgb, var(--ctox-accent) 12%, transparent);
   padding: 8px 9px;
 }
@@ -1254,6 +1250,10 @@ body.ctox-column-resizing {
   display: grid;
   grid-template-rows: 1fr;
   overflow: hidden;
+  /* The workflow SVG has a deliberately large intrinsic drawing surface.
+     Keep its layout and paint invalidation inside the canvas when the outer
+     Business OS window changes mode or size. */
+  contain: layout paint;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -1267,12 +1267,7 @@ body.ctox-column-resizing {
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
-  background:
-    linear-gradient(90deg, var(--ctox-canvas-grid-x) 1px, transparent 1px),
-    linear-gradient(0deg, var(--ctox-canvas-grid-y) 1px, transparent 1px),
-    radial-gradient(900px 520px at 42% 42%, var(--ctox-canvas-glow), transparent 64%),
-    var(--ctox-canvas);
-  background-size: 72px 72px, 72px 72px;
+  background: var(--ctox-canvas);
   overscroll-behavior: contain;
 }
 
@@ -1341,6 +1336,7 @@ body.ctox-column-resizing {
   min-width: 980px;
   min-height: 780px;
   margin: 10px auto 16px;
+  contain: layout paint style;
 }
 
 .ctox-flow-diagram {
@@ -1613,13 +1609,7 @@ body.ctox-column-resizing {
 .ctox-timeline-panel input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
-  background: linear-gradient(
-    to right,
-    var(--ctox-accent) 0%,
-    var(--ctox-accent) var(--timeline-progress, 0%),
-    color-mix(in srgb, var(--line) 76%, transparent) var(--timeline-progress, 0%),
-    color-mix(in srgb, var(--line) 76%, transparent) 100%
-  );
+  background: color-mix(in srgb, var(--line) 76%, transparent);
 }
 
 .ctox-timeline-panel input[type="range"]::-webkit-slider-thumb {
@@ -1631,7 +1621,7 @@ body.ctox-column-resizing {
   border: 1px solid color-mix(in srgb, var(--ctox-accent) 68%, var(--line));
   border-radius: 999px;
   background: var(--ctox-surface-2);
-  box-shadow: 0 1px 5px color-mix(in srgb, var(--line) 55%, transparent);
+  box-shadow: none;
 }
 
 .ctox-timeline-panel input[type="range"]::-moz-range-track {
@@ -1652,7 +1642,7 @@ body.ctox-column-resizing {
   border: 1px solid color-mix(in srgb, var(--ctox-accent) 68%, var(--line));
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: 0 1px 5px color-mix(in srgb, var(--line) 55%, transparent);
+  box-shadow: none;
 }
 
 .ctox-timeline-scale {
@@ -1809,7 +1799,7 @@ body.ctox-column-resizing {
   width: min(560px, calc(100vw - 24px));
   overflow: hidden;
   border: 1px solid var(--ctox-line);
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-panel);
   background: var(--ctox-surface);
   box-shadow: var(--ctox-shadow);
   color: var(--text);
@@ -1904,7 +1894,7 @@ body.ctox-column-resizing {
 
 .ctox-context-chat textarea:focus {
   border-color: var(--ctox-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ctox-accent) 16%, transparent);
+  box-shadow: none;
   outline: none;
 }
 
@@ -2174,7 +2164,7 @@ body.ctox-column-resizing {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--ctox-hair);
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-control);
   background: var(--ctox-surface);
   color: var(--text);
   font: inherit;
@@ -2196,7 +2186,7 @@ body.ctox-column-resizing {
 .ctox-task-save,
 .ctox-task-delete {
   border: 1px solid color-mix(in srgb, var(--ctox-accent) 45%, var(--ctox-line));
-  border-radius: 8px;
+  border-radius: var(--ctox-radius-control);
   background: color-mix(in srgb, var(--ctox-accent) 12%, transparent);
   color: color-mix(in srgb, var(--ctox-accent) 78%, var(--text));
   cursor: pointer;
@@ -2377,7 +2367,7 @@ body.ctox-column-resizing {
   border-color: color-mix(in srgb, var(--ctox-accent) 92%, transparent);
   background: color-mix(in srgb, var(--ctox-accent) 16%, transparent);
   color: color-mix(in srgb, var(--ctox-accent) 82%, var(--text));
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ctox-accent) 10%, transparent);
+  box-shadow: none;
 }
 
 .ctox-drawer-steps strong,
@@ -2456,7 +2446,7 @@ body.ctox-column-resizing {
   }
 }
 
-@media (max-width: 1180px) {
+@container business-app-window (max-width: 1180px) {
   .ctox-harness-app {
     grid-template-columns: minmax(0, 1fr);
     overflow: auto;

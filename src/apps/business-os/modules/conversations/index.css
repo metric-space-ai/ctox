@@ -4,7 +4,7 @@
    (.ctox-avatar), key/value fields (.ctox-fields) and text buttons
    (.ctox-button) all come from shared/base.css + app.css. This file only
    keeps what is conversations-specific (channel brand dots, thread cards,
-   timeline bubbles, right-pane cards).
+   timeline rows, channel state, right-pane facts).
    The width aliases keep the persisted resizer layout working — the shell
    resizer writes --conversations-*-width onto the frame element. */
 .conv-module {
@@ -31,7 +31,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 10px 14px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
@@ -65,8 +65,8 @@
 .conv-secondary-filters {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 0 14px 10px;
+  gap: 4px;
+  padding: 0 10px 8px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
@@ -89,19 +89,19 @@
 .conv-thread-list {
   min-height: 0;
   overflow: auto;
-  padding: 6px 8px;
+  padding: 4px 6px;
   display: grid;
   align-content: start;
-  gap: 4px;
+  gap: 2px;
 }
 
 .conv-thread-item {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
-  padding: 9px 10px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--control-radius);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -111,11 +111,11 @@
 }
 
 .conv-thread-item:hover {
-  background: color-mix(in srgb, var(--accent-soft) 50%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
 }
 
 .conv-thread-item.is-active {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
 }
 
@@ -217,10 +217,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 8px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--hairline, var(--line));
-  background: color-mix(in srgb, var(--surface) 84%, var(--bg));
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
 }
 
 .conv-detail-identity {
@@ -257,7 +257,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 16px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--hairline, var(--line));
   background: color-mix(in srgb, var(--surface) 92%, var(--bg));
   overflow-x: auto;
@@ -281,9 +281,9 @@
 .conv-timeline {
   min-height: 0;
   overflow: auto;
-  padding: 18px 24px 24px;
+  padding: 10px 12px 14px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   align-content: start;
 }
 
@@ -300,10 +300,10 @@
 
 .conv-message {
   display: grid;
-  gap: 6px;
-  max-width: min(720px, 80%);
-  padding: 10px 12px;
-  border-radius: 12px;
+  gap: 5px;
+  max-width: min(760px, 88%);
+  padding: 8px 10px;
+  border-radius: var(--control-radius);
   border: 1px solid var(--line);
   background: var(--surface);
   font-size: 13px;
@@ -318,8 +318,8 @@
 
 .conv-message[data-direction="outbound"] {
   justify-self: end;
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
 .conv-message[data-direction="inbound"] {
@@ -391,7 +391,7 @@
   gap: 6px;
   padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--bg);
   color: var(--muted);
   font-size: 11px;
@@ -431,7 +431,8 @@
 }
 
 .conv-message[data-seen="0"][data-direction="inbound"] {
-  border-left: 3px solid var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
 }
 
 .conv-message-cc {
@@ -466,7 +467,7 @@
   min-height: 120px;
   max-height: 480px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: white;
   resize: vertical;
 }
@@ -643,18 +644,17 @@ details[open] > .conv-message-details-summary::before {
 
 /* Channel-specific tints (brand colors, deliberately hardcoded) */
 .conv-message[data-channel="whatsapp"][data-direction="outbound"] {
-  background: color-mix(in srgb, #25d366 14%, var(--surface));
-  border-color: color-mix(in srgb, #25d366 45%, var(--line));
+  background: color-mix(in srgb, #25d366 8%, var(--surface));
+  border-color: color-mix(in srgb, #25d366 34%, var(--line));
 }
 
 .conv-message[data-channel="email"] {
-  border-style: solid;
-  border-left: 3px solid #4a90e2;
+  border-color: color-mix(in srgb, #4a90e2 34%, var(--line));
 }
 
 .conv-message[data-channel="jami"][data-direction="outbound"] {
-  background: color-mix(in srgb, #b794f4 14%, var(--surface));
-  border-color: color-mix(in srgb, #b794f4 45%, var(--line));
+  background: color-mix(in srgb, #b794f4 8%, var(--surface));
+  border-color: color-mix(in srgb, #b794f4 34%, var(--line));
 }
 
 .conv-message[data-channel="jami"] .conv-message-meta::after {
@@ -664,13 +664,13 @@ details[open] > .conv-message-details-summary::before {
 }
 
 .conv-message[data-channel="teams"][data-direction="outbound"] {
-  background: color-mix(in srgb, #5059c9 12%, var(--surface));
-  border-color: color-mix(in srgb, #5059c9 45%, var(--line));
+  background: color-mix(in srgb, #5059c9 8%, var(--surface));
+  border-color: color-mix(in srgb, #5059c9 34%, var(--line));
 }
 
 .conv-message[data-channel="meeting"][data-direction="outbound"] {
-  background: color-mix(in srgb, #f6a050 12%, var(--surface));
-  border-color: color-mix(in srgb, #f6a050 45%, var(--line));
+  background: color-mix(in srgb, #f6a050 8%, var(--surface));
+  border-color: color-mix(in srgb, #f6a050 34%, var(--line));
 }
 
 /* Right pane — base empty-state styling comes from .ctox-empty. */
@@ -680,19 +680,19 @@ details[open] > .conv-message-details-summary::before {
 
 .conv-right-detail {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
-  padding: 14px;
+  padding: 10px;
   overflow: auto;
 }
 
 .conv-card {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface) 88%, var(--surface-2));
+  border-radius: var(--control-radius);
+  background: var(--surface);
 }
 
 .conv-card header {
@@ -744,8 +744,8 @@ details[open] > .conv-message-details-summary::before {
 }
 
 .conv-outbound-card {
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 
 .conv-outbound-summary {
@@ -772,7 +772,7 @@ details[open] > .conv-message-details-summary::before {
   margin: 2px 0;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
 }
 
@@ -787,7 +787,7 @@ details[open] > .conv-message-details-summary::before {
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
 }
 
@@ -811,7 +811,7 @@ details[open] > .conv-message-details-summary::before {
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
 }
 
@@ -834,7 +834,7 @@ details[open] > .conv-message-details-summary::before {
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
 }
 
@@ -883,7 +883,7 @@ details[open] > .conv-message-details-summary::before {
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
   font-size: 12px;
 }
@@ -920,7 +920,7 @@ details[open] > .conv-message-details-summary::before {
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   background: var(--surface);
   cursor: pointer;
 }
@@ -944,31 +944,34 @@ details[open] > .conv-message-details-summary::before {
   padding: 24px 16px;
 }
 
-@media (max-width: 1080px) {
+@container business-app-window (max-width: 1080px) {
   .conv-module {
-    grid-template-columns: minmax(240px, 0.85fr) 12px minmax(360px, 1.6fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 32vh) minmax(320px, 1fr) minmax(220px, 34vh);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+    padding: 8px;
   }
-  .conv-pane.conv-right,
-  [data-resizer="right"] {
+  .conv-pane.conv-left,
+  .conv-pane.conv-center,
+  .conv-pane.conv-right {
+    display: grid !important;
+    min-height: 220px;
+  }
+  .conv-module [data-resizer] {
     display: none !important;
   }
 }
 
-@media (max-width: 760px) {
+@container business-app-window (max-width: 760px) {
   .conv-module {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(220px, 42vh) minmax(260px, 1fr);
-    gap: 8px;
-    padding: 8px;
-    overflow: auto;
+    grid-template-rows: minmax(190px, 34vh) minmax(320px, 1fr) minmax(220px, 36vh);
   }
 
   .conv-pane.conv-left {
     display: grid !important;
-  }
-
-  [data-resizer] {
-    display: none !important;
   }
 
   .conv-channel-filters {
@@ -979,5 +982,13 @@ details[open] > .conv-message-details-summary::before {
 
   .conv-channel-filters::-webkit-scrollbar {
     display: none;
+  }
+
+  .conv-message {
+    max-width: 100%;
+  }
+
+  .conv-thread-item {
+    min-height: 42px;
   }
 }

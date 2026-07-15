@@ -35,7 +35,7 @@ const MATCH_PROMPT = [
 
 export async function queueRequirementParseTask({ html = '', url = '' } = {}) {
   return queueCommand({
-    type: 'matching.source.parse_requirement',
+    commandType: 'matching.source.parse_requirement',
     recordId: stableRecordId('requirement'),
     payload: {
       instruction: PARSE_REQUIREMENT_PROMPT,
@@ -57,7 +57,7 @@ export async function queueRequirementParseTask({ html = '', url = '' } = {}) {
 export async function queueObjectParseTask({ files = [], sourceLabel = '', filenames = [] } = {}) {
   const filePayloads = await Promise.all((Array.isArray(files) ? files : []).map(fileToPayload));
   return queueCommand({
-    type: 'matching.source.parse_object',
+    commandType: 'matching.source.parse_object',
     recordId: stableRecordId('object'),
     payload: {
       instruction: PARSE_OBJECT_PROMPT,
@@ -79,7 +79,7 @@ export async function queueObjectParseTask({ files = [], sourceLabel = '', filen
 
 export async function llmChat(request = {}, options = {}) {
   const result = await queueCommand({
-    type: options.commandType || 'matching.match',
+    commandType: options.commandType || 'matching.match',
     recordId:
       options.recordId ||
       options.matchId ||
@@ -118,55 +118,33 @@ export async function llmChat(request = {}, options = {}) {
   );
 }
 
-async function queueCommand({ type, recordId, payload, clientContext, timeoutMs = 12000 }) {
+let commandBus = null;
+
+export function setCtoxCommandBus(nextCommandBus) {
+  commandBus = nextCommandBus?.dispatch ? nextCommandBus : null;
+}
+
+async function queueCommand({ commandType, recordId, payload, clientContext, timeoutMs = 12000 }) {
   const command = {
     id: recordId,
     module: 'matching',
-    type,
+    command_type: commandType,
     record_id: recordId,
     payload,
     client_context: clientContext
   };
 
-  window.dispatchEvent(new CustomEvent('ctox-business-os:agent-command', { detail: command }));
   const response = await dispatchCtoxCommand(command, { timeoutMs });
   if (response?.ok && response.result) return response.result;
   if (response?.status === 'timeout') {
-    throw new Error(`CTOX command bus timeout: ${type}`);
+    throw new Error(`CTOX command bus timeout: ${commandType}`);
   }
-  throw new Error(response?.error || `CTOX command failed: ${type}`);
+  throw new Error(response?.error || `CTOX command failed: ${commandType}`);
 }
 
 function dispatchCtoxCommand(command, { timeoutMs = 12000 } = {}) {
-  const requestId = `ctox_matching_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      window.removeEventListener('message', onMessage);
-      resolve({ ok: false, status: 'timeout', requestId });
-    }, timeoutMs);
-
-    function onMessage(event) {
-      if (event.origin !== window.location.origin) return;
-      if (!isTrustedShellMessageSource(event)) return;
-      if (event.data?.type !== 'ctox-business-os-command-result') return;
-      if (event.data.requestId !== requestId) return;
-      done = true;
-      clearTimeout(timer);
-      window.removeEventListener('message', onMessage);
-      resolve(event.data);
-    }
-
-    window.addEventListener('message', onMessage);
-    parent.postMessage({
-      type: 'ctox-business-os-command',
-      requestId,
-      surface: 'matching',
-      command
-    }, window.location.origin);
-  });
+  if (!commandBus?.dispatch) return Promise.resolve({ ok: false, status: 'unavailable', error: 'CTOX command bus is unavailable' });
+  return commandBus.dispatch(command, { timeoutMs });
 }
 
 function isTrustedShellMessageSource(event) {

@@ -1,0 +1,9 @@
+{
+  "id": "record-workbench",
+  "title": "Record Workbench",
+  "description": "Compact one-page workspace for searchable, filterable and editable business records.",
+  "category": "Operations",
+  "starter_archetype": "record-workbench",
+  "default_title": "Record Workbench",
+  "tags": ["records", "crud", "filter", "automation"]
+}

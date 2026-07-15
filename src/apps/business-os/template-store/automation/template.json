@@ -1,0 +1,9 @@
+{
+  "id": "automation",
+  "title": "Automation",
+  "description": "Input and configuration workspace centered on a distinct automation run action.",
+  "category": "Automation",
+  "starter_archetype": "automation",
+  "default_title": "Automation",
+  "tags": ["automation", "inputs", "run", "results"]
+}

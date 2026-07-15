@@ -28,30 +28,57 @@
     "accounting_invoice_attachments",
     "accounting_invoice_approvals"
   ],
-  "source": "local",
+  "source": "catalog",
   "core": false,
   "editable": true,
   "deletable": true,
   "layout": {
-    "shell": "full-workspace",
+    "shell": "windowed",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-invoices\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><path d=\"M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z\" fill=\"url(#grad-invoices)\" fill-opacity=\"0.12\" stroke=\"url(#grad-invoices)\" stroke-width=\"2\" stroke-linejoin=\"round\" /><path d=\"M15 2v6h6\" stroke=\"url(#grad-invoices)\" stroke-width=\"2\" stroke-linejoin=\"round\" /><line x1=\"9\" y1=\"12\" x2=\"15\" y2=\"12\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /><line x1=\"9\" y1=\"15\" x2=\"15\" y2=\"15\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /><line x1=\"9\" y1=\"18\" x2=\"13\" y2=\"18\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /></svg>",
     "left": "Rechnungs-Scopes, Status-Chips, Schnellfilter (ueberfaellig, Mahnstufe 1, offene Posten)",
     "center": "Editor und Detail mit Tabs (Stammdaten, Positionen, Steuern, Zahlungen, PDF, Verlauf)",
-    "right": "Kunden-Inspector, offene Posten, AI-Aktionen (Mahnlauf, Skonto, Gutschrift)"
+    "right": "Kunden-Inspector, offene Posten, AI-Aktionen (Mahnlauf, Skonto, Gutschrift)",
+    "third_pane_justification": "The financial inspector provides approval, open-item and customer context alongside the invoice editor; compact mode moves it into the shared drawer."
   },
   "category": "Finance",
   "version": "v0.1",
   "developer": "CTOX",
   "license": "AGPL-3.0-only",
-  "tags": ["invoices", "billing", "fibu", "skonto", "dunning", "xrechnung"],
+  "tags": [
+    "invoices",
+    "billing",
+    "fibu",
+    "skonto",
+    "dunning",
+    "xrechnung"
+  ],
   "store": {
     "summary": "Rechnungsstellung mit Lebenszyklus, Gutschriften, Skonto, Mahnwesen, XRechnung und GoBD-Archivierung auf Basis der Buchhaltung.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/invoices",
     "installable": true,
     "editable_after_install": true,
-    "distribution": "ctox-repo-module"
+    "distribution": "catalog-module"
   },
   "install_scope": "store",
-  "default_installed": false
+  "default_installed": false,
+  "launch_kind": "desktop-app",
+  "presentation": {
+    "default_mode": "window",
+    "supported_modes": [
+      "window",
+      "maximized",
+      "focus"
+    ],
+    "initial_size": {
+      "width": 1120,
+      "height": 760
+    },
+    "minimum_size": {
+      "width": 640,
+      "height": 480
+    },
+    "multi_instance": false,
+    "auto_restore": false
+  }
 }

@@ -7,6 +7,7 @@ const state = {
   appTitle: '',
   appDesc: '',
   appCategory: '',
+  appArchetype: 'record-workbench',
   appLayout: '',
   appCollections: [],
   appVersion: '0.1.0',
@@ -158,7 +159,6 @@ export async function mount(ctx) {
   await startCreatorDataStreams(ctx, ctx.host);
 
   // 5. Initialize CTOX unified context menu
-  state.contextMenuCleanup = initCreatorContextMenu(state);
 
   // 6. Setup column resizer
   state.resizerCleanup = setupResizers(ctx.host);
@@ -368,6 +368,7 @@ function wireUi(host) {
   const inputTitle = host.querySelector('#input-app-title');
   const inputDesc = host.querySelector('#input-app-desc');
   const selectCategory = host.querySelector('#select-app-category');
+  const selectArchetype = host.querySelector('#select-app-archetype');
   const selectLayout = host.querySelector('#select-app-layout');
   const btnAddColl = host.querySelector('#btn-add-collection');
   const inputNewColl = host.querySelector('#input-new-collection');
@@ -400,6 +401,7 @@ function wireUi(host) {
     state.appTitle = inputTitle.value.trim();
     state.appDesc = inputDesc.value.trim();
     state.appCategory = selectCategory.value || '';
+    state.appArchetype = selectArchetype.value || 'record-workbench';
     state.appLayout = selectLayout.value || '';
 
     updateCreatorActionState();
@@ -436,7 +438,7 @@ function wireUi(host) {
     updateCreatorActionState();
   });
 
-  [inputId, inputTitle, inputDesc, selectCategory, selectLayout].forEach(el => {
+  [inputId, inputTitle, inputDesc, selectCategory, selectArchetype, selectLayout].forEach(el => {
     el.addEventListener('input', () => syncStateFromInputs());
   });
 
@@ -545,6 +547,7 @@ function wireUi(host) {
         appTitle: inputTitle.value,
         appDesc: inputDesc.value,
         appCategory: selectCategory.value,
+        appArchetype: selectArchetype.value,
         appLayout: selectLayout.value,
         appCollections: state.appCollections,
         appVersion: state.appVersion,
@@ -574,7 +577,7 @@ function wireUi(host) {
     const hash = window.location.hash || '';
     const queryStr = hash.includes('?') ? hash.split('?')[1] : '';
     const params = new URLSearchParams(queryStr);
-    const upgradeAppId = params.get('upgrade');
+    const upgradeAppId = state.ctx?.args?.upgrade || params.get('upgrade');
 
     if (upgradeAppId) {
       try {
@@ -589,7 +592,8 @@ function wireUi(host) {
         if (inputTitle) inputTitle.value = manifest.title || '';
         if (inputDesc) inputDesc.value = manifest.description || '';
         if (selectCategory) selectCategory.value = manifest.category || 'Management';
-        if (selectLayout) selectLayout.value = manifest.layout?.shell || 'full-workspace';
+        if (selectArchetype) selectArchetype.value = manifest.archetype || manifest.store?.archetype || 'record-workbench';
+        if (selectLayout) selectLayout.value = manifest.layout?.shell || 'windowed';
         if (inputRequest) inputRequest.value = `Ändere ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
         state.appVersion = /^\d+\.\d+\.\d+$/.test(String(manifest.version || ''))
           ? String(manifest.version)
@@ -626,6 +630,7 @@ export function buildAppCreateCommand({
   appTitle,
   appDesc,
   appCategory,
+  appArchetype,
   appLayout,
   appCollections,
   appVersion,
@@ -648,7 +653,6 @@ export function buildAppCreateCommand({
   return {
     command_id: `app-create-${moduleId}-${now}`,
     module: 'creator',
-    type: 'ctox.business_os.app.create',
     command_type: 'ctox.business_os.app.create',
     record_id: moduleId,
     payload: {
@@ -659,7 +663,16 @@ export function buildAppCreateCommand({
       app_title: title,
       description,
       category: String(appCategory || '').trim(),
+      archetype: String(appArchetype || 'record-workbench').trim(),
       layout_hint: String(appLayout || '').trim(),
+      presentation: {
+        default_mode: 'window',
+        supported_modes: ['window', 'maximized', 'focus'],
+        initial_size: { width: 960, height: 680 },
+        minimum_size: { width: 640, height: 480 },
+        multi_instance: false,
+        auto_restore: false,
+      },
       collections_hint: collections,
       desired_version: version,
       install_target: 'runtime-installed-module',
@@ -673,6 +686,7 @@ export function buildAppCreateCommand({
       mode: 'app',
       module_id: moduleId,
       app_id: moduleId,
+      archetype: String(appArchetype || 'record-workbench').trim(),
       install_target: 'runtime-installed-module',
       actor: actor || null,
     },
@@ -730,6 +744,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
       appTitle,
       appDesc,
       appCategory: state.appCategory,
+      appArchetype: state.appArchetype,
       appLayout,
       appCollections: collections,
       appVersion,
@@ -796,12 +811,10 @@ function initCreatorContextMenu(state) {
     if (event.key === 'Escape') hideCreatorContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideCreatorContextMenu(state);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -145,4 +146,14 @@ test('bucket filters report active account, channel, direction, date, and search
     dateRange: 'any',
     search: '',
   }), true);
+});
+
+test('conversations presentation follows compact Business OS contract', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(html, /ctox-pane--glass/);
+  assert.doesNotMatch(css, /border-(left|right)\s*:\s*(?:[2-9]|\d{2,})px/i);
+  assert.match(css, /\.conv-message\s*\{[^}]*border-radius:\s*var\(--control-radius\)/s);
+  assert.match(css, /\.conv-card\s*\{[^}]*border-radius:\s*var\(--control-radius\)/s);
 });

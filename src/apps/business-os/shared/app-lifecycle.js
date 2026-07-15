@@ -2,7 +2,7 @@ import {
   BusinessOsPermissions,
   canModifyBusinessModule,
   canUseBusinessPermission,
-} from './permissions.js?v=20260623-role-session';
+} from './permissions.js?v=20260714-chat-queue-v56';
 
 export function parseBusinessAppSemver(version) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version || '').trim());
@@ -30,6 +30,14 @@ export function isRuntimeInstalledModule(moduleLike) {
   return moduleLike?.source === 'installed'
     || moduleLike?.install_scope === 'installed'
     || entry.startsWith('installed-modules/');
+}
+
+export function isLocalModule(moduleLike) {
+  if (moduleLike?.lifecycle?.local_module === true) return true;
+  const entry = String(moduleLike?.entry || '').trim();
+  return moduleLike?.source === 'local'
+    || moduleLike?.install_scope === 'local'
+    || entry.startsWith('local-modules/');
 }
 
 export function hasPublicAppVersion(moduleLike) {
@@ -210,6 +218,7 @@ export function appReleaseProjection(moduleLike) {
 
 export function appLifecycleState(moduleLike, options = {}) {
   const runtimeInstalled = isRuntimeInstalledModule(moduleLike);
+  const localModule = isLocalModule(moduleLike);
   const parsed = parseBusinessAppSemver(businessAppVersion(moduleLike));
   const versionLabel = appVersionLabel(moduleLike);
   const explicit = moduleLike?.lifecycle?.visibility_state || moduleLike?.visibility_state || '';
@@ -229,7 +238,7 @@ export function appLifecycleState(moduleLike, options = {}) {
       scopeId: moduleId,
     });
 
-  if (!runtimeInstalled) {
+  if (!runtimeInstalled && !localModule) {
     return {
       state: 'packaged',
       label: 'System',
@@ -257,6 +266,38 @@ export function appLifecycleState(moduleLike, options = {}) {
       warningCode: moduleLike?.lifecycle?.warning_code || 'invalid_semver',
       reason: 'Diese App hat keine gültige SemVer-Version und bleibt deshalb privat.',
     };
+  }
+
+  // Native lifecycle projections are authoritative. SemVer remains a release
+  // validation/display field, never the publication switch.
+  if (moduleLike?.lifecycle?.source === 'native_catalog_projection') {
+    const state = String(moduleLike.lifecycle.visibility_state || '').trim();
+    const labels = {
+      team: ['Team', 'Team'],
+      restricted: ['Eingeschränkt', 'Schutz'],
+      preview: ['Vorschau', 'Preview'],
+      private: ['Privat', 'Privat'],
+    };
+    if (labels[state]) {
+      const publicApp = state === 'team';
+      return {
+        state,
+        label: labels[state][0],
+        shortLabel: labels[state][1],
+        versionLabel,
+        runtimeInstalled,
+        public: publicApp,
+        canManage,
+        canAccessNonPublic,
+        reason: publicApp
+          ? 'Diese App ist durch einen nativen Release-Record für das Team freigegeben.'
+          : state === 'restricted'
+            ? 'Der aktuelle Release ist auf eine explizite Zielgruppe eingeschränkt.'
+            : state === 'preview'
+              ? 'Diese App ist als Vorschau nur für explizit berechtigte Nutzer sichtbar.'
+              : 'Diese App besitzt keinen aktiven Team-Release.',
+      };
+    }
   }
 
   if (parsed.major >= 1) {

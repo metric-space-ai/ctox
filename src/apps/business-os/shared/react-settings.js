@@ -1,23 +1,23 @@
-import { showBusinessConfirm } from './dialogs.js';
-import { appReleaseProjection } from './app-lifecycle.js?v=20260623-role-session';
+import { showBusinessConfirm } from './dialogs.js?v=20260714-chat-queue-v56';
+import { appReleaseProjection } from './app-lifecycle.js?v=20260714-chat-queue-v56';
 import {
   BusinessOsPermissions,
   canModifyBusinessModule,
   canUseBusinessPermission,
-} from './permissions.js?v=20260701-branding-v1';
+} from './permissions.js?v=20260714-chat-queue-v56';
 import {
   brandingExportJson,
   normalizeBrandingImportPayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './branding.js?v=20260701-branding-v1';
+} from './branding.js?v=20260714-chat-queue-v56';
 import {
   assignableRolesForActor,
   normalizeRole,
   roleCanManage,
   roleDisplayName,
-} from './roles.js';
-import { renderModuleWhyDiagnosticsHtml } from './shell-permissions-ui.js?v=20260623-role-session';
+} from './roles.js?v=20260714-chat-queue-v56';
+import { renderModuleWhyDiagnosticsHtml } from './shell-permissions-ui.js?v=20260714-chat-queue-v56';
 
 export async function openReactSettings({
   mount,
@@ -1876,7 +1876,7 @@ function settingsCommand(type, root, { syncConfig }) {
   if (type === 'runtime') {
     return {
       module: 'ctox',
-      type: 'ctox.runtime.switch',
+      command_type: 'ctox.runtime.switch',
       record_id: 'runtime-settings',
       payload: {
         model: root.querySelector('[data-runtime-model]')?.value,
@@ -1890,7 +1890,7 @@ function settingsCommand(type, root, { syncConfig }) {
   if (type === 'sync') {
     return {
       module: 'ctox',
-      type: 'ctox.business_os.sync.configure',
+      command_type: 'ctox.business_os.sync.configure',
       record_id: syncConfig?.instance_id || 'sync-settings',
       payload: {
         sync_room: root.querySelector('[data-sync-room]')?.value,
@@ -1903,7 +1903,7 @@ function settingsCommand(type, root, { syncConfig }) {
   if (type === 'policy' || type === 'routing') {
     return {
       module: 'ctox',
-      type: 'ctox.communication_policy.verify',
+      command_type: 'ctox.communication_policy.verify',
       record_id: 'communication-policy',
       payload: {
         review_policy: root.querySelector('[data-policy-review]')?.value,

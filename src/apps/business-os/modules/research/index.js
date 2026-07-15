@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { buildResearchGraphProjection } from './research-graph-data.mjs';
 
-const BUILD = '20260706-kit-migration-v1';
+const BUILD = '20260713-semantic-graph-v1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -106,6 +107,32 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'weighted_total',
       'confidence',
       'rationale',
+      'updated_at',
+    ],
+  },
+  semantic_graph_nodes: {
+    title: 'Semantic Graph Nodes',
+    columns: [
+      'node_id',
+      'label',
+      'kind',
+      'cluster_id',
+      'occurrences',
+      'betweenness_centrality',
+      'source_ids_json',
+      'provenance_json',
+      'updated_at',
+    ],
+  },
+  semantic_graph_edges: {
+    title: 'Semantic Graph Edges',
+    columns: [
+      'edge_id',
+      'source_id',
+      'target_id',
+      'weight',
+      'source_ids_json',
+      'provenance_json',
       'updated_at',
     ],
   },
@@ -276,14 +303,30 @@ const state = {
   reportContents: {},
   activeTab: 'sources',
   sourcesViewMode: 'shards',
-  showDiagram: false,
+  showDiagram: true,
   sourceSearchTerm: '',
   sourceActiveTag: 'all',
-  mapMode: 'portfolio',
+  mapMode: 'discovery',
   sourceRows: [],
   curatedRows: [],
   measurementRows: [],
+  graphNodeRows: [],
+  graphEdgeRows: [],
   sourceModels: [],
+  graphProjection: null,
+  graphSurface: null,
+  graphMountToken: 0,
+  selectedGraphNodeId: '',
+  graph: {
+    dimensions: 3,
+    visibleLimit: 120,
+    layer: 'concepts',
+    panel: 'topics',
+    query: '',
+    autoRotate: true,
+    busyAction: '',
+    status: 'loading',
+  },
   map: {
     scale: 1,
     panX: 0,
@@ -301,9 +344,13 @@ const state = {
   refreshTimer: null,
   cleanup: [],
   contextMenu: null,
+  mountToken: null,
+  syncLeases: new Set(),
 };
 
 export async function mount(ctx) {
+  const mountToken = Symbol('research-mount');
+  state.mountToken = mountToken;
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
 
@@ -341,9 +388,9 @@ export async function mount(ctx) {
   // `schedulePostSyncRefresh` + `wireRealtime` refresh once data lands.
   wireRealtime();
   wireSyncDiagnosticsRefresh();
-  state.cleanup.push(initResearchContextMenu());
-  startResearchCollections()
+  startResearchCollections(mountToken)
     .then(() => {
+      if (state.mountToken !== mountToken) return;
       queueKnowledgeRefreshAfter(300);
       queueKnowledgeRefreshAfter(2500);
       queueKnowledgeRefreshAfter(6500);
@@ -351,24 +398,39 @@ export async function mount(ctx) {
     .catch((error) => {
       console.warn('[research] background sync start failed', error);
     });
-  await refreshAll({ seed: true });
+  // Paint the usable workbench before local queries or an empty-knowledge
+  // retry can delay window activation. The background refresh is guarded by
+  // this mount token so a late result from a closed instance cannot repaint a
+  // subsequently opened window.
+  render();
+  setStatus(state.t('loadingKnowledge', 'Knowledge wird geladen...'));
+  refreshAll({ seed: true, retryEmptyKnowledge: false, mountToken }).catch((error) => {
+    if (state.mountToken === mountToken) {
+      console.warn('[research] initial background refresh failed', error);
+    }
+  });
   schedulePostSyncRefresh(1200);
   return () => {
+    if (state.mountToken === mountToken) state.mountToken = null;
+    for (const lease of state.syncLeases) lease?.release?.().catch?.(() => null);
+    state.syncLeases.clear();
     // Cleanup globals
     delete window.selectReport;
     delete window.showPromptViewer;
     
     state.cleanup.forEach((fn) => fn?.());
     state.cleanup = [];
+    disposeResearchGraph();
     if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
     state.contextMenu?.remove();
     state.contextMenu = null;
     ctx.host.replaceChildren();
+    if (state.ctx === ctx) state.ctx = null;
   };
 }
 
-async function startResearchCollections() {
+async function startResearchCollections(mountToken) {
   await Promise.all(RESEARCH_COLLECTIONS.map(async (collection) => {
     if (typeof state.ctx.sync?.startCollection !== 'function') {
       markCollectionDiagnostic(collection, 'sync', 'local', state.t('localOnly', 'Lokaler Modus'));
@@ -380,7 +442,11 @@ async function startResearchCollections() {
           throw new Error(`${collection} requires sync.leaseCollection().`);
         }
         const lease = await state.ctx.sync.leaseCollection(collection, 'research-document-blob-sync');
-        state.cleanup.push(() => lease?.release?.().catch?.(() => null));
+        if (state.mountToken !== mountToken) {
+          await lease?.release?.().catch?.(() => null);
+          return;
+        }
+        state.syncLeases.add(lease);
       } else {
         await state.ctx.sync.startCollection(collection);
       }
@@ -426,6 +492,26 @@ function bindEvents(root) {
       state.mapMode = target.dataset.mapMode || 'portfolio';
       // Zoom & Pan state is persistent, do not reset view!
       renderCenter();
+    } else if (action === 'graph-dimension') {
+      state.graph.dimensions = state.graph.dimensions === 3 ? 2 : 3;
+      state.graphSurface?.setDimensions?.(state.graph.dimensions);
+      target.textContent = `${state.graph.dimensions}D`;
+      target.setAttribute('aria-label', state.graph.dimensions === 3 ? state.t('switch2d', 'Zu 2D wechseln') : state.t('switch3d', 'Zu 3D wechseln'));
+    } else if (action === 'graph-command') {
+      handleGraphCommand(target.dataset.graphCommand || '');
+    } else if (action === 'graph-layer') {
+      state.graph.layer = target.dataset.graphLayer || 'concepts';
+      renderCenter();
+    } else if (action === 'graph-panel') {
+      state.graph.panel = target.dataset.graphPanel || 'topics';
+      updateGraphInsights();
+    } else if (action === 'graph-topic') {
+      const nodeId = target.dataset.nodeId || '';
+      const node = state.graphProjection?.nodes?.find((candidate) => candidate.id === nodeId);
+      state.graphSurface?.select?.(nodeId, { focus: true });
+      selectGraphNode(node);
+    } else if (action === 'graph-ai') {
+      await dispatchGraphAiAction(target.dataset.graphAi || 'research');
     } else if (action === 'refresh') {
       await refreshAll();
     } else if (action === 'new-task') {
@@ -464,6 +550,12 @@ function bindEvents(root) {
     }
   });
   root.addEventListener('change', (event) => {
+    const graphLimit = event.target.closest('[data-action="graph-limit"]');
+    if (graphLimit) {
+      state.graph.visibleLimit = clampNumber(Number(graphLimit.value) || 120, 20, 500);
+      renderCenter();
+      return;
+    }
     const axis = event.target.closest('[data-axis-select]');
     if (!axis) return;
     updateTaskAxis(axis.dataset.axisSelect, axis.value).catch((error) => {
@@ -471,6 +563,18 @@ function bindEvents(root) {
     });
   });
   root.addEventListener('input', (event) => {
+    const graphSearch = event.target.closest('[data-action="graph-search"]');
+    if (graphSearch) {
+      state.graph.query = graphSearch.value;
+      state.graphSurface?.search?.(graphSearch.value);
+      return;
+    }
+    const graphLimit = event.target.closest('[data-action="graph-limit"]');
+    if (graphLimit) {
+      const label = graphLimit.closest('.research-graph-limit')?.querySelector('span');
+      if (label) label.textContent = graphLimit.value;
+      return;
+    }
     const searchInput = event.target.closest('[data-action="source-search"]');
     if (searchInput) {
       const selectionStart = searchInput.selectionStart;
@@ -493,25 +597,30 @@ function bindEvents(root) {
   root.addEventListener('pointercancel', stopMapDrag);
 }
 
-async function refreshAll({ seed = false } = {}) {
+async function refreshAll({ seed = false, retryEmptyKnowledge = true, mountToken = null } = {}) {
   state.diagnostics.reloadStartedAt = Date.now();
   state.diagnostics.reloadFinishedAt = 0;
   state.diagnostics.reloadCount += 1;
   setStatus(state.t('loadingKnowledge', 'Knowledge wird geladen...'));
-  state.knowledgeBases = await loadKnowledgeBases();
-  await loadLocalState();
+  const knowledgeBases = await loadKnowledgeBases({ retryEmpty: retryEmptyKnowledge });
+  if (mountToken && state.mountToken !== mountToken) return;
+  state.knowledgeBases = knowledgeBases;
+  await loadLocalState({ mountToken });
+  if (mountToken && state.mountToken !== mountToken) return;
   if (seed) await ensureTasksFromKnowledgeBases();
+  if (mountToken && state.mountToken !== mountToken) return;
   if (!state.selectedTaskId || !state.tasks.some((task) => task.id === state.selectedTaskId)) {
     state.selectedTaskId = state.tasks[0]?.id || '';
   }
   await loadDashboardData();
+  if (mountToken && state.mountToken !== mountToken) return;
   render();
   refreshOpenTaskDialogDomainOptions();
   state.diagnostics.reloadFinishedAt = Date.now();
   setStatus(reloadStatusText());
 }
 
-async function loadLocalState() {
+async function loadLocalState({ mountToken = null } = {}) {
   const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
     findAll(readableCollection('research_tasks'), 'research_tasks'),
     findAll(readableCollection('research_runs'), 'research_runs'),
@@ -519,6 +628,7 @@ async function loadLocalState() {
     findAll(readableCollection('business_commands'), 'business_commands'),
     findAll(readableCollection('ctox_queue_tasks'), 'ctox_queue_tasks'),
   ]);
+  if (mountToken && state.mountToken !== mountToken) return;
   if (tasks.length || !state.tasks.length) {
     state.tasks = tasks
       .filter((task) => isVisibleResearchTask(task))
@@ -570,32 +680,44 @@ function schedulePostSyncRefresh(delay = 250) {
 
 function scheduleLocalRefresh(delay = 80) {
   if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  const mountToken = state.mountToken;
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
-    await loadLocalState();
+    if (!mountToken || state.mountToken !== mountToken) return;
+    await loadLocalState({ mountToken });
+    if (state.mountToken !== mountToken) return;
     render();
   }, delay);
 }
 
 function scheduleKnowledgeRefresh(delay = 120) {
   if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  const mountToken = state.mountToken;
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
-    state.knowledgeBases = await loadKnowledgeBases();
-    await loadLocalState();
+    if (!mountToken || state.mountToken !== mountToken) return;
+    const knowledgeBases = await loadKnowledgeBases();
+    if (state.mountToken !== mountToken) return;
+    state.knowledgeBases = knowledgeBases;
+    await loadLocalState({ mountToken });
+    if (state.mountToken !== mountToken) return;
     await ensureTasksFromKnowledgeBases();
+    if (state.mountToken !== mountToken) return;
     if (!state.selectedTaskId || !state.tasks.some((task) => task.id === state.selectedTaskId)) {
       state.selectedTaskId = state.tasks[0]?.id || '';
     }
     await loadDashboardData();
+    if (state.mountToken !== mountToken) return;
     render();
     refreshOpenTaskDialogDomainOptions();
   }, delay);
 }
 
 function queueKnowledgeRefreshAfter(delay) {
+  const mountToken = state.mountToken;
   const timer = window.setTimeout(() => {
-    refreshAll({ seed: true }).catch((error) => {
+    if (!mountToken || state.mountToken !== mountToken) return;
+    refreshAll({ seed: true, mountToken }).catch((error) => {
       console.warn('[research] deferred knowledge refresh failed', error);
     });
   }, delay);
@@ -632,6 +754,7 @@ async function ensureTasksFromKnowledgeBases() {
         scoring_dimensions: inferScoringDimensions({ knowledge_domain: base.domain, title: base.title, prompt: defaultPromptForKnowledgeBase(base), criteria: '' }),
         scoring_weights: scoringWeights(inferScoringDimensions({ knowledge_domain: base.domain, title: base.title, prompt: defaultPromptForKnowledgeBase(base), criteria: '' })),
         table_contract: RESEARCH_TABLE_CONTRACT,
+        graph_contract: semanticGraphContract(),
         source_table_ids: base.tables.map((table) => table.id),
       },
       created_at_ms: now,
@@ -644,8 +767,8 @@ async function ensureTasksFromKnowledgeBases() {
   }
 }
 
-async function loadKnowledgeBases() {
-  const tables = await loadKnowledgeTables();
+async function loadKnowledgeBases({ retryEmpty = true } = {}) {
+  const tables = await loadKnowledgeTables({ retryEmpty });
   return knowledgeBasesFromTables(tables);
 }
 
@@ -680,11 +803,11 @@ function knowledgeBasesFromTables(tables = []) {
     .sort((a, b) => scoreResearchBase(b) - scoreResearchBase(a) || a.title.localeCompare(b.title));
 }
 
-async function loadKnowledgeTables() {
+async function loadKnowledgeTables({ retryEmpty = true } = {}) {
   const collection = readableCollection('knowledge_tables');
   const first = await findAll(collection, 'knowledge_tables');
   if (first.length || !collection?.find) return first;
-  if (!shouldRetryEmptyKnowledgeTables()) return first;
+  if (!retryEmpty || !shouldRetryEmptyKnowledgeTables()) return first;
   for (const delay of KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS) {
     await sleep(delay);
     const retry = await findAll(collection, 'knowledge_tables');
@@ -772,21 +895,39 @@ async function loadDashboardData() {
   state.sourceRows = [];
   state.curatedRows = [];
   state.measurementRows = [];
+  state.graphNodeRows = [];
+  state.graphEdgeRows = [];
   state.sourceModels = [];
+  state.graphProjection = null;
   if (!task) return;
   const base = knowledgeBaseForTask(task);
   const sourceTable = tableForKey(base, task.source_catalog_key) || firstTableMatching(base, /source|catalog|curated/i);
   const curatedTable = tableForKey(base, task.curated_table_key) || firstTableMatching(base, /library|curated/i);
   const measurementTable = tableForKey(base, task.measurements_table_key) || firstTableMatching(base, /measure|load|point/i);
-  const [sourceRows, curatedRows, measurementRows] = await Promise.all([
+  const graphNodeTable = tableForKey(base, task.payload?.graph_contract?.nodes_table_key || 'semantic_graph_nodes') || firstTableMatching(base, /semantic.*graph.*node|concept.*node/i);
+  const graphEdgeTable = tableForKey(base, task.payload?.graph_contract?.edges_table_key || 'semantic_graph_edges') || firstTableMatching(base, /semantic.*graph.*edge|concept.*edge/i);
+  const [sourceRows, curatedRows, measurementRows, graphNodeRows, graphEdgeRows] = await Promise.all([
     sourceTable ? fetchTableRows(sourceTable.id) : Promise.resolve([]),
     curatedTable && curatedTable.id !== sourceTable?.id ? fetchTableRows(curatedTable.id) : Promise.resolve([]),
     measurementTable && measurementTable.id !== sourceTable?.id && measurementTable.id !== curatedTable?.id ? fetchTableRows(measurementTable.id) : Promise.resolve([]),
+    graphNodeTable ? fetchTableRows(graphNodeTable.id) : Promise.resolve([]),
+    graphEdgeTable ? fetchTableRows(graphEdgeTable.id) : Promise.resolve([]),
   ]);
   state.sourceRows = sourceRows;
   state.curatedRows = curatedRows;
   state.measurementRows = measurementRows;
+  state.graphNodeRows = graphNodeRows;
+  state.graphEdgeRows = graphEdgeRows;
   state.sourceModels = buildSourceModels(task, sourceRows, curatedRows, measurementRows);
+  state.graphProjection = buildResearchGraphProjection({
+    task,
+    sourceModels: state.sourceModels,
+    measurementRows,
+    graphNodeRows,
+    graphEdgeRows,
+    graphLayer: state.graph.layer,
+    visibleLimit: state.graph.visibleLimit,
+  });
   if (!state.selectedSourceId || !state.sourceModels.some((item) => item.id === state.selectedSourceId)) {
     state.selectedSourceId = state.sourceModels[0]?.id || '';
   }
@@ -1064,13 +1205,11 @@ function renderCenter() {
   if (!root) return;
   const task = selectedTask();
   if (!task) {
+    disposeResearchGraph();
     root.innerHTML = renderNoTaskCenter();
     return;
   }
-  const axisPair = normalizedAxisPair(task);
-  const xAxis = axisPair.x;
-  const yAxis = axisPair.y;
-  const isGraphMode = state.mapMode === 'discovery';
+  const projection = currentGraphProjection(task);
   root.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band research-center-header">
       <div class="ctox-pane-title-row">
@@ -1079,7 +1218,7 @@ function renderCenter() {
           <h2 class="ctox-pane-title">${escapeHtml(task.title)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          ${state.showDiagram ? `<span class="research-map-hint">Scroll zoom · drag pan</span>` : ''}
+          ${state.showDiagram ? `<span class="research-map-hint">${escapeHtml(state.t('graphNavigationHint', 'Ziehen: drehen · Scrollen: zoomen'))}</span>` : ''}
           <button type="button"
                   class="ctox-pane-icon${state.showDiagram ? ' is-active' : ''}"
                   data-action="toggle-diagram"
@@ -1092,22 +1231,7 @@ function renderCenter() {
       </div>
     </header>
     <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
-      <section class="research-map-panel">
-        <div class="research-map-head">
-          <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
-          ${mapModeToggle()}
-          <button type="button" class="ctox-button" data-action="reset-map" aria-label="${escapeHtml(state.t('resetMapView', 'Kartenansicht zurücksetzen'))}">${escapeHtml(state.t('reset', 'Reset'))}</button>
-          <button type="button" class="ctox-button" data-action="toggle-diagram" title="${state.showDiagram ? 'Einklappen' : 'Ausklappen'}">${state.showDiagram ? 'Einklappen' : 'Ausklappen'}</button>
-        </div>
-        <div class="research-portfolio-map${isGraphMode ? ' is-discovery-graph' : ''}">
-          <div class="research-map-grid" aria-hidden="true"></div>
-          <div class="research-map-content" data-map-content style="${mapTransformStyle()}">
-            ${isGraphMode ? renderDiscoveryGraph(task) : state.sourceModels.map((source) => renderMapPoint(source, xAxis, yAxis)).join('')}
-          </div>
-          ${isGraphMode ? '' : axisSelect('y', yAxis, 'map')}
-          ${isGraphMode ? '' : axisSelect('x', xAxis, 'map')}
-        </div>
-      </section>
+      ${renderSemanticGraph(task, projection)}
       <section class="research-workbench">
         <div class="research-tabs-container">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
@@ -1143,6 +1267,413 @@ function renderCenter() {
       </section>
     </div>
   `;
+  if (state.showDiagram) scheduleResearchGraphMount(task, projection);
+  else disposeResearchGraph();
+}
+
+function renderSemanticGraph(task, projection) {
+  const metrics = projection.metrics || {};
+  const maximum = Math.max(20, Math.min(500, projection.availableNodeCount || state.graph.visibleLimit));
+  const runInfo = researchRunInfo(task);
+  const live = ['queued', 'running'].includes(runInfo.statusKind);
+  return `
+    <section class="research-graph-shell" aria-label="${escapeHtml(state.t('semanticResearchGraph', 'Semantischer Research-Graph'))}">
+      <div class="research-graph-stage">
+        <div class="research-graph-canvas" data-research-graph-host role="img" aria-label="${escapeHtml(state.t('graphCanvasLabel', 'Interaktiver semantischer Graph. Ziehen dreht die Szene, Scrollen zoomt.'))}"></div>
+        <div class="research-graph-loading" data-research-graph-loading role="status">
+          <span class="research-spinner" aria-hidden="true"></span>
+          <span>${escapeHtml(state.t('graphLoading', 'Semantischen Graph aufbauen …'))}</span>
+        </div>
+        <div class="research-graph-meta">
+          <div>
+            <strong>${escapeHtml(state.t('semanticResearchGraph', 'Semantic Research Graph'))}</strong>
+            <span>${metrics.nodeCount || 0} ${escapeHtml(state.t('concepts', 'Begriffe'))} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Beziehungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Cluster'))}</span>
+          </div>
+          <span class="research-graph-live${live ? ' is-live' : ''}">${live ? escapeHtml(state.t('liveRun', 'LIVE · CTOX aktualisiert')) : escapeHtml(projection.origin === 'persisted' ? state.t('persistedGraph', 'Knowledge Graph') : state.t('derivedGraph', 'Live projection'))}</span>
+        </div>
+        <label class="research-graph-search">
+          <span class="research-sr-only">${escapeHtml(state.t('searchGraph', 'Graph durchsuchen'))}</span>
+          ${iconSvg('search')}
+          <input type="search" data-action="graph-search" value="${escapeHtml(state.graph.query)}" placeholder="${escapeHtml(state.t('searchConcepts', 'Begriff suchen …'))}" autocomplete="off" />
+        </label>
+        <div class="research-graph-rail" aria-label="${escapeHtml(state.t('graphControls', 'Graph-Steuerung'))}">
+          <button type="button" data-action="graph-command" data-graph-command="panel" class="research-graph-tool${state.graph.panel !== 'hidden' ? ' is-active' : ''}" aria-label="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}" title="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}">${iconSvg('layers')}</button>
+          <button type="button" data-action="graph-command" data-graph-command="reset" class="research-graph-tool" aria-label="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}" title="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}">${iconSvg('refresh')}</button>
+          <label class="research-graph-limit" title="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}">
+            <span>${state.graph.visibleLimit}</span>
+            <input type="range" data-action="graph-limit" min="20" max="${maximum}" step="10" value="${Math.min(maximum, state.graph.visibleLimit)}" aria-label="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}" />
+          </label>
+          <button type="button" data-action="graph-dimension" class="research-graph-tool research-graph-dimension" aria-label="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}" title="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}">${state.graph.dimensions}D</button>
+          <button type="button" data-action="graph-command" data-graph-command="rotate" class="research-graph-tool${state.graph.autoRotate ? ' is-active' : ''}" aria-pressed="${state.graph.autoRotate}" aria-label="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}" title="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}">${iconSvg('refresh')}</button>
+          <button type="button" data-action="graph-command" data-graph-command="zoom-in" class="research-graph-tool" aria-label="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}" title="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}">+</button>
+          <button type="button" data-action="graph-command" data-graph-command="zoom-out" class="research-graph-tool" aria-label="${escapeHtml(state.t('zoomOut', 'Verkleinern'))}" title="${escapeHtml(state.t('zoomOut', 'Verkleinern'))}">−</button>
+          <button type="button" data-action="graph-command" data-graph-command="fit" class="research-graph-tool" aria-label="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}" title="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}">${iconSvg('focus')}</button>
+        </div>
+        <div class="research-graph-layer-switch" role="group" aria-label="${escapeHtml(state.t('graphLayer', 'Graph-Ebene'))}">
+          ${graphLayerButton('concepts', state.t('concepts', 'Begriffe'))}
+          ${graphLayerButton('sources', state.t('sources', 'Quellen'))}
+          ${graphLayerButton('evidence', state.t('evidence', 'Belege'))}
+        </div>
+        ${state.graph.panel === 'hidden' ? '' : renderGraphInsights(projection)}
+        <div class="research-graph-actions">
+          <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="research" ${state.graph.busyAction ? 'disabled' : ''}>${iconSvg('search')}<span>${escapeHtml(state.t('targetedResearch', 'Nachrecherche'))}</span></button>
+          <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="document" ${state.graph.busyAction ? 'disabled' : ''}>${iconSvg('file')}<span>${escapeHtml(state.t('createDocument', 'Dokument erstellen'))}</span></button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function graphLayerButton(id, label) {
+  return `<button type="button" data-action="graph-layer" data-graph-layer="${id}" class="${state.graph.layer === id ? 'is-active' : ''}" aria-pressed="${state.graph.layer === id}">${escapeHtml(label)}</button>`;
+}
+
+function renderGraphInsights(projection) {
+  const metrics = projection.metrics || {};
+  const body = state.graph.panel === 'analytics'
+    ? `
+      <dl class="research-graph-metrics">
+        <div><dt>${escapeHtml(state.t('nodes', 'Knoten'))}</dt><dd>${metrics.nodeCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('relations', 'Beziehungen'))}</dt><dd>${metrics.linkCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('clusters', 'Cluster'))}</dt><dd>${metrics.clusterCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('sources', 'Quellen'))}</dt><dd>${metrics.sourceCount || 0}</dd></div>
+      </dl>
+      <p>${escapeHtml(state.t('graphMethod', 'Größe: Betweenness-Zentralität · Farbe: automatische Community · Kante: gemeinsame Nennung'))}</p>
+    `
+    : `<ol class="research-graph-topics">${(projection.topics || []).slice(0, 6).map((topic, index) => `
+        <li>
+          <button type="button" data-action="graph-topic" data-node-id="${escapeHtml(topic.nodeId || '')}" style="--topic-color:${escapeHtml(topic.color)}">
+            <span>${String(index + 1).padStart(2, '0')}</span><strong>${escapeHtml(topic.label)}</strong><small>${topic.nodeCount}</small>
+          </button>
+        </li>
+      `).join('')}</ol>`;
+  return `
+    <aside class="research-graph-insights">
+      <div class="research-graph-insights-tabs" role="tablist" aria-label="Graph insights">
+        <button type="button" data-action="graph-panel" data-graph-panel="topics" class="${state.graph.panel === 'topics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'topics'}">${escapeHtml(state.t('topics', 'Topics'))}</button>
+        <button type="button" data-action="graph-panel" data-graph-panel="analytics" class="${state.graph.panel === 'analytics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'analytics'}">${escapeHtml(state.t('analytics', 'Analytics'))}</button>
+      </div>
+      ${body}
+    </aside>
+  `;
+}
+
+function currentGraphProjection(task = selectedTask()) {
+  const projection = buildResearchGraphProjection({
+    task,
+    sourceModels: state.sourceModels,
+    measurementRows: state.measurementRows,
+    graphNodeRows: state.graphNodeRows,
+    graphEdgeRows: state.graphEdgeRows,
+    graphLayer: state.graph.layer,
+    visibleLimit: state.graph.visibleLimit,
+  });
+  state.graphProjection = projection;
+  return projection;
+}
+
+async function scheduleResearchGraphMount(task, projection) {
+  const root = pane('center');
+  const host = root?.querySelector('[data-research-graph-host]');
+  if (!host || !state.showDiagram) return;
+  disposeResearchGraph();
+  const token = ++state.graphMountToken;
+  const loading = root.querySelector('[data-research-graph-loading]');
+  if (!projection.nodes.length) {
+    if (loading) loading.innerHTML = `<span>${escapeHtml(state.t('graphNoData', 'Noch keine Begriffe. Starte eine Nachrecherche oder füge Quellen hinzu.'))}</span>`;
+    return;
+  }
+  try {
+    const moduleUrl = new URL('./research-graph.mjs', import.meta.url);
+    moduleUrl.search = new URL(import.meta.url).search;
+    const graphModule = await import(moduleUrl.href);
+    if (token !== state.graphMountToken || !host.isConnected || selectedTask()?.id !== task.id) return;
+    state.graphSurface = graphModule.createResearchGraph(host, {
+      projection,
+      dimensions: state.graph.dimensions,
+      autoRotate: state.graph.autoRotate,
+      onNodeClick(node) {
+        selectGraphNode(node);
+      },
+      onBackgroundClick() {
+        state.selectedGraphNodeId = '';
+      },
+      onSettled() {
+        state.graph.status = 'ready';
+        loading?.remove();
+      },
+    });
+    state.graph.status = 'ready';
+    loading?.remove();
+  } catch (error) {
+    if (token !== state.graphMountToken || !host.isConnected) return;
+    state.graph.status = 'failed';
+    console.error('[research] semantic graph mount failed', error);
+    const message = errorMessage(error);
+    if (loading) {
+      loading.classList.add('is-error');
+      loading.innerHTML = `
+        <strong>${escapeHtml(state.t('graphUnavailable', '3D-Graph nicht verfügbar'))}</strong>
+        <span>${escapeHtml(message)}</span>
+        <button type="button" class="ctox-button" data-action="graph-command" data-graph-command="retry">${escapeHtml(state.t('retry', 'Erneut versuchen'))}</button>
+      `;
+    }
+  }
+}
+
+function disposeResearchGraph() {
+  state.graphMountToken += 1;
+  state.graphSurface?.dispose?.();
+  state.graphSurface = null;
+}
+
+function selectGraphNode(node) {
+  if (!node) return;
+  state.selectedGraphNodeId = node.id || '';
+  const sourceId = (node.sourceIds || []).find((id) => state.sourceModels.some((source) => source.id === id));
+  if (sourceId) {
+    state.selectedSourceId = sourceId;
+    renderLeft();
+    renderRight();
+  }
+}
+
+function handleGraphCommand(command) {
+  if (command === 'panel') {
+    state.graph.panel = state.graph.panel === 'hidden' ? 'topics' : 'hidden';
+    updateGraphInsights();
+    return;
+  }
+  if (command === 'retry') {
+    renderCenter();
+    return;
+  }
+  if (command === 'rotate') {
+    state.graph.autoRotate = !state.graph.autoRotate;
+    state.graphSurface?.setAutoRotate?.(state.graph.autoRotate);
+    const button = pane('center')?.querySelector('[data-graph-command="rotate"]');
+    button?.classList.toggle('is-active', state.graph.autoRotate);
+    button?.setAttribute('aria-pressed', String(state.graph.autoRotate));
+    return;
+  }
+  if (command === 'zoom-in') state.graphSurface?.zoomIn?.();
+  else if (command === 'zoom-out') state.graphSurface?.zoomOut?.();
+  else if (command === 'fit') state.graphSurface?.fit?.();
+  else if (command === 'reset') state.graphSurface?.reset?.();
+}
+
+function updateGraphInsights() {
+  const center = pane('center');
+  const stage = center?.querySelector('.research-graph-stage');
+  const existing = stage?.querySelector('.research-graph-insights');
+  const toggle = stage?.querySelector('[data-graph-command="panel"]');
+  if (!stage || !state.graphProjection) return;
+  if (state.graph.panel === 'hidden') {
+    existing?.remove();
+    toggle?.classList.remove('is-active');
+    return;
+  }
+  const markup = renderGraphInsights(state.graphProjection);
+  if (existing) existing.outerHTML = markup;
+  else stage.querySelector('.research-graph-actions')?.insertAdjacentHTML('beforebegin', markup);
+  toggle?.classList.add('is-active');
+}
+
+async function dispatchGraphAiAction(action) {
+  const task = selectedTask();
+  if (!task || state.graph.busyAction) return;
+  if (!canWriteResearchState()) {
+    setStatus(researchWriteDeniedMessage());
+    return;
+  }
+  state.graph.busyAction = action;
+  renderCenter();
+  try {
+    if (action === 'document') await dispatchGraphDocumentTask(task);
+    else await dispatchTargetedGraphResearch(task);
+  } catch (error) {
+    console.error('[research] graph action failed', error);
+    setStatus(`${state.t('actionFailed', 'Aktion fehlgeschlagen')}: ${errorMessage(error)}`);
+  } finally {
+    state.graph.busyAction = '';
+    renderCenter();
+    renderRight();
+  }
+}
+
+async function dispatchTargetedGraphResearch(task) {
+  const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const focus = selectedNode?.label || task.title;
+  const related = selectedNode
+    ? state.graphProjection.links
+      .filter((link) => graphLinkNodeId(link.source) === selectedNode.id || graphLinkNodeId(link.target) === selectedNode.id)
+      .slice(0, 12)
+      .map((link) => {
+        const peerId = graphLinkNodeId(link.source) === selectedNode.id ? graphLinkNodeId(link.target) : graphLinkNodeId(link.source);
+        return state.graphProjection.nodes.find((node) => node.id === peerId)?.label;
+      })
+      .filter(Boolean)
+    : [];
+  const instruction = [
+    `Führe eine gezielte Nachrecherche für den Research-Graph "${task.title}" durch.`,
+    `Fokusbegriff: ${focus}`,
+    related.length ? `Benachbarte Begriffe: ${related.join(', ')}` : '',
+    `Knowledge domain: ${task.knowledge_domain}`,
+    '',
+    task.prompt || '',
+    '',
+    'Nutze systematic-research und die CTOX Web-Research-Tools. Prüfe die vorhandenen Belege, schließe erkennbare Lücken und schreibe neue Quellen und Belege sofort in die bestehenden Knowledge-Tabellen.',
+    'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell. Erzeuge Kanten aus gemeinsamer Nennung in einem 4-Token-Fenster, behalte Provenienz und Source-IDs und überschreibe keine belegten Daten ohne neuen Nachweis.',
+  ].filter(Boolean).join('\n');
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const now = Date.now();
+  const result = await state.ctx.commandBus.dispatch({
+    id: commandId,
+    command_id: commandId,
+    module: 'research',
+    command_type: 'research.systematic.run',
+    record_id: task.id,
+    payload: {
+      title: `Nachrecherche · ${focus}`,
+      instruction,
+      prompt: instruction,
+      priority: 'high',
+      required_skills: ['systematic-research'],
+      research_mode: 'targeted_graph_gap',
+      thread_key: `business-os/research/${task.id}`,
+      knowledge_domain: task.knowledge_domain,
+      graph_focus: {
+        node_id: selectedNode?.id || '',
+        label: focus,
+        related_terms: related,
+        source_ids: selectedNode?.sourceIds || [],
+      },
+      knowledge_contract: {
+        domain: task.knowledge_domain,
+        tables: task.payload?.table_contract || RESEARCH_TABLE_CONTRACT,
+        provenance_required: true,
+      },
+      graph_contract: semanticGraphContract(),
+      writeback_contract: {
+        collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
+        graph_tables: { nodes: 'semantic_graph_nodes', edges: 'semantic_graph_edges' },
+      },
+    },
+    client_context: {
+      action: 'research-graph-targeted-research',
+      module: 'research',
+      source_module: 'research',
+      inbound_channel: 'business_os.research',
+      knowledge_domain: task.knowledge_domain,
+      graph_node_id: selectedNode?.id || '',
+    },
+  });
+  const run = {
+    id: `research_run_${now}`,
+    task_id: task.id,
+    status: result?.task_status || result?.status || 'queued',
+    command_id: commandId,
+    task_queue_id: result?.task_id || '',
+    identified_count: state.sourceRows.length,
+    accepted_count: state.sourceModels.length,
+    used_count: state.sourceModels.length,
+    payload: { result, graph_focus: focus },
+    created_at_ms: now,
+    updated_at_ms: now,
+  };
+  state.runs = [run, ...state.runs];
+  await upsertDoc(writableCollection('research_runs'), run);
+  setStatus(state.t('targetedResearchQueued', 'Gezielte Nachrecherche wurde an CTOX übergeben.'));
+}
+
+async function dispatchGraphDocumentTask(task) {
+  const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const focus = selectedNode?.label || task.title;
+  const title = `${task.title} · ${focus}`.slice(0, 120);
+  const filename = `${slugId(title).slice(0, 82) || 'research-graph-report'}.docx`;
+  const outputPath = `runtime/business-os/documents/generated/${filename}`;
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const instruction = [
+    `Erstelle ein belastbares Word-Dokument aus dem Research-Graph "${task.title}".`,
+    `Fokus: ${focus}`,
+    `Knowledge domain: ${task.knowledge_domain}`,
+    selectedNode?.sourceIds?.length ? `Bevorzugte Source-IDs: ${selectedNode.sourceIds.join(', ')}` : '',
+    '',
+    'Nutze systematic-research für die Knowledge-Lookup-Pflicht und den doc-Skill für Produktion, Rendering und visuelle Qualitätsprüfung.',
+    'Strukturiere Kernaussagen, Cluster, Zusammenhänge, Evidenzlücken und Handlungsempfehlungen. Zitiere nur nachweisbare Quellen aus der Knowledge Base.',
+    `Speichere das finale DOCX unter ${outputPath}. Kein Markdown als Endartefakt.`,
+  ].filter(Boolean).join('\n');
+  await state.ctx.commandBus.dispatch({
+    id: commandId,
+    command_id: commandId,
+    module: 'documents',
+    command_type: 'research.systematic.report.create',
+    record_id: task.id,
+    inbound_channel: 'business_os.documents',
+    payload: {
+      title,
+      instruction,
+      prompt: instruction,
+      report_type_id: 'research-brief',
+      selected_runbook_id: 'research.report.auto',
+      desired_format: 'docx',
+      output_filename: filename,
+      output_path: outputPath,
+      required_skills: ['systematic-research', 'doc'],
+      required_artifacts: [outputPath],
+      thread_key: `business-os/research/${task.id}`,
+      knowledge_domain: task.knowledge_domain,
+      graph_focus: {
+        node_id: selectedNode?.id || '',
+        label: focus,
+        source_ids: selectedNode?.sourceIds || [],
+      },
+      document_quality_contract: {
+        use_documents_skill: true,
+        final_artifact_format: 'docx',
+        require_real_word_styles: true,
+        require_tables_and_figures_when_useful: true,
+        require_render_or_structural_qa: true,
+      },
+      writeback_contract: {
+        module: 'documents',
+        collection: 'documents',
+        desired_format: 'docx',
+        document_type: 'word_document',
+        title,
+        filename,
+        output_path: outputPath,
+      },
+    },
+    client_context: {
+      module: 'documents',
+      surface: 'research-semantic-graph',
+      action: 'create_word_document',
+      source_module: 'research',
+      inbound_channel: 'business_os.documents',
+      document_type: 'word_document',
+      filename,
+      output_path: outputPath,
+    },
+  });
+  setStatus(state.t('graphDocumentQueued', 'Word-Dokument wurde an CTOX übergeben.'));
+}
+
+function semanticGraphContract() {
+  return {
+    nodes_table_key: 'semantic_graph_nodes',
+    edges_table_key: 'semantic_graph_edges',
+    extraction: 'concept_cooccurrence',
+    cooccurrence_window_tokens: 4,
+    community_detection: 'automatic_modularity',
+    node_importance: 'betweenness_centrality',
+    incremental_writeback: true,
+    provenance_required: true,
+  };
+}
+
+function graphLinkNodeId(value) {
+  return typeof value === 'object' && value ? value.id : String(value || '');
 }
 
 function renderNoTaskCenter() {
@@ -1765,10 +2296,6 @@ function renderRight() {
           <span class="ctox-pane-kicker">${escapeHtml(state.t('context', 'Context'))}</span>
           <h2 class="ctox-pane-title">${escapeHtml(task?.title || 'Research')}</h2>
         </div>
-        <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-action="build-knowledge" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${escapeHtml(state.t('buildKnowledge', 'Knowledge aufbauen oder aktualisieren'))}" title="${escapeHtml(state.t('buildKnowledgeHint', 'Aus diesem Research belegtes Knowledge mit Skills, Runbooks und Quellenreferenzen aufbauen oder aktualisieren'))}">${iconSvg('knowledge')}</button>
-          <button type="button" class="ctox-pane-icon" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}" title="${escapeHtml(runResearchHint(task, runInfo))}">${iconSvg('play')}</button>
-        </div>
       </div>
     </header>
     <div class="research-right-scroll">
@@ -1865,6 +2392,8 @@ function renderRight() {
 }
 
 function renderRunPanel(runInfo) {
+  const task = selectedTask();
+  const canRun = canRunResearchTask(task);
   return `
     <section class="research-run-panel">
       <div class="research-section-head flush">
@@ -1890,6 +2419,9 @@ function renderRunPanel(runInfo) {
       ` : `
         <p>${escapeHtml(state.t('noRunStarted', 'Kein Research-Lauf für dieses Dashboard gestartet.'))}</p>
       `}
+      <button type="button" class="ctox-button ctox-run-control research-run-control" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} aria-label="${escapeHtml(runInfoActionLabel(task))}" title="${escapeHtml(runResearchHint(task, runInfo))}" ${['queued', 'running'].includes(runInfo.statusKind) ? 'aria-busy="true"' : ''}>
+        <span aria-hidden="true">▶</span>${escapeHtml(runInfoActionLabel(task))}
+      </button>
     </section>
   `;
 }
@@ -2171,6 +2703,7 @@ async function createTaskFromForm(form) {
       scoring_dimensions: scoringDimensions,
       scoring_weights: scoringWeights(scoringDimensions),
       table_contract: RESEARCH_TABLE_CONTRACT,
+      graph_contract: semanticGraphContract(),
     },
     created_at_ms: current?.created_at_ms || now,
     updated_at_ms: now,
@@ -2218,6 +2751,7 @@ async function runSelectedResearch() {
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
     'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen.',
+    'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
   const commandId = `cmd_${crypto.randomUUID()}`;
   const title = `Research · ${task.title}`;
@@ -2248,6 +2782,7 @@ async function runSelectedResearch() {
       create_missing_tables: missingTables,
       provenance_required: true,
     },
+    graph_contract: semanticGraphContract(),
     scoring_contract: {
       dimensions: scoringDimensions,
       weights: scoringWeights(scoringDimensions),
@@ -2260,6 +2795,8 @@ async function runSelectedResearch() {
         source_catalog: task.source_catalog_key || 'source_catalog',
         evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
         evidence_points: task.measurements_table_key || 'evidence_points',
+        semantic_graph_nodes: 'semantic_graph_nodes',
+        semantic_graph_edges: 'semantic_graph_edges',
       },
     },
   };
@@ -2439,9 +2976,7 @@ async function updateTaskAxis(axis, value) {
 
 function openKnowledgeTable(tableId) {
   if (!tableId) return;
-  const task = selectedTask();
-  if (task?.knowledge_domain) sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
-  sessionStorage.setItem('ctox.businessOs.knowledge.openId', tableId);
+  state.ctx.storageScope.set('ctox.businessOs.knowledge.openId', tableId);
   location.hash = 'knowledge';
 }
 
@@ -2468,13 +3003,6 @@ function focusCtoxRun(taskQueueId, commandId) {
     taskId: taskQueueId,
     commandId,
     sourceModule: 'research',
-  }));
-  window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', {
-    detail: {
-      taskId: taskQueueId,
-      commandId,
-      sourceModule: 'research',
-    },
   }));
   location.hash = 'ctox';
 }
@@ -2503,11 +3031,9 @@ function initResearchContextMenu() {
   const esc = (event) => {
     if (event.key === 'Escape') menu.hidden = true;
   };
-  state.ctx.host.addEventListener('contextmenu', onContext);
   window.addEventListener('click', hide, { capture: true });
   window.addEventListener('keydown', esc);
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', onContext);
     window.removeEventListener('click', hide, { capture: true });
     window.removeEventListener('keydown', esc);
   };
@@ -2590,18 +3116,13 @@ function researchContextSummary(context) {
     .join(' · ') || 'Research';
 }
 
-function dispatchResearchContextChat(context, message, mode = 'data') {
+async function dispatchResearchContextChat(context, message, mode = 'data') {
   const trimmed = String(message || '').trim();
   const status = state.contextMenu?.querySelector('[data-status]');
   if (!trimmed) {
     if (status) status.textContent = state.t('messageMissing', 'Nachricht fehlt.');
     return;
   }
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-
   const safeMode = mode === 'app' && canModifyResearchApp() ? 'app' : 'data';
   const task = selectedTask();
   const source = selectedSource();
@@ -2611,38 +3132,11 @@ function dispatchResearchContextChat(context, message, mode = 'data') {
     : `Arbeite mit dem Web Research Dashboard und der verknuepften Knowledge Base.\n\n${trimmed}`;
 
   if (status) status.textContent = state.t('openChatting', 'Öffne Chat...');
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'research',
-      source_title: 'Research',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'research' : (context.record_id || task?.id || 'research'),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
-        selected_task: task || null,
-        selected_source: source || null,
-        context,
-        thread_key: `business-os/research/${task?.id || 'context'}`,
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        module: 'research',
-        column: context.column,
-        record_type: context.record_type,
-        record_id: context.record_id,
-        knowledge_domain: context.knowledge_domain || task?.knowledge_domain || '',
-      },
-    },
-  }));
+  await state.ctx.contextActions.dispatch(safeMode, {
+    title,
+    prompt: instruction,
+    context,
+  });
   state.contextMenu.hidden = true;
 }
 
@@ -3554,29 +4048,29 @@ function renderReportsWorkbench(task) {
   }
   
   const viewerContent = content === null 
-    ? `<div style="padding: 40px; text-align: center; color: var(--research-muted);"><span class="research-spinner" style="display:inline-block; width:18px; height:18px; border:2px solid var(--research-accent); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:8px; vertical-align:middle;"></span>Lade Fachbericht...</div>`
+    ? `<div class="research-report-loading"><span class="research-spinner"></span>Lade Fachbericht...</div>`
     : content.startsWith('Fehler')
-      ? `<div style="padding: 40px; text-align: center; color: var(--research-warn);">${escapeHtml(content)}</div>`
+      ? `<div class="research-report-error">${escapeHtml(content)}</div>`
       : `
-        <div class="ai-warning-banner" style="background: color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)); border: 1px solid color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; box-shadow: 0 4px 12px color-mix(in srgb, var(--research-text) 10%, transparent);">
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <span style="font-size: 1.4rem; line-height: 1;">🤖</span>
+        <div class="ai-warning-banner">
+          <div class="research-ai-banner-row">
+            <div class="research-ai-banner-title">
+              <span class="research-ai-banner-icon">🤖</span>
               <div>
-                <div style="font-weight: 700; font-size: 12px; color: var(--research-text);">KI-generierter Fachbericht</div>
-                <div style="font-size: 11px; color: var(--research-muted); margin-top: 2px;">Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</div>
+                <strong>KI-generierter Fachbericht</strong>
+                <span>Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</span>
               </div>
             </div>
             <button type="button" class="ctox-button" onclick="window.showPromptViewer('${selectedReport.filename}')">
               Prompt im Modal
             </button>
           </div>
-          <div style="border-top: 1px dashed var(--research-line); padding-top: 10px; margin-top: 10px; text-align: left;">
-            <details style="width: 100%;">
-              <summary style="font-size: 11px; color: var(--research-accent); font-weight: 700; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px;">
+          <div class="research-ai-prompt">
+            <details>
+              <summary>
                 <span>▶ System-Prompt der KI-Generierung einblenden</span>
               </summary>
-              <div style="margin-top: 8px; background: var(--research-surface-2); border: 1px solid var(--research-line); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; line-height: 1.5; color: var(--research-text); max-height: 180px; overflow-y: auto; white-space: pre-wrap; box-shadow: inset 0 2px 4px color-mix(in srgb, var(--research-text) 10%, transparent);">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
+              <div class="research-ai-prompt-pre">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
             </details>
           </div>
         </div>

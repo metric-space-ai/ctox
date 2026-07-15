@@ -37,7 +37,9 @@ old-legacy-for-transplation-only/
 /.pentest/
 /.wrangler/
 /**/.wrangler/
-/src/apps/business-os/modules/sellify/
+
+# Private Business OS apps belong in runtime/business-os/local-modules/.
+# The root-level /runtime ignore above keeps all of their source private.
 
 
 # Dev-only files

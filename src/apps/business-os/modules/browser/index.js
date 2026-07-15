@@ -509,7 +509,8 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     updated_at_ms: now,
     sync_queue_tasks: false,
   };
-  await requireCommandBus(ctx).dispatch(command, { until: 'accepted' });
+  const commandBus = requireCommandBus(ctx);
+  await commandBus.dispatch(command, { until: 'accepted' });
   return { commandId, sessionId, tabId, opensNewSession };
 }
 

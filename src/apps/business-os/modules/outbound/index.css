@@ -12,7 +12,7 @@
   --outbound-accent-soft: var(--accent-soft);
   --outbound-danger: var(--danger);
   --outbound-warn: var(--warning);
-  --outbound-radius: 6px;
+  --outbound-radius: var(--surface-radius);
   /* Outreach status specials (blue info / purple referral / indigo approval
      pipeline colors and the modal scrim) — light literals here. */
   --outbound-info: #2563eb;
@@ -27,11 +27,11 @@
   --outbound-icon-runbook: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 4.5A2.5 2.5 0 0 1 7.5 2H20v17H7.5A2.5 2.5 0 0 0 5 21.5v-17ZM7.5 4a.5.5 0 0 0-.5.5v13.1c.2 0 .3-.1.5-.1H18V4H7.5ZM9 7h7v2H9V7Zm0 4h6v2H9v-2Z'/%3E%3C/svg%3E");
   --outbound-left-width: 360px;
   display: grid;
-  grid-template-columns: var(--outbound-left-width) 12px minmax(0, 1fr);
+  grid-template-columns: var(--outbound-left-width) 6px minmax(0, 1fr);
   gap: 0;
   height: 100%;
   min-height: 0;
-  padding: 12px;
+  padding: 8px;
   overflow: hidden;
   position: relative;
   background: var(--outbound-bg);
@@ -54,9 +54,9 @@
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--outbound-line);
-  border-radius: 12px;
+  border-radius: var(--outbound-radius);
   background: var(--outbound-surface);
-  box-shadow: var(--panel-shadow);
+  box-shadow: none;
 }
 
 .outbound-left,
@@ -429,7 +429,7 @@
   cursor: pointer;
   font: inherit;
   text-align: left;
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .outbound-funnel-stage:nth-child(1) { grid-column: 1; grid-row: 1; }
@@ -451,7 +451,7 @@
 .outbound-funnel-stage[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--outbound-accent) 46%, var(--outbound-line));
   background: color-mix(in srgb, var(--outbound-accent) 13%, var(--outbound-surface));
-  box-shadow: inset 2px 0 0 var(--outbound-accent);
+  box-shadow: none;
 }
 
 .outbound-funnel-stage > span {
@@ -545,19 +545,13 @@
 
 .outbound-funnel-input.is-running .outbound-funnel-progress > span {
   min-width: 18%;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--outbound-accent) 58%, transparent),
-    var(--outbound-accent),
-    color-mix(in srgb, var(--outbound-accent) 58%, transparent)
-  );
-  background-size: 180% 100%;
-  animation: outbound-progress-sweep 1.2s ease-out infinite;
+  background: var(--outbound-accent);
+  animation: outbound-progress-pulse 1.2s ease-out infinite;
 }
 
-@keyframes outbound-progress-sweep {
-  from { background-position: 100% 0; }
-  to { background-position: 0 0; }
+@keyframes outbound-progress-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
 }
 
 .outbound-left .outbound-funnel {
@@ -1067,7 +1061,6 @@
   flex: 0 0 auto;
   border-radius: 999px;
   background: currentColor;
-  box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 34%, transparent);
   animation: outbound-status-pulse 1.45s ease-out infinite;
 }
 
@@ -1385,7 +1378,6 @@
 .outbound-center-resizer:hover::before,
 .outbound-center-resizer.is-active::before {
   background: var(--outbound-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--outbound-accent) 18%, transparent);
 }
 
 .outbound-automation-drawer,
@@ -1415,7 +1407,7 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   border-top: 1px solid var(--outbound-line);
   background: var(--outbound-surface);
-  box-shadow: 0 -18px 40px color-mix(in srgb, var(--outbound-text) 16%, transparent);
+  box-shadow: none;
   pointer-events: auto;
 }
 
@@ -1535,13 +1527,13 @@
 
 @keyframes outbound-status-pulse {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 34%, transparent);
+    opacity: 0.55;
   }
   72% {
-    box-shadow: 0 0 0 7px transparent;
+    opacity: 1;
   }
   100% {
-    box-shadow: 0 0 0 0 transparent;
+    opacity: 0.55;
   }
 }
 
@@ -1752,7 +1744,7 @@
   font-size: 12px;
 }
 
-@media (max-width: 1100px) {
+@container business-app-window (max-width: 1100px) {
   .outbound-column-settings-grid {
     grid-template-columns: 1fr;
   }
@@ -1786,13 +1778,13 @@
   border-top: 1px solid var(--outbound-line);
 }
 
-@media (max-width: 980px) {
+@container business-app-window (max-width: 980px) {
   .outbound-module {
     grid-template-columns: minmax(260px, 0.82fr) 12px minmax(420px, 1.4fr);
   }
 }
 
-@media (max-width: 760px) {
+@container business-app-window (max-width: 760px) {
   .outbound-module {
     grid-template-columns: 1fr;
     padding: 8px;
@@ -1837,7 +1829,7 @@
   overflow: hidden;
   background: var(--outbound-surface);
   border-radius: var(--outbound-radius);
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
 }
 
 .outbound-unified-toolbar {
@@ -1894,9 +1886,9 @@
   table-layout: fixed;
   background: var(--outbound-surface);
   border: 1px solid var(--outbound-line);
-  border-radius: 12px;
+  border-radius: var(--outbound-radius);
   overflow: hidden;
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .crm-table thead th {
@@ -2073,9 +2065,9 @@
 }
 
 .msg-content, .note-content {
-  background: linear-gradient(180deg, var(--outbound-surface-2), var(--outbound-surface));
+  background: var(--outbound-surface-2);
   border: 1px solid var(--outbound-line);
-  border-radius: 8px;
+  border-radius: var(--outbound-radius);
   padding: 8px 10px;
   min-height: 40px;
   max-height: calc(var(--row-h) - 16px);
@@ -2157,7 +2149,7 @@
   background: var(--outbound-surface-2);
   border: 1px solid var(--outbound-line);
   border-radius: var(--outbound-radius);
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
   min-width: 200px;
   max-width: 250px;
   max-height: 40vh;
@@ -2322,7 +2314,7 @@
   padding: 8px 10px;
   font-size: 13px;
   font-family: inherit;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s;
   width: 100%;
   box-sizing: border-box;
 }
@@ -2335,7 +2327,7 @@
 .outbound-field-wrap textarea:focus {
   outline: none;
   border-color: var(--outbound-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--outbound-accent) 18%, transparent);
+  box-shadow: none;
 }
 
 .outbound-field-wrap .code-font {
@@ -2415,6 +2407,126 @@
   100% { border-color: color-mix(in srgb, var(--outbound-accent) 20%, transparent); }
 }
 
+.outbound-mailserver-settings,
+.outbound-mailserver-add-user-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.outbound-mailserver-domain-card,
+.outbound-mailserver-add-domain-form,
+.outbound-mailserver-add-user-form {
+  background: color-mix(in srgb, var(--outbound-text) 2%, transparent);
+  border: 1px solid var(--outbound-line);
+  border-radius: var(--outbound-radius);
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.outbound-mailserver-domain-head,
+.outbound-dns-record-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.outbound-mailserver-domain-head {
+  margin-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--outbound-text) 5%, transparent);
+  padding-bottom: 8px;
+}
+
+.outbound-mailserver-domain-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--outbound-text);
+  font-weight: 700;
+}
+
+.outbound-dns-guide {
+  cursor: pointer;
+}
+
+.outbound-dns-guide summary {
+  font-size: 13px;
+  color: var(--outbound-accent);
+  font-weight: 600;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.outbound-dns-records {
+  padding-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.outbound-dns-record-card {
+  background: var(--outbound-surface-2);
+  border: 1px solid var(--outbound-line);
+  border-radius: var(--outbound-radius);
+  padding: 10px;
+}
+
+.outbound-dns-record-head {
+  margin-bottom: 4px;
+}
+
+.outbound-dns-record-head strong {
+  font-size: 11px;
+  color: var(--outbound-muted);
+}
+
+.outbound-dns-record-host {
+  font-size: 10px;
+  color: var(--outbound-muted);
+  font-family: var(--font-mono);
+}
+
+.outbound-dns-record-code {
+  display: block;
+  word-break: break-all;
+  font-size: 11px;
+  background: var(--outbound-surface);
+  border: 1px solid var(--outbound-line);
+  border-radius: calc(var(--outbound-radius) - 2px);
+  color: var(--outbound-accent);
+  padding: 6px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.outbound-mailserver-form-row {
+  display: flex;
+  gap: 8px;
+}
+
+.outbound-mailserver-form-row.is-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.outbound-mailserver-form-row input {
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: calc(var(--outbound-radius) - 2px);
+  border: 1px solid var(--outbound-line);
+  font-size: 13px;
+  background: var(--outbound-surface-2);
+  color: var(--outbound-text);
+}
+
+.outbound-mailserver-form-row input:first-child {
+  flex: 1;
+}
+
+.outbound-mailserver-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* Hidden company panel */
 .hidden-company-panel {
   position: fixed;
@@ -2423,8 +2535,8 @@
   top: 70px;
   background: var(--outbound-surface);
   border: 1px solid var(--outbound-line);
-  border-radius: 12px;
-  box-shadow: var(--panel-shadow);
+  border-radius: var(--outbound-radius);
+  box-shadow: none;
   min-width: 280px;
   max-width: 340px;
   max-height: 60vh;
@@ -2617,7 +2729,7 @@
   gap: 16px;
   padding: 16px;
   background: color-mix(in srgb, var(--outbound-line) 10%, transparent);
-  border-radius: 8px;
+  border-radius: var(--outbound-radius);
 }
 .outbound-outreach-detail-head {
   display: flex;
@@ -2647,7 +2759,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--outbound-radius);
   background: color-mix(in srgb, var(--outbound-line) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--outbound-line) 40%, transparent);
   margin-bottom: 12px;
@@ -2746,7 +2858,7 @@
 }
 .outbound-outreach-reply {
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--outbound-radius);
   background: color-mix(in srgb, var(--outbound-line) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--outbound-line) 40%, transparent);
   display: flex;
@@ -2769,21 +2881,22 @@
 }
 .outbound-outreach-timeline-item {
   padding: 6px 10px;
-  border-left: 2px solid color-mix(in srgb, var(--outbound-line) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--outbound-line) 40%, transparent);
+  border-radius: var(--control-radius);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-.outbound-outreach-timeline-draft { border-left-color: var(--outbound-muted); }
-.outbound-outreach-timeline-awaiting { border-left-color: var(--outbound-info); }
-.outbound-outreach-timeline-approved { border-left-color: var(--success); }
-.outbound-outreach-timeline-queued { border-left-color: var(--outbound-purple); }
-.outbound-outreach-timeline-sent { border-left-color: var(--success); }
-.outbound-outreach-timeline-cancelled { border-left-color: var(--outbound-danger); }
-.outbound-outreach-timeline-blocked { border-left-color: var(--outbound-warn); }
-.outbound-outreach-timeline-reply { border-left-color: var(--outbound-purple); }
-.outbound-outreach-timeline-approval { border-left-color: var(--outbound-indigo); }
-.outbound-outreach-timeline-stopped { border-left-color: var(--outbound-danger); }
+.outbound-outreach-timeline-draft { border-color: color-mix(in srgb, var(--outbound-muted) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-awaiting { border-color: color-mix(in srgb, var(--outbound-info) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-approved { border-color: color-mix(in srgb, var(--success) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-queued { border-color: color-mix(in srgb, var(--outbound-purple) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-sent { border-color: color-mix(in srgb, var(--success) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-cancelled { border-color: color-mix(in srgb, var(--outbound-danger) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-blocked { border-color: color-mix(in srgb, var(--outbound-warn) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-reply { border-color: color-mix(in srgb, var(--outbound-purple) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-approval { border-color: color-mix(in srgb, var(--outbound-indigo) 34%, var(--outbound-line)); }
+.outbound-outreach-timeline-stopped { border-color: color-mix(in srgb, var(--outbound-danger) 34%, var(--outbound-line)); }
 .outbound-outreach-modal {
   position: fixed;
   inset: 0;
@@ -2797,7 +2910,7 @@
   width: min(420px, 95vw);
   padding: 20px;
   background: var(--outbound-bg);
-  border-radius: 8px;
+  border-radius: var(--overlay-radius, var(--outbound-radius));
   border: 1px solid color-mix(in srgb, var(--outbound-line) 50%, transparent);
 }
 .outbound-outreach-modal-body h4 { margin: 0 0 12px; }
@@ -2835,9 +2948,9 @@
 
 .outbound-outreach-reply-context {
   background: color-mix(in srgb, var(--outbound-indigo) 15%, transparent);
-  border-left: 3px solid var(--outbound-indigo);
+  border: 1px solid color-mix(in srgb, var(--outbound-indigo) 40%, var(--outbound-line));
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: var(--control-radius);
   display: flex;
   gap: 8px;
   align-items: center;
@@ -2866,21 +2979,21 @@
 .outbound-outreach-head-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .outbound-outreach-sequence-warning {
   background: color-mix(in srgb, var(--outbound-warn) 10%, transparent);
-  border-left: 3px solid var(--outbound-warn);
+  border: 1px solid color-mix(in srgb, var(--outbound-warn) 42%, var(--outbound-line));
   padding: 8px 12px;
-  border-radius: 4px;
+  border-radius: var(--control-radius);
 }
 
 /* Production repair: compact campaign navigation and stable workbench layout. */
 .outbound-module {
   --outbound-left-width: min(360px, 32vw);
-  grid-template-columns: var(--outbound-left-width) 10px minmax(0, 1fr);
-  padding: 10px;
+  grid-template-columns: var(--outbound-left-width) 6px minmax(0, 1fr);
+  padding: 8px;
 }
 
 .outbound-module > .ctox-column-resizer {
-  width: 10px;
-  min-width: 10px;
+  width: 6px;
+  min-width: 6px;
   border: 0;
   border-radius: 0;
   background: color-mix(in srgb, var(--outbound-bg) 72%, var(--outbound-line));
@@ -2890,7 +3003,7 @@
 .outbound-module > .ctox-column-resizer::before {
   content: "";
   display: block;
-  width: 3px;
+  width: 2px;
   height: 52px;
   margin: auto;
   border-radius: 999px;
@@ -2900,7 +3013,6 @@
 .outbound-module > .ctox-column-resizer:hover::before,
 .outbound-module > .ctox-column-resizer.is-active::before {
   background: var(--outbound-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--outbound-accent) 18%, transparent);
 }
 
 .outbound-left .outbound-scroll {
@@ -3100,7 +3212,7 @@
   max-width: 62ch;
 }
 
-@media (max-width: 980px) {
+@container business-app-window (max-width: 980px) {
   .outbound-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(220px, 34vh) minmax(0, 1fr);
