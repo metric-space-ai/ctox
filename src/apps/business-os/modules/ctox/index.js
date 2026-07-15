@@ -413,6 +413,7 @@ export async function mount(ctx) {
     refreshTimer: null,
     localSubscriptionCleanup: null,
     refreshInFlight: false,
+    disposed: false,
     focusTaskOpenDrawer: false,
     harnessHealth: null,
     harnessToastId: '',
@@ -434,12 +435,23 @@ export async function mount(ctx) {
   const teardownShellMessages = wireShellMessages(state);
   state.layoutResizeCleanup = wireColumnResize(state);
   await loadCtoxMessages(state.lang);
-  await renderFromLocalCache(state);
+  renderLoading(state);
   startLiveTicker(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
-  refresh(state);
+  // A cold RxDB/WebRTC lease must not block the OS window from becoming
+  // operable. Hydrate in the background while the compact loading workspace is
+  // already visible, then let the normal refresh interval take over.
+  state.refreshInFlight = true;
+  void renderFromLocalCache(state)
+    .catch((error) => {
+      if (!state.disposed) console.warn('[ctox] initial local render failed', error);
+    })
+    .finally(() => {
+      state.refreshInFlight = false;
+    });
   state.refreshTimer = window.setInterval(() => refresh(state), HARNESS_REFRESH_MS);
   return () => {
+    state.disposed = true;
     window.clearInterval(state.liveTicker);
     window.clearInterval(state.refreshTimer);
     state.localSubscriptionCleanup?.();
@@ -462,6 +474,7 @@ async function renderFromLocalCache(state) {
     loadLocalBugReports(state.ctx).catch(() => []),
     loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
   ]);
+  if (state.disposed) return;
   state.webStack = {
     loading: false,
     error: webStack?.ok ? '' : (webStack?.error || 'Web Stack status unavailable'),
@@ -469,6 +482,7 @@ async function renderFromLocalCache(state) {
     data: webStack?.ok ? webStack : state.webStack?.data,
   };
   state.flow = await loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable'));
+  if (state.disposed) return;
   const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
   const metrics = aggregateFlowMetrics(state.flow);
   state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
@@ -485,6 +499,7 @@ function wireLocalRealtime(state) {
   const collectionsToWatch = ['business_commands', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports'];
   let renderTimer = null;
   const scheduleRender = () => {
+    if (state.disposed || state.refreshInFlight) return;
     if (renderTimer) return;
     renderTimer = window.setTimeout(() => {
       renderTimer = null;
@@ -509,7 +524,7 @@ function wireLocalRealtime(state) {
 }
 
 async function refresh(state) {
-  if (state.refreshInFlight) return;
+  if (state.disposed || state.refreshInFlight) return;
   state.refreshInFlight = true;
   try {
     const [commands, queueTasks, bugReports, webStack, harnessFlow] = await Promise.all([
@@ -526,6 +541,7 @@ async function refresh(state) {
       data: webStack?.ok ? webStack : state.webStack?.data,
     };
     const nextFlow = harnessFlow?.ok ? harnessFlow : emptyHarnessFlow('rxdb_flow_projection_unavailable');
+    if (state.disposed) return;
     const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
     state.flow = nextFlow;
     const metrics = aggregateFlowMetrics(nextFlow);
@@ -545,7 +561,7 @@ async function refresh(state) {
   }
 }
 
-async function renderLoading(state) {
+function renderLoading(state) {
   const t = labels[state.lang];
   state.ctx.host.querySelector('[data-ctox-left]').innerHTML = `
     <div class="ctox-panel-title">

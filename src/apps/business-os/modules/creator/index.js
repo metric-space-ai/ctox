@@ -16,6 +16,7 @@ const state = {
   resizerCleanup: null,
   catalogSubscription: null,
   commandSubscription: null,
+  streamGeneration: 0,
   installedApps: [],
   creatorRequests: [],
   isDeploying: false
@@ -138,6 +139,7 @@ export function normalizeCreatorRequestSuggestions(commands, limit = 5) {
 }
 
 export async function mount(ctx) {
+  const streamGeneration = ++state.streamGeneration;
   state.ctx = ctx;
 
   // 1. Inject module scoped stylesheet dynamically
@@ -155,8 +157,13 @@ export async function mount(ctx) {
   // 3. Wire UI events
   wireUi(ctx.host);
 
-  // 4. Load catalog-backed right rail data
-  await startCreatorDataStreams(ctx, ctx.host);
+  // 4. Render the operable shell immediately. Catalog and command hydration
+  // can wait for a cold WebRTC lease without blocking the window from opening.
+  renderCreatorRightRail(ctx.host);
+  void startCreatorDataStreams(ctx, ctx.host, streamGeneration).catch((error) => {
+    if (streamGeneration !== state.streamGeneration) return;
+    addConsoleLog(`[WARN] Creator-Daten konnten nicht geladen werden: ${error.message}`, 'warning');
+  });
 
   // 5. Initialize CTOX unified context menu
 
@@ -164,6 +171,7 @@ export async function mount(ctx) {
   state.resizerCleanup = setupResizers(ctx.host);
 
   return () => {
+    if (streamGeneration === state.streamGeneration) state.streamGeneration += 1;
     state.contextMenuCleanup?.();
     state.resizerCleanup?.();
     cleanupSubscription(state.catalogSubscription);
@@ -243,17 +251,19 @@ function setupResizers(host) {
   };
 }
 
-async function startCreatorDataStreams(ctx, host) {
+async function startCreatorDataStreams(ctx, host, streamGeneration) {
   await Promise.allSettled([
     ctx.sync?.startCollection?.('business_module_catalog'),
     ctx.sync?.startCollection?.('business_commands'),
   ]);
+  if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
 
   const catalogColl = getCollection(ctx, 'business_module_catalog');
   const commandColl = getCollection(ctx, 'business_commands');
 
   try {
     const catalogDoc = await catalogColl?.findOne?.('module-catalog')?.exec?.();
+    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.installedApps = normalizeCreatorInstalledApps(catalogDoc?.toJSON?.() || {});
   } catch (error) {
     addConsoleLog(`[WARN] Modulkatalog konnte nicht geladen werden: ${error.message}`, 'warning');
@@ -261,17 +271,21 @@ async function startCreatorDataStreams(ctx, host) {
 
   try {
     const commandDocs = await commandColl?.find?.()?.exec?.();
+    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.creatorRequests = normalizeCreatorRequestSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
   } catch (error) {
     addConsoleLog(`[WARN] CTOX App-Auftraege konnten nicht geladen werden: ${error.message}`, 'warning');
   }
 
+  if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
   state.catalogSubscription = catalogColl?.findOne?.('module-catalog')?.$?.subscribe?.((doc) => {
+    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.installedApps = normalizeCreatorInstalledApps(doc?.toJSON?.() || {});
     renderCreatorRightRail(host);
   }) || null;
 
   state.commandSubscription = commandColl?.find?.()?.$?.subscribe?.((docs) => {
+    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.creatorRequests = normalizeCreatorRequestSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
     renderCreatorRightRail(host);
   }) || null;
