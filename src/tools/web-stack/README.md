@@ -42,9 +42,10 @@ plus a report scaffold for the agent to synthesize.
 Successful retrieval and evidence promotion are separate gates. An HTTP 2xx
 response with a persisted snapshot proves transport and provenance only.
 Deep research promotes a source into the evidence bundle only when it also has
-a scored topical match and is not metadata-only, an aggregator, a third-party
-dataset reupload, or a reference/link collection. Rejected reads remain in the
-workspace with an `evidence_rejection_reason` for auditability.
+a scored topical match, contains extracted evidence text, and is not
+metadata-only, an aggregator, a third-party dataset reupload, or a
+reference/link collection. Rejected reads remain in the workspace with an
+`evidence_rejection_reason` for auditability.
 
 Deep research also creates a persistent research workspace by default under
 `runtime/research/deep-research/<timestamp>-<slug>`. The folder contains the

@@ -241,6 +241,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .get("evidence_eligible")
                             .and_then(Value::as_bool)
                             .unwrap_or(false);
+                        let content_extracted = read_has_meaningful_evidence(&read_payload);
                         source["canonical_url"] = read_payload
                             .get("canonical_url")
                             .cloned()
@@ -250,8 +251,12 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .cloned()
                             .unwrap_or_else(|| Value::String("unverified".to_string()));
                         source["transport_verified"] = Value::Bool(transport_verified);
-                        let (evidence_eligible, rejection_reason) =
-                            assess_evidence_promotion(&source, transport_verified);
+                        source["content_extracted"] = Value::Bool(content_extracted);
+                        let (evidence_eligible, rejection_reason) = assess_evidence_promotion(
+                            &source,
+                            transport_verified,
+                            content_extracted,
+                        );
                         source["evidence_eligible"] = Value::Bool(evidence_eligible);
                         if let Some(reason) = rejection_reason {
                             source["evidence_rejection_reason"] = Value::String(reason.to_string());
@@ -1119,9 +1124,13 @@ fn is_non_scoreable_source(source: &Value) -> bool {
 fn assess_evidence_promotion(
     source: &Value,
     transport_verified: bool,
+    content_extracted: bool,
 ) -> (bool, Option<&'static str>) {
     if !transport_verified {
         return (false, Some("transport_not_verified"));
+    }
+    if !content_extracted {
+        return (false, Some("no_extracted_evidence"));
     }
     if is_non_scoreable_source(source) {
         return (false, Some("metadata_or_aggregator"));
@@ -1131,6 +1140,20 @@ fn assess_evidence_promotion(
         Some(_) => (false, Some("low_topic_relevance")),
         None => (false, Some("topic_relevance_not_scored")),
     }
+}
+
+fn read_has_meaningful_evidence(read: &Value) -> bool {
+    read.get("summary")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty())
+        || read
+            .get("excerpts")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        || read
+            .get("find_results")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
 }
 
 fn is_likely_reference_collection(source: &Value) -> bool {
@@ -2458,10 +2481,17 @@ mod tests {
             "url": "https://example.edu/propeller-data",
             "discovery_score": 42,
         });
-        assert_eq!(assess_evidence_promotion(&primary, true), (true, None));
         assert_eq!(
-            assess_evidence_promotion(&primary, false),
+            assess_evidence_promotion(&primary, true, true),
+            (true, None)
+        );
+        assert_eq!(
+            assess_evidence_promotion(&primary, false, true),
             (false, Some("transport_not_verified"))
+        );
+        assert_eq!(
+            assess_evidence_promotion(&primary, true, false),
+            (false, Some("no_extracted_evidence"))
         );
 
         let metadata = json!({
@@ -2472,9 +2502,20 @@ mod tests {
             "url": "https://doi.org/10.1234/example",
         });
         assert_eq!(
-            assess_evidence_promotion(&metadata, true),
+            assess_evidence_promotion(&metadata, true, true),
             (false, Some("metadata_or_aggregator"))
         );
+
+        assert!(!read_has_meaningful_evidence(&json!({
+            "summary": "",
+            "excerpts": [],
+            "find_results": [],
+        })));
+        assert!(read_has_meaningful_evidence(&json!({
+            "summary": "Measured torque and radial load data",
+            "excerpts": [],
+            "find_results": [],
+        })));
     }
 
     #[test]
@@ -2488,7 +2529,7 @@ mod tests {
             "discovery_score": 53,
         });
         assert_eq!(
-            assess_evidence_promotion(&kaggle_reupload, true),
+            assess_evidence_promotion(&kaggle_reupload, true, true),
             (false, Some("metadata_or_aggregator"))
         );
 
@@ -2501,7 +2542,7 @@ mod tests {
             "discovery_score": 44,
         });
         assert_eq!(
-            assess_evidence_promotion(&github_resources, true),
+            assess_evidence_promotion(&github_resources, true, true),
             (false, Some("metadata_or_aggregator"))
         );
     }
@@ -2516,12 +2557,12 @@ mod tests {
             "url": "https://example.org/paper",
         });
         assert_eq!(
-            assess_evidence_promotion(&source, true),
+            assess_evidence_promotion(&source, true, true),
             (false, Some("topic_relevance_not_scored"))
         );
         source["discovery_score"] = Value::Number((-1).into());
         assert_eq!(
-            assess_evidence_promotion(&source, true),
+            assess_evidence_promotion(&source, true, true),
             (false, Some("low_topic_relevance"))
         );
     }
