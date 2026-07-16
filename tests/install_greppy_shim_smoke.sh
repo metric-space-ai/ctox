@@ -29,13 +29,35 @@ fi
 target_one="$tmp_dir/greppy-real-one"
 target_two="$tmp_dir/greppy-real-two"
 bin_dir="$tmp_dir/bin"
+provenance="$tmp_dir/provenance.json"
 mkdir -p "$bin_dir"
 
 cat > "$target_one" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'greppy 0.1.3\n'
+  exit 0
+fi
 printf 'greppy-one:%s\n' "$*"
 EOF
 chmod +x "$target_one"
+
+target_one_sha="$(file_sha256 "$target_one")"
+cat > "$provenance" <<EOF
+{
+  "revision": "$GREPPY_REV",
+  "binary_sha256": "$target_one_sha"
+}
+EOF
+if ! greppy_install_is_current "$provenance" "$target_one"; then
+  printf 'expected hash-bound Greppy install to be current\n' >&2
+  exit 1
+fi
+printf '\n# changed\n' >> "$target_one"
+if greppy_install_is_current "$provenance" "$target_one"; then
+  printf 'modified Greppy binary must not pass current-install check\n' >&2
+  exit 1
+fi
 
 cat > "$target_two" <<'EOF'
 #!/usr/bin/env bash

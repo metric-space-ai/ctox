@@ -1602,6 +1602,30 @@ remove_managed_greppy_grep_shim() {
   printf '%s\n' "preserved-existing"
 }
 
+file_sha256() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    shasum -a 256 "$path" | awk '{print $1}'
+  fi
+}
+
+greppy_install_is_current() {
+  local provenance="$1"
+  local binary="$2"
+  [[ -f "$provenance" && -x "$binary" ]] || return 1
+  grep -Fq "\"revision\": \"$GREPPY_REV\"" "$provenance" || return 1
+  local expected observed
+  expected="$(sed -n 's/.*"binary_sha256": "\([0-9a-fA-F][0-9a-fA-F]*\)".*/\1/p' "$provenance" | head -n 1)"
+  [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
+  observed="$(file_sha256 "$binary")" || return 1
+  expected="$(printf '%s' "$expected" | tr 'A-F' 'a-f')"
+  observed="$(printf '%s' "$observed" | tr 'A-F' 'a-f')"
+  [[ "$observed" == "$expected" ]] || return 1
+  "$binary" --version 2>/dev/null | grep -q '^greppy '
+}
+
 ensure_greppy_tool() {
   local started; started="$(date +%s)"
   tui_module_start "Installing greppy code navigation"
@@ -1616,7 +1640,18 @@ ensure_greppy_tool() {
   local install_root="$root/install"
   local cargo_home="$root/cargo-home"
   local cargo_target="$root/cargo-target"
+  if [[ -n "${CTOX_BUILD_TARGET_DIR:-}" ]]; then
+    cargo_target="${CTOX_BUILD_TARGET_DIR%/}/greppy"
+  fi
   mkdir -p "$root/src" "$install_root" "$cargo_home" "$cargo_target" "$BIN_DIR" || return 1
+
+  local greppy_bin="$install_root/bin/greppy"
+  if greppy_install_is_current "$root/provenance.json" "$greppy_bin"; then
+    write_greppy_shim "$BIN_DIR/greppy" "$greppy_bin" 1 || return 1
+    remove_managed_greppy_grep_shim "$BIN_DIR/grep" >/dev/null || return 1
+    tui_module_done "greppy code navigation (verified current)" "$started"
+    return 0
+  fi
 
   if [[ -d "$source_dir/.git" ]]; then
     git -C "$source_dir" fetch --depth 1 origin "$GREPPY_REV" >/dev/null 2>&1 || return 1
@@ -1644,8 +1679,9 @@ ensure_greppy_tool() {
     "CARGO_NET_GIT_FETCH_WITH_CLI=true" \
     "${cargo_cmd[@]}" install --force --locked --path "$source_dir/crates/cli" --root "$install_root" >/dev/null || return 1
 
-  local greppy_bin="$install_root/bin/greppy"
   [[ -x "$greppy_bin" ]] || return 1
+  local greppy_sha256
+  greppy_sha256="$(file_sha256 "$greppy_bin")" || return 1
   write_greppy_shim "$BIN_DIR/greppy" "$greppy_bin" 1 || return 1
   local grep_shim_status
   grep_shim_status="$(remove_managed_greppy_grep_shim "$BIN_DIR/grep")" || return 1
@@ -1658,6 +1694,7 @@ ensure_greppy_tool() {
   "rust_toolchain": "$GREPPY_RUST_TOOLCHAIN",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "binary": "$greppy_bin",
+  "binary_sha256": "$greppy_sha256",
   "shims": ["$BIN_DIR/greppy"],
   "greppy_shim_status": "managed",
   "grep_shim_status": "$grep_shim_status"
