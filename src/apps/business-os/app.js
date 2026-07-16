@@ -52,7 +52,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260716-files-initial-sync-v103';
+const APP_BUILD = '20260716-office-data-scopes-v104';
 
 ensureShellStylesheets();
 
@@ -5414,6 +5414,11 @@ const DESKTOP_APP_DB_COLLECTIONS = {
   explorer: [
     'desktop_file_chunks',
     'desktop_files',
+    'documents',
+    'knowledge_items',
+    'matching_objects',
+    'outbound_companies',
+    'spreadsheets',
   ],
   'file-viewer': [
     'business_commands',
@@ -5489,6 +5494,14 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'documents',
     'document_versions',
     'document_blob_chunks',
+  ]),
+  spreadsheets: Object.freeze([
+    'business_commands',
+    'spreadsheets',
+    'spreadsheet_versions',
+    'spreadsheet_blob_chunks',
+    'spreadsheet_runbooks',
+    'ctox_runtime_settings',
   ]),
   reports: Object.freeze([
     'business_commands',

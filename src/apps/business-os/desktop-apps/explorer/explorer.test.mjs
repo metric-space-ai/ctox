@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import { build } from 'esbuild';
 
 const explorerSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+const shellSource = await readFile(new URL('../../app.js', import.meta.url), 'utf8');
 
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./app.js', import.meta.url))],
@@ -76,6 +77,24 @@ describe('Explorer app helpers', () => {
     assert.ok(replicationStart >= 0, 'Files must explicitly start desktop_files replication');
     assert.ok(replicationStart < seedStart, 'native file metadata must arrive before browser seeds');
     assert.ok(seedStart < renderStart, 'the populated collection must be rendered last');
+  });
+
+  it('replicates each selected Business OS source through the scoped Files facade', () => {
+    assert.match(explorerSource, /startCollection\?\.\(state\.activeSource\.id\)/);
+    const scope = shellSource.match(/explorer: \[([\s\S]*?)\],/);
+    assert.ok(scope, 'Files must have an explicit packaged-system data scope');
+    for (const collection of ['documents', 'spreadsheets', 'knowledge_items', 'matching_objects', 'outbound_companies']) {
+      assert.match(scope[1], new RegExp(`'${collection}'`));
+    }
+  });
+
+  it('gives the packaged Spreadsheets app only its declared system collections', () => {
+    const scope = shellSource.match(/spreadsheets: Object\.freeze\(\[([\s\S]*?)\]\),/);
+    assert.ok(scope, 'Spreadsheets must have an explicit packaged-system data scope');
+    for (const collection of ['spreadsheets', 'spreadsheet_versions', 'spreadsheet_blob_chunks', 'spreadsheet_runbooks']) {
+      assert.match(scope[1], new RegExp(`'${collection}'`));
+    }
+    assert.doesNotMatch(scope[1], /desktop_files|documents|knowledge_items/);
   });
 
   it('validates new folder and rename inputs before persistence', () => {

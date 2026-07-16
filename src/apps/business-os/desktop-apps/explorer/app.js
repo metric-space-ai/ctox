@@ -165,6 +165,22 @@ export async function mount(container, ctx) {
     refs.table.replaceChildren(message('Lade Dateien...'));
     refs.preview.innerHTML = emptyPreview();
     revokePreviewUrl();
+    try {
+      const bridge = await ctx.sync?.startCollection?.(state.activeSource.id);
+      if (bridge) await waitForReplicationBridge(bridge, state.activeSource.id);
+    } catch (error) {
+      state.rows = [];
+      state.lastLoad = {
+        ok: false,
+        reason: 'sync_error',
+        total: 0,
+        visible: 0,
+        message: `Synchronisierung fehlgeschlagen: ${error?.message || error}`,
+      };
+      renderHeader();
+      renderRows();
+      return;
+    }
     const collection = ctx.db?.collection?.(state.activeSource.id);
     if (!collection) {
       state.rows = [];
