@@ -71,8 +71,27 @@ function main() {
   assertLockfileIntegrity();
   assertCiWorkflowMatrix();
   assertReleaseWorkflowMatrix();
+  assertDedicatedDesktopReleaseWorkflow();
 
   console.log("desktop release config OK");
+}
+
+function assertDedicatedDesktopReleaseWorkflow() {
+  const workflowPath = path.join(repoRoot, ".github", "workflows", "business-os-desktop-release.yml");
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  assert.match(workflow, /business-os-desktop-v\*/);
+  for (const artifact of [
+    "ctox-business-os-desktop-macos-arm64",
+    "ctox-business-os-desktop-macos-x64",
+    "ctox-business-os-desktop-linux-x64",
+    "ctox-business-os-desktop-windows-x64",
+  ]) {
+    assert.match(workflow, new RegExp(escapeRegExp(`artifact: ${artifact}`)));
+  }
+  assert.match(workflow, /CTOX_WINDOWS_STORE_RELEASE/);
+  assert.match(workflow, /Verify macOS signing secrets/);
+  assert.match(workflow, /actions\/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/);
+  assert.match(workflow, /softprops\/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65/);
 }
 
 function assertLockfileIntegrity() {
