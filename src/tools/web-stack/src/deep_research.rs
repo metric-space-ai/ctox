@@ -237,6 +237,10 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     },
                 ) {
                     Ok(read_payload) => {
+                        let transport_verified = read_payload
+                            .get("evidence_eligible")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
                         source["canonical_url"] = read_payload
                             .get("canonical_url")
                             .cloned()
@@ -245,10 +249,13 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .get("verification_status")
                             .cloned()
                             .unwrap_or_else(|| Value::String("unverified".to_string()));
-                        source["evidence_eligible"] = read_payload
-                            .get("evidence_eligible")
-                            .cloned()
-                            .unwrap_or(Value::Bool(false));
+                        source["transport_verified"] = Value::Bool(transport_verified);
+                        let (evidence_eligible, rejection_reason) =
+                            assess_evidence_promotion(&source, transport_verified);
+                        source["evidence_eligible"] = Value::Bool(evidence_eligible);
+                        if let Some(reason) = rejection_reason {
+                            source["evidence_rejection_reason"] = Value::String(reason.to_string());
+                        }
                         source["checked_at"] = read_payload
                             .get("checked_at")
                             .cloned()
@@ -1106,6 +1113,49 @@ fn is_non_scoreable_source(source: &Value) -> bool {
         || source_type == "aggregator"
         || source_tier == "metadata"
         || source_tier == "aggregator"
+        || is_likely_reference_collection(source)
+}
+
+fn assess_evidence_promotion(
+    source: &Value,
+    transport_verified: bool,
+) -> (bool, Option<&'static str>) {
+    if !transport_verified {
+        return (false, Some("transport_not_verified"));
+    }
+    if is_non_scoreable_source(source) {
+        return (false, Some("metadata_or_aggregator"));
+    }
+    match source.get("discovery_score").and_then(Value::as_i64) {
+        Some(score) if score >= 0 => (true, None),
+        Some(_) => (false, Some("low_topic_relevance")),
+        None => (false, Some("topic_relevance_not_scored")),
+    }
+}
+
+fn is_likely_reference_collection(source: &Value) -> bool {
+    let domain = source
+        .get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let title = source
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let url = source
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    domain == "kaggle.com"
+        || domain.ends_with(".kaggle.com")
+        || ((domain == "github.com" || domain.ends_with(".github.com"))
+            && ["awesome", "resource", "link-list", "curated-list"]
+                .iter()
+                .any(|marker| title.contains(marker) || url.contains(marker)))
 }
 
 fn source_tier_for_source(source_type: &str) -> String {
@@ -1366,6 +1416,9 @@ fn collect_scholarly_search_sources(
             if let Some(license) = result.get("open_access_license").cloned() {
                 entry["open_access_license"] = license;
             }
+        }
+        if let Some(score) = source_discovery_score(&entry, &plan.query) {
+            entry["discovery_score"] = Value::Number(score.into());
         }
         sources.push(entry);
     }
@@ -2396,6 +2449,84 @@ mod tests {
     }
 
     #[test]
+    fn evidence_promotion_separates_transport_from_source_quality() {
+        let primary = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "domain": "example.edu",
+            "title": "Measured propeller thrust and torque dataset",
+            "url": "https://example.edu/propeller-data",
+            "discovery_score": 42,
+        });
+        assert_eq!(assess_evidence_promotion(&primary, true), (true, None));
+        assert_eq!(
+            assess_evidence_promotion(&primary, false),
+            (false, Some("transport_not_verified"))
+        );
+
+        let metadata = json!({
+            "source_type": "paper_metadata",
+            "source_tier": "metadata",
+            "domain": "doi.org",
+            "title": "Metadata landing page",
+            "url": "https://doi.org/10.1234/example",
+        });
+        assert_eq!(
+            assess_evidence_promotion(&metadata, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+    }
+
+    #[test]
+    fn evidence_promotion_rejects_reuploads_and_reference_lists() {
+        let kaggle_reupload = json!({
+            "source_type": "web",
+            "source_tier": "web",
+            "domain": "www.kaggle.com",
+            "title": "UIUC Propeller Database",
+            "url": "https://www.kaggle.com/datasets/example/uiuc-propeller-database",
+            "discovery_score": 53,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&kaggle_reupload, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+
+        let github_resources = json!({
+            "source_type": "web",
+            "source_tier": "web",
+            "domain": "github.com",
+            "title": "Predictive Maintenance and Vibration Resources",
+            "url": "https://github.com/example/vibration-resources",
+            "discovery_score": 44,
+        });
+        assert_eq!(
+            assess_evidence_promotion(&github_resources, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+    }
+
+    #[test]
+    fn evidence_promotion_rejects_unscored_or_negative_relevance() {
+        let mut source = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "domain": "example.org",
+            "title": "Unrelated reachable paper",
+            "url": "https://example.org/paper",
+        });
+        assert_eq!(
+            assess_evidence_promotion(&source, true),
+            (false, Some("topic_relevance_not_scored"))
+        );
+        source["discovery_score"] = Value::Number((-1).into());
+        assert_eq!(
+            assess_evidence_promotion(&source, true),
+            (false, Some("low_topic_relevance"))
+        );
+    }
+
+    #[test]
     fn discovered_search_source_uses_discovery_score_and_unverified_status() {
         let payload = json!({
             "results": [{
@@ -2625,6 +2756,10 @@ mod tests {
             Some(false)
         );
         assert_eq!(paper.get("is_pdf").and_then(Value::as_bool), Some(true));
+        assert!(paper
+            .get("discovery_score")
+            .and_then(Value::as_i64)
+            .is_some());
         assert_eq!(
             paper
                 .pointer("/scholarly_metadata/doi")
