@@ -944,12 +944,14 @@ async function loadDashboardData() {
   state.graphNodeRows = graphNodeRows;
   state.graphEdgeRows = graphEdgeRows;
   state.sourceModels = buildSourceModels(task, sourceRows, curatedRows, measurementRows);
+  const evidenceMeasurementRows = filterMeasurementRowsForEvidence(measurementRows, state.sourceModels);
+  const evidenceGraphRows = filterGraphRowsForEvidence(graphNodeRows, graphEdgeRows, evidenceSourceIds(state.sourceModels));
   state.graphProjection = buildResearchGraphProjection({
     task,
-    sourceModels: state.sourceModels,
-    measurementRows,
-    graphNodeRows,
-    graphEdgeRows,
+    sourceModels: evidenceSourceModels(state.sourceModels),
+    measurementRows: evidenceMeasurementRows,
+    graphNodeRows: evidenceGraphRows.nodes,
+    graphEdgeRows: evidenceGraphRows.edges,
     graphLayer: state.graph.layer,
     visibleLimit: state.graph.visibleLimit,
   });
@@ -985,13 +987,14 @@ async function fetchTableRows(tableId) {
 }
 
 function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
-  const measurementAgg = aggregateMeasurements(measurementRows);
   const curatedBySource = new Map();
   for (const row of curatedRows) {
     const id = sourceId(row);
     if (id) curatedBySource.set(id, row);
   }
   const raw = sourceRows.length ? sourceRows : curatedRows;
+  const verifiedIds = new Set(raw.filter((row) => evidenceGate(row).eligible).map(sourceId).filter(Boolean));
+  const measurementAgg = aggregateMeasurements((measurementRows || []).filter((row) => verifiedIds.has(sourceId(row))));
   return raw.map((row, index) => {
     const id = sourceId(row) || `source_${index + 1}`;
     const title = firstString(row, ['title', 'source_title', 'name']) || `Source ${index + 1}`;
@@ -1000,7 +1003,10 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
     const curated = curatedBySource.get(id);
     const agg = measurementAgg.get(id) || null;
     const axisDefs = scoringDimensionsForTask(task);
-    const dimensions = scoreDimensions(row, curated, agg, task, axisDefs);
+    const gate = evidenceGate(row);
+    const dimensions = gate.eligible
+      ? scoreDimensions(row, curated, agg, task, axisDefs)
+      : emptyScoreDimensions(axisDefs);
     return {
       id,
       rank: index + 1,
@@ -1012,11 +1018,117 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
       row,
       curated,
       measurements: agg,
+      evidenceEligible: gate.eligible,
+      evidenceStatus: gate.status,
+      evidenceStatusLabel: gate.label,
       dimensions,
-      score: dimensions.portfolio_priority,
-      grade: gradeForScore(dimensions.portfolio_priority),
+      score: gate.eligible ? dimensions.portfolio_priority : null,
+      grade: gate.eligible ? gradeForScore(dimensions.portfolio_priority) : '—',
     };
-  }).sort((a, b) => b.score - a.score).map((item, index) => ({ ...item, rank: index + 1 }));
+  }).sort((a, b) => {
+    if (a.evidenceEligible !== b.evidenceEligible) return a.evidenceEligible ? -1 : 1;
+    if (a.evidenceEligible) return b.score - a.score;
+    return 0;
+  }).map((item, index, items) => ({
+    ...item,
+    rank: item.evidenceEligible ? items.slice(0, index + 1).filter((candidate) => candidate.evidenceEligible).length : null,
+  }));
+}
+
+function evidenceRankedSources() {
+  return state.sourceModels.filter((source) => source.evidenceEligible);
+}
+
+function evidenceSourceModels(sourceModels = state.sourceModels) {
+  return sourceModels.filter((source) => source.evidenceEligible);
+}
+
+function evidenceSourceIds(sourceModels = state.sourceModels) {
+  return new Set(evidenceSourceModels(sourceModels).map((source) => source.id));
+}
+
+function filterMeasurementRowsForEvidence(rows, sourceModels = state.sourceModels) {
+  const eligibleIds = evidenceSourceIds(sourceModels);
+  return (rows || []).filter((row) => eligibleIds.has(sourceId(row)));
+}
+
+function filterGraphRowsForEvidence(nodeRows, edgeRows, eligibleIds) {
+  const nodes = (nodeRows || []).map((row) => {
+    const nodeId = firstString(row, ['node_id', 'id', 'concept_id', 'key']);
+    const explicitSourceId = nodeId.startsWith('source:') ? nodeId.slice('source:'.length) : '';
+    const sourceIds = graphSourceIds(row);
+    const filteredSourceIds = sourceIds.filter((id) => eligibleIds.has(id));
+    if (explicitSourceId && !eligibleIds.has(explicitSourceId)) return null;
+    if (sourceIds.length && !filteredSourceIds.length) return null;
+    if (!sourceIds.length || filteredSourceIds.length === sourceIds.length) return row;
+    return { ...row, source_ids_json: JSON.stringify(filteredSourceIds) };
+  }).filter(Boolean);
+  const edges = (edgeRows || []).filter((row) => {
+    const sourceIds = graphSourceIds(row);
+    return !sourceIds.length || sourceIds.some((id) => eligibleIds.has(id));
+  }).map((row) => {
+    const sourceIds = graphSourceIds(row);
+    if (!sourceIds.length || sourceIds.every((id) => eligibleIds.has(id))) return row;
+    return { ...row, source_ids_json: JSON.stringify(sourceIds.filter((id) => eligibleIds.has(id))) };
+  });
+  return { nodes, edges };
+}
+
+function graphSourceIds(row) {
+  const raw = row?.source_ids_json ?? row?.source_ids ?? row?.sources;
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch {}
+  return raw.split(/[,;|]/).map((value) => value.trim()).filter(Boolean);
+}
+
+function evidenceGate(row) {
+  const verificationStatus = firstString(row, ['verification_status']).toLowerCase();
+  const httpStatus = Number(row?.http_status);
+  const snapshotHash = firstString(row, ['snapshot_hash']);
+  const sourceTier = firstString(row, ['source_tier']).toLowerCase();
+  const metadataOnly = row?.metadata_only === true
+    || firstString(row, ['reading_status', 'source_status', 'review_status', 'status']).toLowerCase() === 'metadata_only'
+    || firstString(row, ['source_type', 'type']).toLowerCase() === 'paper_metadata';
+  const rejected = ['relevance_status', 'screening_status', 'review_status', 'source_status', 'status']
+    .map((key) => firstString(row, [key]).toLowerCase())
+    .some((value) => ['rejected', 'off_topic', 'off-topic', 'fachfremd', 'irrelevant'].includes(value));
+  const aggregated = /aggregat|rollup|derived|synthes|summary/.test(sourceTier);
+  const eligible = verificationStatus === 'verified'
+    && Number.isInteger(httpStatus)
+    && httpStatus >= 200
+    && httpStatus < 300
+    && Boolean(snapshotHash)
+    && row?.evidence_eligible === true
+    && Boolean(sourceTier)
+    && !aggregated
+    && !metadataOnly
+    && !rejected;
+
+  if (eligible) return { eligible: true, status: 'verified', label: 'Verifiziert' };
+  if (metadataOnly) return { eligible: false, status: 'metadata_only', label: 'Metadata only' };
+  if (rejected) return { eligible: false, status: 'rejected', label: 'Rejected / off-topic' };
+  if (Number.isFinite(httpStatus) && (httpStatus < 200 || httpStatus >= 300)) {
+    return { eligible: false, status: 'http_error', label: `HTTP ${httpStatus}` };
+  }
+  if (aggregated) return { eligible: false, status: 'aggregated', label: 'Aggregated source' };
+  if (verificationStatus !== 'verified') return { eligible: false, status: 'unverified', label: 'Not verified' };
+  if (!snapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Snapshot missing' };
+  if (row?.evidence_eligible !== true) return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
+  if (!sourceTier) return { eligible: false, status: 'legacy', label: 'Legacy / not verified' };
+  return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
+}
+
+function emptyScoreDimensions(axisDefs = BASE_AXES) {
+  return Object.fromEntries([...new Set([
+    ...BASE_AXES,
+    ...BEARING_AXES,
+    ...COMPETITIVE_AI_AXES,
+    ...(axisDefs || []),
+  ].map((axis) => axis.id))].map((id) => [id, null]));
 }
 
 function aggregateMeasurements(rows) {
@@ -1131,6 +1243,7 @@ function renderLeft() {
   const root = pane('left');
   if (!root) return;
   const task = selectedTask();
+  const rankedSources = evidenceRankedSources();
   root.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -1152,6 +1265,15 @@ function renderLeft() {
         </div>
         <div class="research-task-list">
           ${state.tasks.map(renderTaskButton).join('') || renderNoTasksEmpty()}
+        </div>
+      </section>
+      <section class="research-section">
+        <div class="research-section-head">
+          <strong>${escapeHtml(state.t('evidenceRanking', 'Evidence-Ranking'))}</strong>
+          <span>${rankedSources.length} ${escapeHtml(state.t('verified', 'verifiziert'))}</span>
+        </div>
+        <div class="research-ranking-list">
+          ${rankedSources.map(renderRankingRow).join('') || `<div class="research-empty">${escapeHtml(state.t('noVerifiedSources', 'Keine verifizierten Quellen verfügbar. Discovery-Kandidaten bleiben ohne Evidence-Score.'))}</div>`}
         </div>
       </section>
     </div>
@@ -1177,7 +1299,7 @@ function renderRankingRow(source) {
       <span class="research-rank">#${source.rank}</span>
       <span class="research-rank-main"><strong>${escapeHtml(source.title)}</strong><small>${escapeHtml(source.subtitle)}</small></span>
       <span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade}</span>
-      <span class="research-score">${(source.score / 10).toFixed(1)}</span>
+      <span class="research-score">${formatPortfolioScore(source.score)}</span>
     </button>
   `;
 }
@@ -1348,7 +1470,7 @@ function renderSemanticGraph(task, projection) {
         ${state.graph.panel === 'hidden' ? '' : renderGraphInsights(projection)}
         <div class="research-graph-actions">
           <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="research" ${state.graph.busyAction ? 'disabled' : ''}>${iconSvg('search')}<span>${escapeHtml(state.t('targetedResearch', 'Nachrecherche'))}</span></button>
-          <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="document" ${state.graph.busyAction ? 'disabled' : ''}>${iconSvg('file')}<span>${escapeHtml(state.t('createDocument', 'Dokument erstellen'))}</span></button>
+          <button type="button" class="research-graph-action" data-action="graph-ai" data-graph-ai="document" ${state.graph.busyAction || !evidenceRankedSources().length ? 'disabled' : ''}>${iconSvg('file')}<span>${escapeHtml(evidenceRankedSources().length ? state.t('createDocument', 'Dokument erstellen') : state.t('reportUnavailable', 'Report nicht verfügbar'))}</span></button>
         </div>
       </div>
     </section>
@@ -1390,12 +1512,13 @@ function renderGraphInsights(projection) {
 }
 
 function currentGraphProjection(task = selectedTask()) {
+  const evidenceGraphRows = filterGraphRowsForEvidence(state.graphNodeRows, state.graphEdgeRows, evidenceSourceIds(state.sourceModels));
   const projection = buildResearchGraphProjection({
     task,
-    sourceModels: state.sourceModels,
-    measurementRows: state.measurementRows,
-    graphNodeRows: state.graphNodeRows,
-    graphEdgeRows: state.graphEdgeRows,
+    sourceModels: evidenceSourceModels(state.sourceModels),
+    measurementRows: filterMeasurementRowsForEvidence(state.measurementRows),
+    graphNodeRows: evidenceGraphRows.nodes,
+    graphEdgeRows: evidenceGraphRows.edges,
     graphLayer: state.graph.layer,
     visibleLimit: state.graph.visibleLimit,
   });
@@ -1513,6 +1636,11 @@ function updateGraphInsights() {
 async function dispatchGraphAiAction(action) {
   const task = selectedTask();
   if (!task || state.graph.busyAction) return;
+  if (action === 'document' && !evidenceRankedSources().length) {
+    setStatus(state.t('reportRequiresVerifiedSources', 'Reports sind ohne verifizierte Quellen nicht verfügbar.'));
+    renderCenter();
+    return;
+  }
   if (!canWriteResearchState()) {
     setStatus(researchWriteDeniedMessage());
     return;
@@ -1606,8 +1734,8 @@ async function dispatchTargetedGraphResearch(task) {
     command_id: commandId,
     task_queue_id: result?.task_id || '',
     identified_count: state.sourceRows.length,
-    accepted_count: state.sourceModels.length,
-    used_count: state.sourceModels.length,
+    accepted_count: evidenceRankedSources().length,
+    used_count: evidenceRankedSources().length,
     payload: { result, graph_focus: focus },
     created_at_ms: now,
     updated_at_ms: now,
@@ -1618,6 +1746,7 @@ async function dispatchTargetedGraphResearch(task) {
 }
 
 async function dispatchGraphDocumentTask(task) {
+  if (!evidenceRankedSources().length) return;
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
   const focus = selectedNode?.label || task.title;
   const title = `${task.title} · ${focus}`.slice(0, 120);
@@ -1757,6 +1886,7 @@ function mapModeToggle() {
 }
 
 function renderMapPoint(source, xAxis, yAxis) {
+  if (!source?.evidenceEligible) return '';
   const jitter = pointJitter(source);
   const x = clampScore((source.dimensions[xAxis] ?? source.score) + jitter.x);
   const y = clampScore((source.dimensions[yAxis] ?? source.score) + jitter.y);
@@ -1835,7 +1965,7 @@ function discoveryGraph(task) {
   const topSources = [];
   const cIds = ["rotorload", "bench", "flightlog", "vibration", "simulation"];
   cIds.forEach(cId => {
-    const clusterSources = state.sourceModels
+    const clusterSources = evidenceRankedSources()
       .filter(s => getSearchCluster(s) === cId)
       .sort((a, b) => b.score - a.score)
       .slice(0, 8);
@@ -2057,12 +2187,12 @@ function renderSourcesTable(filteredList = state.sourceModels) {
       </thead>
       <tbody>
         ${filteredList.map((source) => `
-          <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}">
-            <td><button type="button" data-action="select-source" data-source-id="${escapeHtml(source.id)}"><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.id)}</span></button></td>
+          <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}" data-evidence-status="${escapeHtml(source.evidenceStatus)}">
+            <td><button type="button" data-action="select-source" data-source-id="${escapeHtml(source.id)}"><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.id)} · ${escapeHtml(source.evidenceStatusLabel)}</span></button></td>
             <td>${escapeHtml(source.sourceClass)}</td>
-            <td class="is-num"><span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
-            <td class="is-num">${Math.round(source.dimensions[yAxis] ?? 0)}</td>
-            <td class="is-num">${Math.round(source.dimensions[xAxis] ?? 0)}</td>
+            <td class="is-num"><span class="ctox-badge ${gradeBadgeClass(source.grade)}">${escapeHtml(source.grade)}${source.evidenceEligible ? ` · ${formatPortfolioScore(source.score)}` : ''}</span></td>
+            <td class="is-num">${formatDimensionScore(source.dimensions[yAxis])}</td>
+            <td class="is-num">${formatDimensionScore(source.dimensions[xAxis])}</td>
             <td class="is-num">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
@@ -2173,6 +2303,9 @@ function renderSourceCard(source) {
           ${escapeHtml(gradeFullText(source.grade))}
         </span>
       </div>
+      <div class="research-source-card-status ${source.evidenceEligible ? 'is-verified' : 'is-discovery'}" data-evidence-status="${escapeHtml(source.evidenceStatus)}">
+        ${escapeHtml(source.evidenceStatusLabel)}${source.evidenceEligible ? ` · ${escapeHtml(formatPortfolioScore(source.score))}` : ' · Score —'}
+      </div>
       <div class="research-source-card-chips">
         ${tags.map(tag => `<span class="research-source-card-chip">${escapeHtml(tag)}</span>`).join('')}
       </div>
@@ -2218,6 +2351,18 @@ function gradeFullText(grade) {
   if (g === 'C') return 'C · Ergänzend';
   if (g === 'D') return 'D · Risiko';
   return g;
+}
+
+function formatPortfolioScore(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const score = Number(value);
+  return Number.isFinite(score) ? (score / 10).toFixed(1) : '—';
+}
+
+function formatDimensionScore(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const score = Number(value);
+  return Number.isFinite(score) ? String(Math.round(score)) : '—';
 }
 
 function renderMeasurementsTable() {
@@ -2320,6 +2465,7 @@ function renderRight() {
   const notes = computedDecisionNotes(source);
   const axisPair = normalizedAxisPair(task);
   const canRun = canRunResearchTask(task);
+  const canBuildKnowledge = canBuildKnowledgeFromResearch(task);
   root.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -2336,11 +2482,12 @@ function renderRight() {
         <p>${escapeHtml(task?.prompt || state.t('defaultTaskDesc', 'Research-Dashboard auf Basis einer vorhandenen Knowledge Base.'))}</p>
         ${task?.criteria ? `<small>${escapeHtml(task.criteria)}</small>` : ''}
         ${task ? `<button type="button" class="ctox-button" data-action="edit-task">${escapeHtml(state.t('editScoring', 'Scoring bearbeiten'))}</button>` : ''}
-        ${task ? `<button type="button" class="ctox-button" data-action="build-knowledge">${escapeHtml(task.payload?.knowledge_refresh?.command_id ? state.t('updateKnowledge', 'Knowledge aktualisieren') : state.t('buildKnowledge', 'Knowledge aufbauen'))}</button>` : ''}
+        ${task ? `<button type="button" class="ctox-button" data-action="build-knowledge" ${canBuildKnowledge ? '' : 'disabled aria-disabled="true"'} title="${escapeHtml(canBuildKnowledge ? '' : knowledgeUnavailableReason())}">${escapeHtml(task.payload?.knowledge_refresh?.command_id ? state.t('updateKnowledge', 'Knowledge aktualisieren') : state.t('buildKnowledge', 'Knowledge aufbauen'))}</button>` : ''}
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
         <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
+        <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('verified', 'Verified'))}</span></div>
         <div><strong>${state.measurementRows.length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
         <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
         <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>${escapeHtml(state.t('status', 'Status'))}</span></div>
@@ -2351,16 +2498,17 @@ function renderRight() {
         ${source ? `
           <strong style="font-size: 13px; display: block; margin-bottom: 8px; color: var(--research-text);">${escapeHtml(source.title)}</strong>
           <p style="font-size: 11.5px; line-height: 1.4; color: var(--research-muted); margin-bottom: 12px;">${escapeHtml(source.note || state.t('noSummaryAvailable', 'Keine Zusammenfassung vorhanden.'))}</p>
+          <div class="research-source-card-status ${source.evidenceEligible ? 'is-verified' : 'is-discovery'}" data-evidence-status="${escapeHtml(source.evidenceStatus)}">${escapeHtml(source.evidenceStatusLabel)} · ${source.evidenceEligible ? 'Score verfügbar' : 'Score —'}</div>
           
           <div class="research-metric-profile" style="margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px;">
             <!-- Overall Score Progress -->
             <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
               <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
                 <span>Overall Score</span>
-                <span>${(source.score / 10).toFixed(1)}%</span>
+                <span>${formatPortfolioScore(source.score)}${source.evidenceEligible ? '%' : ''}</span>
               </div>
               <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
-                <div class="research-metric-progress-bar-fill ${source.score / 10 > 75 ? 'good' : source.score / 10 > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${(source.score / 10).toFixed(1)}%;"></div>
+                <div class="research-metric-progress-bar-fill ${source.evidenceEligible && source.score / 10 > 75 ? 'good' : source.evidenceEligible && source.score / 10 > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${source.evidenceEligible ? (source.score / 10).toFixed(1) : '0'}%;"></div>
               </div>
             </div>
             
@@ -2368,10 +2516,10 @@ function renderRight() {
             <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
               <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
                 <span>Source Quality</span>
-                <span>${Math.round(source.dimensions.source_quality || 0)}%</span>
+                <span>${formatDimensionScore(source.dimensions.source_quality)}${source.evidenceEligible ? '%' : ''}</span>
               </div>
               <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
-                <div class="research-metric-progress-bar-fill ${source.dimensions.source_quality > 75 ? 'good' : source.dimensions.source_quality > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.source_quality || 0)}%;"></div>
+                <div class="research-metric-progress-bar-fill ${source.evidenceEligible && source.dimensions.source_quality > 75 ? 'good' : source.evidenceEligible && source.dimensions.source_quality > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${source.evidenceEligible ? Math.round(source.dimensions.source_quality) : 0}%;"></div>
               </div>
             </div>
             
@@ -2379,10 +2527,10 @@ function renderRight() {
             <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
               <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
                 <span>Evidence Strength</span>
-                <span>${Math.round(source.dimensions.evidence_strength || 0)}%</span>
+                <span>${formatDimensionScore(source.dimensions.evidence_strength)}${source.evidenceEligible ? '%' : ''}</span>
               </div>
               <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
-                <div class="research-metric-progress-bar-fill ${source.dimensions.evidence_strength > 75 ? 'good' : source.dimensions.evidence_strength > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.evidence_strength || 0)}%;"></div>
+                <div class="research-metric-progress-bar-fill ${source.evidenceEligible && source.dimensions.evidence_strength > 75 ? 'good' : source.evidenceEligible && source.dimensions.evidence_strength > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${source.evidenceEligible ? Math.round(source.dimensions.evidence_strength) : 0}%;"></div>
               </div>
             </div>
             
@@ -2390,10 +2538,10 @@ function renderRight() {
             <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
               <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
                 <span>Topic Fit</span>
-                <span>${Math.round(source.dimensions.topic_fit || 0)}%</span>
+                <span>${formatDimensionScore(source.dimensions.topic_fit)}${source.evidenceEligible ? '%' : ''}</span>
               </div>
               <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
-                <div class="research-metric-progress-bar-fill ${source.dimensions.topic_fit > 75 ? 'good' : source.dimensions.topic_fit > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.topic_fit || 0)}%;"></div>
+                <div class="research-metric-progress-bar-fill ${source.evidenceEligible && source.dimensions.topic_fit > 75 ? 'good' : source.evidenceEligible && source.dimensions.topic_fit > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${source.evidenceEligible ? Math.round(source.dimensions.topic_fit) : 0}%;"></div>
               </div>
             </div>
             
@@ -2401,10 +2549,10 @@ function renderRight() {
             <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
               <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
                 <span>Actionability</span>
-                <span>${Math.round(source.dimensions.actionability || 0)}%</span>
+                <span>${formatDimensionScore(source.dimensions.actionability)}${source.evidenceEligible ? '%' : ''}</span>
               </div>
               <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
-                <div class="research-metric-progress-bar-fill ${source.dimensions.actionability > 75 ? 'good' : source.dimensions.actionability > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.actionability || 0)}%;"></div>
+                <div class="research-metric-progress-bar-fill ${source.evidenceEligible && source.dimensions.actionability > 75 ? 'good' : source.evidenceEligible && source.dimensions.actionability > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${source.evidenceEligible ? Math.round(source.dimensions.actionability) : 0}%;"></div>
               </div>
             </div>
           </div>
@@ -2458,13 +2606,16 @@ function renderRunPanel(runInfo) {
 }
 
 function computedDecisionNotes(source) {
-  const top = state.sourceModels[0];
+  const top = evidenceRankedSources()[0];
   const notes = [];
   if (top) {
     notes.push({ kind: 'opportunity', title: state.t('decisionNoteEv1', 'Use strongest evidence first'), body: state.t('decisionNoteEv1Body', `${top.title} ist aktuell der stärkste Dashboard-Anker.`, top.title) });
   }
   if (state.measurementRows.length) {
     notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${state.measurementRows.length} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, state.measurementRows.length) });
+  }
+  if (!top) {
+    notes.push({ kind: 'risk', title: state.t('decisionNoteGate', 'Evidence gate active'), body: state.t('decisionNoteGateBody', 'Discovery-Kandidaten bleiben sichtbar, bis Verifizierung, Snapshot und HTTP-Erfolg vollständig vorliegen.') });
   }
   if (source && source.dimensions.reuse_readiness < 60) {
     notes.push({ kind: 'risk', title: state.t('decisionNoteGap', 'Reuse gap'), body: state.t('decisionNoteGapBody', 'Diese Quelle braucht weitere Extraktion, bevor sie als belastbare Dashboard-Kennzahl dient.') });
@@ -2496,6 +2647,16 @@ function renderScoringModel(task) {
 
 function canRunResearchTask(task) {
   return validateSelectedResearchTask(task, state.knowledgeBases).valid && canWriteResearchState();
+}
+
+function canBuildKnowledgeFromResearch(task = selectedTask()) {
+  return Boolean(task?.id && evidenceRankedSources().length && canWriteResearchState());
+}
+
+function knowledgeUnavailableReason() {
+  if (!evidenceRankedSources().length) return state.t('knowledgeRequiresVerifiedSources', 'Knowledge ist ohne verifizierte Quellen nicht verfügbar.');
+  if (!canWriteResearchState()) return researchWriteDeniedMessage();
+  return '';
 }
 
 function validateSelectedResearchTask(task, knowledgeBases = []) {
@@ -2781,7 +2942,7 @@ async function runSelectedResearch() {
     `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen.',
+    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, http_status 2xx, snapshot_hash, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
   const commandId = `cmd_${crypto.randomUUID()}`;
@@ -2818,7 +2979,8 @@ async function runSelectedResearch() {
       dimensions: scoringDimensions,
       weights: scoringWeights(scoringDimensions),
       total_field: 'weighted_total',
-      rule: 'Only score facts supported by a read source or durable Knowledge row; raw discovery candidates stay unscored.',
+      rule: 'Only score rows passing the UI evidence gate: verification_status=verified, http_status 2xx, non-empty snapshot_hash, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, or aggregated discovery candidates stay unscored.',
+      required_source_fields: ['verification_status', 'http_status', 'snapshot_hash', 'evidence_eligible', 'source_tier'],
     },
     writeback_contract: {
       collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
@@ -2864,8 +3026,8 @@ async function runSelectedResearch() {
     command_id: commandId,
     task_queue_id: '',
     identified_count: state.sourceRows.length,
-    accepted_count: state.sourceModels.length,
-    used_count: state.sourceModels.length,
+    accepted_count: evidenceRankedSources().length,
+    used_count: evidenceRankedSources().length,
     payload: { result },
     created_at_ms: now,
     updated_at_ms: now,
@@ -2936,6 +3098,11 @@ function knowledgeRefreshPayload(task, base, latestRun) {
 
 async function buildKnowledgeFromResearch() {
   const task = selectedTask();
+  if (!canBuildKnowledgeFromResearch(task)) {
+    setStatus(knowledgeUnavailableReason());
+    renderRight();
+    return;
+  }
   if (!canRunResearchTask(task)) {
     setStatus(runDisabledReason(task));
     renderRight();
@@ -3019,7 +3186,7 @@ function openSourceDrawer(sourceId) {
   body.innerHTML = `
     <header><strong>${escapeHtml(source.title)}</strong><button type="button" class="ctox-pane-icon" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">${iconSvg('close')}</button></header>
     <div class="research-drawer-body">
-      <span class="ctox-badge ${gradeBadgeClass(source.grade)}">${source.grade} · ${(source.score / 10).toFixed(1)}</span>
+      <span class="ctox-badge ${gradeBadgeClass(source.grade)}">${escapeHtml(source.grade)}${source.evidenceEligible ? ` · ${formatPortfolioScore(source.score)}` : ' · Score —'}</span>
       <p>${escapeHtml(source.note || '')}</p>
       <pre>${escapeHtml(JSON.stringify(source.row, null, 2))}</pre>
     </div>
@@ -3464,8 +3631,9 @@ function pointJitter(source) {
 }
 
 function avgScore() {
-  if (!state.sourceModels.length) return '0.0';
-  return (state.sourceModels.reduce((sum, item) => sum + item.score, 0) / state.sourceModels.length / 10).toFixed(1);
+  const ranked = evidenceRankedSources();
+  if (!ranked.length) return '—';
+  return (ranked.reduce((sum, item) => sum + item.score, 0) / ranked.length / 10).toFixed(1);
 }
 
 async function findAll(collection, collectionName = '') {
@@ -4054,6 +4222,14 @@ async function loadReportContentFromRxdb(filename) {
 }
 
 function renderReportsWorkbench(task) {
+  if (!evidenceRankedSources().length) {
+    return `
+      <section class="research-empty research-empty-card" data-report-gate="blocked">
+        <strong>${escapeHtml(state.t('reportUnavailable', 'Reports nicht verfügbar'))}</strong>
+        <span>${escapeHtml(state.t('reportRequiresVerifiedSources', 'Erst verifizierte Quellen mit vollständigem Evidence-Gate machen Reports verfügbar.'))}</span>
+      </section>
+    `;
+  }
   const reports = GENERATED_REPORTS;
   const selectedReportId = state.selectedReportId || reports[0].id;
   const selectedReport = reports.find(r => r.id === selectedReportId) || reports[0];
@@ -4132,9 +4308,16 @@ function renderReportsWorkbench(task) {
 }
 
 export const __researchTestHooks = {
+  buildSourceModels,
   collectionDiagnosticRows,
   diagnosticRows,
   disabledTabButton,
+  evidenceGate,
+  filterGraphRowsForEvidence,
+  filterMeasurementRowsForEvidence,
+  formatDimensionScore,
+  formatPortfolioScore,
+  hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
   knowledgeRefreshPayload,
   renderNoTaskCenter,
