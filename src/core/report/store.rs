@@ -35,6 +35,10 @@ pub fn open(root: &Path) -> Result<Connection> {
     ))
     .context("failed to set SQLite pragmas for report")?;
     ensure_schema(&conn).context("failed to ensure report schema")?;
+    // Keep the legacy store entry point migration-compatible while making
+    // report_evidence_register the canonical evidence surface.
+    crate::report::schema::ensure_schema(&conn)
+        .context("failed to ensure canonical report evidence register")?;
     Ok(conn)
 }
 

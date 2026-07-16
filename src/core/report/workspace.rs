@@ -91,6 +91,24 @@ pub struct EvidenceEntry {
     pub integrity_hash: Option<String>,
     pub citations_count: i64,
     pub content_chars: i64,
+    pub verification_status: String,
+    pub http_status: Option<i64>,
+    pub snapshot_hash: Option<String>,
+    pub evidence_eligible: bool,
+}
+
+impl EvidenceEntry {
+    pub fn is_evidence_eligible(&self) -> bool {
+        self.verification_status == "verified"
+            && self
+                .http_status
+                .is_some_and(|status| (200..=299).contains(&status))
+            && self
+                .snapshot_hash
+                .as_deref()
+                .is_some_and(|hash| !hash.trim().is_empty())
+            && self.evidence_eligible
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -251,7 +269,8 @@ impl<'a> Workspace<'a> {
             "SELECT evidence_id, kind, canonical_id, title, authors_json, venue, year,
                     publisher, url_canonical, url_full_text, license, abstract_md,
                     snippet_md, retrieved_at, resolver_used, integrity_hash, citations_count,
-                    length(coalesce(full_text_md, abstract_md, snippet_md, ''))
+                    length(coalesce(full_text_md, abstract_md, snippet_md, '')),
+                    verification_status, http_status, snapshot_hash, evidence_eligible
              FROM report_evidence_register WHERE run_id = ?1
              ORDER BY retrieved_at DESC",
         )?;
@@ -280,6 +299,12 @@ impl<'a> Workspace<'a> {
                 integrity_hash: row.get(15)?,
                 citations_count: row.get(16)?,
                 content_chars: row.get(17)?,
+                verification_status: row
+                    .get::<_, Option<String>>(18)?
+                    .unwrap_or_else(|| "unverified".to_string()),
+                http_status: row.get(19)?,
+                snapshot_hash: row.get(20)?,
+                evidence_eligible: row.get::<_, Option<i64>>(21)?.unwrap_or(0) != 0,
             })
         })?;
         let mut out = Vec::new();

@@ -196,7 +196,7 @@ pub fn record_stage_finished(
 pub fn run_summary(conn: &Connection, run_id: &str) -> Result<Value> {
     let view = load_run(conn, run_id)?.context("run not found")?;
     let counts = json!({
-        "evidence": count(conn, "report_evidence", run_id)?,
+        "evidence": count(conn, "report_evidence_register", run_id)?,
         "options": count(conn, "report_options", run_id)?,
         "requirements": count(conn, "report_requirements", run_id)?,
         "scoring_rubrics": count(conn, "report_scoring_rubrics", run_id)?,

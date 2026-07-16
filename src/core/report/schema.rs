@@ -138,6 +138,21 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         "full_text_chars",
         "INTEGER",
     );
+    migrate_add_column(
+        conn,
+        "report_evidence_register",
+        "verification_status",
+        "TEXT NOT NULL DEFAULT 'unverified'",
+    );
+    migrate_add_column(conn, "report_evidence_register", "http_status", "INTEGER");
+    migrate_add_column(conn, "report_evidence_register", "snapshot_hash", "TEXT");
+    migrate_add_column(
+        conn,
+        "report_evidence_register",
+        "evidence_eligible",
+        "INTEGER NOT NULL DEFAULT 0",
+    );
+    migrate_legacy_report_evidence(conn);
     // Storyline lives directly on the run row — single-source-of-truth
     // narrative spine.
     migrate_add_column(conn, "report_runs", "storyline_md", "TEXT");
@@ -184,6 +199,28 @@ fn migrate_legacy_report_runs(conn: &Connection) {
 fn migrate_add_column(conn: &Connection, table: &str, column: &str, decl: &str) {
     let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
     let _ = conn.execute(&sql, []);
+}
+
+/// Move rows from the pre-register table into the canonical register without
+/// treating historical metadata as verified evidence.
+fn migrate_legacy_report_evidence(conn: &Connection) {
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO report_evidence_register (
+             evidence_id, run_id, kind, canonical_id, title, authors_json,
+             venue, year, publisher, url_canonical, url_full_text,
+             abstract_md, snippet_md, retrieved_at, resolver_used, license,
+             integrity_hash, raw_payload_json, created_at, updated_at,
+             citations_count, verification_status, http_status, snapshot_hash,
+             evidence_eligible
+         )
+         SELECT evidence_id, run_id, citation_kind, canonical_id, title,
+                authors_json, venue, year, publisher, landing_url, full_text_url,
+                abstract_md, snippet_md, retrieved_at, resolver, license,
+                integrity_hash, '{\"migrated_from\":\"report_evidence\"}',
+                created_at, created_at, 0, 'unverified', NULL, NULL, 0
+         FROM report_evidence",
+        [],
+    );
 }
 
 /// Current UTC timestamp in RFC3339, used as the canonical clock for
@@ -300,6 +337,10 @@ CREATE TABLE IF NOT EXISTS report_evidence_register (
     created_at          TEXT,
     updated_at          TEXT,
     citations_count     INTEGER NOT NULL DEFAULT 0,
+    verification_status TEXT NOT NULL DEFAULT 'unverified',
+    http_status         INTEGER,
+    snapshot_hash       TEXT,
+    evidence_eligible   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (run_id) REFERENCES report_runs(run_id) ON DELETE CASCADE
 );
 

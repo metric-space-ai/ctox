@@ -5,7 +5,7 @@
 //!
 //! * The legacy `scholarly` + `web` modules still drive
 //!   `crate::report::evidence` (Wave 2). They normalise into
-//!   [`scholarly::CanonicalCitation`] and write to `report_evidence`.
+//!   [`scholarly::CanonicalCitation`] and write to the canonical register.
 //! * The new resolver subsystem (Wave 3) — `crossref`, `openalex`, `arxiv`,
 //!   `web_research`, `cache` — fronts the `report_evidence_register` table
 //!   that the deep-research skill manager consults before it can call
@@ -13,9 +13,8 @@
 //!   LINT-DOI-NOT-RESOLVED, LINT-CITED-BUT-MISSING, LINT-EVIDENCE-FLOOR,
 //!   and LINT-EVIDENCE-CONCENTRATION all read from this register.
 //!
-//! The two layers share zero state; the legacy layer continues to use
-//! `report_evidence`, the new layer writes `report_evidence_register`. They
-//! coexist while higher waves migrate the consumer side.
+//! `report_evidence` remains as a migration input for older databases; new
+//! evidence writes use `report_evidence_register` exclusively.
 
 pub mod arxiv;
 pub mod cache;
@@ -380,11 +379,18 @@ fn ensure_register_schema(conn: &Connection) -> Result<()> {
             license TEXT,
             abstract_md TEXT,
             snippet_md TEXT,
+            full_text_md TEXT,
+            full_text_source TEXT,
+            full_text_chars INTEGER,
             resolver_used TEXT NOT NULL,
             raw_payload_json TEXT NOT NULL,
             citations_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            verification_status TEXT NOT NULL DEFAULT 'unverified',
+            http_status INTEGER,
+            snapshot_hash TEXT,
+            evidence_eligible INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (run_id, evidence_id)
         );
 
@@ -395,6 +401,20 @@ fn ensure_register_schema(conn: &Connection) -> Result<()> {
         "#,
     )
     .context("failed to ensure report_evidence_register schema")?;
+    for (column, decl) in [
+        ("full_text_md", "TEXT"),
+        ("full_text_source", "TEXT"),
+        ("full_text_chars", "INTEGER"),
+        ("verification_status", "TEXT NOT NULL DEFAULT 'unverified'"),
+        ("http_status", "INTEGER"),
+        ("snapshot_hash", "TEXT"),
+        ("evidence_eligible", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let _ = conn.execute(
+            &format!("ALTER TABLE report_evidence_register ADD COLUMN {column} {decl}"),
+            [],
+        );
+    }
     Ok(())
 }
 

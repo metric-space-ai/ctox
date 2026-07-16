@@ -218,11 +218,9 @@ fn research_payload_count_hint(value: &Value) -> i64 {
     best
 }
 
-/// arXiv resolver-API fallback. When `resolve_arxiv` times out (a
-/// recurring problem from third-party networks), insert a minimal
-/// evidence row pointing at the canonical arXiv URL, then attempt the
-/// direct PDF fetch. The row carries `resolver_used = "arxiv-direct"`
-/// so the operator can later see the lookup was metadata-light.
+/// arXiv resolver-API fallback. When `resolve_arxiv` times out, fetch the
+/// direct PDF first. Only a successful document fetch may create an eligible
+/// evidence row; failed fallback attempts leave no evidence record behind.
 fn arxiv_direct_pdf_fallback(
     root: &Path,
     run_id: &str,
@@ -248,17 +246,21 @@ fn arxiv_direct_pdf_fallback(
         hex
     };
     let abs_url = format!("https://arxiv.org/abs/{arxiv_id}");
+    let fetch = fetch_full_text(pdf_url)
+        .with_context(|| format!("arXiv {arxiv_id} direct PDF fetch failed"))?;
     let now = now_iso();
     conn.execute(
         "INSERT OR REPLACE INTO report_evidence_register (
              evidence_id, run_id, kind, canonical_id, title, authors_json,
              venue, year, publisher, url_canonical, url_full_text,
              license, abstract_md, snippet_md, retrieved_at,
-             resolver_used, integrity_hash, raw_payload_json,
-             created_at, updated_at, citations_count
+             full_text_md, full_text_source, full_text_chars, resolver_used,
+             integrity_hash, raw_payload_json, created_at, updated_at,
+             citations_count, verification_status, http_status, snapshot_hash,
+             evidence_eligible
          ) VALUES (?1, ?2, 'arxiv', ?3, NULL, '[]', 'arXiv', NULL, NULL,
-                   ?4, ?5, NULL, NULL, NULL, ?6, 'arxiv-direct', NULL,
-                   ?7, ?8, ?8, 0)",
+                   ?4, ?5, NULL, NULL, NULL, ?6, ?7, ?8, ?9, 'arxiv-direct',
+                   NULL, ?10, ?11, ?11, 0, 'verified', ?12, ?13, 1)",
         params![
             evidence_id,
             run_id,
@@ -266,8 +268,12 @@ fn arxiv_direct_pdf_fallback(
             abs_url,
             pdf_url,
             now,
+            fetch.markdown,
+            fetch.source_label,
+            fetch.markdown.chars().count() as i64,
             "{\"fallback\":\"arxiv-direct\"}",
-            now,
+            fetch.http_status,
+            fetch.snapshot_hash,
         ],
     )
     .context("insert arxiv-direct fallback row")?;
@@ -278,35 +284,7 @@ fn arxiv_direct_pdf_fallback(
     println!("url:         {abs_url}");
     println!("resolver:    arxiv-direct (resolver-API failed; metadata-light row)");
 
-    match fetch_full_text(pdf_url) {
-        Ok(f) => {
-            let chars = f.markdown.chars().count() as i64;
-            conn.execute(
-                "UPDATE report_evidence_register \
-                 SET full_text_md = ?1, full_text_source = ?2, \
-                     full_text_chars = ?3, updated_at = ?4 \
-                 WHERE run_id = ?5 AND evidence_id = ?6",
-                params![
-                    f.markdown,
-                    f.source_label,
-                    chars,
-                    now_iso(),
-                    run_id,
-                    evidence_id,
-                ],
-            )
-            .context("persist arxiv-direct full text")?;
-            emit_full_text_note(Some(&f));
-        }
-        Err(err) => {
-            eprintln!("warning: arXiv direct-PDF fetch from {pdf_url} failed: {err}");
-            emit_full_text_note(None);
-            bail!(
-                "arXiv {arxiv_id}: resolver API and direct PDF both failed — \
-                 evidence row was created but carries no abstract or full text"
-            );
-        }
-    }
+    emit_full_text_note(Some(&fetch));
     Ok(())
 }
 
@@ -354,13 +332,16 @@ fn try_attach_full_text(
     let res = conn.execute(
         "UPDATE report_evidence_register \
          SET full_text_md = ?1, full_text_source = ?2, full_text_chars = ?3, \
-             updated_at = ?4 \
-         WHERE run_id = ?5 AND evidence_id = ?6",
+             verification_status = 'verified', http_status = ?5, snapshot_hash = ?6,
+             evidence_eligible = 1, updated_at = ?4 \
+         WHERE run_id = ?7 AND evidence_id = ?8",
         params![
             fetch.markdown,
             fetch.source_label,
             chars,
             now,
+            fetch.http_status,
+            fetch.snapshot_hash,
             run_id,
             evidence_id,
         ],
@@ -966,13 +947,17 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                         if let Err(err) = conn.execute(
                             "UPDATE report_evidence_register \
                              SET full_text_md = ?1, full_text_source = ?2, \
-                                 full_text_chars = ?3, updated_at = ?4 \
-                             WHERE run_id = ?5 AND evidence_id = ?6",
+                                 full_text_chars = ?3, verification_status = 'verified', \
+                                 http_status = ?5, snapshot_hash = ?6, evidence_eligible = 1, \
+                                 updated_at = ?4 \
+                             WHERE run_id = ?7 AND evidence_id = ?8",
                             params![
                                 f.markdown,
                                 f.source_label,
                                 chars,
                                 now_iso(),
+                                f.http_status,
+                                f.snapshot_hash,
                                 run_id,
                                 evidence_id,
                             ],
@@ -1911,10 +1896,14 @@ fn cmd_source_review_sync(root: &Path, args: &[String]) -> Result<()> {
             metadata.report_type_id
         );
     }
-    let evidence = workspace.evidence_register()?;
+    let evidence: Vec<_> = workspace
+        .evidence_register()?
+        .into_iter()
+        .filter(|entry| entry.is_evidence_eligible())
+        .collect();
     let research_logs = workspace.research_log_entries()?;
     if evidence.is_empty() {
-        bail!("source-review-sync requires persisted evidence; add sources with `ctox report add-evidence` first");
+        bail!("source-review-sync requires verified evidence; add sources and complete a successful document fetch first");
     }
     if research_logs.is_empty() {
         bail!("source-review-sync requires persisted research logs; add search passes with `ctox report research-log-add` first");
