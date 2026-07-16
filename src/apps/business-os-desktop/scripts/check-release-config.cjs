@@ -58,6 +58,9 @@ function main() {
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.icon)), "macOS icon icns is missing");
   assert.equal(builderConfig.linux?.icon, "build/icon.png");
   assert.equal(builderConfig.linux?.maintainer, packageJson.author);
+  assert.equal(builderConfig.appx?.identityName, "MichaelWelsch.ctox");
+  assert.equal(builderConfig.appx?.publisher, "CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66");
+  assert.equal(builderConfig.appx?.publisherDisplayName, "Michael Welsch");
   const notarizeSource = fs.readFileSync(path.join(appRoot, builderConfig.afterSign), "utf8");
   assert.match(notarizeSource, /isDirOnlyPack/);
 
@@ -141,6 +144,7 @@ function assertReleaseWorkflowMatrix() {
     "business-os desktop invite --format json",
     "Desktop Release Helper Smoke",
     "desktop-invite.json",
+    "CTOX_WINDOWS_STORE_RELEASE",
     "npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never",
     "npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }} --evidence-json release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json",
   ]) {
@@ -163,6 +167,7 @@ function assertReleaseWorkflowMatrix() {
   // unsigned NSIS installer is never shipped silently, and must support a hard
   // --require-signature gate for when a signing certificate is configured.
   assert.match(signedArtifactSmoke, /Get-AuthenticodeSignature/, "windows artifact smoke must check Authenticode signature");
+  assert.match(signedArtifactSmoke, /MichaelWelsch\\\.ctox/, "windows Store smoke must verify the package identity");
   assert.match(signedArtifactSmoke, /--require-signature/, "windows artifact smoke must support enforcing a signature");
   for (const linuxDependency of ["gnome-keyring", "libsecret-tools"]) {
     assert.match(workflow, new RegExp(escapeRegExp(linuxDependency)), `release workflow missing Linux keychain dependency: ${linuxDependency}`);
@@ -181,6 +186,8 @@ function assertReleaseWorkflowMatrix() {
     /needs:\s*\[(?:[\w-]+,\s*)*build-desktop-macos,\s*build-desktop-linux,\s*build-desktop-windows,\s*build-business-os-desktop,\s*build-ctox\]/,
     "GitHub release job must wait for Business OS Desktop artifacts",
   );
+  assert.match(workflow, /actions\/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/);
+  assert.match(workflow, /subject-path:\s*artifacts\/\*\*\/\*/);
 }
 
 function escapeRegExp(value) {

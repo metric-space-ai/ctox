@@ -79,6 +79,14 @@ Release-related checks:
   `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK`, and
   `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD`. It checks names only, never
   reads secret values.
+- Tagged Windows releases are built as the Microsoft Store AppX package for
+  product `ctox` (`9NHZ1TZF3V94`) with the reserved package identity
+  `MichaelWelsch.ctox`. Microsoft applies the platform signature after Partner
+  Center certification; the release workflow does not publish an unsigned NSIS
+  installer as a substitute.
+- Every published release file is covered by a SHA-256 manifest and a GitHub
+  Sigstore build-provenance attestation. macOS artifacts additionally require
+  Developer ID signing, notarization and Gatekeeper validation.
 - `npm run smoke:keychain-runtime` writes, reads and deletes a synthetic secret
   through the platform keychain: macOS Keychain, Linux Secret Service or
   Windows Credential Manager.

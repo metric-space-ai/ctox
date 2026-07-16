@@ -76,6 +76,11 @@ function smokeLinuxArtifacts(releaseRoot) {
 }
 
 function smokeWindowsArtifacts(releaseRoot) {
+  const storePackage = findFirstFile(
+    releaseRoot,
+    (filePath) => filePath.endsWith(".appx") || filePath.endsWith(".msix"),
+  );
+  if (storePackage) return smokeWindowsStorePackage(releaseRoot, storePackage);
   const installer = findFirstFile(
     releaseRoot,
     (filePath) => filePath.endsWith(".exe") && !filePath.includes(`${path.sep}win-unpacked${path.sep}`),
@@ -115,6 +120,32 @@ function smokeWindowsArtifacts(releaseRoot) {
     appAsar: fileEvidence(releaseRoot, asarPath),
     bundledHelper: fileEvidence(releaseRoot, helperPath),
     signature,
+  });
+}
+
+function smokeWindowsStorePackage(releaseRoot, storePackage) {
+  assertFile(storePackage, "Windows Store package is missing");
+  const entries = execFileSync("tar", ["-tf", storePackage], { stdio: ["ignore", "pipe", "pipe"] })
+    .toString()
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const hasEntry = (suffix) => entries.some((entry) => entry.replaceAll("\\", "/").endsWith(suffix));
+  assert.ok(hasEntry("AppxManifest.xml"), "Windows Store package has no AppxManifest.xml");
+  assert.ok(hasEntry("resources/app.asar"), "Windows Store package has no app.asar");
+  assert.ok(hasEntry("resources/ctox/ctox.exe"), "Windows Store package has no bundled CTOX helper");
+  const manifest = execFileSync("tar", ["-xOf", storePackage, "AppxManifest.xml"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  }).toString();
+  assert.match(manifest, /Name="MichaelWelsch\.ctox"/);
+  assert.match(manifest, /Publisher="CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66"/);
+  console.log(`desktop Store artifact smoke OK (win): ${storePackage}`);
+  return createEvidence(releaseRoot, "win", {
+    storePackage: fileEvidence(releaseRoot, storePackage),
+    manifestIdentity: {
+      name: "MichaelWelsch.ctox",
+      publisher: "CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66",
+    },
+    storeSigning: "Microsoft signs the package after Partner Center certification",
   });
 }
 

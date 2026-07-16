@@ -6,7 +6,9 @@ on:
       - "v*"
 
 permissions:
+  attestations: write
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -569,6 +571,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
+          CTOX_WINDOWS_STORE_RELEASE: ${{ matrix.builderPlatform == 'win' && '1' || '0' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
 
@@ -580,7 +583,16 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.artifact }}
-          path: src/apps/business-os-desktop/release/*
+          path: |
+            src/apps/business-os-desktop/release/*.AppImage
+            src/apps/business-os-desktop/release/*.appx
+            src/apps/business-os-desktop/release/*.blockmap
+            src/apps/business-os-desktop/release/*.deb
+            src/apps/business-os-desktop/release/*.dmg
+            src/apps/business-os-desktop/release/*.exe
+            src/apps/business-os-desktop/release/*.json
+            src/apps/business-os-desktop/release/*.yml
+            src/apps/business-os-desktop/release/*.zip
           if-no-files-found: error
 
   build-ctox:
@@ -709,6 +721,15 @@ jobs:
 
       - name: List artifacts
         run: ls -la artifacts/
+
+      - name: Create release checksums
+        working-directory: artifacts
+        run: find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Sign release provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: artifacts/**/*
 
       - name: Create release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65

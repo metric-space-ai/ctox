@@ -41,6 +41,18 @@ test("signed artifact smoke writes platform evidence for all release targets", (
   }
 });
 
+test("signed artifact smoke verifies the Windows Store package identity", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-store-artifact-"));
+  try {
+    createWindowsStoreFixture(tmp);
+    const evidence = runSmoke(tmp, "win");
+    assertEvidence(evidence, "win", ["storePackage", "manifestIdentity", "storeSigning"]);
+    assert.equal(evidence.checks.manifestIdentity.name, "MichaelWelsch.ctox");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 function runSmoke(releaseRoot, platform, extraArgs = []) {
   const evidencePath = path.join(releaseRoot, `evidence-${platform}.json`);
   execFileSync(process.execPath, [
@@ -91,6 +103,24 @@ function createWindowsFixture(root) {
   writeFile(path.join(root, "CTOX Business-OS Desktop Beta Setup.exe"), "installer");
   writeFile(path.join(root, "win-unpacked", "resources", "app.asar"), "asar");
   writeFile(path.join(root, "win-unpacked", "resources", "ctox", "ctox.exe"), "binary");
+}
+
+function createWindowsStoreFixture(root) {
+  const payload = path.join(root, "store-payload");
+  writeFile(
+    path.join(payload, "AppxManifest.xml"),
+    '<Package><Identity Name="MichaelWelsch.ctox" Publisher="CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66" /></Package>',
+  );
+  writeFile(path.join(payload, "resources", "app.asar"), "asar");
+  writeFile(path.join(payload, "resources", "ctox", "ctox.exe"), "binary");
+  execFileSync("tar", [
+    "-cf",
+    path.join(root, "CTOX Business OS Desktop.appx"),
+    "AppxManifest.xml",
+    "resources/app.asar",
+    "resources/ctox/ctox.exe",
+  ], { cwd: payload });
+  fs.rmSync(payload, { recursive: true, force: true });
 }
 
 function writeFile(filePath, content) {

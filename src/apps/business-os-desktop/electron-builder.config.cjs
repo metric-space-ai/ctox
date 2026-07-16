@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const UPDATE_FEED_URL = "https://ctox.dev/downloads/business-os-desktop";
+const windowsStoreRelease = process.env.CTOX_WINDOWS_STORE_RELEASE === "1";
 const ctoxHelperResourceDir = path.join(__dirname, "resources", "ctox");
 const extraResources = [
   {
@@ -66,10 +67,18 @@ module.exports = {
     sign: true,
   },
   win: {
-    target: [{
-      target: "nsis",
-      arch: ["x64", "arm64"],
-    }],
+    target: windowsStoreRelease
+      ? [{ target: "appx", arch: ["x64"] }]
+      : [{ target: "nsis", arch: ["x64", "arm64"] }],
+  },
+  appx: {
+    applicationId: "CTOXBusinessOSDesktop",
+    identityName: "MichaelWelsch.ctox",
+    publisher: "CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66",
+    publisherDisplayName: "Michael Welsch",
+    displayName: "CTOX Business OS Desktop",
+    languages: ["de-DE", "en-US"],
+    showNameOnTiles: true,
   },
   nsis: {
     oneClick: false,
