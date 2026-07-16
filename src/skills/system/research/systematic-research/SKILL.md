@@ -11,8 +11,10 @@ cluster: research
 You are the harness LLM. This skill is the **single entry point for all
 durable research work in CTOX**. It orchestrates a common discovery phase
 and one or two output modes depending on what the deliverable actually is.
-Never write workspace markdown, CSV, or JSON files as the deliverable for
-durable research — those vanish after the turn.
+Workspace markdown, CSV, JSON, and Parquet files may be deterministic build
+receipts or import inputs, but they are not the durable research deliverable by
+themselves. Register or import accepted outputs into CTOX Knowledge, Documents,
+Spreadsheets, or Files before claiming completion.
 
 ## CTOX Runtime Contract
 
@@ -404,6 +406,38 @@ the procedure ↔ data relationship for any hit, instead of leaving it
 buried in free-text comments. Use `ctox knowledge kinds` to see the
 canonical relation labels.
 
+### Knowledge promotion — required for reusable or living research
+
+When the operator expects later questions, reports, or periodic research
+updates, the verified source catalog and data tables are inputs, not the end of
+the chain. Promote them into procedural Knowledge before drafting documents:
+
+1. Create or update one topic-scoped main skill with `ctox knowledge skill`.
+   Record the source-catalog table, promoted data-table versions, research run,
+   schema version, and freshness timestamp.
+2. Use skillbooks to organize stable interpretation knowledge and runbooks for
+   repeatable procedures, calculations, refreshes, audits, and report creation.
+   Do not paste a report into a skillbook and call it knowledge.
+3. Keep each knowledge item concise and executable. Link it to exact verified
+   source IDs, snapshot IDs/content hashes, data-table rows or ranges, units,
+   derivations, and caveats. The source snapshot remains the place to read the
+   underlying evidence.
+4. Require the trace `knowledge_version -> claim_id -> evidence_id ->
+   snapshot_id -> source_id` for every factual or numerical statement. Missing,
+   unreachable, rejected, or hash-invalid evidence invalidates the dependent
+   claim; it must not silently fall back to model memory.
+5. Preserve conflicts as contested claims with both evidence paths. Do not
+   collapse disagreement into a fabricated consensus.
+6. Link the main skill, skillbooks, runbooks, source catalog, data tables, and
+   research run through `ctox knowledge link`. A UI consumer must be able to
+   traverse Research → Knowledge → source snapshot and Knowledge → Documents.
+
+Knowledge is living state. On refresh, use this order as one atomic promotion
+workflow: discover candidates → verify snapshots → build/version data → rerun
+data and claim audits → create a new Knowledge version → mark dependent reports
+stale → regenerate or explicitly revalidate them. Never mutate an old source
+hash or data version in place merely to keep a report appearing current.
+
 ## Phase 2B — Decision-report mode
 
 Drive the work through `ctox report …` CLI subcommands. The full mode
@@ -444,13 +478,17 @@ the operator asked for multiple report types, open separate runs.
 For deliverables that are both a durable data collection and a written
 synthesis:
 
-1. Run library mode first. Persist the records into
-   `ctox knowledge data`.
-2. Run decision-report mode with the library as the primary evidence
-   source — the report's evidence-register entries point at the library
-   table by `domain/table_key`, and key claims cite specific rows.
-3. The report mentions the library by name so future readers can re-open
-   the source.
+1. Run library mode first. Persist the records into `ctox knowledge data`.
+2. Run Knowledge promotion. Build or update the topic skill, skillbooks, and
+   runbooks, then link them to the verified catalog and versioned tables.
+3. Run decision-report mode from the promoted Knowledge version. The report's
+   evidence register points at Knowledge claim IDs and the underlying table
+   rows/source snapshots. Automatically selected skills must still be recorded
+   in the document lineage; a user-selected skill must be validated for topic,
+   freshness, and evidence health.
+4. Publish the document and export files only after the Knowledge and claim
+   audits pass. Return the document/spreadsheet/file IDs and locations so the
+   user can open or download every artifact.
 
 Combined mode is the default when the operator's wording uses both data
 and judgement verbs ("compare X and recommend which to use", "build a
