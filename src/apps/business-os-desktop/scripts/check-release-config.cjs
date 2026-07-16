@@ -54,6 +54,7 @@ function main() {
   assert.equal(builderConfig.mac?.entitlements, "build/entitlements.mac.plist");
   assert.equal(builderConfig.mac?.entitlementsInherit, "build/entitlements.mac.plist");
   assert.equal(builderConfig.afterSign, "scripts/notarize-macos.cjs");
+  assert.equal(builderConfig.mac?.notarize, false);
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.entitlements)), "macOS entitlements file is missing");
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.icon)), "desktop icon png is missing");
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.icon)), "macOS icon icns is missing");

@@ -53,6 +53,9 @@ module.exports = {
     category: "public.app-category.business",
     hardenedRuntime: true,
     gatekeeperAssess: false,
+    // The afterSign hook below is the single owner of notarization. Electron
+    // Builder's built-in pass runs before afterSign and would submit twice.
+    notarize: false,
     signIgnore: [
       "/Contents/Resources/business-os/",
       "/Contents/Frameworks/Electron Framework\\.framework/.+\\.lproj/locale\\.pak$",
