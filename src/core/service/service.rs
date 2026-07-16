@@ -108,6 +108,7 @@ const DEFAULT_SERVICE_PORT: &str = "12435";
 const SERVICE_PID_RELATIVE_PATH: &str = "runtime/ctox_service.pid";
 const SERVICE_LOG_RELATIVE_PATH: &str = "runtime/ctox_service.log";
 const SERVICE_SOCKET_RELATIVE_PATH: &str = "runtime/ctox_service.sock";
+const BUSINESS_COMMAND_IPC_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
 const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.installed";
@@ -4796,7 +4797,13 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // Knowledge writes hit Polars + Parquet; bulk imports can run for
         // seconds even on modest tables. 30s is conservative.
         ServiceIpcRequest::KnowledgeData { .. } => Duration::from_secs(30),
-        ServiceIpcRequest::BusinessCommandDispatch { .. } => Duration::from_secs(30),
+        // Business commands include browser automation, deployment audits, and
+        // report generation. Those commands are intentionally synchronous and
+        // can outlive a short request timeout; disconnecting the CLI does not
+        // cancel the daemon-side work and therefore only produces a false
+        // failure. Keep the client wait bounded, but long enough for a complete
+        // command run.
+        ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
     }
 }
 
@@ -23264,6 +23271,21 @@ mod tests {
     static TICKET_SYNC_DUE_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static DURABLE_STATUS_SNAPSHOT_CACHE_TEST_LOCK: std::sync::Mutex<()> =
         std::sync::Mutex::new(());
+
+    #[cfg(unix)]
+    #[test]
+    fn business_command_ipc_timeout_covers_long_running_commands() {
+        let request = ServiceIpcRequest::BusinessCommandDispatch {
+            document: json!({
+                "id": "cmd-long-running",
+                "module": "appsec-pentest",
+                "command_type": "ctox.appsec.assessment.run"
+            }),
+        };
+
+        assert_eq!(service_ipc_timeout(&request), BUSINESS_COMMAND_IPC_TIMEOUT);
+        assert!(service_ipc_timeout(&request) > Duration::from_secs(30));
+    }
 
     fn channel_sync_due_gate_test_lock() -> std::sync::MutexGuard<'static, ()> {
         CHANNEL_SYNC_DUE_GATE_TEST_LOCK
