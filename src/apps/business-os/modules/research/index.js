@@ -294,6 +294,7 @@ const state = {
   tasks: [],
   runs: [],
   notes: [],
+  documents: [],
   commands: [],
   queueTasks: [],
   knowledgeBases: [],
@@ -646,12 +647,13 @@ async function refreshAll({ seed = false, retryEmptyKnowledge = true, mountToken
 }
 
 async function loadLocalState({ mountToken = null } = {}) {
-  const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
+  const [tasks, runs, notes, commands, queueTasks, documents] = await Promise.all([
     findAll(readableCollection('research_tasks'), 'research_tasks'),
     findAll(readableCollection('research_runs'), 'research_runs'),
     findAll(readableCollection('research_notes'), 'research_notes'),
     findAll(readableCollection('business_commands'), 'business_commands'),
     findAll(readableCollection('ctox_queue_tasks'), 'ctox_queue_tasks'),
+    findAll(readableCollection('documents'), 'documents'),
   ]);
   if (mountToken && state.mountToken !== mountToken) return;
   if (tasks.length || !state.tasks.length) {
@@ -663,6 +665,7 @@ async function loadLocalState({ mountToken = null } = {}) {
   if (notes.length || !state.notes.length) state.notes = notes;
   if (commands.length || !state.commands.length) state.commands = commands;
   if (queueTasks.length || !state.queueTasks.length) state.queueTasks = queueTasks;
+  if (documents.length || !state.documents.length) state.documents = documents;
 }
 
 function wireRealtime() {
@@ -672,6 +675,7 @@ function wireRealtime() {
     ['research_notes', readableCollection('research_notes')],
     ['business_commands', readableCollection('business_commands')],
     ['ctox_queue_tasks', readableCollection('ctox_queue_tasks')],
+    ['documents', readableCollection('documents')],
   ].filter(([, collection]) => collection);
   for (const [, collection] of collections) {
     const subscription = collection.$?.subscribe?.(() => scheduleLocalRefresh(80));
@@ -1398,7 +1402,7 @@ function renderCenter() {
             ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
             ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
             ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
-            ${tabButton('reports', `Fachberichte (12)`)}
+            ${tabButton('reports', `${state.t('reports', 'Fachberichte')} (${researchReportsForTask(task).length})`)}
           </div>
           ${state.activeTab === 'sources' ? `
             <div class="ctox-pane-tabs research-view-toggle">
@@ -1669,6 +1673,7 @@ async function dispatchGraphAiAction(action) {
 
 async function dispatchTargetedGraphResearch(task) {
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
   const focus = selectedNode?.label || task.title;
   const related = selectedNode
     ? state.graphProjection.links
@@ -1712,7 +1717,7 @@ async function dispatchTargetedGraphResearch(task) {
         node_id: selectedNode?.id || '',
         label: focus,
         related_terms: related,
-        source_ids: selectedNode?.sourceIds || [],
+        source_ids: graphFocusSourceIds,
       },
       knowledge_contract: {
         domain: task.knowledge_domain,
@@ -1752,9 +1757,15 @@ async function dispatchTargetedGraphResearch(task) {
   setStatus(state.t('targetedResearchQueued', 'Gezielte Nachrecherche wurde an CTOX übergeben.'));
 }
 
+function eligibleGraphFocusSourceIds(selectedNode, sourceModels = state.sourceModels) {
+  const eligibleIds = evidenceSourceIds(sourceModels);
+  return [...new Set((selectedNode?.sourceIds || []).map(String).filter((id) => eligibleIds.has(id)))];
+}
+
 async function dispatchGraphDocumentTask(task) {
   if (!evidenceRankedSources().length) return;
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+  const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
   const focus = selectedNode?.label || task.title;
   const title = `${task.title} · ${focus}`.slice(0, 120);
   const filename = `${slugId(title).slice(0, 82) || 'research-graph-report'}.docx`;
@@ -1764,7 +1775,7 @@ async function dispatchGraphDocumentTask(task) {
     `Erstelle ein belastbares Word-Dokument aus dem Research-Graph "${task.title}".`,
     `Fokus: ${focus}`,
     `Knowledge domain: ${task.knowledge_domain}`,
-    selectedNode?.sourceIds?.length ? `Bevorzugte Source-IDs: ${selectedNode.sourceIds.join(', ')}` : '',
+    graphFocusSourceIds.length ? `Bevorzugte Source-IDs: ${graphFocusSourceIds.join(', ')}` : '',
     '',
     'Nutze systematic-research für die Knowledge-Lookup-Pflicht und den doc-Skill für Produktion, Rendering und visuelle Qualitätsprüfung.',
     'Strukturiere Kernaussagen, Cluster, Zusammenhänge, Evidenzlücken und Handlungsempfehlungen. Zitiere nur nachweisbare Quellen aus der Knowledge Base.',
@@ -1793,7 +1804,7 @@ async function dispatchGraphDocumentTask(task) {
       graph_focus: {
         node_id: selectedNode?.id || '',
         label: focus,
-        source_ids: selectedNode?.sourceIds || [],
+        source_ids: graphFocusSourceIds,
       },
       document_quality_contract: {
         use_documents_skill: true,
@@ -1810,6 +1821,10 @@ async function dispatchGraphDocumentTask(task) {
         title,
         filename,
         output_path: outputPath,
+        linked_records: [
+          { kind: 'research_task', id: task.id },
+          { kind: 'knowledge_domain', id: task.knowledge_domain },
+        ],
       },
     },
     client_context: {
@@ -1939,9 +1954,8 @@ function renderDiscoveryGraph(task) {
 }
 
 function getSearchCluster(source) {
-  const meta = DRONE_SOURCES_METADATA[source.id];
-  const tags = meta?.tags || [];
-  const text = [source.id, source.title, source.sourceClass, source.note, meta?.kind, ...(meta?.tags || [])].join(' ').toLowerCase();
+  const tags = sourceTags(source);
+  const text = [source.id, source.title, source.sourceClass, source.note, ...tags].join(' ').toLowerCase();
 
   if (tags.includes('simulation') || /simulation|modell|gazebo|sih|virtuell|cfd|ansys|numerical/i.test(text)) {
     return 'simulation';
@@ -2263,8 +2277,7 @@ function filteredSources() {
 
   return state.sourceModels.filter((source) => {
     if (activeTag !== 'all') {
-      const meta = DRONE_SOURCES_METADATA[source.id];
-      const tags = meta?.tags || [];
+      const tags = sourceTags(source);
       if (!tags.includes(activeTag)) return false;
     }
     if (searchTerm) {
@@ -2272,12 +2285,11 @@ function filteredSources() {
       const idMatch = (source.id || '').toLowerCase().includes(searchTerm);
       const classMatch = (source.sourceClass || '').toLowerCase().includes(searchTerm);
 
-      const meta = DRONE_SOURCES_METADATA[source.id];
-      const kindMatch = meta?.kind ? meta.kind.toLowerCase().includes(searchTerm) : false;
-      const fieldsMatch = meta?.fields ? meta.fields.toLowerCase().includes(searchTerm) : false;
-      const useMatch = meta?.use ? meta.use.toLowerCase().includes(searchTerm) : false;
-      const missingMatch = meta?.missing ? meta.missing.toLowerCase().includes(searchTerm) : false;
-      const tagMatch = meta?.tags ? meta.tags.some(t => t.toLowerCase().includes(searchTerm)) : false;
+      const kindMatch = source.subtitle.toLowerCase().includes(searchTerm);
+      const fieldsMatch = firstString(source.row, ['data_fields', 'fields', 'measurement_fields']).toLowerCase().includes(searchTerm);
+      const useMatch = firstString(source.row, ['contribution_note', 'contribution', 'use']).toLowerCase().includes(searchTerm);
+      const missingMatch = firstString(source.row, ['evidence_gap', 'gap', 'limitations']).toLowerCase().includes(searchTerm);
+      const tagMatch = sourceTags(source).some((tag) => tag.toLowerCase().includes(searchTerm));
 
       if (!titleMatch && !idMatch && !classMatch && !kindMatch && !fieldsMatch && !useMatch && !missingMatch && !tagMatch) {
         return false;
@@ -2289,13 +2301,12 @@ function filteredSources() {
 
 function renderSourceCard(source) {
   const isSelected = source.id === state.selectedSourceId;
-  const meta = DRONE_SOURCES_METADATA[source.id];
-
-  const kind = meta?.kind || source.sourceClass || 'Quelle';
-  const tags = meta?.tags || [source.sourceClass.toLowerCase()];
-  const fields = meta?.fields || source.summary || state.t('noSummaryAvailable', 'Keine Zusammenfassung.');
-  const use = meta?.use || 'Verfügbare quantitative Datenpunkte für das Dashboard.';
-  const missing = meta?.missing || 'Nicht separat aufbereitete Lückenanalyse.';
+  const kind = source.sourceClass || 'Quelle';
+  const tags = sourceTags(source);
+  const fields = firstString(source.row, ['data_fields', 'fields', 'measurement_fields', 'summary']) || state.t('noSummaryAvailable', 'Keine Zusammenfassung.');
+  const use = firstString(source.row, ['contribution_note', 'contribution', 'use']) || state.t('contributionMissing', 'Beitrag nicht dokumentiert.');
+  const missing = firstString(source.row, ['evidence_gap', 'gap', 'limitations']) || state.t('limitationsMissing', 'Grenzen nicht dokumentiert.');
+  const canonicalUrl = firstString(source.row, ['canonical_url']);
 
   return `
     <div class="research-source-card${isSelected ? ' is-selected' : ''}"
@@ -2324,21 +2335,9 @@ function renderSourceCard(source) {
         <span class="k">Lücke</span>
         <span class="v">${escapeHtml(missing)}</span>
       </div>
-      ${meta?.links && meta.links.length > 0 ? `
+      ${source.evidenceEligible && canonicalUrl ? `
         <div class="research-source-card-actions">
-          ${meta.links.map((link, idx) => `
-            <a href="${escapeHtml(link[1])}"
-               class="research-source-card-btn${idx === 0 ? ' primary' : ''}"
-               target="_blank"
-               rel="noreferrer"
-               onclick="event.stopPropagation();">
-              ${escapeHtml(link[0])}
-            </a>
-          `).join('')}
-        </div>
-      ` : source.url ? `
-        <div class="research-source-card-actions">
-          <a href="${escapeHtml(source.url)}"
+          <a href="${escapeHtml(canonicalUrl)}"
              class="research-source-card-btn primary"
              target="_blank"
              rel="noreferrer"
@@ -2349,6 +2348,16 @@ function renderSourceCard(source) {
       ` : ''}
     </div>
   `;
+}
+
+function sourceTags(source) {
+  const raw = source?.row?.tags ?? source?.row?.source_tags ?? source?.sourceClass ?? '';
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string' && raw.trim().startsWith('[')
+      ? (() => { try { return JSON.parse(raw); } catch { return raw.split(/[,;|]/); } })()
+      : String(raw).split(/[,;|]/);
+  return [...new Set(values.map((value) => String(value).trim().toLowerCase()).filter(Boolean))];
 }
 
 function gradeFullText(grade) {
@@ -2983,14 +2992,7 @@ async function runSelectedResearch() {
       provenance_required: true,
     },
     graph_contract: semanticGraphContract(),
-    scoring_contract: {
-      dimensions: scoringDimensions,
-      weights: scoringWeights(scoringDimensions),
-      total_field: 'weighted_total',
-      rule: 'Only score rows passing the UI evidence gate: verification_status=verified, transport_verified=true, content_extracted=true, HTTP 2xx, non-empty snapshot_hash and canonical_url, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, empty, or aggregated discovery candidates stay unscored.',
-      required_source_fields: ['verification_status', 'transport_verified', 'content_extracted', 'http_status', 'snapshot_hash', 'canonical_url', 'evidence_eligible', 'source_tier'],
-      required_audits: ['source', 'data', 'claim'],
-    },
+    scoring_contract: researchScoringContract(scoringDimensions),
     writeback_contract: {
       collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
       dashboard_tables: {
@@ -3050,6 +3052,17 @@ async function runSelectedResearch() {
   });
   setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
   render();
+}
+
+function researchScoringContract(scoringDimensions) {
+  return {
+    dimensions: scoringDimensions,
+    weights: scoringWeights(scoringDimensions),
+    total_field: 'weighted_total',
+    rule: 'Only score rows passing the UI evidence gate: verification_status=verified, transport_verified=true, content_extracted=true, HTTP 2xx, non-empty snapshot_hash and canonical_url, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, empty, or aggregated discovery candidates stay unscored.',
+    required_source_fields: ['verification_status', 'transport_verified', 'content_extracted', 'http_status', 'snapshot_hash', 'canonical_url', 'evidence_eligible', 'source_tier'],
+    required_audits: ['source', 'data', 'claim'],
+  };
 }
 
 function knowledgeRefreshPayload(task, base, latestRun) {
@@ -3123,7 +3136,7 @@ async function buildKnowledgeFromResearch() {
     return;
   }
   const base = knowledgeBaseForTask(task);
-  const latestRun = latestRunForTask(task.id);
+  const latestRun = latestEvidenceRunForTask(task.id, state.runs);
   const commandId = `cmd_${crypto.randomUUID()}`;
   const payload = knowledgeRefreshPayload(task, base, latestRun);
   const result = await state.ctx.commandBus.dispatch({
@@ -3159,6 +3172,13 @@ async function buildKnowledgeFromResearch() {
   sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
   setStatus(state.t('knowledgeQueued', 'Knowledge-Aufbau wurde an CTOX uebergeben.'));
   render();
+}
+
+function latestEvidenceRunForTask(taskId, runs = state.runs) {
+  return [...(runs || [])]
+    .filter((run) => run.task_id === taskId)
+    .filter((run) => Number(run.used_count) > 0 || Number(run.accepted_count) > 0)
+    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0] || null;
 }
 
 function runInfoActionLabel(task) {
@@ -4239,7 +4259,15 @@ function renderReportsWorkbench(task) {
       </section>
     `;
   }
-  const reports = GENERATED_REPORTS;
+  const reports = researchReportsForTask(task);
+  if (!reports.length) {
+    return `
+      <section class="research-empty research-empty-card" data-report-gate="ready-empty">
+        <strong>${escapeHtml(state.t('noResearchReports', 'Noch keine verknüpften Fachberichte'))}</strong>
+        <span>${escapeHtml(state.t('createResearchReportHint', 'Erstelle einen Bericht aus dem verifizierten Research-Graph. Er erscheint nach der Documents-Synchronisierung hier.'))}</span>
+      </section>
+    `;
+  }
   const selectedReportId = state.selectedReportId || reports[0].id;
   const selectedReport = reports.find(r => r.id === selectedReportId) || reports[0];
   
@@ -4271,23 +4299,11 @@ function renderReportsWorkbench(task) {
         <div class="ai-warning-banner">
           <div class="research-ai-banner-row">
             <div class="research-ai-banner-title">
-              <span class="research-ai-banner-icon">🤖</span>
               <div>
-                <strong>KI-generierter Fachbericht</strong>
-                <span>Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</span>
+                <strong>${escapeHtml(state.t('evidenceBackedReport', 'Evidence-basierter Fachbericht'))}</strong>
+                <span>${evidenceRankedSources().length} ${escapeHtml(state.t('verifiedSources', 'verifizierte Quellen'))} · ${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length} ${escapeHtml(state.t('traceableMeasurements', 'nachverfolgbare Messpunkte'))}</span>
               </div>
             </div>
-            <button type="button" class="ctox-button" onclick="window.showPromptViewer('${selectedReport.filename}')">
-              Prompt im Modal
-            </button>
-          </div>
-          <div class="research-ai-prompt">
-            <details>
-              <summary>
-                <span>▶ System-Prompt der KI-Generierung einblenden</span>
-              </summary>
-              <div class="research-ai-prompt-pre">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
-            </details>
           </div>
         </div>
         <div class="markdown-body">${parseMarkdown(content)}</div>
@@ -4316,12 +4332,37 @@ function renderReportsWorkbench(task) {
   `;
 }
 
+function researchReportsForTask(task, documents = state.documents) {
+  if (!task?.id || !task.knowledge_domain) return [];
+  return (documents || [])
+    .filter((document) => !document.is_deleted && document.filename)
+    .filter((document) => documentLinksToResearch(document, task))
+    .map((document) => ({
+      id: String(document.id),
+      filename: String(document.filename),
+      title: String(document.title || document.filename),
+      category: String(document.document_type || state.t('report', 'Fachbericht')),
+      updated_at_ms: Number(document.updated_at_ms || document.created_at_ms || 0),
+    }))
+    .sort((a, b) => b.updated_at_ms - a.updated_at_ms || a.title.localeCompare(b.title));
+}
+
+function documentLinksToResearch(document, task) {
+  return (document.linked_records || []).some((record) => {
+    const kind = String(record?.kind || record?.type || record?.record_type || '').toLowerCase();
+    const id = String(record?.id || record?.record_id || record?.value || '');
+    return (kind === 'research_task' && id === task.id)
+      || (kind === 'knowledge_domain' && id === task.knowledge_domain);
+  });
+}
+
 export const __researchTestHooks = {
   buildSourceModels,
   collectionDiagnosticRows,
   diagnosticRows,
   disabledTabButton,
   evidenceGate,
+  eligibleGraphFocusSourceIds,
   filterGraphRowsForEvidence,
   filterMeasurementRowsForEvidence,
   formatDimensionScore,
@@ -4329,6 +4370,9 @@ export const __researchTestHooks = {
   hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
   knowledgeRefreshPayload,
+  latestEvidenceRunForTask,
+  researchScoringContract,
+  researchReportsForTask,
   renderNoTaskCenter,
   researchDomainFromFormValue,
   shouldRetryEmptyKnowledgeTables,

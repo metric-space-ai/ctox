@@ -69,6 +69,32 @@ test('knowledge refresh contract preserves living research lineage and source pr
   assert.match(payload.instruction, /source_id\/source_url/);
 });
 
+test('systematic research scoring contract pins all source gates and independent audits', () => {
+  const contract = hooks.researchScoringContract([{ id: 'evidence_strength', label: 'Evidence', weight: 1 }]);
+  assert.deepEqual(contract.required_source_fields, [
+    'verification_status',
+    'transport_verified',
+    'content_extracted',
+    'http_status',
+    'snapshot_hash',
+    'canonical_url',
+    'evidence_eligible',
+    'source_tier',
+  ]);
+  assert.deepEqual(contract.required_audits, ['source', 'data', 'claim']);
+  assert.match(contract.rule, /canonical_url/);
+});
+
+test('knowledge lineage selects the latest run that actually used accepted evidence', () => {
+  const runs = [
+    { id: 'old-good', task_id: 'task-1', used_count: 3, updated_at_ms: 10 },
+    { id: 'latest-empty', task_id: 'task-1', used_count: 0, accepted_count: 0, updated_at_ms: 30 },
+    { id: 'other-task', task_id: 'task-2', used_count: 8, updated_at_ms: 40 },
+  ];
+  assert.equal(hooks.latestEvidenceRunForTask('task-1', runs)?.id, 'old-good');
+  assert.equal(hooks.latestEvidenceRunForTask('missing', runs), null);
+});
+
 test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sources', () => {
   const task = {
     title: 'Drone bearing loads',
@@ -136,6 +162,29 @@ test('evidence graph filtering removes unverified source nodes and provenance', 
   assert.deepEqual(filtered.nodes.map((row) => row.node_id), ['source:verified', 'concept:load', 'concept:task']);
   assert.equal(filtered.nodes.find((row) => row.node_id === 'concept:load').source_ids_json, '["verified"]');
   assert.deepEqual(filtered.edges.map((row) => row.edge_id), ['valid-edge']);
+});
+
+test('targeted graph research carries only currently eligible source ids', () => {
+  const sourceModels = [
+    { id: 'verified', evidenceEligible: true },
+    { id: 'legacy', evidenceEligible: false },
+  ];
+  assert.deepEqual(
+    hooks.eligibleGraphFocusSourceIds({ sourceIds: ['verified', 'legacy', 'verified'] }, sourceModels),
+    ['verified'],
+  );
+});
+
+test('research reports contain only live documents with explicit task or domain lineage', () => {
+  const task = { id: 'task-1', knowledge_domain: 'drone_bearing_design' };
+  const reports = hooks.researchReportsForTask(task, [
+    { id: 'task-report', title: 'Task report', filename: 'task.docx', linked_records: [{ kind: 'research_task', id: 'task-1' }], updated_at_ms: 20 },
+    { id: 'domain-report', title: 'Domain report', filename: 'domain.docx', linked_records: [{ kind: 'knowledge_domain', id: 'drone_bearing_design' }], updated_at_ms: 30 },
+    { id: 'unlinked-demo', title: 'Legacy demo', filename: 'legacy.md', linked_records: [], updated_at_ms: 40 },
+    { id: 'deleted', title: 'Deleted', filename: 'deleted.docx', linked_records: [{ kind: 'research_task', id: 'task-1' }], is_deleted: true, updated_at_ms: 50 },
+  ]);
+
+  assert.deepEqual(reports.map((report) => report.id), ['domain-report', 'task-report']);
 });
 
 test('diagnostic rows distinguish sync failures from local no-data', () => {

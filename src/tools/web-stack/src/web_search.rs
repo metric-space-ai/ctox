@@ -750,7 +750,29 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         rank: 1,
     };
     let (doc, _) = match build_evidence_doc(&config, &read_query, &hit) {
-        Ok(result) => result,
+        Ok(primary) if evidence_doc_has_meaningful_content(&primary.0) => primary,
+        Ok(primary) => {
+            let Some(fallback_url) = canonical_read_fallback_url(&url) else {
+                return Ok(render_direct_web_read_payload(
+                    &url,
+                    &read_query,
+                    request,
+                    primary.0,
+                ));
+            };
+            crate::egress::assert_fetchable_url(&fallback_url)?;
+            let fallback_hit = SearchHit {
+                title: display_url(&fallback_url),
+                url: fallback_url,
+                snippet: hit.snippet.clone(),
+                source: format!("{}_canonical_fallback", hit.source),
+                rank: hit.rank,
+            };
+            match build_evidence_doc(&config, &read_query, &fallback_hit) {
+                Ok(fallback) if evidence_doc_has_meaningful_content(&fallback.0) => fallback,
+                _ => primary,
+            }
+        }
         Err(primary_error) => {
             let Some(fallback_url) = canonical_read_fallback_url(&url) else {
                 return Err(primary_error);
@@ -770,6 +792,20 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
             })?
         }
     };
+    Ok(render_direct_web_read_payload(
+        &url,
+        &read_query,
+        request,
+        doc,
+    ))
+}
+
+fn render_direct_web_read_payload(
+    url: &str,
+    read_query: &str,
+    request: &DirectWebReadRequest,
+    doc: EvidenceDoc,
+) -> Value {
     let mut find_results = request
         .find
         .iter()
@@ -807,7 +843,7 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         })
     });
 
-    Ok(json!({
+    json!({
         "ok": true,
         "tool": "ctox_web_read",
         "url": url,
@@ -833,7 +869,11 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         // (e.g. scrape-target scripts revising selectors). PDFs and
         // cache-loaded pages from older CTOX versions return null.
         "raw_html": doc.raw_html,
-    }))
+    })
+}
+
+fn evidence_doc_has_meaningful_content(doc: &EvidenceDoc) -> bool {
+    !doc.summary.trim().is_empty() || !doc.excerpts.is_empty() || !doc.find_results.is_empty()
 }
 
 fn canonical_read_fallback_url(url: &str) -> Option<String> {
@@ -8703,6 +8743,9 @@ mod tests {
         );
         assert_eq!(verified.verification_status, "verified");
         assert!(verified.evidence_eligible);
+        assert!(!evidence_doc_has_meaningful_content(&verified));
+        verified.summary = "Primary source record with downloadable data files.".to_string();
+        assert!(evidence_doc_has_meaningful_content(&verified));
         assert!(verified.snapshot_hash.is_some());
 
         let mut empty = base_doc();
