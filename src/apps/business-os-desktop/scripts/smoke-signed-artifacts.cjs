@@ -33,13 +33,17 @@ function smokeMacArtifacts(releaseRoot, { skipSignature = false } = {}) {
   const infoPlistPath = path.join(appPath, "Contents", "Info.plist");
   const asarPath = path.join(appPath, "Contents", "Resources", "app.asar");
   const helperPath = path.join(appPath, "Contents", "Resources", "ctox", "ctox");
+  const dmgPath = findFirstFile(releaseRoot, (filePath) => filePath.endsWith(".dmg"));
   assert.ok(fs.existsSync(appPath), `macOS app bundle is missing: ${appPath}`);
+  assertFile(dmgPath, "macOS DMG artifact is missing");
   assertFile(infoPlistPath, "macOS Info.plist is missing");
   assertFile(asarPath, "macOS app.asar is missing");
   assertExecutable(helperPath, "macOS bundled CTOX helper is missing");
   if (!skipSignature) {
     execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath], { stdio: "pipe" });
     execFileSync("spctl", ["--assess", "--type", "execute", "--verbose=2", appPath], { stdio: "pipe" });
+    execFileSync("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmgPath], { stdio: "pipe" });
+    execFileSync("xcrun", ["stapler", "validate", dmgPath], { stdio: "pipe" });
   }
   console.log(`desktop signed artifact smoke OK (mac): ${appPath}`);
   return createEvidence(releaseRoot, "mac", {
@@ -47,9 +51,15 @@ function smokeMacArtifacts(releaseRoot, { skipSignature = false } = {}) {
     infoPlist: fileEvidence(releaseRoot, infoPlistPath),
     appAsar: fileEvidence(releaseRoot, asarPath),
     bundledHelper: executableEvidence(releaseRoot, helperPath),
+    dmg: fileEvidence(releaseRoot, dmgPath),
     signature: {
       skipped: skipSignature,
-      checks: skipSignature ? [] : ["codesign --verify --deep --strict", "spctl --assess --type execute"],
+      checks: skipSignature ? [] : [
+        "codesign --verify --deep --strict",
+        "spctl --assess --type execute",
+        "spctl --assess --type open DMG",
+        "xcrun stapler validate DMG",
+      ],
     },
   });
 }

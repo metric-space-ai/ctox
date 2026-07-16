@@ -67,6 +67,7 @@ module.exports = {
     target: ["dmg", "zip"],
   },
   afterSign: "scripts/notarize-macos.cjs",
+  afterAllArtifactBuild: "scripts/notarize-macos-artifacts.cjs",
   dmg: {
     sign: true,
   },
