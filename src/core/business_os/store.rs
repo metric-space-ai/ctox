@@ -5455,7 +5455,8 @@ fn normalize_office_engine(value: &str, kind: &str) -> anyhow::Result<&'static s
             "spreadsheet",
             "" | "ctox_spreadsheets" | "ctox-spreadsheets" | "ctox_office" | "ctox-office",
         ) => Ok("ctox_spreadsheets"),
-        (_, "legacy") => Ok("legacy"),
+        ("spreadsheet", "legacy") => Ok("ctox_spreadsheets"),
+        ("document", "legacy") => Ok("legacy"),
         (_, other) => anyhow::bail!("unsupported {kind} office engine: {other}"),
     }
 }
@@ -5498,8 +5499,30 @@ fn load_office_runtime_settings(root: &Path) -> anyhow::Result<Value> {
             },
         )
         .optional()?;
-    Ok(value.unwrap_or_else(|| {
-        serde_json::json!({
+    if let Some(mut settings) = value {
+        let documents_engine = normalize_office_engine(
+            settings["documents_engine"].as_str().unwrap_or_default(),
+            "document",
+        )?;
+        let spreadsheets_engine = normalize_office_engine(
+            settings["spreadsheets_engine"].as_str().unwrap_or_default(),
+            "spreadsheet",
+        )?;
+        if settings["documents_engine"].as_str() != Some(documents_engine)
+            || settings["spreadsheets_engine"].as_str() != Some(spreadsheets_engine)
+        {
+            conn.execute(
+                "UPDATE office_runtime_settings
+                 SET documents_engine = ?1, spreadsheets_engine = ?2
+                 WHERE id = 1",
+                params![documents_engine, spreadsheets_engine],
+            )?;
+        }
+        settings["documents_engine"] = Value::String(documents_engine.to_string());
+        settings["spreadsheets_engine"] = Value::String(spreadsheets_engine.to_string());
+        return Ok(settings);
+    }
+    Ok(serde_json::json!({
             "documents_engine": "ctox_documents",
             "spreadsheets_engine": "ctox_spreadsheets",
             "updated_at_ms": 0,
@@ -5507,8 +5530,7 @@ fn load_office_runtime_settings(root: &Path) -> anyhow::Result<Value> {
             "spreadsheet_available": true,
             "protocol": super::office_engine::EDITOR_PROTOCOL,
             "protocol_version": super::office_engine::EDITOR_PROTOCOL_VERSION,
-        })
-    }))
+        }))
 }
 
 fn save_office_runtime_settings(
@@ -30698,7 +30720,8 @@ fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<
 
 fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
     use super::office_engine::{
-        apply_changes, export, prepare, sha256_hex, ApplyChangesOptions, OfficeKind, PrepareOptions,
+        apply_changes, delimited_text_to_xlsx, export, prepare, sha256_hex,
+        ApplyChangesOptions, OfficeKind, PrepareOptions,
     };
 
     let (kind, module_id, records_collection, versions_collection, chunks_collection) =
@@ -30754,6 +30777,38 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
                 .filter(|value| !value.is_empty())
                 .context("office version has no canonical blob")?;
             let source = load_rxdb_office_blob(root, chunks_collection, source_blob_id)?;
+            let delimited_source = kind == OfficeKind::Spreadsheet
+                && !source.starts_with(b"PK")
+                && (version
+                    .get("source_kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        value.contains("csv") || value.contains("tsv") || value == "created_blank"
+                    })
+                    || record
+                        .get("mime_type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| matches!(value, "text/csv" | "text/tab-separated-values"))
+                    || record
+                        .get("filename")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| {
+                            let lower = value.to_ascii_lowercase();
+                            lower.ends_with(".csv") || lower.ends_with(".tsv")
+                        }));
+            let (source, canonical_blob_id) = if delimited_source {
+                let canonical = delimited_text_to_xlsx(&source)?;
+                let blob_id = persist_office_canonical_spreadsheet_blob(
+                    root,
+                    chunks_collection,
+                    &record_id,
+                    &version_id,
+                    &canonical,
+                )?;
+                (canonical, Some(blob_id))
+            } else {
+                (source, None)
+            };
             let prepared = prepare(
                 kind,
                 &source,
@@ -30797,6 +30852,23 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
                 "editor_blob_id".to_string(),
                 Value::String(editor_blob_id.clone()),
             );
+            if let Some(canonical_blob_id) = canonical_blob_id.as_ref() {
+                object
+                    .entry("original_blob_id".to_string())
+                    .or_insert_with(|| Value::String(source_blob_id.to_string()));
+                object.insert(
+                    "blob_id".to_string(),
+                    Value::String(canonical_blob_id.clone()),
+                );
+                object.insert(
+                    "canonical_source_kind".to_string(),
+                    Value::String("delimited_text_to_xlsx".to_string()),
+                );
+                object.insert(
+                    "canonical_mime_type".to_string(),
+                    Value::String(OfficeKind::Spreadsheet.canonical_mime().to_string()),
+                );
+            }
             object.insert(
                 "editor_protocol".to_string(),
                 Value::String(prepared.protocol.clone()),
@@ -30836,6 +30908,13 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
                 versions_collection,
                 &version_id,
                 now_ms() as i64,
+                next_version.clone(),
+            )?;
+            upsert_rxdb_collection_record(
+                root,
+                versions_collection,
+                &version_id,
+                now_ms() as i64,
                 next_version,
             )?;
             Ok(serde_json::json!({
@@ -30843,6 +30922,7 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
                 "operation": "prepare",
                 "record_id": record_id,
                 "version_id": version_id,
+                "blob_id": canonical_blob_id.unwrap_or_else(|| source_blob_id.to_string()),
                 "editor_blob_id": editor_blob_id,
                 "editor_protocol": prepared.protocol,
                 "editor_protocol_version": prepared.protocol_version,
@@ -30971,6 +31051,50 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
     }
 }
 
+fn persist_office_canonical_spreadsheet_blob(
+    root: &Path,
+    chunks_collection: &str,
+    spreadsheet_id: &str,
+    version_id: &str,
+    bytes: &[u8],
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        chunks_collection == "spreadsheet_blob_chunks",
+        "canonical spreadsheet blob used the wrong collection"
+    );
+    let digest = super::office_engine::sha256_hex(bytes);
+    let suffix = digest.get(..12).unwrap_or(&digest);
+    let blob_id = format!("{version_id}_canonical_{suffix}");
+    let total = bytes.len().div_ceil(DOCUMENT_BLOB_CHUNK_SIZE).max(1);
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let mut projections = Vec::with_capacity(total);
+    for (index, chunk) in bytes.chunks(DOCUMENT_BLOB_CHUNK_SIZE).enumerate() {
+        let chunk_id = format!("{blob_id}_{index:04}");
+        let payload = serde_json::json!({
+            "id": chunk_id,
+            "blob_id": blob_id,
+            "spreadsheet_id": spreadsheet_id,
+            "version_id": version_id,
+            "idx": index,
+            "total": total,
+            "mime_type": super::office_engine::OfficeKind::Spreadsheet.canonical_mime(),
+            "encoding": "base64",
+            "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+            "sha256": super::office_engine::sha256_hex(chunk),
+            "created_at_ms": now,
+        });
+        upsert_business_record(&tx, chunks_collection, &chunk_id, now, payload.clone())?;
+        projections.push((chunk_id, payload));
+    }
+    tx.commit()?;
+    for (chunk_id, payload) in projections {
+        upsert_rxdb_collection_record(root, chunks_collection, &chunk_id, now, payload)?;
+    }
+    Ok(blob_id)
+}
+
 fn load_rxdb_office_document(
     root: &Path,
     collection: &str,
@@ -31077,6 +31201,7 @@ fn persist_office_editor_blob(
     let now = now_ms() as i64;
     let conn = open_store(root)?;
     let tx = conn.unchecked_transaction()?;
+    let mut projections = Vec::with_capacity(total);
     let record_field = match kind {
         super::office_engine::OfficeKind::Document => "document_id",
         super::office_engine::OfficeKind::Spreadsheet => "spreadsheet_id",
@@ -31106,9 +31231,19 @@ fn persist_office_editor_blob(
                 record_field.to_string(),
                 Value::String(record_id.to_string()),
             );
-        upsert_business_record(&tx, chunks_collection, &chunk_id, now, payload)?;
+        upsert_business_record(
+            &tx,
+            chunks_collection,
+            &chunk_id,
+            now,
+            payload.clone(),
+        )?;
+        projections.push((chunk_id, payload));
     }
     tx.commit()?;
+    for (chunk_id, payload) in projections {
+        upsert_rxdb_collection_record(root, chunks_collection, &chunk_id, now, payload)?;
+    }
     Ok(blob_id)
 }
 
@@ -58911,7 +59046,7 @@ mod tests {
     }
 
     #[test]
-    fn office_runtime_defaults_to_ctox_and_keeps_typed_legacy_rollback() -> anyhow::Result<()> {
+    fn office_runtime_removes_spreadsheet_legacy_mode() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let defaults = load_office_runtime_settings(root.path())?;
         assert_eq!(
@@ -58945,8 +59080,27 @@ mod tests {
         );
         assert_eq!(
             rollback.get("spreadsheets_engine").and_then(Value::as_str),
-            Some("legacy")
+            Some("ctox_spreadsheets")
         );
+
+        let conn = open_office_runtime_settings(root.path())?;
+        conn.execute(
+            "UPDATE office_runtime_settings SET spreadsheets_engine = 'legacy' WHERE id = 1",
+            [],
+        )?;
+        drop(conn);
+        let migrated = load_office_runtime_settings(root.path())?;
+        assert_eq!(
+            migrated.get("spreadsheets_engine").and_then(Value::as_str),
+            Some("ctox_spreadsheets")
+        );
+        let conn = open_office_runtime_settings(root.path())?;
+        let persisted: String = conn.query_row(
+            "SELECT spreadsheets_engine FROM office_runtime_settings WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(persisted, "ctox_spreadsheets");
         Ok(())
     }
 

@@ -40,6 +40,11 @@ download upstream code.
   remains a development artifact and may never satisfy a production gate.
 - Document bytes cross the capsule through `MessageChannel`, then through the
   Business OS database and command facades. HTTP is static-asset delivery only.
+- XLSX and delimited spreadsheet resources (CSV/TSV) open in CTOX
+  Spreadsheets by default. The native `office.spreadsheet.prepare` path
+  canonicalizes delimited text to a typed XLSX package while Files retains the
+  original downloadable resource. CTOX Spreadsheets is the only spreadsheet
+  viewer; there is no legacy runtime fallback.
 
 The capsule deliberately keeps the iframe boundary. The inherited editor core
 uses process-global namespaces and global CSS; the iframe prevents those

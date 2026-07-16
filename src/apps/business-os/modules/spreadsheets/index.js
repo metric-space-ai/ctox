@@ -1,14 +1,13 @@
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs';
-import { HyperFormula } from '../../vendor/hyperformula.mjs';
 
 const CSV_MIME = 'text/csv';
-const JSON_MIME = 'application/json';
+const TSV_MIME = 'text/tab-separated-values';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
-const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.json', '.xlsx'];
+const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -81,19 +80,13 @@ export async function mount(ctx) {
 
   const state = {
     ctx,
-    jspreadsheetModule: null,
-    jSuitesModule: null,
-    jspreadsheetLoadPromise: null,
     ctoxSpreadsheetsModule: null,
-    officeEngine: 'ctox_spreadsheets',
     spreadsheets: [],
     runbooks: [],
     selectedId: '',
     selectedVersion: null,
     editorHandle: null,
     spreadsheetContainer: null,
-    autosaveTimer: null,
-    autosavePromise: null,
     renderSerial: 0,
     switchSerial: 0,
     dirty: false,
@@ -128,10 +121,7 @@ export async function mount(ctx) {
       if (disposed) return;
       await refreshRunbooks(state).catch((error) => console.warn('[spreadsheets] refreshRunbooks failed', error));
       if (disposed) return;
-      await Promise.all([
-        refreshSpreadsheets(state).catch((error) => console.warn('[spreadsheets] refreshSpreadsheets failed', error)),
-        refreshOfficeEngineSettings(state).catch((error) => console.warn('[spreadsheets] office engine settings failed', error)),
-      ]);
+      await refreshSpreadsheets(state).catch((error) => console.warn('[spreadsheets] refreshSpreadsheets failed', error));
       if (disposed) return;
       if (ctx.args?.openFile) {
         await enqueueSpreadsheetOpenFile(state, ctx.args.openFile);
@@ -150,18 +140,13 @@ export async function mount(ctx) {
 
   return () => {
     disposed = true;
-    if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
     state.contextMenuCleanup?.();
     if (state.openFileToken) ctx.eventBus?.off?.('desktop-app:open-file', state.openFileToken);
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
-    flushActiveSpreadsheetDraft(state).catch((error) => console.error('[spreadsheets] final draft save failed', error));
     if (state.editorHandle?.kind === 'ctox-spreadsheets') {
       state.editorHandle.destroy?.();
-    } else if (state.spreadsheetContainer && state.jspreadsheetModule) {
-      try { state.jspreadsheetModule.destroy(state.spreadsheetContainer); } catch {}
-      state.spreadsheetContainer = null;
     }
     state.editorHandle = null;
   };
@@ -222,31 +207,6 @@ async function loadCtoxSpreadsheetsModule(state) {
     state.ctoxSpreadsheetsModule = await import('../../vendor/ctox-office/ctox-office-spreadsheet.mjs');
   }
   return state.ctoxSpreadsheetsModule;
-}
-
-async function refreshOfficeEngineSettings(state) {
-  const collection = state.ctx.db?.collection?.('ctox_runtime_settings');
-  if (!collection) return state.officeEngine;
-  const settings = await collection.findOne('runtime-settings').exec();
-  const projected = settings?.toJSON?.() || settings;
-  state.officeEngine = officeEngineFromSettings(projected);
-  return state.officeEngine;
-}
-
-function officeEngineFromSettings(settings) {
-  return settings?.office?.spreadsheets_engine === 'legacy' ? 'legacy' : 'ctox_spreadsheets';
-}
-
-async function loadJSpreadsheetLib(state) {
-  if (state.jspreadsheetModule) return state.jspreadsheetModule;
-  if (!state.jspreadsheetLoadPromise) {
-    state.jspreadsheetLoadPromise = import('../../vendor/jspreadsheet.mjs').then((mod) => {
-      state.jspreadsheetModule = mod.jspreadsheet;
-      state.jSuitesModule = mod.jSuites;
-      return mod.jspreadsheet;
-    });
-  }
-  return state.jspreadsheetLoadPromise;
 }
 
 function wireModule(state) {
@@ -391,7 +351,7 @@ async function createNewSpreadsheet(state, input = {}) {
     filename,
     mime_type: CSV_MIME,
     status: 'Draft',
-    spreadsheet_type: 'jspreadsheet',
+    spreadsheet_type: 'csv',
     owner_id: '',
     current_version_id: versionId,
     source_sha256: await sha256Hex(bytes),
@@ -422,8 +382,8 @@ async function importSpreadsheetFile(state, file, tags = []) {
   if (!validation.valid) {
     throw new Error(state.t(validation.key, validation.message));
   }
-  const isJson = file.name.endsWith('.json') || file.type === JSON_MIME;
   const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.type === XLSX_MIME;
+  const isTsv = file.name.toLowerCase().endsWith('.tsv') || file.type === TSV_MIME;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const fileText = isXlsx ? '' : new TextDecoder().decode(bytes);
 
@@ -441,31 +401,11 @@ async function importSpreadsheetFile(state, file, tags = []) {
       data: [],
       columns: [],
     };
-  } else if (isJson) {
-    try {
-      const parsed = JSON.parse(fileText);
-      if (Array.isArray(parsed)) {
-        modelJson.data = parsed;
-        // Make standard columns based on elements count
-        const colCount = parsed[0]?.length || 6;
-        modelJson.columns = Array.from({ length: colCount }, (_, i) => ({ type: 'text', title: String.fromCharCode(65 + i), width: '120px' }));
-      } else if (parsed && typeof parsed === 'object') {
-        modelJson = {
-          data: parsed.data || DEFAULT_GRID_DATA,
-          columns: parsed.columns || DEFAULT_GRID_COLUMNS,
-          nestedHeaders: parsed.nestedHeaders || null,
-          mergeCells: parsed.mergeCells || null,
-          style: parsed.style || null
-        };
-      }
-    } catch (err) {
-      console.warn('Failed parsing JSON spreadsheet. Reverting to empty grid.', err);
-      throw new Error(state.t('validationInvalidJson', 'JSON konnte nicht gelesen werden.'));
-    }
   } else {
-    // Parse CSV
+    // Parse delimited text for list metadata. The native Office prepare step
+    // remains authoritative for the canonical XLSX representation.
     try {
-      const rows = parseCSVContent(fileText);
+      const rows = parseCSVContent(fileText, isTsv ? '\t' : ',');
       if (rows.length > 0) {
         modelJson.data = rows;
         const colCount = Math.max(...rows.map(r => r.length), 1);
@@ -474,7 +414,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
         throw new Error(state.t('validationEmptySpreadsheet', 'Die Datei enthält keine Tabellenzeilen.'));
       }
     } catch (err) {
-      console.warn('Failed parsing CSV spreadsheet.', err);
+      console.warn('Failed parsing delimited spreadsheet.', err);
       throw err;
     }
   }
@@ -487,7 +427,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     blobId,
     spreadsheetId: documentId,
     versionId,
-    mimeType: isXlsx ? XLSX_MIME : isJson ? JSON_MIME : CSV_MIME,
+    mimeType: isXlsx ? XLSX_MIME : isTsv ? TSV_MIME : CSV_MIME,
     bytes
   });
 
@@ -495,7 +435,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
-    source_kind: isXlsx ? 'imported_xlsx' : isJson ? 'imported_json' : 'imported_csv',
+    source_kind: isXlsx ? 'imported_xlsx' : isTsv ? 'imported_tsv' : 'imported_csv',
     blob_id: blobId,
     model_json: modelJson,
     diagnostics: [],
@@ -507,9 +447,9 @@ async function importSpreadsheetFile(state, file, tags = []) {
     id: documentId,
     title: titleFromFilename(file.name),
     filename: file.name,
-    mime_type: isXlsx ? XLSX_MIME : isJson ? JSON_MIME : CSV_MIME,
+    mime_type: isXlsx ? XLSX_MIME : isTsv ? TSV_MIME : CSV_MIME,
     status: 'Imported',
-    spreadsheet_type: isXlsx ? 'xlsx' : 'jspreadsheet',
+    spreadsheet_type: isXlsx ? 'xlsx' : isTsv ? 'tsv' : 'csv',
     owner_id: '',
     current_version_id: versionId,
     source_sha256: await sha256Hex(bytes),
@@ -534,7 +474,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
   renderCenter(state);
 }
 
-function parseCSVContent(text) {
+function parseCSVContent(text, delimiter = ',') {
   // Simple yet robust CSV parses that handles quotes
   const lines = [];
   let row = [""];
@@ -551,7 +491,7 @@ function parseCSVContent(text) {
       } else {
         insideQuote = !insideQuote;
       }
-    } else if (char === ',' && !insideQuote) {
+    } else if (char === delimiter && !insideQuote) {
       row.push("");
     } else if ((char === '\r' || char === '\n') && !insideQuote) {
       if (char === '\r' && nextChar === '\n') {
@@ -670,7 +610,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
     empty.style.padding = '30px 10px';
     empty.innerHTML = `
       <strong>${escapeHtml(hasRecords ? state.t('noMatches', 'Keine Treffer') : state.t('noDocuments', 'Keine Tabellen'))}</strong>
-      <span>${escapeHtml(hasRecords ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('importPrompt', 'Über das Import-Icon CSV oder JSON hinzufügen.'))}</span>
+      <span>${escapeHtml(hasRecords ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('importPrompt', 'Über das Import-Icon XLSX, CSV oder TSV hinzufügen.'))}</span>
     `;
     list.append(empty);
     return;
@@ -796,9 +736,9 @@ function normalizeSpreadsheetRecord(record = {}) {
     id: String(record.id || '').trim(),
     title: title || stateLessSpreadsheetTitleFallback(record),
     filename: filename || 'spreadsheet.csv',
-    mime_type: record.mime_type || (isXlsx ? XLSX_MIME : filename.toLowerCase().endsWith('.json') ? JSON_MIME : CSV_MIME),
+    mime_type: record.mime_type || (isXlsx ? XLSX_MIME : filename.toLowerCase().endsWith('.tsv') ? TSV_MIME : CSV_MIME),
     status: normalizeSpreadsheetStatus(record.status || 'Draft'),
-    spreadsheet_type: record.spreadsheet_type || (isXlsx ? 'xlsx' : 'jspreadsheet'),
+    spreadsheet_type: record.spreadsheet_type || (isXlsx ? 'xlsx' : filename.toLowerCase().endsWith('.tsv') ? 'tsv' : 'csv'),
     current_version_id: String(record.current_version_id || ''),
     row_count: Number(record.row_count || 0),
     col_count: Number(record.col_count || 0),
@@ -958,130 +898,35 @@ async function renderCenter(state) {
   });
 
   const canvas = shell.querySelector('[data-spreadsheets-canvas]');
-  const isXlsx = record.spreadsheet_type === 'xlsx'
-    || record.mime_type === XLSX_MIME
-    || String(record.filename || '').toLowerCase().endsWith('.xlsx');
-
-  if (isXlsx) {
-    shell.querySelector('[data-spreadsheets-add-row]').hidden = true;
-    shell.querySelector('[data-spreadsheets-add-col]').hidden = true;
-    if (!state.selectedVersion) {
-      canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
-      return;
-    }
-    if (state.officeEngine !== 'ctox_spreadsheets') {
-      canvas.innerHTML = `<div class="spreadsheets-error"><strong>Legacy-Engine unterstützt XLSX nicht.</strong><span>Die typisierte Runtime-Einstellung <code>office.spreadsheets_engine = ctox_spreadsheets</code> aktiviert CTOX Spreadsheets.</span></div>`;
-      return;
-    }
-    try {
-      await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
-    } catch (error) {
-      canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
-    }
+  shell.querySelector('[data-spreadsheets-add-row]').hidden = true;
+  shell.querySelector('[data-spreadsheets-add-col]').hidden = true;
+  if (!isOfficeSpreadsheetRecord(record)) {
+    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('unsupportedSpreadsheetFormat', 'Nicht unterstütztes Tabellenformat.'))}</strong><span>${escapeHtml(state.t('supportedSpreadsheetFormats', 'Bitte XLSX, CSV oder TSV verwenden.'))}</span></div>`;
     return;
   }
-
-  try {
-    const jspread = await loadJSpreadsheetLib(state);
-
-    // Destroy previous grid if any
-    if (state.spreadsheetContainer) {
-      try { jspread.destroy(state.spreadsheetContainer); } catch {}
-      state.spreadsheetContainer = null;
-    }
-    state.editorHandle = null;
-
-    canvas.innerHTML = '';
-    const container = document.createElement('div');
-    canvas.appendChild(container);
-    state.spreadsheetContainer = container;
-
-    if (!state.selectedVersion?.model_json) {
-      canvas.innerHTML = `
-        <div class="spreadsheets-error">
-          <strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong>
-          <span>${escapeHtml(state.t('loadVersionRepairPrompt', 'Bitte erneut importieren oder den Datensatz verwalten.'))}</span>
-        </div>
-      `;
-      return;
-    }
-
-    const versionData = normalizeSpreadsheetModel(state.selectedVersion.model_json);
-
-    const worksheet = await new Promise((resolve, reject) => {
-      const gridConfig = {
-        worksheets: [{
-          data: versionData.data,
-          columns: versionData.columns,
-          nestedHeaders: versionData.nestedHeaders || null,
-          mergeCells: versionData.mergeCells || null,
-          style: versionData.style || null,
-          minDimensions: [6, 10],
-        }],
-        tableOverflow: true,
-        tableHeight: '100%',
-        tableWidth: '100%',
-        parseFormulas: false, // Use our custom HyperFormula ESM engine
-        onload: (spreadsheet) => {
-          if (spreadsheet.worksheets && spreadsheet.worksheets[0]) {
-            resolve(spreadsheet.worksheets[0]);
-          } else {
-            reject(new Error("No worksheet created"));
-          }
-        },
-        onchange: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        oninsertrow: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        oninsertcolumn: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        ondeleterow: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        ondeletecolumn: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        onmerge: () => {
-          markSpreadsheetAsDirty(state);
-          recalculateSpreadsheet(state);
-        },
-        onchangestyle: () => {
-          markSpreadsheetAsDirty(state);
-        }
-      };
-
-      try {
-        jspread(container, gridConfig);
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    state.editorHandle = worksheet;
-    recalculateSpreadsheet(state);
-  } catch (err) {
-    canvas.innerHTML = `
-      <div class="spreadsheets-error">
-        <strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong>
-        <span>${escapeHtml(err.message)}</span>
-      </div>
-    `;
+  if (!state.selectedVersion) {
+    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
+    return;
   }
+  try {
+    await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
+  } catch (error) {
+    canvas.innerHTML = `<div class="spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+  }
+}
+
+function isOfficeSpreadsheetRecord(record) {
+  return record?.spreadsheet_type === 'xlsx'
+    || record?.spreadsheet_type === 'csv'
+    || record?.spreadsheet_type === 'tsv'
+    || record?.mime_type === XLSX_MIME
+    || record?.mime_type === CSV_MIME
+    || record?.mime_type === TSV_MIME
+    || /\.(xlsx|csv|tsv)$/i.test(String(record?.filename || ''));
 }
 
 async function mountCtoxSpreadsheets(state, host, record, version) {
   if (state.editorHandle?.kind === 'ctox-spreadsheets') await state.editorHandle.destroy();
-  else if (state.spreadsheetContainer && state.jspreadsheetModule) {
-    try { state.jspreadsheetModule.destroy(state.spreadsheetContainer); } catch {}
-  }
   state.editorHandle = null;
   state.spreadsheetContainer = null;
   const { createCtoxSpreadsheetsEditor } = await loadCtoxSpreadsheetsModule(state);
@@ -1120,57 +965,6 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
   };
 }
 
-function recalculateSpreadsheet(state) {
-  if (!state.editorHandle) return;
-
-  // Guard against recursion during visual DOM cell updates
-  if (state.isRecalculating) return;
-  state.isRecalculating = true;
-
-  try {
-    const rawData = state.editorHandle.getData();
-    const columns = state.editorHandle.options?.columns || [];
-    // Rebuild HyperFormula using the raw data containing formulas
-    const hf = HyperFormula.buildFromArray(rawData);
-
-    for (let r = 0; r < rawData.length; r++) {
-      for (let c = 0; c < rawData[r].length; c++) {
-        const val = rawData[r][c];
-        if (typeof val === 'string' && val.startsWith('=')) {
-          const calcVal = hf.getCellValue({ sheet: 0, col: c, row: r });
-          const cellElement = state.editorHandle.getCell(c, r);
-          if (cellElement) {
-            const colDef = columns[c] || {};
-            const displayVal = formatCellForDisplay(calcVal, colDef);
-            cellElement.textContent = displayVal;
-            if (String(calcVal).startsWith('#')) {
-              cellElement.classList.add('formula-error');
-            } else {
-              cellElement.classList.remove('formula-error');
-            }
-          }
-        } else {
-          const cellElement = state.editorHandle.getCell(c, r);
-          if (cellElement) {
-            cellElement.classList.remove('formula-error');
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("HyperFormula recalculation failed:", err);
-  } finally {
-    state.isRecalculating = false;
-  }
-}
-
-// Evaluate formula cells (leading "=") to their computed values via HyperFormula,
-// returning a deep copy of the grid with formulas replaced by values; non-formula
-// cells pass through unchanged and the input is never mutated (the live editor
-// model keeps its formulas for round-trip editing). This is what persisted and
-// exported artifacts use so non-browser consumers of the canonical CSV never see
-// raw "=SUM(...)" strings. `engine` is injectable for tests. Falls back to the
-// raw cells if the engine cannot build.
 // Serialize one CSV cell with minimal RFC-4180 quoting: only quote when the
 // value contains a delimiter, quote, newline, or leading/trailing whitespace.
 // Numeric and plain cells are emitted raw so their type survives a CSV
@@ -1189,65 +983,6 @@ function rowsToCsv(rows) {
   return (rows || []).map(row => (row || []).map(escapeCsvCell).join(',')).join('\n');
 }
 
-function evaluateGridData(rawData, engine = HyperFormula) {
-  if (!Array.isArray(rawData)) return rawData;
-  let hf;
-  try {
-    hf = engine.buildFromArray(rawData);
-  } catch (err) {
-    console.error('HyperFormula evaluation failed; persisting raw cells', err);
-    return rawData.map(row => (Array.isArray(row) ? row.slice() : row));
-  }
-  try {
-    return rawData.map((row, r) => (Array.isArray(row)
-      ? row.map((val, c) => {
-        if (typeof val === 'string' && val.startsWith('=')) {
-          const calc = hf.getCellValue({ sheet: 0, col: c, row: r });
-          return (calc === null || calc === undefined) ? '' : calc;
-        }
-        return val;
-      })
-      : row));
-  } finally {
-    hf.destroy?.();
-  }
-}
-
-// Apply the column's numeric mask (e.g. "$ #.##0,00") to a calculated value so
-// formula results in numeric columns render with the same formatting as the
-// typed numeric cells above them. Mirrors jSuites' mask conventions: '.' is the
-// thousands separator and ',' is the decimal separator.
-function formatCellForDisplay(value, colDef) {
-  if (value === null || value === undefined || value === '') return '';
-  const type = colDef?.type;
-  const mask = colDef?.mask;
-  if (type !== 'numeric' || !mask) {
-    return String(value);
-  }
-  const num = Number(value);
-  if (!Number.isFinite(num)) return String(value);
-
-  // Detect prefix/suffix around the numeric template.
-  const numericTemplateMatch = mask.match(/[0#.,]+/);
-  if (!numericTemplateMatch) return String(num);
-  const template = numericTemplateMatch[0];
-  const prefix = mask.slice(0, numericTemplateMatch.index);
-  const suffix = mask.slice(numericTemplateMatch.index + template.length);
-
-  // Determine decimal precision from the template's fractional part.
-  const decimalIdx = template.lastIndexOf(',');
-  const decimals = decimalIdx >= 0 ? template.length - decimalIdx - 1 : 0;
-
-  const fixed = num.toFixed(decimals);
-  const [intPartRaw, fracPart = ''] = fixed.split('.');
-  const sign = intPartRaw.startsWith('-') ? '-' : '';
-  const intDigits = sign ? intPartRaw.slice(1) : intPartRaw;
-  const intWithGroups = intDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  const body = decimals > 0 ? `${intWithGroups},${fracPart}` : intWithGroups;
-
-  return `${prefix}${sign}${body}${suffix}`;
-}
-
 function markSpreadsheetAsDirty(state) {
   if (state.dirty) return;
   state.dirty = true;
@@ -1258,131 +993,15 @@ function markSpreadsheetAsDirty(state) {
     badge.querySelector('span').textContent = state.t('unsavedChanges', 'Ungespeicherte Änderungen');
   }
 
-  // CTOX Spreadsheets owns its XLSY commit lifecycle. The legacy grid
-  // autosave serializes getData()/CSV and must never run against that editor.
-  if (state.editorHandle?.kind === 'ctox-spreadsheets') return;
-  if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
-  state.autosaveTimer = setTimeout(() => {
-    saveActiveSpreadsheetDraft(state).catch(err => console.error('Auto-save failed:', err));
-  }, 900);
 }
 
 function markSpreadsheetAsSaved(state) {
   state.dirty = false;
   state.saving = false;
-  if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
-  state.autosaveTimer = null;
   const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
   if (badge) {
     badge.className = 'ctox-badge spreadsheets-dirty-badge';
     badge.querySelector('span').textContent = state.t('saved', 'Gespeichert');
-  }
-}
-
-async function saveActiveSpreadsheetDraft(state) {
-  if (!state.dirty || !state.editorHandle || !state.selectedId) return;
-
-  state.saving = true;
-  const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
-  if (badge) {
-    badge.className = 'ctox-badge spreadsheets-dirty-badge is-saving';
-    badge.querySelector('span').textContent = state.t('saving', 'Speichert...');
-  }
-
-  try {
-    const rawData = state.editorHandle.getData();
-    // Retrieve complete styles, merges, and columns layout safely
-    const mergeData = state.editorHandle.getMerge?.() || null;
-    const styleData = state.editorHandle.getStyle?.() || null;
-
-    // Build columns configurations
-    const columnsData = (state.editorHandle.options.columns || []).map((col, idx) => ({
-      type: col.type || 'text',
-      title: col.title || String.fromCharCode(65 + idx),
-      width: col.width || '120px',
-      mask: col.mask || null,
-      decimal: col.decimal || null
-    }));
-
-    // The model keeps formulas (round-trip editing); the canonical CSV blob and
-    // search index carry computed values for non-browser consumers (H14).
-    const evaluatedData = evaluateGridData(rawData);
-
-    const modelJson = {
-      data: rawData,
-      columns: columnsData,
-      nestedHeaders: state.editorHandle.options.nestedHeaders || null,
-      mergeCells: mergeData,
-      style: styleData
-    };
-
-    const docVersionId = state.selectedVersion?.id || `${state.selectedId}_v1`;
-    const docBlobId = state.selectedVersion?.blob_id || `${docVersionId}_blob`;
-    const now = Date.now();
-
-    // Serialize evaluated values to the canonical CSV blob.
-    const csvText = rowsToCsv(evaluatedData);
-    const bytes = new TextEncoder().encode(csvText);
-
-    // Delete previous blob chunks first to avoid stacking duplicate indices
-    const chunkCollection = spreadsheetCollection(state.ctx, 'spreadsheet_blob_chunks');
-    const oldChunks = await chunkCollection.find({ selector: { blob_id: docBlobId } }).exec();
-    await Promise.all(oldChunks.map(chunk => chunk.remove()));
-
-    // Persist new chunks
-    await saveBlobChunks(state.ctx, {
-      blobId: docBlobId,
-      spreadsheetId: state.selectedId,
-      versionId: docVersionId,
-      mimeType: CSV_MIME,
-      bytes
-    });
-
-    // Update version model JSON
-    const versionDoc = await spreadsheetCollection(state.ctx, 'spreadsheet_versions').findOne(docVersionId).exec();
-    if (versionDoc) {
-      await versionDoc.incrementalPatch({
-        model_json: modelJson,
-        updated_at_ms: now
-      });
-    }
-
-    // Update parent metadata
-    const sheetDoc = await spreadsheetCollection(state.ctx, 'spreadsheets').findOne(state.selectedId).exec();
-    if (sheetDoc) {
-      await sheetDoc.incrementalPatch({
-        row_count: modelJson.data.length,
-        col_count: modelJson.columns.length,
-        source_sha256: await sha256Hex(bytes),
-        index_text: sheetDoc.toJSON().title + '\n' + evaluatedData.slice(0, 10).map(r => r.join(' ')).join('\n'),
-        updated_at_ms: now
-      });
-    }
-
-    state.dirty = false;
-    state.saving = false;
-
-    if (badge) {
-      badge.className = 'ctox-badge spreadsheets-dirty-badge';
-      badge.querySelector('span').textContent = state.t('saved', 'Gespeichert');
-    }
-
-    // Trigger explorer refresh
-    await refreshSpreadsheets(state);
-    state.ctx.host.dispatchEvent(new CustomEvent('spreadsheets:refresh-left'));
-  } catch (err) {
-    state.saving = false;
-    if (badge) {
-      badge.className = 'ctox-badge spreadsheets-dirty-badge is-dirty';
-      badge.querySelector('span').textContent = state.t('saveFailed', 'Fehler beim Speichern');
-    }
-    throw err;
-  }
-}
-
-async function flushActiveSpreadsheetDraft(state) {
-  if (state.dirty && state.editorHandle?.kind !== 'ctox-spreadsheets') {
-    await saveActiveSpreadsheetDraft(state);
   }
 }
 
@@ -1471,7 +1090,6 @@ function renderRight(state) {
       sendBtn.textContent = 'Executing...';
 
       try {
-        await flushActiveSpreadsheetDraft(state);
         await dispatchSpreadsheetRunbook(state, {
           record,
           versionId: record.current_version_id,
@@ -1563,7 +1181,7 @@ function validateImportInput(input = {}) {
     return { valid: false, key: 'validationFileRequired', message: 'Datei erforderlich.' };
   }
   if (!isSupportedSpreadsheetFile(file)) {
-    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur XLSX, CSV oder JSON.' };
+    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur XLSX, CSV oder TSV.' };
   }
   return { valid: true, message: '' };
 }
@@ -1598,7 +1216,7 @@ function isSupportedSpreadsheetFile(file) {
   const name = file.name.toLowerCase();
   return SUPPORTED_IMPORT_EXTENSIONS.some((ext) => name.endsWith(ext))
     || file.type === CSV_MIME
-    || file.type === JSON_MIME
+    || file.type === TSV_MIME
     || file.type === XLSX_MIME;
 }
 
@@ -1669,8 +1287,8 @@ function openImportModal(state) {
   wrapper.innerHTML = `
     <form data-spreadsheets-import-form novalidate>
       <label>
-        <span>${escapeHtml(state.t('file', 'Datei auswählen (XLSX, CSV oder JSON)'))}</span>
-        <input type="file" accept=".xlsx,.csv,.json" required data-import-file>
+        <span>${escapeHtml(state.t('file', 'Datei auswählen (XLSX, CSV oder TSV)'))}</span>
+        <input type="file" accept=".xlsx,.csv,.tsv" required data-import-file>
       </label>
       <label style="margin-top: 8px;">
         <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
@@ -1728,9 +1346,7 @@ function openExportModal(state) {
       <label>
         <span>${escapeHtml(state.t('documentType', 'Exportformat'))}</span>
         <select data-export-format>
-          ${state.editorHandle?.kind === 'ctox-spreadsheets'
-            ? '<option value="xlsx">XLSX (Office Open XML)</option>'
-            : '<option value="csv">CSV (Kommagetrennt)</option><option value="json">JSON (JSpreadsheet Struktur)</option>'}
+          <option value="xlsx">XLSX (Office Open XML)</option>
         </select>
       </label>
       <div class="spreadsheets-drawer-actions" style="margin-top: 12px;">
@@ -1751,53 +1367,12 @@ function openExportModal(state) {
 
     try {
       if (!state.editorHandle) throw new Error('Editor nicht initialisiert.');
-      if (state.editorHandle.kind === 'ctox-spreadsheets') {
-        const bytes = await state.editorHandle.export();
-        const downloadName = ensureExtension(slugFilename(record.title || 'export'), '.xlsx');
-        downloadBlob(bytes, XLSX_MIME, downloadName);
-        state.ctx.notifications?.success?.(`Export abgeschlossen: ${downloadName}`);
-        return;
+      if (format !== 'xlsx' || state.editorHandle.kind !== 'ctox-spreadsheets') {
+        throw new Error('CTOX Spreadsheets ist nicht bereit.');
       }
-      await flushActiveSpreadsheetDraft(state);
-
-      const rawData = state.editorHandle.getData();
-      const evaluatedData = evaluateGridData(rawData);
-      let content = '';
-      let fileExt = '.csv';
-      let mime = CSV_MIME;
-
-      if (format === 'json') {
-        const mergeData = state.editorHandle.getMerge?.() || null;
-        const styleData = state.editorHandle.getStyle?.() || null;
-        const columnsData = (state.editorHandle.options.columns || []).map((col, idx) => ({
-          type: col.type || 'text',
-          title: col.title || String.fromCharCode(65 + idx),
-          width: col.width || '120px',
-          mask: col.mask || null
-        }));
-
-        const modelJson = {
-          // `data` keeps formulas so the export round-trips back into the editor;
-          // `computed` carries the evaluated values for non-browser consumers.
-          data: rawData,
-          computed: evaluatedData,
-          columns: columnsData,
-          nestedHeaders: state.editorHandle.options.nestedHeaders || null,
-          mergeCells: mergeData,
-          style: styleData
-        };
-        content = JSON.stringify(modelJson, null, 2);
-        fileExt = '.json';
-        mime = JSON_MIME;
-      } else {
-        // CSV exports evaluated values (a flat CSV consumer wants results, not
-        // raw "=SUM(...)").
-        content = rowsToCsv(evaluatedData);
-      }
-
-      const downloadName = ensureExtension(slugFilename(record.title || 'export'), fileExt);
-      downloadBlob(content, mime, downloadName);
-
+      const bytes = await state.editorHandle.export();
+      const downloadName = ensureExtension(slugFilename(record.title || 'export'), '.xlsx');
+      downloadBlob(bytes, XLSX_MIME, downloadName);
       state.ctx.notifications?.success?.(`Export abgeschlossen: ${downloadName}`);
     } catch (err) {
       console.error(err);
@@ -1896,10 +1471,8 @@ async function openManageDrawer(state, id) {
       if (state.selectedId === id) {
         state.selectedId = '';
         state.selectedVersion = null;
-        if (state.spreadsheetContainer && state.jspreadsheetModule) {
-          try { state.jspreadsheetModule.destroy(state.spreadsheetContainer); } catch {}
-          state.spreadsheetContainer = null;
-        }
+        if (state.editorHandle?.kind === 'ctox-spreadsheets') await state.editorHandle.destroy();
+        state.spreadsheetContainer = null;
         state.editorHandle = null;
       }
 
@@ -2109,18 +1682,6 @@ function requireSpreadsheetPersistence(ctx) {
 async function ensureStyles() {
   if (document.querySelector('link[data-spreadsheets-style]')) return;
 
-  const linkJsuites = document.createElement('link');
-  linkJsuites.rel = 'stylesheet';
-  linkJsuites.href = new URL('../../vendor/jsuites.css', import.meta.url).href;
-  linkJsuites.dataset.jsuitesStyle = 'true';
-  document.head.append(linkJsuites);
-
-  const linkJspread = document.createElement('link');
-  linkJspread.rel = 'stylesheet';
-  linkJspread.href = new URL('../../vendor/jspreadsheet.css', import.meta.url).href;
-  linkJspread.dataset.jspreadsheetStyle = 'true';
-  document.head.append(linkJspread);
-
   const linkModule = document.createElement('link');
   linkModule.rel = 'stylesheet';
   linkModule.href = new URL('./index.css', import.meta.url).href;
@@ -2234,13 +1795,12 @@ export const __spreadsheetsTestHooks = {
   isActiveSpreadsheetRecord,
   normalizeSpreadsheetRecord,
   normalizeSpreadsheetModel,
-  officeEngineFromSettings,
+  isOfficeSpreadsheetRecord,
   spreadsheetBySourceSha,
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,
   saveBlobChunks,
-  evaluateGridData,
   escapeCsvCell,
   rowsToCsv,
 };

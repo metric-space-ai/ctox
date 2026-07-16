@@ -10,7 +10,6 @@ const bundledModule = await build({
   bundle: true,
   format: 'esm',
   platform: 'browser',
-  external: ['../../vendor/jspreadsheet.mjs'],
   write: false,
 });
 
@@ -86,7 +85,7 @@ test('new spreadsheet validation requires a title before persistence', () => {
 test('import validation requires a supported spreadsheet file', () => {
   assert.equal(hooks.validateImportInput({ file: null }).valid, false);
   assert.equal(hooks.validateImportInput({ file: new File(['a,b'], 'budget.csv', { type: 'text/csv' }) }).valid, true);
-  assert.equal(hooks.validateImportInput({ file: new File(['[]'], 'budget.json', { type: 'application/json' }) }).valid, true);
+  assert.equal(hooks.validateImportInput({ file: new File(['a\tb'], 'budget.tsv', { type: 'text/tab-separated-values' }) }).valid, true);
   assert.equal(hooks.validateImportInput({ file: new File(['PK'], 'budget.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) }).valid, true);
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, false);
 });
@@ -100,35 +99,17 @@ test('file-open deduplication reuses the imported spreadsheet with the same sour
   assert.equal(hooks.spreadsheetBySourceSha(records, 'missing'), null);
 });
 
-test('spreadsheet engine selection defaults to CTOX Spreadsheets and preserves explicit legacy rollback', () => {
-  assert.equal(hooks.officeEngineFromSettings({}), 'ctox_spreadsheets');
-  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'legacy' } }), 'legacy');
-  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'ctox_office' } }), 'ctox_spreadsheets');
-  assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'ctox_spreadsheets' } }), 'ctox_spreadsheets');
+test('supported records always use the real CTOX Office spreadsheet engine', () => {
+  assert.equal(hooks.isOfficeSpreadsheetRecord({ filename: 'loads.csv', mime_type: 'text/csv' }), true);
+  assert.equal(hooks.isOfficeSpreadsheetRecord({ filename: 'loads.xlsx' }), true);
+  assert.equal(hooks.isOfficeSpreadsheetRecord({ filename: 'loads.tsv' }), true);
+  assert.equal(hooks.isOfficeSpreadsheetRecord({ filename: 'model.json', mime_type: 'application/json' }), false);
 });
 
 test('malformed spreadsheet models normalize to a renderable grid', () => {
   const model = hooks.normalizeSpreadsheetModel({ data: [['A', 'B']] });
   assert.deepEqual(model.data, [['A', 'B']]);
   assert.equal(model.columns.length, 2);
-});
-
-test('evaluateGridData replaces formulas with computed values for persistence/export', () => {
-  const raw = [[10, 20], ['=A1+B1', 'text']];
-  const evaluated = hooks.evaluateGridData(raw);
-
-  assert.equal(evaluated[1][0], 30, 'formula cell evaluates to its computed value');
-  assert.equal(evaluated[0][0], 10, 'literal numbers pass through');
-  assert.equal(evaluated[1][1], 'text', 'literal text passes through');
-  // The live editor model must keep the formula for round-trip editing.
-  assert.equal(raw[1][0], '=A1+B1', 'input grid is not mutated');
-});
-
-test('evaluateGridData falls back to raw cells when the engine cannot build', () => {
-  const raw = [['=A1+B1']];
-  const brokenEngine = { buildFromArray() { throw new Error('no license'); } };
-  const out = hooks.evaluateGridData(raw, brokenEngine);
-  assert.deepEqual(out, [['=A1+B1']]);
 });
 
 test('CSV serialization quotes only when required, preserving numeric round-trip', () => {

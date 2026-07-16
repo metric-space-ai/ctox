@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+csv = "1"
 quick-xml = "0.37"
 regex = "1"
 roxmltree = "0.21"
