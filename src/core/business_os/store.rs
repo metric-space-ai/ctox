@@ -28016,7 +28016,15 @@ fn write_rxdb_control_command_outcome(
     conn.execute(
         "INSERT INTO business_commands
             (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            module = excluded.module,
+            command_type = excluded.command_type,
+            record_id = excluded.record_id,
+            status = excluded.status,
+            payload_json = excluded.payload_json,
+            client_context_json = excluded.client_context_json,
+            observed_at_ms = excluded.observed_at_ms",
         params![
             command_id,
             command.module,
@@ -39539,6 +39547,66 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn control_command_outcome_updates_outbox_intake_projection() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let command_id = "cmd_appsec_outbox_race";
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.to_string()),
+            module: APPSEC_MODULE_ID.to_string(),
+            command_type: "ctox.appsec.tools.doctor".to_string(),
+            record_id: Some("runtime/appsec/test".to_string()),
+            payload: serde_json::json!({ "profile": "full" }),
+            client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
+        };
+
+        let claim = channels::claim_business_control_command(
+            root.path(),
+            business_command_core_claim(command_id, &command)?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+
+        let conn = open_store(root.path())?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, 1)",
+            params![
+                command_id,
+                command.module,
+                command.command_type,
+                command.record_id,
+                serde_json::to_string(&command.payload)?,
+                serde_json::to_string(&command.client_context)?,
+            ],
+        )?;
+        drop(conn);
+
+        let outcome = write_rxdb_control_command_outcome(
+            root.path(),
+            &command,
+            "completed",
+            command.record_id.as_deref(),
+            Some("completed"),
+            serde_json::json!({ "ok": true }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let conn = open_store(root.path())?;
+        let (count, status): (i64, String) = conn.query_row(
+            "SELECT COUNT(*), MAX(status) FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(count, 1);
+        assert_eq!(status, "completed");
+        Ok(())
+    }
 
     #[test]
     fn appsec_assessment_run_is_a_write_command_with_bounded_active_gates() -> anyhow::Result<()> {
