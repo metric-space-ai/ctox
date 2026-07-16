@@ -63,6 +63,7 @@ function applyStaticLabels(host, t) {
 
 export async function mount(ctx) {
   await ensureStyles();
+  await ensureSpreadsheetRuntimeReady(ctx);
   const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
   const t = (key, fallback, ...args) => {
     let val = key.split('.').reduce((acc, curr) => acc?.[curr], messages) ?? fallback ?? key;
@@ -153,6 +154,12 @@ export async function mount(ctx) {
     }
     state.editorHandle = null;
   };
+}
+
+async function ensureSpreadsheetRuntimeReady(ctx) {
+  if (typeof ctx?.actions?.ensureRuntimeReady !== 'function') return false;
+  await ctx.actions.ensureRuntimeReady();
+  return true;
 }
 
 async function loadCtoxSpreadsheetsModule(state) {
@@ -2167,6 +2174,7 @@ async function withTimeout(promise, ms, message) {
 }
 
 export const __spreadsheetsTestHooks = {
+  ensureSpreadsheetRuntimeReady,
   hasActiveListFilters,
   isActiveSpreadsheetRecord,
   normalizeSpreadsheetRecord,

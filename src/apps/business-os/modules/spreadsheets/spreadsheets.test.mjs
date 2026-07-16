@@ -19,6 +19,21 @@ const { __spreadsheetsTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
+test('spreadsheet runtime waits for initial replication before reading collections', async () => {
+  const events = [];
+  const ready = await hooks.ensureSpreadsheetRuntimeReady({
+    actions: {
+      async ensureRuntimeReady() {
+        events.push('ready');
+      },
+    },
+  });
+
+  assert.equal(ready, true);
+  assert.deepEqual(events, ['ready']);
+  assert.equal(await hooks.ensureSpreadsheetRuntimeReady({}), false);
+});
+
 test('spreadsheet records without is_deleted remain visible', () => {
   assert.equal(hooks.isActiveSpreadsheetRecord({ id: 'sheet_1' }), true);
   assert.equal(hooks.isActiveSpreadsheetRecord({ id: 'sheet_1', is_deleted: false }), true);
