@@ -96,6 +96,16 @@ function assertDedicatedDesktopReleaseWorkflow() {
     assert.match(workflow, new RegExp(escapeRegExp(`artifact: ${artifact}`)));
   }
   assert.match(workflow, /CTOX_WINDOWS_STORE_RELEASE/);
+  assert.match(
+    workflow,
+    /CSC_LINK:\s*\$\{\{ matrix\.builderPlatform == 'mac' && secrets\.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK \|\| '' \}\}/,
+    "dedicated release must expose the Apple certificate only to macOS builders",
+  );
+  assert.match(
+    workflow,
+    /CSC_IDENTITY_AUTO_DISCOVERY:\s*\$\{\{ matrix\.builderPlatform == 'win' && 'false' \|\| 'true' \}\}/,
+    "dedicated release must disable certificate auto-discovery for Microsoft Store packages",
+  );
   assert.match(workflow, /Verify macOS signing secrets/);
   assert.match(
     workflow,
@@ -186,6 +196,16 @@ function assertReleaseWorkflowMatrix() {
     assert.match(workflow, new RegExp(escapeRegExp(command)), `release workflow missing command: ${command}`);
   }
   assert.match(workflow, /Verify macOS signing secrets/, "release workflow must preflight macOS signing secrets");
+  assert.match(
+    workflow,
+    /CSC_LINK:\s*\$\{\{ matrix\.builderPlatform == 'mac' && secrets\.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK \|\| '' \}\}/,
+    "release workflow must expose the Apple certificate only to macOS builders",
+  );
+  assert.match(
+    workflow,
+    /CSC_IDENTITY_AUTO_DISCOVERY:\s*\$\{\{ matrix\.builderPlatform == 'win' && 'false' \|\| 'true' \}\}/,
+    "release workflow must disable certificate auto-discovery for Microsoft Store packages",
+  );
   assert.match(
     workflow,
     /for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD;/,
