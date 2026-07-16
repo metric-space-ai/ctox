@@ -156,8 +156,10 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
-  /* Prefer word boundaries; only split an actually unbreakable identifier. */
-  overflow-wrap: anywhere;
+  /* Keep recognizable app names on word boundaries. Breaking anywhere caused
+     ugly orphan glyphs (for example the final "n" in "Zugangsdaten"). The
+     two-line clamp truncates genuinely unbreakable identifiers instead. */
+  overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
   color: var(--text);
