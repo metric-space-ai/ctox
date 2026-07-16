@@ -3869,6 +3869,9 @@ fn is_pdf_content(hit: &SearchHit, fetched: &FetchedPageContent) -> bool {
 }
 
 fn extract_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
+    if let Some(page) = extract_zenodo_record_opened_page(query, hit, body) {
+        return page;
+    }
     match detect_page_adapter(hit, body) {
         PageAdapterKind::Github => extract_github_opened_page(query, hit, body)
             .or_else(|| extract_github_discussion_opened_page(query, hit, body))
@@ -3882,6 +3885,98 @@ fn extract_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
         PageAdapterKind::GenericHtml => extract_html_opened_page(query, hit, body),
         PageAdapterKind::PlainText => extract_text_opened_page(query, hit, body),
     }
+}
+
+fn extract_zenodo_record_opened_page(
+    query: &str,
+    hit: &SearchHit,
+    body: &str,
+) -> Option<OpenedPage> {
+    let parsed_url = Url::parse(&hit.url).ok()?;
+    let host = parsed_url.host_str()?.trim_start_matches("www.");
+    if host != "zenodo.org" || !parsed_url.path().starts_with("/api/records/") {
+        return None;
+    }
+
+    let value: Value = serde_json::from_str(body).ok()?;
+    let metadata = value.get("metadata").unwrap_or(&Value::Null);
+    let title = metadata
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("title").and_then(Value::as_str))
+        .unwrap_or(&hit.title)
+        .trim()
+        .to_string();
+    let description = metadata
+        .get("description")
+        .and_then(Value::as_str)
+        .map(strip_html_text)
+        .unwrap_or_default();
+
+    let mut paragraphs = Vec::new();
+    if !title.is_empty() {
+        paragraphs.push(title.clone());
+    }
+    if !description.is_empty() {
+        paragraphs.extend(split_plaintext_paragraphs(&description));
+    }
+    if let Some(doi) = value
+        .get("doi")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("doi").and_then(Value::as_str))
+    {
+        paragraphs.push(format!("DOI: {doi}"));
+    }
+    if let Some(publication_date) = metadata.get("publication_date").and_then(Value::as_str) {
+        paragraphs.push(format!("Publication date: {publication_date}"));
+    }
+    if let Some(files) = value.get("files").and_then(Value::as_array) {
+        for file in files {
+            let key = file.get("key").and_then(Value::as_str).unwrap_or("unnamed");
+            let size = file.get("size").and_then(Value::as_u64);
+            let checksum = file.get("checksum").and_then(Value::as_str);
+            let content_url = file
+                .get("links")
+                .and_then(|links| links.get("content").or_else(|| links.get("self")))
+                .and_then(Value::as_str);
+            let mut parts = vec![format!("File: {key}")];
+            if let Some(size) = size {
+                parts.push(format!("size_bytes: {size}"));
+            }
+            if let Some(checksum) = checksum {
+                parts.push(format!("checksum: {checksum}"));
+            }
+            if let Some(content_url) = content_url {
+                parts.push(format!("content_url: {content_url}"));
+            }
+            paragraphs.push(parts.join("; "));
+        }
+    }
+
+    let paragraphs = clean_candidate_paragraphs(paragraphs);
+    if paragraphs.is_empty() {
+        return None;
+    }
+    let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
+    let summary = if excerpts.is_empty() {
+        trim_text(&format!("{title} {description}"), 360)
+    } else {
+        trim_text(&excerpts.join(" "), 360)
+    };
+    Some(OpenedPage {
+        title,
+        summary,
+        is_pdf: false,
+        pdf_total_pages: None,
+        page_sections: Vec::new(),
+        excerpts,
+        page_text: paragraphs.join("\n\n"),
+    })
+}
+
+fn strip_html_text(raw: &str) -> String {
+    let fragment = Html::parse_fragment(raw);
+    normalize_ws(&fragment.root_element().text().collect::<Vec<_>>().join(" "))
 }
 
 fn looks_like_html(body: &str) -> bool {
@@ -8890,6 +8985,50 @@ mod tests {
         );
         assert!(canonical_read_fallback_url("https://zenodo.org/search?q=propeller").is_none());
         assert!(canonical_read_fallback_url("https://example.org/records/15856431").is_none());
+    }
+
+    #[test]
+    fn zenodo_record_adapter_extracts_canonical_file_receipts() {
+        let hit = SearchHit {
+            title: "zenodo.org".to_string(),
+            url: "https://zenodo.org/api/records/20111572".to_string(),
+            snippet: String::new(),
+            source: "direct_read".to_string(),
+            rank: 1,
+        };
+        let body = r#"{
+          "doi": "10.5281/zenodo.20111572",
+          "metadata": {
+            "title": "ENOLA numerical and experimental propeller database",
+            "description": "<div>Experimental measurements include forces, moments, and acoustic emissions.</div>",
+            "publication_date": "2026-05-10"
+          },
+          "files": [{
+            "key": "Propeller_Database.zip",
+            "size": 223601320,
+            "checksum": "md5:245267e590546f160f3b971d7f8e05fb",
+            "links": {"content": "https://zenodo.org/api/records/20111572/files/archive/content"}
+          }]
+        }"#;
+
+        let page = extract_zenodo_record_opened_page(
+            "ENOLA propeller database archive checksum forces moments",
+            &hit,
+            body,
+        )
+        .expect("Zenodo record");
+        assert_eq!(
+            page.title,
+            "ENOLA numerical and experimental propeller database"
+        );
+        assert!(page.page_text.contains("Propeller_Database.zip"));
+        assert!(page.page_text.contains("223601320"));
+        assert!(page.page_text.contains("245267e590546f160f3b971d7f8e05fb"));
+        assert!(page
+            .excerpts
+            .iter()
+            .any(|excerpt| excerpt.contains("checksum")));
+        assert!(is_meaningful_evidence_text(&page.summary));
     }
 
     #[test]
