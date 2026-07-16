@@ -422,6 +422,64 @@ export function getSvgIcon(moduleId, size = 24, strokeWidth = 2) {
     return svg;
   }
 
-  const generator = iconMap[key] || iconMap.fallback;
-  return generator(size, strokeWidth).trim();
+  const generator = iconMap[key];
+  if (generator) {
+    return generator(size, strokeWidth).trim();
+  }
+
+  // No curated or registered icon: derive a deterministic monogram icon so
+  // custom / generated apps look distinct and intentional instead of all
+  // sharing one placeholder glyph.
+  return buildMonogramIcon(key, size, strokeWidth);
+}
+
+// Curated gradient pairs matching the premium module-icon aesthetic. Both
+// stops stay vivid enough to read in the light and dark shell themes.
+const MONOGRAM_GRADIENTS = [
+  ['#6366f1', '#8b5cf6'],
+  ['#0ea5e9', '#22c55e'],
+  ['#10b981', '#06b6d4'],
+  ['#f59e0b', '#ef4444'],
+  ['#ec4899', '#8b5cf6'],
+  ['#3b82f6', '#06b6d4'],
+  ['#14b8a6', '#3b82f6'],
+  ['#f97316', '#eab308'],
+  ['#8b5cf6', '#ec4899'],
+  ['#475569', '#3b82f6'],
+];
+
+function hashKey(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash * 31 + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function monogramLetter(key) {
+  const match = String(key).match(/[a-z0-9]/i);
+  return match ? match[0].toUpperCase() : '◻';
+}
+
+function buildMonogramIcon(key, size, strokeWidth) {
+  const safeKey = String(key || '').trim();
+  if (!safeKey) {
+    return iconMap.fallback(size, strokeWidth).trim();
+  }
+  const hash = hashKey(safeKey);
+  const [from, to] = MONOGRAM_GRADIENTS[hash % MONOGRAM_GRADIENTS.length];
+  const letter = monogramLetter(safeKey);
+  const gradId = `grad-mono-${hash.toString(36)}`;
+  return `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-monogram">
+      <defs>
+        <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${from}" />
+          <stop offset="100%" stop-color="${to}" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="5" fill="url(#${gradId})" fill-opacity="0.14" stroke="url(#${gradId})" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"></rect>
+      <text x="12" y="12" fill="url(#${gradId})" font-size="11" font-weight="600" font-family="ui-sans-serif, -apple-system, 'Segoe UI', sans-serif" text-anchor="middle" dominant-baseline="central">${letter}</text>
+    </svg>
+  `.trim();
 }
