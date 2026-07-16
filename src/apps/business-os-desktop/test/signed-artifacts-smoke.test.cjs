@@ -110,7 +110,7 @@ function createWindowsStoreFixture(root) {
   const payload = path.join(root, "store-payload");
   writeFile(
     path.join(payload, "AppxManifest.xml"),
-    '<Package><Identity Name="MichaelWelsch.ctox" Publisher="CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66" /></Package>',
+    '<Package><Identity Name="MichaelWelsch.ctox" Publisher=\'CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66\' /></Package>',
   );
   writeFile(path.join(payload, "resources", "app.asar"), "asar");
   writeFile(path.join(payload, "resources", "ctox", "ctox.exe"), "binary");
