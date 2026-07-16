@@ -69,6 +69,69 @@ test('knowledge refresh contract preserves living research lineage and source pr
   assert.match(payload.instruction, /source_id\/source_url/);
 });
 
+test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sources', () => {
+  const task = {
+    title: 'Drone bearing loads',
+    prompt: 'Compare rotor load evidence',
+    criteria: 'Traceable source evidence',
+    knowledge_domain: 'drone_bearing_design',
+  };
+  const valid = {
+    source_id: 'valid',
+    title: 'Verified rotor load dataset',
+    source_type: 'dataset',
+    source_url: 'https://example.test/valid',
+    verification_status: 'verified',
+    http_status: 200,
+    snapshot_hash: 'sha256:valid',
+    evidence_eligible: true,
+    source_tier: 'primary',
+  };
+  const rows = [
+    valid,
+    { ...valid, source_id: 'not-found', title: '404 candidate', http_status: 404 },
+    { ...valid, source_id: 'metadata', title: 'Metadata only candidate', metadata_only: true },
+    { ...valid, source_id: 'off-topic', title: 'Fachfremde candidate', relevance_status: 'fachfremd' },
+    { ...valid, source_id: 'rejected', title: 'Rejected candidate', verification_status: 'rejected', review_status: 'rejected' },
+    { ...valid, source_id: 'aggregated', title: 'Aggregated candidate', source_tier: 'aggregated' },
+    { source_id: 'legacy', title: 'Legacy candidate', source_url: 'https://example.test/legacy' },
+  ];
+  const models = hooks.buildSourceModels(task, rows, [], []);
+  const byId = new Map(models.map((model) => [model.id, model]));
+
+  assert.equal(byId.get('valid').evidenceEligible, true);
+  assert.ok(byId.get('valid').score > 4);
+  assert.notEqual(byId.get('valid').dimensions.evidence_strength, null);
+
+  for (const id of ['not-found', 'metadata', 'off-topic', 'rejected', 'aggregated', 'legacy']) {
+    const model = byId.get(id);
+    assert.equal(model.evidenceEligible, false, id);
+    assert.equal(model.score, null, id);
+    assert.equal(model.grade, '—', id);
+    assert.equal(model.dimensions.evidence_strength, null, id);
+    assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata only|Rejected|Aggregated|Legacy|not verified/i, id);
+  }
+  assert.deepEqual(models.filter((model) => model.evidenceEligible).map((model) => model.id), ['valid']);
+  assert.equal(hooks.formatPortfolioScore(null), '—');
+  assert.equal(hooks.formatDimensionScore(null), '—');
+});
+
+test('evidence graph filtering removes unverified source nodes and provenance', () => {
+  const filtered = hooks.filterGraphRowsForEvidence([
+    { node_id: 'source:verified', label: 'Verified', source_ids_json: '["verified"]' },
+    { node_id: 'source:legacy', label: 'Legacy', source_ids_json: '["legacy"]' },
+    { node_id: 'concept:load', label: 'Load', source_ids_json: '["verified","legacy"]' },
+    { node_id: 'concept:task', label: 'Task' },
+  ], [
+    { edge_id: 'valid-edge', source_id: 'source:verified', target_id: 'concept:load', source_ids_json: '["verified"]' },
+    { edge_id: 'legacy-edge', source_id: 'source:legacy', target_id: 'concept:load', source_ids_json: '["legacy"]' },
+  ], new Set(['verified']));
+
+  assert.deepEqual(filtered.nodes.map((row) => row.node_id), ['source:verified', 'concept:load', 'concept:task']);
+  assert.equal(filtered.nodes.find((row) => row.node_id === 'concept:load').source_ids_json, '["verified"]');
+  assert.deepEqual(filtered.edges.map((row) => row.edge_id), ['valid-edge']);
+});
+
 test('diagnostic rows distinguish sync failures from local no-data', () => {
   const rows = hooks.collectionDiagnosticRows(['research_runs', 'research_notes', 'knowledge_tables'], {
     research_runs: { sync: { kind: 'failed', message: 'WebRTC replication failed' } },

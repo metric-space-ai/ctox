@@ -60,15 +60,15 @@ const html = `<!doctype html>
         cluster_id: 'cluster:' + cluster,
         occurrences: Math.max(2, 22 - index * 1.4 + cluster),
         betweenness_centrality: index === 0 ? 0.94 - cluster * 0.045 : Math.max(0.04, 0.52 - index * 0.035 + cluster * 0.01),
-        source_ids_json: JSON.stringify(['source_' + (cluster * 3 + index) % 28, 'source_' + (cluster * 5 + index + 3) % 28]),
+        source_ids_json: JSON.stringify(['source_' + (cluster * 3 + index) % 25, 'source_' + (cluster * 5 + index + 3) % 25]),
         provenance_json: JSON.stringify({ table: 'source_catalog', method: 'cooccurrence' }),
       })));
       const graphEdges = [];
       for (let cluster = 0; cluster < clusters.length; cluster += 1) {
         for (let index = 1; index < clusters[cluster].length; index += 1) {
-          graphEdges.push({ edge_id: 'hub:' + cluster + ':' + index, source_id: 'node:' + cluster + ':0', target_id: 'node:' + cluster + ':' + index, weight: 13 - index * 0.5, source_ids_json: JSON.stringify(['source_' + (cluster * 4 + index) % 28]) });
-          graphEdges.push({ edge_id: 'mesh:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + cluster + ':' + ((index % 11) + 1), weight: 5 + index % 4, source_ids_json: JSON.stringify(['source_' + (cluster * 7 + index) % 28]) });
-          if (index % 2 === 0) graphEdges.push({ edge_id: 'cross:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + ((cluster + index) % clusters.length) + ':' + ((index * 3) % 11 + 1), weight: 3 + index % 5, source_ids_json: JSON.stringify(['source_' + (cluster * 9 + index) % 28]) });
+          graphEdges.push({ edge_id: 'hub:' + cluster + ':' + index, source_id: 'node:' + cluster + ':0', target_id: 'node:' + cluster + ':' + index, weight: 13 - index * 0.5, source_ids_json: JSON.stringify(['source_' + (cluster * 4 + index) % 25]) });
+          graphEdges.push({ edge_id: 'mesh:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + cluster + ':' + ((index % 11) + 1), weight: 5 + index % 4, source_ids_json: JSON.stringify(['source_' + (cluster * 7 + index) % 25]) });
+          if (index % 2 === 0) graphEdges.push({ edge_id: 'cross:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + ((cluster + index) % clusters.length) + ':' + ((index * 3) % 11 + 1), weight: 3 + index % 5, source_ids_json: JSON.stringify(['source_' + (cluster * 9 + index) % 25]) });
         }
       }
       const sourceRows = Array.from({ length: 28 }, (_, index) => ({
@@ -80,6 +80,13 @@ const html = `<!doctype html>
         contribution_note: 'Verified evidence for ' + clusters[index % clusters.length][0] + ' and ' + clusters[(index + 2) % clusters.length][1],
         evidence_relevance: 92 - index,
         confidence: 0.93 - index * 0.008,
+        verification_status: index === 25 ? 'verified' : index === 26 ? 'verified' : index === 27 ? 'rejected' : 'verified',
+        http_status: index === 25 ? 404 : 200,
+        snapshot_hash: 'sha256:research-' + index,
+        evidence_eligible: index < 25,
+        source_tier: 'primary',
+        metadata_only: index === 26,
+        relevance_status: index === 27 ? 'fachfremd' : 'relevant',
       }));
       const evidenceRows = sourceRows.flatMap((source, index) => [0, 1].map((fact) => ({
         evidence_id: 'evidence_' + index + '_' + fact,
@@ -185,9 +192,13 @@ try {
   page.on('pageerror', (error) => failures.push('pageerror: ' + error.message));
   page.on('requestfailed', (request) => failures.push('requestfailed: ' + request.url() + ' ' + (request.failure()?.errorText || '')));
   await page.goto(`http://127.0.0.1:${port}/qa`, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => window.__researchQa?.ready === true);
+  await page.waitForSelector('[data-research-graph-host]', { state: 'attached', timeout: 30000 });
   await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 30000 });
   await page.waitForTimeout(3200);
+  assert.equal(await page.locator('[data-evidence-status="http_error"]').count(), 1);
+  assert.equal(await page.locator('[data-evidence-status="metadata_only"]').count(), 1);
+  assert.equal(await page.locator('[data-evidence-status="rejected"]').count(), 1);
+  assert.equal(await page.locator('.research-ranking-list .research-rank-row').count(), 25);
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.ok(await page.locator('.research-graph-topics li').count() >= 5);
   assert.ok(await page.locator('[data-research-graph-host] canvas').boundingBox());
