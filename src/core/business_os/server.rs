@@ -322,6 +322,20 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             let url_raw = request.url().to_owned();
             handle_subscription_auth_callback(request, root, &url_raw)?;
         }
+        (Method::Get, "/api/business-os/ctox/maintenance") => {
+            let session = request_session(root, &request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                // Instance-scoped operational state: every authenticated actor
+                // sees the same lease. No Business OS records or native status
+                // documents are transported through this control-plane route.
+                match crate::install::business_os_maintenance_status(root) {
+                    Ok(payload) => respond_json_value_no_store(request, payload)?,
+                    Err(error) => respond_status(request, 500, &error.to_string())?,
+                }
+            }
+        }
         (Method::Get, "/api/business-os/ctox/update/check") => {
             let session = request_session(root, &request);
             if !session.authenticated {
@@ -753,6 +767,10 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
             // and update subprocess launch. No Business OS records flow here.
             | "/api/business-os/ctox/update/check"
             | "/api/business-os/ctox/update/apply"
+            // Instance-scoped upgrade lease only. This endpoint never carries
+            // Business OS collection records and is deliberately identical for
+            // Owner/Admin and every other authenticated actor.
+            | "/api/business-os/ctox/maintenance"
             // §9.1 auth/control-plane: issues a capability token bound to the
             // server-authenticated session. No Business OS records flow here.
             | "/api/business-os/auth/capability"

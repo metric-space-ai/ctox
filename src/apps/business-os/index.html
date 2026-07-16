@@ -103,6 +103,18 @@
         </div>
       </header>
 
+      <section class="ctox-maintenance-banner" data-maintenance-banner role="status" aria-live="polite" hidden>
+        <div class="ctox-maintenance-icon" aria-hidden="true">↻</div>
+        <div class="ctox-maintenance-copy">
+          <strong data-maintenance-title>CTOX wird aktualisiert – Daten bleiben erhalten</strong>
+          <span data-maintenance-detail>Daten werden nach dem Update synchronisiert</span>
+        </div>
+        <div class="ctox-maintenance-progress" aria-hidden="true">
+          <span data-maintenance-progress></span>
+        </div>
+        <button class="ctox-maintenance-retry" type="button" data-maintenance-retry hidden>Erneut prüfen</button>
+      </section>
+
       <main class="workspace-frame">
         <aside class="workspace-pane workspace-pane-left" data-left-pane>
           <div class="pane-title" data-shell-t="context">Context</div>
@@ -177,6 +189,6 @@
     </div>
     <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen" data-shell-t-aria="notificationsAria"></aside>
 
-  <script type="module" src="app.js?v=20260716-files-research-sync-v106"></script>
+  <script type="module" src="app.js?v=20260716-maintenance-session-v117"></script>
   </body>
 </html>

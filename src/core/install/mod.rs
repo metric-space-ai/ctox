@@ -11,8 +11,9 @@ use std::fs::OpenOptions;
 use std::io::{copy, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::channels;
@@ -23,6 +24,10 @@ use crate::service;
 
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
+const MAINTENANCE_STATE_ID: &str = "business-os-upgrade";
+const MAINTENANCE_SCHEMA_VERSION: u32 = 1;
+const MAINTENANCE_LEASE_TTL_MS: i64 = 90_000;
+const MAINTENANCE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_INSTALL_ROOT_RELATIVE_PATH: &str = ".local/lib/ctox";
 const DEFAULT_STATE_ROOT_RELATIVE_PATH: &str = ".local/state/ctox";
 const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
@@ -309,6 +314,91 @@ pub struct UpdateState {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceProgress {
+    pub percent: u8,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceClientReadiness {
+    pub client_id: String,
+    pub module_id: String,
+    pub required_collections: Vec<String>,
+    pub acknowledged_at: String,
+}
+
+/// Durable, instance-scoped Business OS maintenance lease.
+///
+/// This is control-plane state only. It never contains Business OS records or
+/// collection payloads. The browser reports only collection *names* and its
+/// initial-replication acknowledgement through `business_commands` over the
+/// existing RxDB/WebRTC data plane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceState {
+    pub schema_version: u32,
+    pub lease_id: String,
+    pub phase: String,
+    pub status: String,
+    pub started_at: String,
+    pub updated_at: String,
+    pub lease_expires_at_ms: i64,
+    pub target_release: String,
+    pub current_release: Option<String>,
+    pub previous_release: Option<String>,
+    pub progress: MaintenanceProgress,
+    pub service_active: bool,
+    pub replication_up: bool,
+    pub initial_replication_complete: bool,
+    #[serde(default)]
+    pub client_readiness: Vec<MaintenanceClientReadiness>,
+    pub retryable: bool,
+    pub retry_action: Option<String>,
+    pub last_error: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+impl MaintenanceState {
+    fn is_terminal(&self) -> bool {
+        matches!(self.status.as_str(), "completed" | "failed" | "rolled_back")
+    }
+}
+
+#[derive(Debug)]
+struct MaintenanceHeartbeat {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl MaintenanceHeartbeat {
+    fn start(state_root: PathBuf, lease_id: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("ctox-upgrade-maintenance-heartbeat".to_string())
+            .spawn(move || {
+                while !thread_stop.load(Ordering::SeqCst) {
+                    std::thread::sleep(MAINTENANCE_HEARTBEAT_INTERVAL);
+                    if thread_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let _ = refresh_maintenance_lease(&state_root, &lease_id);
+                }
+            })
+            .ok();
+        Self { stop, thread }
+    }
+}
+
+impl Drop for MaintenanceHeartbeat {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct UpdateStatus {
     version: String,
@@ -440,6 +530,7 @@ pub fn business_os_platform_status(root: &Path) -> Result<serde_json::Value> {
     let layout = InstallLayout::resolve(root)?;
     let manifest = load_install_manifest(&layout.install_manifest_path())?;
     let update = load_update_state(&layout.update_state_path())?;
+    let maintenance = reconcile_maintenance_runtime(root, &layout)?;
     let release_channel = resolve_release_channel(&layout, manifest.as_ref());
     Ok(json!({
         "ok": true,
@@ -456,7 +547,384 @@ pub fn business_os_platform_status(root: &Path) -> Result<serde_json::Value> {
         "release_channel_configured": release_channel.is_some(),
         "release_channel": release_channel.map(|entry| entry.config),
         "update": update,
+        "maintenance": maintenance,
     }))
+}
+
+fn open_maintenance_store(state_root: &Path) -> Result<rusqlite::Connection> {
+    ensure_dir(state_root)?;
+    let connection = rusqlite::Connection::open(state_root.join("ctox.sqlite3"))?;
+    connection.busy_timeout(Duration::from_secs(10))?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ctox_maintenance_state (
+            state_id TEXT PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );",
+    )?;
+    Ok(connection)
+}
+
+fn load_maintenance_state_from_root(state_root: &Path) -> Result<Option<MaintenanceState>> {
+    use rusqlite::OptionalExtension;
+
+    let connection = open_maintenance_store(state_root)?;
+    let raw: Option<String> = connection
+        .query_row(
+            "SELECT state_json FROM ctox_maintenance_state WHERE state_id = ?1",
+            [MAINTENANCE_STATE_ID],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.map(|value| serde_json::from_str(&value).map_err(Into::into))
+        .transpose()
+}
+
+fn persist_maintenance_state_to_root(state_root: &Path, state: &MaintenanceState) -> Result<()> {
+    let connection = open_maintenance_store(state_root)?;
+    connection.execute(
+        "INSERT INTO ctox_maintenance_state (state_id, state_json, updated_at_ms)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(state_id) DO UPDATE SET
+           state_json = excluded.state_json,
+           updated_at_ms = excluded.updated_at_ms",
+        rusqlite::params![
+            MAINTENANCE_STATE_ID,
+            serde_json::to_string(state)?,
+            current_utc().timestamp_millis(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn begin_maintenance(layout: &InstallLayout, target_release: &str) -> Result<MaintenanceState> {
+    let now = current_utc();
+    let manifest = load_install_manifest(&layout.install_manifest_path())?;
+    let lease_id = format!(
+        "upgrade-{}-{}",
+        now.format("%Y%m%dT%H%M%S%.3fZ"),
+        std::process::id()
+    );
+    let state = MaintenanceState {
+        schema_version: MAINTENANCE_SCHEMA_VERSION,
+        lease_id,
+        phase: "preparing".to_string(),
+        status: "active".to_string(),
+        started_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+        lease_expires_at_ms: now.timestamp_millis() + MAINTENANCE_LEASE_TTL_MS,
+        target_release: target_release.to_string(),
+        current_release: manifest
+            .as_ref()
+            .and_then(|entry| entry.current_release.clone()),
+        previous_release: manifest
+            .as_ref()
+            .and_then(|entry| entry.previous_release.clone()),
+        progress: MaintenanceProgress {
+            percent: 2,
+            message: "Upgrade wird vorbereitet".to_string(),
+        },
+        service_active: false,
+        replication_up: false,
+        initial_replication_complete: false,
+        client_readiness: Vec::new(),
+        retryable: false,
+        retry_action: None,
+        last_error: None,
+        finished_at: None,
+    };
+    persist_maintenance_state_to_root(&layout.state_root, &state)?;
+    Ok(state)
+}
+
+fn update_maintenance(
+    state_root: &Path,
+    lease_id: &str,
+    update: impl FnOnce(&mut MaintenanceState),
+) -> Result<MaintenanceState> {
+    let mut state = load_maintenance_state_from_root(state_root)?
+        .context("CTOX maintenance state is missing")?;
+    anyhow::ensure!(
+        state.lease_id == lease_id,
+        "CTOX maintenance lease changed while upgrade was running"
+    );
+    update(&mut state);
+    let now = current_utc();
+    state.updated_at = now.to_rfc3339();
+    if !state.is_terminal() {
+        state.lease_expires_at_ms = now.timestamp_millis() + MAINTENANCE_LEASE_TTL_MS;
+    }
+    persist_maintenance_state_to_root(state_root, &state)?;
+    Ok(state)
+}
+
+fn set_maintenance_phase(
+    state_root: &Path,
+    lease_id: &str,
+    phase: &str,
+    percent: u8,
+    message: &str,
+) -> Result<MaintenanceState> {
+    update_maintenance(state_root, lease_id, |state| {
+        state.phase = phase.to_string();
+        state.status = "active".to_string();
+        state.progress.percent = percent.min(100);
+        state.progress.message = message.to_string();
+        state.retryable = false;
+        state.retry_action = None;
+        state.last_error = None;
+        state.finished_at = None;
+    })
+}
+
+fn set_active_maintenance_phase(
+    layout: &InstallLayout,
+    phase: &str,
+    percent: u8,
+    message: &str,
+) -> Result<()> {
+    let Some(state) = load_maintenance_state_from_root(&layout.state_root)? else {
+        return Ok(());
+    };
+    if state.is_terminal() {
+        return Ok(());
+    }
+    set_maintenance_phase(&layout.state_root, &state.lease_id, phase, percent, message)?;
+    Ok(())
+}
+
+fn update_active_maintenance_target(layout: &InstallLayout, target_release: &str) -> Result<()> {
+    let Some(state) = load_maintenance_state_from_root(&layout.state_root)? else {
+        return Ok(());
+    };
+    if state.is_terminal() {
+        return Ok(());
+    }
+    update_maintenance(&layout.state_root, &state.lease_id, |state| {
+        state.target_release = target_release.to_string();
+    })?;
+    Ok(())
+}
+
+fn refresh_maintenance_lease(state_root: &Path, lease_id: &str) -> Result<()> {
+    let Some(state) = load_maintenance_state_from_root(state_root)? else {
+        return Ok(());
+    };
+    if state.lease_id != lease_id || state.is_terminal() {
+        return Ok(());
+    }
+    update_maintenance(state_root, lease_id, |state| {
+        if state.status == "stale" {
+            state.status = "active".to_string();
+            state.retryable = false;
+            state.retry_action = None;
+            state.last_error = None;
+        }
+    })?;
+    Ok(())
+}
+
+fn fail_maintenance(state_root: &Path, lease_id: &str, error: &str) -> Result<()> {
+    if load_maintenance_state_from_root(state_root)?
+        .is_some_and(|state| state.lease_id == lease_id && state.status == "rolled_back")
+    {
+        return Ok(());
+    }
+    update_maintenance(state_root, lease_id, |state| {
+        state.phase = "failed".to_string();
+        state.status = "failed".to_string();
+        state.progress.message = "Upgrade fehlgeschlagen".to_string();
+        state.retryable = true;
+        state.retry_action = Some("ctox upgrade --dev".to_string());
+        state.last_error = Some(error.to_string());
+        state.finished_at = Some(now_rfc3339());
+    })?;
+    Ok(())
+}
+
+fn mark_maintenance_rolled_back(state_root: &Path, error: &str) -> Result<()> {
+    let Some(state) = load_maintenance_state_from_root(state_root)? else {
+        return Ok(());
+    };
+    update_maintenance(state_root, &state.lease_id, |state| {
+        state.phase = "rolled_back".to_string();
+        state.status = "rolled_back".to_string();
+        state.service_active = true;
+        state.progress = MaintenanceProgress {
+            percent: 100,
+            message: "Upgrade fehlgeschlagen · vorherige Version wiederhergestellt".to_string(),
+        };
+        state.retryable = true;
+        state.retry_action = Some("ctox upgrade --dev".to_string());
+        state.last_error = Some(error.to_string());
+        state.finished_at = Some(now_rfc3339());
+    })?;
+    Ok(())
+}
+
+fn mark_maintenance_service_active(state_root: &Path, lease_id: &str) -> Result<()> {
+    update_maintenance(state_root, lease_id, |state| {
+        state.phase = "waiting_replication".to_string();
+        state.status = "active".to_string();
+        state.service_active = true;
+        state.progress = MaintenanceProgress {
+            percent: 92,
+            message: "CTOX-Dienst aktiv · Replikation wird verbunden".to_string(),
+        };
+    })?;
+    Ok(())
+}
+
+fn native_replication_is_up(root: &Path) -> bool {
+    crate::business_os::native_peer_status(root)
+        .get("replicationUp")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn reconcile_maintenance_runtime(
+    root: &Path,
+    layout: &InstallLayout,
+) -> Result<Option<MaintenanceState>> {
+    let Some(mut state) = load_maintenance_state_from_root(&layout.state_root)? else {
+        return Ok(None);
+    };
+    if state.is_terminal() || state.status == "stale" {
+        return Ok(Some(state));
+    }
+    if state.service_active && !state.replication_up && native_replication_is_up(root) {
+        let lease_id = state.lease_id.clone();
+        state = update_maintenance(&layout.state_root, &lease_id, |state| {
+            state.replication_up = true;
+            state.phase = "waiting_collections".to_string();
+            state.progress = MaintenanceProgress {
+                percent: 96,
+                message: "App-Daten werden nach dem Update synchronisiert".to_string(),
+            };
+        })?;
+    }
+    if current_utc().timestamp_millis() > state.lease_expires_at_ms && !state.is_terminal() {
+        let lease_id = state.lease_id.clone();
+        state = update_maintenance(&layout.state_root, &lease_id, |state| {
+            state.phase = "stale".to_string();
+            state.status = "stale".to_string();
+            state.retryable = true;
+            state.retry_action = Some("ctox upgrade --dev".to_string());
+            state.last_error = Some(
+                "Der Upgrade-Prozess sendet keinen aktuellen Lease-Heartbeat mehr.".to_string(),
+            );
+            state.progress.message = "Upgrade unterbrochen · Wiederholen möglich".to_string();
+        })?;
+    }
+    Ok(Some(state))
+}
+
+/// Read-only, actor-independent control-plane projection used by the shell.
+pub fn business_os_maintenance_status(root: &Path) -> Result<serde_json::Value> {
+    let layout = InstallLayout::resolve(root)?;
+    let state = reconcile_maintenance_runtime(root, &layout)?;
+    let active = state
+        .as_ref()
+        .is_some_and(|state| !matches!(state.status.as_str(), "completed" | "rolled_back"));
+    Ok(json!({
+        "ok": true,
+        "scope": "instance",
+        "active": active,
+        "message": if active {
+            "CTOX wird aktualisiert – Daten bleiben erhalten"
+        } else {
+            ""
+        },
+        "state": state,
+    }))
+}
+
+/// Final browser acknowledgement. This function is called only by the native
+/// Business Command router after the acknowledgement replicated over
+/// RxDB/WebRTC; there is deliberately no HTTP write endpoint for it.
+pub fn acknowledge_business_os_maintenance_ready(
+    root: &Path,
+    lease_id: &str,
+    client_id: &str,
+    module_id: &str,
+    required_collections: &[String],
+) -> Result<serde_json::Value> {
+    let layout = InstallLayout::resolve(root)?;
+    let state = reconcile_maintenance_runtime(root, &layout)?
+        .context("no active CTOX maintenance lease")?;
+    anyhow::ensure!(
+        state.lease_id == lease_id,
+        "maintenance lease is no longer current"
+    );
+    anyhow::ensure!(
+        !state.is_terminal(),
+        "maintenance lease is already terminal"
+    );
+    anyhow::ensure!(state.service_active, "new CTOX service is not active yet");
+    anyhow::ensure!(
+        state.replication_up,
+        "native RxDB peer is not replicationUp yet"
+    );
+    anyhow::ensure!(
+        !client_id.trim().is_empty(),
+        "maintenance client_id is required"
+    );
+    anyhow::ensure!(
+        !module_id.trim().is_empty(),
+        "maintenance module_id is required"
+    );
+    let mut collections = required_collections
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    collections.sort();
+    collections.dedup();
+    let completed = complete_maintenance_for_client(
+        &layout.state_root,
+        &state.lease_id,
+        client_id,
+        module_id,
+        &collections,
+    )?;
+    Ok(json!({
+        "ok": true,
+        "status": "completed",
+        "lease_id": completed.lease_id,
+        "module_id": module_id,
+        "required_collections": collections,
+    }))
+}
+
+fn complete_maintenance_for_client(
+    state_root: &Path,
+    lease_id: &str,
+    client_id: &str,
+    module_id: &str,
+    collections: &[String],
+) -> Result<MaintenanceState> {
+    update_maintenance(state_root, lease_id, |state| {
+        state
+            .client_readiness
+            .retain(|entry| entry.client_id != client_id);
+        state.client_readiness.push(MaintenanceClientReadiness {
+            client_id: client_id.to_string(),
+            module_id: module_id.to_string(),
+            required_collections: collections.to_vec(),
+            acknowledged_at: now_rfc3339(),
+        });
+        state.initial_replication_complete = true;
+        state.phase = "completed".to_string();
+        state.status = "completed".to_string();
+        state.progress = MaintenanceProgress {
+            percent: 100,
+            message: "Upgrade abgeschlossen".to_string(),
+        };
+        state.retryable = false;
+        state.retry_action = None;
+        state.last_error = None;
+        state.finished_at = Some(now_rfc3339());
+    })
 }
 
 pub fn business_os_update_check(root: &Path) -> Result<serde_json::Value> {
@@ -558,6 +1026,10 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             None,
         )?;
         let use_dev = args.iter().any(|arg| arg == "--dev");
+        let target_release = if use_dev { "branch:main" } else { "latest" };
+        let maintenance = begin_maintenance(&layout, target_release)?;
+        let _maintenance_heartbeat =
+            MaintenanceHeartbeat::start(layout.state_root.clone(), maintenance.lease_id.clone());
         let request = if use_dev {
             RemoteReleaseRequest::Branch("main".to_string())
         } else {
@@ -568,7 +1040,17 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
         } else {
             "start stable upgrade"
         });
-        let result = apply_remote_update(root, request, false, false, false)?;
+        let result = match apply_remote_update(root, request, false, false, false) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = fail_maintenance(
+                    &layout.state_root,
+                    &maintenance.lease_id,
+                    &error.to_string(),
+                );
+                return Err(error);
+            }
+        };
         progress_info("upgrade completed; emitting machine-readable summary on stdout");
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -643,7 +1125,13 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                 .or_else(|| requested_version.clone())
                 .or_else(|| source.as_deref().and_then(release_name_for_source));
             let _lease = acquire_update_operation_lease(&layout, "apply", lock_release.as_deref())?;
-            let result = if let Some(source) = source {
+            let maintenance =
+                begin_maintenance(&layout, lock_release.as_deref().unwrap_or("latest"))?;
+            let _maintenance_heartbeat = MaintenanceHeartbeat::start(
+                layout.state_root.clone(),
+                maintenance.lease_id.clone(),
+            );
+            let apply_result = if let Some(source) = source {
                 // Local --source always means a source-tree rebuild; binary-mode only
                 // applies to remote releases that ship a pre-built bundle.
                 let release = requested_release
@@ -659,7 +1147,7 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                     keep_failed_release,
                     UpdateSourceKind::Source,
                     false,
-                )?
+                )
             } else {
                 let request = if use_latest {
                     RemoteReleaseRequest::Latest
@@ -670,7 +1158,18 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                         "usage: ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] [--from-source] | ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source]"
                     );
                 };
-                apply_remote_update(root, request, force, keep_failed_release, from_source)?
+                apply_remote_update(root, request, force, keep_failed_release, from_source)
+            };
+            let result = match apply_result {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = fail_maintenance(
+                        &layout.state_root,
+                        &maintenance.lease_id,
+                        &error.to_string(),
+                    );
+                    return Err(error);
+                }
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
@@ -678,7 +1177,39 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
         Some("rollback") => {
             let layout = InstallLayout::resolve(root)?;
             let _lease = acquire_update_operation_lease(&layout, "rollback", None)?;
-            let result = rollback_update(root)?;
+            let maintenance = begin_maintenance(&layout, "rollback")?;
+            let _maintenance_heartbeat = MaintenanceHeartbeat::start(
+                layout.state_root.clone(),
+                maintenance.lease_id.clone(),
+            );
+            set_maintenance_phase(
+                &layout.state_root,
+                &maintenance.lease_id,
+                "rolling_back",
+                20,
+                "Vorherige CTOX-Version wird wiederhergestellt",
+            )?;
+            let result = match rollback_update(root) {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = fail_maintenance(
+                        &layout.state_root,
+                        &maintenance.lease_id,
+                        &error.to_string(),
+                    );
+                    return Err(error);
+                }
+            };
+            update_maintenance(&layout.state_root, &maintenance.lease_id, |state| {
+                state.phase = "rolled_back".to_string();
+                state.status = "rolled_back".to_string();
+                state.service_active = true;
+                state.progress = MaintenanceProgress {
+                    percent: 100,
+                    message: "Rollback abgeschlossen".to_string(),
+                };
+                state.finished_at = Some(now_rfc3339());
+            })?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
@@ -871,6 +1402,12 @@ fn apply_remote_update(
 ) -> Result<ApplyResult> {
     let started = Instant::now();
     let layout = InstallLayout::resolve(root)?;
+    set_active_maintenance_phase(
+        &layout,
+        "resolving_release",
+        8,
+        "Zielrelease wird ermittelt",
+    )?;
     progress_step(format!(
         "resolved install layout: active={} state={} cache={}",
         layout.active_root.display(),
@@ -894,6 +1431,16 @@ fn apply_remote_update(
     // genuinely picks up the latest commit.
     let force = force || is_branch;
     let download_started = Instant::now();
+    set_active_maintenance_phase(
+        &layout,
+        "downloading",
+        15,
+        if from_source {
+            "CTOX-Quellrelease wird geladen"
+        } else {
+            "CTOX-Release wird geladen"
+        },
+    )?;
     progress_step(if from_source {
         "fetch source archive"
     } else {
@@ -914,6 +1461,13 @@ fn apply_remote_update(
         format!("downloaded {}", downloaded.release.tag_name),
         download_started,
     );
+    update_active_maintenance_target(&layout, &downloaded.release.tag_name)?;
+    set_active_maintenance_phase(
+        &layout,
+        "preparing",
+        30,
+        "Release geladen · persistente Daten werden gesichert",
+    )?;
     let result = apply_update(
         root,
         &downloaded.extracted_root,
@@ -1085,6 +1639,13 @@ fn apply_update(
     }
     progress_step("release source validated");
     let layout = InstallLayout::resolve(root)?;
+    update_active_maintenance_target(&layout, release)?;
+    set_active_maintenance_phase(
+        &layout,
+        "preparing",
+        35,
+        "Persistente CTOX-Daten werden gesichert",
+    )?;
     let install_root = layout
         .install_root
         .clone()
@@ -1144,6 +1705,7 @@ fn apply_update(
     }
     ensure_runtime_symlink(&release_root, &layout.state_root)?;
     persist_update_phase(&layout.update_state_path(), "building", None)?;
+    set_active_maintenance_phase(&layout, "building", 55, "Neues CTOX-Release wird gebaut")?;
     if kind == UpdateSourceKind::Source {
         progress_step("running release installer / source build");
         if let Err(err) = run_release_installer(
@@ -1175,6 +1737,12 @@ fn apply_update(
         .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(true);
     persist_update_phase(&layout.update_state_path(), "switching", None)?;
+    set_active_maintenance_phase(
+        &layout,
+        "switching",
+        75,
+        "CTOX wechselt auf das neue Release",
+    )?;
     progress_step("switching current symlink and restarting service if required");
     if let Err(err) = stop_background_for_release_switch(&layout.active_root) {
         let error_message = err.to_string();
@@ -1210,9 +1778,11 @@ fn apply_update(
             "failed",
             Some(err.to_string().as_str()),
         )?;
+        mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
         return Err(err);
     }
     if should_restart {
+        set_active_maintenance_phase(&layout, "restarting", 85, "CTOX-Dienst wird neu gestartet")?;
         progress_step("starting CTOX background service");
         // Verify post-start that the daemon is actually `running`. The old
         // logic only checked that the snapshot call succeeded, which it does
@@ -1243,10 +1813,18 @@ fn apply_update(
                 "failed",
                 Some(err.to_string().as_str()),
             )?;
+            mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
             return Err(err);
         }
     }
     runtime_invariants.verify_preserved(&layout.state_root)?;
+    if should_restart {
+        if let Some(state) = load_maintenance_state_from_root(&layout.state_root)? {
+            if !state.is_terminal() {
+                mark_maintenance_service_active(&layout.state_root, &state.lease_id)?;
+            }
+        }
+    }
     // Restart the Business OS web shell so it serves the NEW release's static
     // assets (app.js / app.css / index.html). The shell reads these from disk per
     // request, so after the symlink switch a stale `ctox-business-os.service`
@@ -3631,6 +4209,101 @@ fn create_symlink(target: &Path, link_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn maintenance_test_layout(root: &Path) -> InstallLayout {
+        InstallLayout {
+            workspace_root: root.to_path_buf(),
+            active_root: root.to_path_buf(),
+            install_root: None,
+            state_root: root.join("state"),
+            cache_root: root.join("cache"),
+        }
+    }
+
+    #[test]
+    fn maintenance_upgrade_restart_replication_and_client_ready_are_durable() {
+        let temp = tempdir().unwrap();
+        let layout = maintenance_test_layout(temp.path());
+        let started = begin_maintenance(&layout, "branch:main").unwrap();
+        assert_eq!(started.phase, "preparing");
+        assert_eq!(
+            load_maintenance_state_from_root(&layout.state_root)
+                .unwrap()
+                .unwrap()
+                .lease_id,
+            started.lease_id
+        );
+
+        mark_maintenance_service_active(&layout.state_root, &started.lease_id).unwrap();
+        update_maintenance(&layout.state_root, &started.lease_id, |state| {
+            state.replication_up = true;
+            state.phase = "waiting_collections".to_string();
+        })
+        .unwrap();
+        let completed = complete_maintenance_for_client(
+            &layout.state_root,
+            &started.lease_id,
+            "browser-a",
+            "research,knowledge",
+            &[
+                "research_domains".to_string(),
+                "knowledge_tables".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(completed.status, "completed");
+        assert!(completed.service_active);
+        assert!(completed.replication_up);
+        assert!(completed.initial_replication_complete);
+        assert_eq!(completed.client_readiness.len(), 1);
+    }
+
+    #[test]
+    fn maintenance_failure_and_rollback_remain_retryable() {
+        let temp = tempdir().unwrap();
+        let layout = maintenance_test_layout(temp.path());
+        let failed = begin_maintenance(&layout, "branch:main").unwrap();
+        fail_maintenance(&layout.state_root, &failed.lease_id, "build failed").unwrap();
+        let failed_state = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed_state.status, "failed");
+        assert!(failed_state.retryable);
+
+        let rollback = begin_maintenance(&layout, "branch:main").unwrap();
+        mark_maintenance_rolled_back(&layout.state_root, "service verification failed").unwrap();
+        fail_maintenance(&layout.state_root, &rollback.lease_id, "outer error").unwrap();
+        let rolled_back = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rolled_back.status, "rolled_back");
+        assert!(rolled_back.retryable);
+    }
+
+    #[test]
+    fn expired_maintenance_lease_becomes_stale() {
+        let temp = tempdir().unwrap();
+        let layout = maintenance_test_layout(temp.path());
+        let started = begin_maintenance(&layout, "branch:main").unwrap();
+        update_maintenance(&layout.state_root, &started.lease_id, |state| {
+            state.lease_expires_at_ms = 0;
+        })
+        .unwrap();
+        // update_maintenance refreshes leases by design; expire the persisted
+        // record explicitly to simulate a crashed upgrade process.
+        let mut expired = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        expired.lease_expires_at_ms = 0;
+        persist_maintenance_state_to_root(&layout.state_root, &expired).unwrap();
+
+        let reconciled = reconcile_maintenance_runtime(temp.path(), &layout)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reconciled.status, "stale");
+        assert!(reconciled.retryable);
+    }
 
     #[test]
     fn upgrade_progress_lines_are_numbered_and_timed() {

@@ -15,6 +15,7 @@
     "modules/ctox/index.js",
     "modules/customers/index.js",
     "modules/cv-print-builder/index.js",
+    "modules/desktop/index.js",
     "modules/documents/index.js",
     "modules/esign/index.js",
     "modules/intake/index.js",

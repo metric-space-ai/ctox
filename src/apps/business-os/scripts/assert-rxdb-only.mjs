@@ -199,6 +199,7 @@ function contentForForbiddenHttpScan(file, content) {
       /['"]\/api\/business-os\/sync\/config['"]/g,
       /['"]\/api\/business-os\/ctox\/update\/check['"]/g,
       /['"]\/api\/business-os\/ctox\/update\/apply['"]/g,
+      /['"]\/api\/business-os\/ctox\/maintenance['"]/g,
     );
   }
 
@@ -209,6 +210,7 @@ function contentForForbiddenHttpScan(file, content) {
       /"\/api\/business-os\/ctox\/subscription-auth\/callback"/g,
       /"\/api\/business-os\/ctox\/update\/check"/g,
       /"\/api\/business-os\/ctox\/update\/apply"/g,
+      /"\/api\/business-os\/ctox\/maintenance"/g,
     );
   }
 
@@ -306,6 +308,9 @@ function assertLoginDoesNotDefaultToAdmin() {
   }
   if (!/const\s+pairedConfig\s*=\s*await\s+readBusinessOsLaunchConfig\(\)/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: loadSession must await pairing config before authenticating');
+  }
+  if (!/globalThis\.CTOX_BUSINESS_OS_SESSION\s*=\s*config\.session/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: URL-packed desktop sessions must publish their native capability before the WebRTC handshake');
   }
   const loadSessionStart = appContent.indexOf('async function loadSession()');
   const loadSessionEnd = appContent.indexOf('\nfunction allowsPairingConfigSession', loadSessionStart);

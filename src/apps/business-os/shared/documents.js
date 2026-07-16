@@ -1,5 +1,7 @@
 export const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const DOCUMENT_BLOB_CHUNK_BASE64_SIZE = 256000;
+const DOCUMENT_SYNC_LEASE_ATTEMPTS = 4;
+const DOCUMENT_SYNC_LEASE_RETRY_DELAY_MS = 1_000;
 
 const DOCUMENT_COLLECTION_NAMES = [
   'documents',
@@ -10,6 +12,7 @@ const DOCUMENT_COLLECTION_NAMES = [
 export function createDocumentsFacade({
   db,
   openApp,
+  sync,
   appId = 'documents',
   crypto: cryptoProvider = globalThis.crypto,
   now = () => Date.now(),
@@ -44,12 +47,12 @@ export function createDocumentsFacade({
         return pending.promise;
       }
 
-      const promise = createStoredDocx({
+      const promise = withChunkSyncLease(sync, () => createStoredDocx({
         collections: requireDocumentCollections(db, { write: true }),
         input: normalized,
         cryptoProvider,
         now,
-      });
+      }));
       pendingCreates.set(normalized.idempotencyKey, { fingerprint, promise });
       try {
         return await promise;
@@ -71,7 +74,8 @@ export function createDocumentsFacade({
           'The Business OS app launcher is unavailable.',
         );
       }
-      const launched = await openApp(requireId(appId, 'appId'), {
+      const resolvedAppId = typeof appId === 'function' ? appId() : appId;
+      const launched = await openApp(requireId(resolvedAppId, 'appId'), {
         args: {
           record,
           ...(version ? { version } : {}),
@@ -155,15 +159,40 @@ async function createStoredDocx({ collections, input, cryptoProvider, now }) {
     updated_at_ms: createdAtMs,
   };
   const expected = { document, version, chunks, sha256: input.sha256 };
-  const existing = await inspectIdempotentState(collections, expected);
-  if (existing) return creationResult(existing, true);
+  const existing = await inspectIdempotentState(collections, expected, {
+    acceptCompleteStoredPayload: true,
+    allowPartial: true,
+  });
+  if (existing?.complete) {
+    await verifyStoredBytes(
+      existing,
+      existing.version.source_sha256 || existing.document.source_sha256,
+      cryptoProvider,
+    );
+    await requeueStoredChunks(collections.document_blob_chunks, existing.chunks);
+    return creationResult(existing, true);
+  }
+
+  const created = { document: false, version: false, chunks: false };
 
   try {
-    await insertChunks(collections.document_blob_chunks, chunks);
-    await collections.document_versions.insert(version);
-    await collections.documents.insert(document);
+    if (existing?.requiresSourceHashRefresh) {
+      await refreshPartialSourceHashes(collections, existing, expected, createdAtMs);
+    }
+    if (!existing?.chunks?.length) {
+      await insertChunks(collections.document_blob_chunks, chunks);
+      created.chunks = true;
+    }
+    if (!existing?.version) {
+      await collections.document_versions.insert(version);
+      created.version = true;
+    }
+    if (!existing?.document) {
+      await collections.documents.insert(document);
+      created.document = true;
+    }
   } catch (error) {
-    await cleanupFailedCreate(collections, expected).catch(() => {});
+    await cleanupFailedCreate(collections, expected, created).catch(() => {});
     throw error;
   }
 
@@ -178,7 +207,11 @@ async function createStoredDocx({ collections, input, cryptoProvider, now }) {
   return creationResult(stored, false);
 }
 
-async function inspectIdempotentState(collections, expected) {
+async function inspectIdempotentState(
+  collections,
+  expected,
+  { acceptCompleteStoredPayload = false, allowPartial = false } = {},
+) {
   const [documentDoc, versionDoc, chunkDocs] = await Promise.all([
     findOne(collections.documents, expected.document.id),
     findOne(collections.document_versions, expected.version.id),
@@ -189,38 +222,53 @@ async function inspectIdempotentState(collections, expected) {
   const chunks = chunkDocs.map(documentJson);
   const populated = Number(Boolean(document)) + Number(Boolean(version)) + Number(chunks.length > 0);
   if (populated === 0) return null;
-  if (populated !== 3) {
+  const acceptsStoredPayload = acceptCompleteStoredPayload && populated === 3;
+  const allowSourceHashMismatch = acceptsStoredPayload || (allowPartial && chunks.length === 0);
+  if (document) assertIdempotentDocument(document, expected.document, { allowSourceHashMismatch });
+  if (version) assertIdempotentVersion(version, expected.version, { allowSourceHashMismatch });
+  let sortedChunks = [];
+  if (chunks.length) {
+    sortedChunks = assertChunkSet(chunks, {
+      blobId: expected.version.blob_id,
+      documentId: expected.document.id,
+      versionId: expected.version.id,
+      expectedTotal: acceptsStoredPayload ? undefined : expected.chunks.length,
+    });
+    if (!acceptsStoredPayload && canonicalJson(sortedChunks.map((chunk) => chunk.data))
+        !== canonicalJson(expected.chunks.map((chunk) => chunk.data))) {
+      throw documentsError(
+        'DOCUMENTS_IDEMPOTENCY_CONFLICT',
+        'Stored DOCX chunks differ from the payload for this idempotencyKey.',
+      );
+    }
+  }
+  if (populated !== 3 && !allowPartial) {
     throw documentsError(
       'DOCUMENTS_PARTIAL_STATE',
       'A partial document, version, or chunk set already exists for this idempotencyKey.',
     );
   }
-
-  assertIdempotentDocument(document, expected.document);
-  assertIdempotentVersion(version, expected.version);
-  const sortedChunks = assertChunkSet(chunks, {
-    blobId: expected.version.blob_id,
-    documentId: expected.document.id,
-    versionId: expected.version.id,
-    expectedTotal: expected.chunks.length,
-  });
-  if (canonicalJson(sortedChunks.map((chunk) => chunk.data))
-      !== canonicalJson(expected.chunks.map((chunk) => chunk.data))) {
-    throw documentsError(
-      'DOCUMENTS_IDEMPOTENCY_CONFLICT',
-      'Stored DOCX chunks differ from the payload for this idempotencyKey.',
-    );
-  }
-  return { document, version, chunks: sortedChunks };
+  return {
+    document,
+    version,
+    chunks: sortedChunks,
+    complete: populated === 3,
+    documentDoc,
+    versionDoc,
+    requiresSourceHashRefresh: allowSourceHashMismatch && (
+      (document && document.source_sha256 !== expected.document.source_sha256)
+      || (version && version.source_sha256 !== expected.version.source_sha256)
+    ),
+  };
 }
 
-function assertIdempotentDocument(actual, expected) {
+function assertIdempotentDocument(actual, expected, { allowSourceHashMismatch = false } = {}) {
   assertEquivalentFields(actual, expected, [
     'id',
     'current_version_id',
     'filename',
     'mime_type',
-    'source_sha256',
+    ...(!allowSourceHashMismatch ? ['source_sha256'] : []),
     'idempotency_key',
     'linked_records',
     'template_ref',
@@ -228,14 +276,14 @@ function assertIdempotentDocument(actual, expected) {
   ]);
 }
 
-function assertIdempotentVersion(actual, expected) {
+function assertIdempotentVersion(actual, expected, { allowSourceHashMismatch = false } = {}) {
   assertEquivalentFields(actual, expected, [
     'id',
     'document_id',
     'blob_id',
     'filename',
     'mime_type',
-    'source_sha256',
+    ...(!allowSourceHashMismatch ? ['source_sha256'] : []),
     'idempotency_key',
     'linked_records',
     'template_ref',
@@ -244,13 +292,53 @@ function assertIdempotentVersion(actual, expected) {
 }
 
 function assertEquivalentFields(actual, expected, fields) {
-  const differs = fields.some((field) => canonicalJson(actual[field]) !== canonicalJson(expected[field]));
-  if (differs) {
+  const differingFields = fields.filter(
+    (field) => canonicalJson(actual[field]) !== canonicalJson(expected[field]),
+  );
+  if (differingFields.length) {
     throw documentsError(
       'DOCUMENTS_IDEMPOTENCY_CONFLICT',
-      'Stored document metadata differs from the payload for this idempotencyKey.',
+      `Stored document metadata differs from the payload for this idempotencyKey: ${differingFields.join(', ')}.`,
     );
   }
+}
+
+async function refreshPartialSourceHashes(collections, existing, expected, updatedAtMs) {
+  const updates = [];
+  if (existing.documentDoc && existing.document?.source_sha256 !== expected.document.source_sha256) {
+    updates.push(patchStoredDocument(
+      collections.documents,
+      existing.documentDoc,
+      { source_sha256: expected.document.source_sha256, updated_at_ms: updatedAtMs },
+    ));
+  }
+  if (existing.versionDoc && existing.version?.source_sha256 !== expected.version.source_sha256) {
+    updates.push(patchStoredDocument(
+      collections.document_versions,
+      existing.versionDoc,
+      { source_sha256: expected.version.source_sha256, updated_at_ms: updatedAtMs },
+    ));
+  }
+  await Promise.all(updates);
+}
+
+async function patchStoredDocument(collection, document, patch) {
+  if (typeof document?.incrementalPatch === 'function') {
+    await document.incrementalPatch(patch);
+    return;
+  }
+  if (typeof document?.patch === 'function') {
+    await document.patch(patch);
+    return;
+  }
+  if (typeof collection?.upsert === 'function') {
+    await collection.upsert({ ...documentJson(document), ...patch });
+    return;
+  }
+  throw documentsError(
+    'DOCUMENTS_COLLECTIONS_UNAVAILABLE',
+    'The document collection cannot repair partial metadata.',
+  );
 }
 
 async function loadStoredVersion(collections, request, cryptoProvider) {
@@ -406,6 +494,7 @@ function requireDocumentCollections(db, { write = false } = {}) {
     const canWrite = !write
       || (typeof collection?.insert === 'function'
         && (name !== 'document_blob_chunks'
+          || typeof collection.bulkUpsert === 'function'
           || typeof collection.bulkInsert === 'function'
           || typeof collection.insert === 'function'));
     if (!canRead || !canWrite) {
@@ -446,20 +535,178 @@ async function findChunks(collection, blobId) {
 }
 
 async function insertChunks(collection, chunks) {
-  if (typeof collection.bulkInsert === 'function') {
-    await collection.bulkInsert(chunks);
+  let result;
+  if (typeof collection.bulkUpsert === 'function') {
+    result = await collection.bulkUpsert(chunks);
+  } else if (typeof collection.bulkInsert === 'function') {
+    result = await collection.bulkInsert(chunks);
+  } else {
+    for (const chunk of chunks) await collection.insert(chunk);
     return;
   }
-  for (const chunk of chunks) await collection.insert(chunk);
+  const errors = Array.isArray(result?.error)
+    ? result.error
+    : Object.values(result?.error || {});
+  if (errors.length) {
+    throw documentsError(
+      'DOCUMENTS_BLOB_WRITE_FAILED',
+      `Document blob write failed for ${errors.length} chunk(s).`,
+    );
+  }
 }
 
-async function cleanupFailedCreate(collections, expected) {
-  await removeMatchingDocument(collections.documents, expected.document.id, (document) => (
-    document.idempotency_key === expected.document.idempotency_key
-  ));
-  await removeMatchingDocument(collections.document_versions, expected.version.id, (version) => (
-    version.idempotency_key === expected.version.idempotency_key
-  ));
+async function requeueStoredChunks(collection, chunks) {
+  let result;
+  if (typeof collection.bulkUpsert === 'function') {
+    result = await collection.bulkUpsert(chunks);
+  } else if (typeof collection.upsert === 'function') {
+    for (const chunk of chunks) await collection.upsert(chunk);
+    return;
+  } else {
+    throw documentsError(
+      'DOCUMENTS_COLLECTIONS_UNAVAILABLE',
+      'The document blob collection cannot requeue an idempotent payload.',
+    );
+  }
+  const errors = Array.isArray(result?.error)
+    ? result.error
+    : Object.values(result?.error || {});
+  if (errors.length) {
+    throw documentsError(
+      'DOCUMENTS_BLOB_WRITE_FAILED',
+      `Document blob requeue failed for ${errors.length} chunk(s).`,
+    );
+  }
+}
+
+async function withChunkSyncLease(sync, operation) {
+  if (typeof sync?.leaseCollection !== 'function') return operation();
+  const lease = await acquireChunkSyncLease(sync);
+  try {
+    await waitForChunkSync(lease);
+    const result = await operation();
+    await flushChunkSync(lease);
+    return result;
+  } finally {
+    await lease?.release?.().catch(() => null);
+  }
+}
+
+async function acquireChunkSyncLease(sync) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= DOCUMENT_SYNC_LEASE_ATTEMPTS; attempt += 1) {
+    try {
+      return await sync.leaseCollection('document_blob_chunks', 'documents-create-docx');
+    } catch (error) {
+      lastError = error;
+      if (error?.retryable !== true || attempt === DOCUMENT_SYNC_LEASE_ATTEMPTS) throw error;
+      await delay(DOCUMENT_SYNC_LEASE_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
+}
+
+async function waitForChunkSync(lease) {
+  const bridge = lease?.bridge || lease || null;
+  const replication = bridge?.state || lease?.state || null;
+  if (!replication) return;
+  if (hasSyncPeerStatus(replication)) {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      if (syncPeerConnected(replication)) return;
+      await delay(100);
+    }
+    throw documentsError(
+      'DOCUMENTS_SYNC_UNAVAILABLE',
+      'Document storage did not connect to the native Business OS peer.',
+    );
+  }
+  await withDocumentsTimeout(
+    () => replication.awaitInSync?.() || replication.awaitInitialReplication?.(),
+    15_000,
+    'Document storage did not become ready.',
+  );
+}
+
+async function flushChunkSync(lease) {
+  const bridge = lease?.bridge || lease || null;
+  if (bridge?.mode === 'follower' && typeof bridge.flush === 'function') {
+    await withDocumentsTimeout(
+      () => bridge.flush(),
+      60_000,
+      'The sync leader did not confirm the document blob push.',
+    );
+    return;
+  }
+  const replication = bridge?.state || lease?.state || null;
+  if (!replication) return;
+  await withDocumentsTimeout(
+    () => {
+      if (typeof replication.pushToRemotePeers === 'function') {
+        return replication.pushToRemotePeers();
+      }
+      if (typeof replication.scheduleLocalWritePush === 'function') {
+        return replication.scheduleLocalWritePush();
+      }
+      return replication.awaitInSync?.();
+    },
+    60_000,
+    'Document storage could not confirm the document blob push.',
+  );
+}
+
+function hasSyncPeerStatus(replication) {
+  return typeof replication?.getTransportStatus === 'function'
+    || Boolean(replication?.peerStates$)
+    || Boolean(replication?.active$)
+    || Boolean(replication?.transportStatus$);
+}
+
+function syncPeerConnected(replication) {
+  if (String(replication?.activeRemotePeerId || '').trim()) return true;
+  const status = replication?.getTransportStatus?.() || {};
+  if (Number(status?.activePeerCount || 0) > 0) return true;
+  const connections = Array.isArray(status?.connectionStates) ? status.connectionStates : [];
+  if (connections.some((connection) => {
+    const channelState = connection?.channelState || connection?.channelReadyState || '';
+    const peerState = connection?.peerConnectionState || '';
+    return connection?.open === true
+      || (channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(peerState));
+  })) return true;
+  return replication?.active$?.getValue?.() === true
+    && Boolean(String(replication?.activeRemotePeerId || '').trim());
+}
+
+async function withDocumentsTimeout(operation, timeoutMs, message) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(documentsError('DOCUMENTS_SYNC_UNAVAILABLE', message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function cleanupFailedCreate(collections, expected, created = {}) {
+  if (created.document) {
+    await removeMatchingDocument(collections.documents, expected.document.id, (document) => (
+      document.idempotency_key === expected.document.idempotency_key
+    ));
+  }
+  if (created.version) {
+    await removeMatchingDocument(collections.document_versions, expected.version.id, (version) => (
+      version.idempotency_key === expected.version.idempotency_key
+    ));
+  }
+  if (!created.chunks) return;
   for (const expectedChunk of expected.chunks) {
     await removeMatchingDocument(collections.document_blob_chunks, expectedChunk.id, (chunk) => (
       chunk.blob_id === expectedChunk.blob_id && chunk.data === expectedChunk.data
