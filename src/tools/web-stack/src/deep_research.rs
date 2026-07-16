@@ -237,6 +237,30 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     },
                 ) {
                     Ok(read_payload) => {
+                        source["canonical_url"] = read_payload
+                            .get("canonical_url")
+                            .cloned()
+                            .unwrap_or_else(|| Value::String(url.clone()));
+                        source["verification_status"] = read_payload
+                            .get("verification_status")
+                            .cloned()
+                            .unwrap_or_else(|| Value::String("unverified".to_string()));
+                        source["evidence_eligible"] = read_payload
+                            .get("evidence_eligible")
+                            .cloned()
+                            .unwrap_or(Value::Bool(false));
+                        source["checked_at"] = read_payload
+                            .get("checked_at")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["http_status"] = read_payload
+                            .get("http_status")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["snapshot_hash"] = read_payload
+                            .get("snapshot_hash")
+                            .cloned()
+                            .unwrap_or(Value::Null);
                         source["read"] = json!({
                             "ok": read_payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
                             "url": url,
@@ -246,12 +270,21 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "find_results": read_payload.get("find_results").cloned().unwrap_or_else(|| json!([])),
                             "is_pdf": read_payload.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
                             "pdf_total_pages": read_payload.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
+                            "canonical_url": read_payload.get("canonical_url").cloned().unwrap_or_else(|| Value::String(url.clone())),
+                            "verification_status": read_payload.get("verification_status").cloned().unwrap_or_else(|| Value::String("unverified".to_string())),
+                            "checked_at": read_payload.get("checked_at").cloned().unwrap_or(Value::Null),
+                            "http_status": read_payload.get("http_status").cloned().unwrap_or(Value::Null),
+                            "snapshot_hash": read_payload.get("snapshot_hash").cloned().unwrap_or(Value::Null),
+                            "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
+                            "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
                     }
                     Err(err) => {
                         source["read"] = json!({
                             "ok": false,
                             "url": url,
+                            "verification_status": "failed",
+                            "evidence_eligible": false,
                             "error": err.to_string(),
                         });
                     }
@@ -347,20 +380,18 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
         .iter()
         .filter(|source| {
             source
-                .get("evidence_relevance")
+                .get("discovery_score")
                 .and_then(Value::as_i64)
-                .unwrap_or_default()
-                >= 0
+                .is_some_and(|score| score >= 0)
         })
         .count();
     let filter_low_relevance = relevant_count >= max_sources.min(8);
     for source in sources {
         if filter_low_relevance
             && source
-                .get("evidence_relevance")
+                .get("discovery_score")
                 .and_then(Value::as_i64)
-                .unwrap_or_default()
-                < 0
+                .is_some_and(|score| score < 0)
         {
             continue;
         }
@@ -374,13 +405,13 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
     for bucket in buckets.values_mut() {
         bucket.sort_by(|a, b| {
             let a_score = a
-                .get("evidence_relevance")
+                .get("discovery_score")
                 .and_then(Value::as_i64)
-                .unwrap_or_default();
+                .unwrap_or(-1);
             let b_score = b
-                .get("evidence_relevance")
+                .get("discovery_score")
                 .and_then(Value::as_i64)
-                .unwrap_or_default();
+                .unwrap_or(-1);
             b_score.cmp(&a_score)
         });
     }
@@ -869,11 +900,16 @@ fn collect_search_sources(
         let mut entry = json!({
             "title": result.get("title").cloned().unwrap_or(Value::Null),
             "url": url,
+            "canonical_url": url,
             "domain": domain_for_url(url),
             "snippet": result.get("snippet").cloned().unwrap_or(Value::Null),
             "rank": result.get("rank").cloned().unwrap_or(Value::Null),
             "source": result.get("source").cloned().unwrap_or(Value::Null),
             "source_type": source_type,
+            "source_tier": source_tier_for_source(source_type),
+            "verification_status": "unverified",
+            "discovery_status": "discovered",
+            "evidence_eligible": false,
             "search_label": plan.label,
             "scholarly": plan.scholarly,
             "metadata_only": plan.metadata_only || source_type == "annas_archive_metadata",
@@ -882,13 +918,14 @@ fn collect_search_sources(
             "is_pdf": result.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
             "pdf_total_pages": result.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
         });
-        entry["evidence_relevance"] =
-            Value::Number(score_source_relevance(&entry, &plan.query).into());
+        if let Some(score) = source_discovery_score(&entry, &plan.query) {
+            entry["discovery_score"] = Value::Number(score.into());
+        }
         sources.push(entry);
     }
 }
 
-fn score_source_relevance(source: &Value, query: &str) -> i64 {
+fn score_source_discovery(source: &Value, query: &str) -> i64 {
     let title = source
         .get("title")
         .and_then(Value::as_str)
@@ -969,10 +1006,10 @@ fn score_source_relevance(source: &Value, query: &str) -> i64 {
         "flight log",
         "wind tunnel",
     ];
-    let mut evidence_score = 0_i64;
+    let mut discovery_signal_score = 0_i64;
     for term in evidence_terms {
         if haystack.contains(term) {
-            evidence_score += 1;
+            discovery_signal_score += 1;
             score += 2;
         }
     }
@@ -1009,7 +1046,7 @@ fn score_source_relevance(source: &Value, query: &str) -> i64 {
         score -= 60;
     }
     if is_measurement_review
-        && evidence_score < 2
+        && discovery_signal_score < 2
         && [
             "image",
             "images",
@@ -1043,6 +1080,44 @@ fn score_source_relevance(source: &Value, query: &str) -> i64 {
         }
     }
     score
+}
+
+fn source_discovery_score(source: &Value, query: &str) -> Option<i64> {
+    if is_non_scoreable_source(source) {
+        None
+    } else {
+        Some(score_source_discovery(source, query))
+    }
+}
+
+fn is_non_scoreable_source(source: &Value) -> bool {
+    let source_type = source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source_tier = source
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    source.get("metadata_only").and_then(Value::as_bool) == Some(true)
+        || source_type.contains("metadata")
+        || source_type == "aggregator"
+        || source_tier == "metadata"
+        || source_tier == "aggregator"
+}
+
+fn source_tier_for_source(source_type: &str) -> String {
+    if source_type.contains("metadata") {
+        "metadata".to_string()
+    } else if source_type == "aggregator" {
+        "aggregator".to_string()
+    } else if source_type == "scholarly" || source_type == "open_access_paper" {
+        "scholarly".to_string()
+    } else {
+        "web".to_string()
+    }
 }
 
 fn bounded_text(value: &str, max_chars: usize) -> String {
@@ -1252,11 +1327,16 @@ fn collect_scholarly_search_sources(
         let mut entry = json!({
             "title": result.get("title").cloned().unwrap_or(Value::Null),
             "url": source_url,
+            "canonical_url": source_url,
             "domain": domain_for_url(source_url),
             "snippet": snippet,
             "rank": result.get("rank").cloned().unwrap_or(Value::Null),
             "source": provider.clone(),
             "source_type": source_type,
+            "source_tier": source_tier_for_source(source_type),
+            "verification_status": "unverified",
+            "discovery_status": "discovered",
+            "evidence_eligible": false,
             "search_label": plan.label,
             "scholarly": true,
             "metadata_only": metadata_only,
@@ -1489,11 +1569,15 @@ fn push_database_sources(
         }
         item["source"] = Value::String(database.to_string());
         item["source_type"] = Value::String("paper_metadata".to_string());
+        item["canonical_url"] = Value::String(url.clone());
         item["search_label"] = Value::String(database.to_string());
         item["scholarly"] = Value::Bool(true);
         item["metadata_only"] = Value::Bool(true);
         item["domain"] = Value::String(domain_for_url(&url));
-        item["evidence_relevance"] = Value::Number(score_source_relevance(&item, query).into());
+        item["source_tier"] = Value::String("metadata".to_string());
+        item["verification_status"] = Value::String("unverified".to_string());
+        item["discovery_status"] = Value::String("discovered".to_string());
+        item["evidence_eligible"] = Value::Bool(false);
         sources.push(item);
         pushed += 1;
     }
@@ -1671,6 +1755,9 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
         {
             continue;
         }
+        if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
         let Some(url) = source_read_url(source) else {
             continue;
         };
@@ -1779,6 +1866,11 @@ fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static 
         "open_access_paper"
     } else if metadata_only {
         "metadata"
+    } else if domain.contains("researchgate.net")
+        || domain.contains("scholar.google.")
+        || domain.contains("academia.edu")
+    {
+        "aggregator"
     } else if scholarly
         || domain.contains("sciencedirect.com")
         || domain.contains("springer.com")
@@ -1909,6 +2001,9 @@ fn collect_figure_candidates(sources: &[Value]) -> Vec<Value> {
         Selector::parse("meta[property='og:image'], meta[name='twitter:image']").ok();
 
     for source in sources.iter().take(24) {
+        if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
         let Some(page_url) = source.get("url").and_then(Value::as_str) else {
             continue;
         };
@@ -2277,7 +2372,56 @@ mod tests {
             "snippet": "cran.package rfigshare ecology species invertebrate taxonomy",
             "url": "https://doi.org/10.32614/cran.package.rfigshare",
         });
-        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+        assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
+    }
+
+    #[test]
+    fn metadata_and_aggregator_sources_have_no_discovery_score() {
+        let query = "bearing load data sources";
+        let metadata = json!({
+            "source_type": "paper_metadata",
+            "metadata_only": true,
+            "title": "Bearing load metadata",
+            "snippet": "Measured dataset",
+            "url": "https://doi.org/10.1234/example"
+        });
+        let aggregator = json!({
+            "source_type": "aggregator",
+            "title": "Bearing load aggregator",
+            "snippet": "Measured dataset",
+            "url": "https://aggregator.example/bearing"
+        });
+        assert!(source_discovery_score(&metadata, query).is_none());
+        assert!(source_discovery_score(&aggregator, query).is_none());
+    }
+
+    #[test]
+    fn discovered_search_source_uses_discovery_score_and_unverified_status() {
+        let payload = json!({
+            "results": [{
+                "title": "Bearing load dataset",
+                "url": "https://data.example/bearing-load",
+                "snippet": "Measured force data",
+                "source": "mock",
+                "rank": 1
+            }]
+        });
+        let plan = ResearchSearchPlan {
+            label: "topic_measurement_data",
+            query: "bearing load data".to_string(),
+            domains: Vec::new(),
+            scholarly: true,
+            metadata_only: false,
+        };
+        let mut seen = BTreeSet::new();
+        let mut sources = Vec::new();
+        collect_search_sources(&payload, &plan, &mut seen, &mut sources);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0]["verification_status"], "unverified");
+        assert_eq!(sources[0]["discovery_status"], "discovered");
+        assert!(sources[0].get("discovery_score").is_some());
+        assert!(sources[0].get("evidence_score").is_none());
+        assert_eq!(sources[0]["evidence_eligible"], false);
     }
 
     #[test]
@@ -2293,7 +2437,7 @@ mod tests {
             "snippet": "Raw data benchmark with measurements, current tables, power statistics, and load fields",
             "url": "https://doi.org/10.0000/generic-measurement-dataset",
         });
-        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query) + 30);
+        assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query) + 30);
     }
 
     #[test]
@@ -2309,7 +2453,7 @@ mod tests {
             "snippet": "Definition of load in the Cambridge English Dictionary",
             "url": "https://dictionary.cambridge.org/dictionary/english/load",
         });
-        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+        assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
     }
 
     #[test]
@@ -2328,7 +2472,7 @@ mod tests {
             "snippet": "A complete issue table of contents with many unrelated papers and a single image dataset entry.",
             "url": "https://doi.org/10.0000/full-issue",
         });
-        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+        assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
     }
 
     #[test]
@@ -2344,7 +2488,7 @@ mod tests {
             "snippet": "General thrust stand force and moment calibration data",
             "url": "https://doi.org/10.1201/9781439819487-12",
         });
-        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query) + 20);
+        assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query) + 20);
     }
 
     #[test]
