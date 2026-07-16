@@ -27,6 +27,7 @@
     "ctox.mailserver.get_config",
     "ctox.mailserver.save_domain",
     "ctox.mailserver.save_user",
+    "ctox.maintenance.client_ready",
     "ctox.module.assign_founder",
     "ctox.module.check_updates",
     "ctox.module.delete",

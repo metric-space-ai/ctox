@@ -109,6 +109,124 @@ button {
   overflow: hidden;
 }
 
+body[data-maintenance-active="true"] .app-shell {
+  grid-template-rows: 48px auto minmax(0, 1fr);
+}
+
+.ctox-maintenance-banner {
+  position: relative;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(90px, 18vw) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.ctox-maintenance-banner[hidden] {
+  display: none;
+}
+
+.ctox-maintenance-icon {
+  color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+  animation: ctox-maintenance-spin 1.4s linear infinite;
+}
+
+.ctox-maintenance-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ctox-maintenance-copy strong,
+.ctox-maintenance-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-maintenance-copy strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.ctox-maintenance-copy span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ctox-maintenance-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 65%, transparent);
+}
+
+.ctox-maintenance-progress > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.ctox-maintenance-retry {
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+body[data-maintenance-status="failed"] .ctox-maintenance-banner,
+body[data-maintenance-status="stale"] .ctox-maintenance-banner {
+  border-bottom-color: color-mix(in srgb, var(--danger) 70%, var(--line));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+[data-maintenance-empty-state="true"] {
+  display: none !important;
+}
+
+.ctox-maintenance-data-placeholder {
+  margin: 8px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: var(--panel-radius);
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@keyframes ctox-maintenance-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .ctox-maintenance-banner {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding-inline: 10px;
+  }
+
+  .ctox-maintenance-copy span,
+  .ctox-maintenance-progress {
+    display: none;
+  }
+}
+
 .topbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

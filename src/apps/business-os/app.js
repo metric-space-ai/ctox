@@ -38,7 +38,19 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260715-responsive-shell-v78';
-import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v3';
+import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v11';
+import {
+  CTOX_MAINTENANCE_MESSAGE,
+  CTOX_MAINTENANCE_SYNC_MESSAGE,
+  isDataEmptyStateText,
+  maintenancePhaseLabel,
+  maintenanceRequiredCollections,
+  normalizeMaintenancePayload,
+} from './shared/maintenance-state.js?v=20260716-maintenance-v1';
+import {
+  buildWorkspaceSessionSnapshot,
+  normalizeWorkspaceSessionSnapshot,
+} from './shared/workspace-session.js?v=20260716-workspace-session-v1';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -50,9 +62,10 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
+const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260716-file-bridge-v108';
+const APP_BUILD = '20260716-maintenance-session-v117';
 
 ensureShellStylesheets();
 
@@ -66,6 +79,9 @@ const BUSINESS_DB_NAME = 'ctox_business_os_v11';
 const BUSINESS_DB_STORAGE_GENERATION = 'user-isolation-v3-browser-contract';
 const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
+const CTOX_MAINTENANCE_POLL_MS = 2000;
+const CTOX_MAINTENANCE_LEASE_KEY = 'ctox.businessOs.maintenanceLease';
+const CTOX_MAINTENANCE_CLIENT_KEY = 'ctox.businessOs.maintenanceClient';
 const CTOX_UPDATE_CHECK_POLL_MS = 30 * 60 * 1000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
@@ -130,6 +146,7 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 }
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
+let workspaceSessionSaveTimer = null;
 let shellColumnResizeSync = null;
 let syncToastRefresh = null;
 let syncToastWatchdog = 0;
@@ -212,6 +229,12 @@ const state = {
   // `deferredSyncModules` / `criticalSyncWarmupPromise` /
   // `backgroundModuleWorkScheduled` are intentionally gone.
   ctoxHealth: null,
+  maintenance: normalizeMaintenancePayload(null),
+  maintenanceTimer: null,
+  maintenanceEmptyObserver: null,
+  maintenanceAckLeaseId: '',
+  workspaceSessionRestored: false,
+  workspaceSessionRestoring: false,
   ctoxUpdateCheck: null,
   ctoxUpdateCheckRunning: false,
   ctoxUpdateCheckedAtMs: 0,
@@ -863,6 +886,7 @@ const shellMessages = {
 const els = {
   status: document.querySelector('[data-status-text]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
+  maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
   ctoxVersion: document.querySelector('[data-ctox-version]'),
   tabs: document.querySelector('[data-module-tabs]'),
@@ -927,6 +951,10 @@ async function bootstrap() {
     setStatus(shellText('loginRequired'));
     return;
   }
+
+  startMaintenanceMonitor();
+
+  assertManagedDesktopCapability(launchConfigForPageSession || readUrlPairingConfig());
 
   setStartupProgress(10, shellText('bootConfig'));
   setStartupProgress(30, shellText('bootSession'));
@@ -1019,13 +1047,20 @@ async function bootstrap() {
 
   setStartupProgress(95, shellText('bootReady'));
   try {
-    await openModule(initialModuleRefAfterLogin());
+    const workspaceSession = readWorkspaceSessionSnapshot();
+    const explicitModule = location.hash.replace(/^#/, '').trim();
+    await openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin());
+    await restoreWorkspaceSession(workspaceSession);
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
     scheduleBusinessCompanions();
   } catch (error) {
     console.error('[business-os] module startup failed', error);
-    setStatus(`Module startup failed: ${error.message || error}`);
+    if (isManagedCollectionAuthorizationError(error)) {
+      showStartupError(error);
+    } else {
+      setStatus(`Module startup failed: ${error.message || error}`);
+    }
   } finally {
     state.initialModuleOpened = Boolean(state.activeModule?.id);
     flushDeferredCatalogRefresh();
@@ -1365,6 +1400,59 @@ function persistWindowGeometryLocalCache() {
   }));
 }
 
+function readWorkspaceSessionSnapshot() {
+  try {
+    return normalizeWorkspaceSessionSnapshot(
+      JSON.parse(readScopedLocalStorage(WORKSPACE_SESSION_KEY) || 'null')
+    );
+  } catch {
+    return null;
+  }
+}
+
+function scheduleWorkspaceSessionPersist() {
+  if (!state.workspaceSessionRestored || state.workspaceSessionRestoring) return;
+  if (workspaceSessionSaveTimer) window.clearTimeout(workspaceSessionSaveTimer);
+  workspaceSessionSaveTimer = window.setTimeout(persistWorkspaceSession, 120);
+}
+
+function persistWorkspaceSession() {
+  workspaceSessionSaveTimer = null;
+  if (!state.workspaceSessionRestored || state.workspaceSessionRestoring) return;
+  const snapshot = buildWorkspaceSessionSnapshot(
+    state.windowManager?.listWindows?.() || [],
+    state.activeModule?.id || '',
+  );
+  writeScopedLocalStorage(WORKSPACE_SESSION_KEY, JSON.stringify(snapshot));
+}
+
+async function restoreWorkspaceSession(snapshot) {
+  state.workspaceSessionRestoring = true;
+  try {
+    for (const entry of snapshot?.windows || []) {
+      const appId = entry.ownerId.slice('desktop-app:'.length);
+      const moduleDef = state.modules.find((item) => item.id === appId);
+      const knownDesktopApp = DESKTOP_APPS.some((item) => item.id === appId);
+      if (!moduleDef && !knownDesktopApp) continue;
+      const windowId = await openDesktopApp(appId, {
+        mode: entry.appMode,
+        restoring: true,
+      });
+      if (!windowId) continue;
+      if (entry.state === 'minimized') state.windowManager?.minimize?.(windowId);
+    }
+    const focusedOwner = [...(snapshot?.windows || [])].reverse().find((entry) => entry.focused)?.ownerId;
+    const focused = focusedOwner
+      ? state.windowManager?.listWindows?.().find((entry) => entry.ownerId === focusedOwner)
+      : null;
+    if (focused) state.windowManager?.focus?.(focused.id);
+  } finally {
+    state.workspaceSessionRestoring = false;
+    state.workspaceSessionRestored = true;
+    persistWorkspaceSession();
+  }
+}
+
 function mergeWindowGeometryCache(ownerId, payload) {
   if (!ownerId || !payload) return;
   const current = state.windowGeometryCache.get(ownerId);
@@ -1542,6 +1630,17 @@ function wireShellWindowGestures() {
       'window:restored',
       'window:title_changed',
     ].forEach((eventName) => state.eventBus.on(eventName, renderTabs));
+    [
+      'window:opened',
+      'window:closed',
+      'window:focused',
+      'window:minimized',
+      'window:restored',
+      'window:maximized',
+      'window:snapped',
+      'window:always_on_top_changed',
+      'window:app_mode_changed',
+    ].forEach((eventName) => state.eventBus.on(eventName, scheduleWorkspaceSessionPersist));
   }
 }
 
@@ -3749,6 +3848,10 @@ async function openDesktopApp(appId, options = {}) {
   const existing = findDesktopWindow(appId);
   if (existing) {
     restoreAndFocusWindow(existing);
+    const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
+    if (options.args && !launchDelivered) {
+      throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
+    }
     return existing.id;
   }
   const win = state.windowManager.create({
@@ -3837,12 +3940,16 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
+    const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
         appId: mod.id,
         args: options.args,
         windowId: existing.id,
       });
+    }
+    if (options.args && !launchDelivered) {
+      throw new Error(`Module launch arguments could not be delivered: ${mod.id}`);
     }
     return existing.id;
   }
@@ -4025,6 +4132,27 @@ function findDesktopWindow(targetId) {
 function restoreAndFocusWindow(win) {
   if (win.state === 'minimized') state.windowManager?.restore?.(win.id);
   state.windowManager?.focus?.(win.id);
+}
+
+function dispatchDesktopAppLaunch(win, appId, args = {}) {
+  const directContainer = win?.container || null;
+  const windowElement = directContainer
+    || (win?.id ? document.getElementById(win.id) : null)
+    || [...document.querySelectorAll('.shell-window[data-owner-id]')]
+      .find((element) => element.dataset.ownerId === `desktop-app:${appId}`)
+    || null;
+  const windowContent = windowElement?.matches?.('.shell-window-content')
+    ? windowElement
+    : windowElement?.querySelector?.('.shell-window-content') || windowElement;
+  const target = windowContent?.querySelector?.('[data-module-content]') || windowContent;
+  if (!target) return false;
+  target.dispatchEvent(new CustomEvent('ctox-business-os-app-launch', {
+    detail: {
+      appId: String(appId || ''),
+      args: args && typeof args === 'object' ? structuredClone(args) : {},
+    },
+  }));
+  return true;
 }
 
 function openBusinessChat(detail = {}) {
@@ -4780,6 +4908,7 @@ async function openModule(moduleId, options = {}) {
   }, 0);
   syncToastRefresh?.();
   updateNavButtons();
+  scheduleWorkspaceSessionPersist();
 }
 
 function updateNavButtons() {
@@ -5131,10 +5260,15 @@ function moduleBasePath(mod) {
 }
 
 function documentsWorkspaceAppId() {
+  const modules = state.modules || [];
+  const installedWorkspace = modules.find((mod) => (
+    mod?.id === 'documents-workspace' && moduleLaunchesAsDesktopApp(mod)
+  ));
+  if (installedWorkspace) return installedWorkspace.id;
   const required = ['documents', 'document_versions', 'document_blob_chunks'];
-  const candidates = (state.modules || []).filter((mod) => {
+  const candidates = modules.filter((mod) => {
     const collections = Array.isArray(mod?.collections) ? mod.collections : [];
-    return mod?.launch_kind === 'desktop-app'
+    return moduleLaunchesAsDesktopApp(mod)
       && required.every((collection) => collections.includes(collection));
   });
   return candidates.find((mod) => mod.id === 'documents')?.id
@@ -5159,6 +5293,7 @@ function createModuleContext(mod, overrides = {}) {
     || els.host.querySelector('[data-module-content]')
     || els.host.querySelector('[data-module-root]');
   const ownerKey = overrides.ownerKey || `module:${mod.id}`;
+  const moduleSync = createLiveSyncFacade({ host: hostEl });
   // CTX-CONTRACT-BEGIN business-os-module-context-v1
   return {
     module: mod,
@@ -5174,12 +5309,13 @@ function createModuleContext(mod, overrides = {}) {
     documents: createDocumentsFacade({
       db: moduleDb,
       openApp: openDesktopApp,
-      appId: documentsWorkspaceAppId(),
+      sync: moduleSync,
+      appId: documentsWorkspaceAppId,
     }),
     permissions: createModulePermissionFacade(mod),
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
-    sync: createLiveSyncFacade(),
+    sync: moduleSync,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
       module: mod,
@@ -5588,8 +5724,8 @@ function createLiveDbFacade(contextModule = null) {
   const base = {
     get mode() { return state.db?.mode; },
     get rxdb() { return state.db?.rxdb; },
-    get raw() { return guard ? createGuardedRawDbProxy(guard) : state.db?.raw; },
-    get collections() { return guard ? createGuardedCollectionsProxy(guard) : (state.db?.collections || {}); },
+    get raw() { return createGuardedRawDbProxy(guard); },
+    get collections() { return createGuardedCollectionsProxy(guard); },
     addCollections: (...args) => state.db?.addCollections?.(...args),
     collection: (name) => guardedCollectionFor(guard, name),
     close: (...args) => state.db?.close?.(...args),
@@ -5616,7 +5752,8 @@ function createScopedSystemDbFacade(scopeName, collectionNames = []) {
   const collectionFor = (name, collection = undefined) => {
     const normalized = String(name || '').trim();
     if (!normalized || !allowed.has(normalized)) return null;
-    return collection === undefined ? (state.db?.collection?.(normalized) || null) : (collection || null);
+    const resolved = collection === undefined ? (state.db?.collection?.(normalized) || null) : (collection || null);
+    return maintenanceReadOnlyCollection(normalized, resolved);
   };
   const rawProxy = new Proxy({}, {
     get(_target, prop) {
@@ -5684,6 +5821,7 @@ function createModulePermissionFacade(moduleLike = null) {
       );
     },
     canWriteCollection: (collectionName) => {
+      if (state.maintenance?.active) return false;
       if (scopedSystemCollections) return scopedSystemCollections.includes(String(collectionName || '').trim());
       return !guard || guardAllowsCollectionPermission(
         guard,
@@ -5743,8 +5881,55 @@ function createGuardedCollectionsProxy(guard) {
 function guardedCollectionFor(guard, collectionName, collection = undefined) {
   const name = String(collectionName || '').trim();
   const realCollection = collection === undefined ? state.db?.collection?.(name) : collection;
-  if (!guard || !name || !realCollection) return realCollection;
+  if (!name || !realCollection) return realCollection;
+  if (!guard) return maintenanceReadOnlyCollection(name, realCollection);
   return createGuardedCollectionProxy(guard, name, realCollection);
+}
+
+function assertMaintenanceWriteAllowed(collectionName) {
+  if (!state.maintenance?.active) return;
+  const error = new Error(`CTOX wird aktualisiert. ${collectionName} bleibt vorübergehend schreibgeschützt.`);
+  error.code = 'CTOX_MAINTENANCE_READ_ONLY';
+  throw error;
+}
+
+function maintenanceReadOnlyCollection(collectionName, collection) {
+  if (!state.maintenance?.active || !collection || typeof collection !== 'object') return collection;
+  return new Proxy(collection, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      if (WRITE_COLLECTION_METHODS.has(prop)) {
+        return () => assertMaintenanceWriteAllowed(collectionName);
+      }
+      if (READ_COLLECTION_METHODS.has(prop)) {
+        return (...args) => wrapMaintenanceReadOnlyResult(collectionName, target[prop]?.apply(target, args));
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function wrapMaintenanceReadOnlyResult(collectionName, result) {
+  if (result && typeof result.then === 'function') {
+    return result.then((value) => wrapMaintenanceReadOnlyResult(collectionName, value));
+  }
+  if (Array.isArray(result)) {
+    return result.map((value) => wrapMaintenanceReadOnlyResult(collectionName, value));
+  }
+  if (!result || typeof result !== 'object') return result;
+  return new Proxy(result, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && (WRITE_QUERY_METHODS.has(prop) || WRITE_DOCUMENT_METHODS.has(prop))) {
+        return () => assertMaintenanceWriteAllowed(collectionName);
+      }
+      if (prop === 'exec') {
+        return (...args) => wrapMaintenanceReadOnlyResult(collectionName, target.exec.apply(target, args));
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 function createGuardedCollectionProxy(guard, collectionName, collection) {
@@ -5763,6 +5948,7 @@ function createGuardedCollectionProxy(guard, collectionName, collection) {
       }
       if (WRITE_COLLECTION_METHODS.has(prop)) {
         return (...args) => {
+          assertMaintenanceWriteAllowed(collectionName);
           assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
           return wrapGuardedResult(guard, collectionName, target[prop]?.apply(target, args));
         };
@@ -5789,6 +5975,7 @@ function wrapGuardedQueryLike(guard, collectionName, query) {
       }
       if (typeof prop === 'string' && WRITE_QUERY_METHODS.has(prop)) {
         return (...args) => {
+          assertMaintenanceWriteAllowed(collectionName);
           assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
           return target[prop]?.apply(target, args);
         };
@@ -5815,6 +6002,7 @@ function wrapGuardedDocumentLike(guard, collectionName, doc) {
     get(target, prop, receiver) {
       if (typeof prop === 'string' && WRITE_DOCUMENT_METHODS.has(prop)) {
         return (...args) => {
+          assertMaintenanceWriteAllowed(collectionName);
           assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
           return target[prop]?.apply(target, args);
         };
@@ -5958,15 +6146,31 @@ function createLiveCommandBusFacade() {
     if (!state.commandBus) throw new Error('Business OS command bus is not ready.');
     return state.commandBus;
   };
+  const assertMutationAllowed = (command) => {
+    const commandType = String(command?.command_type || command?.type || '');
+    if (!state.maintenance?.active || commandType === 'ctox.maintenance.client_ready') return;
+    const error = new Error('CTOX wird aktualisiert. Apps bleiben bis zum Abschluss schreibgeschützt.');
+    error.code = 'CTOX_MAINTENANCE_READ_ONLY';
+    throw error;
+  };
   return Object.freeze({
-    dispatch: (...args) => requireCommandBus().dispatch(...args),
-    submit: (...args) => requireCommandBus().submit(...args),
+    dispatch: (command, ...args) => {
+      assertMutationAllowed(command);
+      return requireCommandBus().dispatch(command, ...args);
+    },
+    submit: (command, ...args) => {
+      assertMutationAllowed(command);
+      return requireCommandBus().submit(command, ...args);
+    },
     waitForAccepted: (...args) => requireCommandBus().waitForAccepted(...args),
     waitForTerminal: (...args) => requireCommandBus().waitForTerminal(...args),
     resumeTracking: (...args) => requireCommandBus().resumeTracking(...args),
     getStatus: (...args) => requireCommandBus().getStatus(...args),
     subscribe: (...args) => requireCommandBus().subscribe(...args),
-    cancel: (...args) => requireCommandBus().cancel(...args),
+    cancel: (...args) => {
+      assertMutationAllowed({ command_type: 'ctox.command.cancel' });
+      return requireCommandBus().cancel(...args);
+    },
     activeCommandIds: () => state.commandBus?.activeCommandIds?.() || [],
   });
 }
@@ -7207,7 +7411,11 @@ function getInstanceName() {
     return hostLabel.toUpperCase();
   }
   try {
-    const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch?.config;
+    const injected = launchConfigForPageSession
+      || globalThis.CTOX_BUSINESS_OS_CONFIG
+      || globalThis.ctoxBusinessOsLaunch?.config;
+    const managedName = String(injected?.desktop_instance?.display_name || '').trim();
+    if (managedName) return managedName;
     if (injected?.instance_id) {
       return injected.instance_id.startsWith('biz_') ? injected.instance_id.substring(4, 10).toUpperCase() : injected.instance_id.substring(0, 6).toUpperCase();
     }
@@ -7218,6 +7426,8 @@ function getInstanceName() {
     const packed = params.get('ctox_config') || params.get('ctoxConfig');
     if (packed) {
       const decoded = JSON.parse(atob(packed));
+      const managedName = String(decoded?.desktop_instance?.display_name || '').trim();
+      if (managedName) return managedName;
       if (decoded && decoded.instance_id) {
         if (decoded.instance_id === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
           return 'A6000';
@@ -8037,6 +8247,190 @@ function startShellCtoxHealthMonitor() {
   if (state.ctoxHealthTimer) window.clearInterval(state.ctoxHealthTimer);
   refreshShellCtoxHealth();
   state.ctoxHealthTimer = window.setInterval(refreshShellCtoxHealth, CTOX_HEALTH_POLL_MS);
+}
+
+function maintenanceClientId() {
+  try {
+    const existing = sessionStorage.getItem(CTOX_MAINTENANCE_CLIENT_KEY);
+    if (existing) return existing;
+    const created = `browser-${crypto.randomUUID?.() || Date.now()}`;
+    sessionStorage.setItem(CTOX_MAINTENANCE_CLIENT_KEY, created);
+    return created;
+  } catch {
+    return `browser-${Date.now()}`;
+  }
+}
+
+function rememberedMaintenanceLease() {
+  try { return sessionStorage.getItem(CTOX_MAINTENANCE_LEASE_KEY) || ''; } catch { return ''; }
+}
+
+function rememberMaintenanceLease(leaseId) {
+  try {
+    if (leaseId) sessionStorage.setItem(CTOX_MAINTENANCE_LEASE_KEY, leaseId);
+    else sessionStorage.removeItem(CTOX_MAINTENANCE_LEASE_KEY);
+  } catch {}
+}
+
+function startMaintenanceMonitor() {
+  if (state.maintenanceTimer) window.clearInterval(state.maintenanceTimer);
+  els.maintenanceBanner?.querySelector('[data-maintenance-retry]')?.addEventListener('click', () => {
+    refreshMaintenanceStatus({ retry: true });
+  });
+  refreshMaintenanceStatus();
+  state.maintenanceTimer = window.setInterval(refreshMaintenanceStatus, CTOX_MAINTENANCE_POLL_MS);
+}
+
+async function refreshMaintenanceStatus(options = {}) {
+  const rememberedLeaseId = rememberedMaintenanceLease();
+  try {
+    const payload = await fetchBusinessOsControlJson('/api/business-os/ctox/maintenance');
+    const next = normalizeMaintenancePayload(payload, { rememberedLeaseId });
+    if (next.active && next.leaseId) rememberMaintenanceLease(next.leaseId);
+    if (!payload.active && ['completed', 'rolled_back'].includes(next.status)) {
+      rememberMaintenanceLease('');
+      applyMaintenanceState(normalizeMaintenancePayload(payload));
+      if (next.status === 'rolled_back') {
+        setStatus(next.error || (shellLang() === 'de'
+          ? 'Das Upgrade wurde zurückgesetzt. CTOX verwendet wieder die vorherige Version.'
+          : 'The upgrade was rolled back. CTOX is using the previous version again.'));
+      }
+      return;
+    }
+    applyMaintenanceState(next);
+  } catch (error) {
+    if (!rememberedLeaseId) return;
+    applyMaintenanceState(normalizeMaintenancePayload({
+      active: true,
+      state: {
+        lease_id: rememberedLeaseId,
+        phase: 'service_restart',
+        status: 'disconnected',
+        retryable: true,
+        progress: {
+          percent: state.maintenance?.percent || 70,
+          message: options.retry
+            ? 'Verbindung wird erneut aufgebaut'
+            : 'CTOX-Dienst startet neu · Verbindung wird wiederhergestellt',
+        },
+        last_error: String(error?.message || error),
+      },
+    }, { rememberedLeaseId }));
+  }
+}
+
+function applyMaintenanceState(next) {
+  state.maintenance = next;
+  document.body.dataset.maintenanceActive = next.active ? 'true' : 'false';
+  document.body.dataset.maintenanceStatus = next.status || 'idle';
+  if (els.maintenanceBanner) {
+    els.maintenanceBanner.hidden = !next.active;
+    const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
+    const progress = els.maintenanceBanner.querySelector('[data-maintenance-progress]');
+    const retry = els.maintenanceBanner.querySelector('[data-maintenance-retry]');
+    if (detail) detail.textContent = next.error && ['failed', 'stale'].includes(next.status)
+      ? `${maintenancePhaseLabel(next, shellLang())}: ${next.error}`
+      : maintenancePhaseLabel(next, shellLang());
+    if (progress) {
+      progress.style.width = `${Math.round(next.percent || 0)}%`;
+      progress.title = `${Math.round(next.percent || 0)}%`;
+    }
+    if (retry) retry.hidden = !next.retryable;
+  }
+  if (next.active) {
+    startMaintenanceEmptyStateGuard();
+    if (next.serviceActive && next.replicationUp && next.status === 'active') {
+      tryAcknowledgeMaintenanceReadiness();
+    }
+  } else {
+    stopMaintenanceEmptyStateGuard();
+    state.maintenanceAckLeaseId = '';
+  }
+}
+
+function maintenanceOpenModules() {
+  const ids = new Set();
+  if (state.activeModule?.id) ids.add(state.activeModule.id);
+  for (const win of state.windowManager?.listWindows?.() || []) {
+    if (win.ownerId?.startsWith('desktop-app:')) ids.add(win.ownerId.slice('desktop-app:'.length));
+  }
+  return [...ids].map((id) => state.modules.find((entry) => entry.id === id)).filter(Boolean);
+}
+
+async function tryAcknowledgeMaintenanceReadiness() {
+  const leaseId = state.maintenance?.leaseId;
+  if (!leaseId || state.maintenanceAckLeaseId === leaseId || !state.commandBus) return;
+  const modules = maintenanceOpenModules();
+  const requiredCollections = [...new Set(modules.flatMap(maintenanceRequiredCollections))].sort();
+  await Promise.all(requiredCollections.map((name) => Promise
+    .resolve(state.sync?.startCollection?.(name))
+    .catch(() => null)));
+  const missing = requiredCollections.filter((name) => {
+    const diagnostics = state.syncDiagnostics?.collections?.[name];
+    return !(diagnostics?.initialReplicationAt || diagnostics?.initialReplicationState === 'complete');
+  });
+  if (missing.length) {
+    if (els.maintenanceBanner) {
+      const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
+      if (detail) detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · ${missing.length} ausstehend`;
+    }
+    return;
+  }
+  state.maintenanceAckLeaseId = leaseId;
+  const commandId = `cmd_maintenance_ready_${crypto.randomUUID?.() || Date.now()}`;
+  try {
+    await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.maintenance.client_ready',
+      payload: {
+        lease_id: leaseId,
+        client_id: maintenanceClientId(),
+        module_id: modules.map((entry) => entry.id).join(',') || 'shell',
+        required_collections: requiredCollections,
+      },
+      client_context: { source: 'business-os-maintenance-readiness' },
+    }, { until: 'terminal' });
+    rememberMaintenanceLease('');
+    await refreshMaintenanceStatus();
+  } catch (error) {
+    state.maintenanceAckLeaseId = '';
+    console.warn('[business-os] maintenance readiness acknowledgement failed:', error);
+  }
+}
+
+function startMaintenanceEmptyStateGuard() {
+  applyMaintenanceEmptyStateGuard();
+  if (state.maintenanceEmptyObserver) return;
+  state.maintenanceEmptyObserver = new MutationObserver(applyMaintenanceEmptyStateGuard);
+  state.maintenanceEmptyObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+}
+
+function applyMaintenanceEmptyStateGuard() {
+  if (!state.maintenance?.active) return;
+  const selectors = '[class*="empty"], [data-empty], td[colspan]';
+  for (const node of document.querySelectorAll(selectors)) {
+    if (isDataEmptyStateText(node.textContent)) node.dataset.maintenanceEmptyState = 'true';
+  }
+  for (const host of document.querySelectorAll('[data-module-content]')) {
+    if (!host.querySelector('[data-maintenance-empty-state="true"]')) continue;
+    if (host.querySelector('[data-maintenance-data-placeholder]')) continue;
+    const placeholder = document.createElement('div');
+    placeholder.className = 'ctox-maintenance-data-placeholder';
+    placeholder.dataset.maintenanceDataPlaceholder = '';
+    placeholder.textContent = CTOX_MAINTENANCE_SYNC_MESSAGE;
+    host.prepend(placeholder);
+  }
+}
+
+function stopMaintenanceEmptyStateGuard() {
+  state.maintenanceEmptyObserver?.disconnect?.();
+  state.maintenanceEmptyObserver = null;
+  document.querySelectorAll('[data-maintenance-empty-state]').forEach((node) => {
+    delete node.dataset.maintenanceEmptyState;
+  });
+  document.querySelectorAll('[data-maintenance-data-placeholder]').forEach((node) => node.remove());
 }
 
 function startWorkspaceBrandingMonitor() {
@@ -9824,6 +10218,13 @@ async function readBusinessOsLaunchConfig() {
   const config = await normalizeBusinessOsLaunchConfig(launch);
   if (config) {
     launchConfigForPageSession = config;
+    // The command bus and WebRTC handshake resolve the native capability from
+    // the session global. URL-packed desktop launches previously validated the
+    // token here but never published it, so the browser joined the right room
+    // without authorization and every protected collection failed closed.
+    if (config.session && typeof config.session === 'object') {
+      globalThis.CTOX_BUSINESS_OS_SESSION = config.session;
+    }
   }
   if (config && config.source === 'url' && allowsStoredPairingConfig()) {
     writeStoredPairingConfig(config);
@@ -9871,6 +10272,23 @@ function readUrlPairingConfig() {
     native_rxdb_peer_available: true,
     native_rxdb_peer_reason: '',
   };
+}
+
+function assertManagedDesktopCapability(config) {
+  if (config?.desktop_managed_auth?.required !== true) return;
+  const session = config?.session && typeof config.session === 'object' ? config.session : {};
+  const capabilityToken = String(
+    session.capability_token
+      || session.capabilityToken
+      || config.capability_token
+      || config.capabilityToken
+      || ''
+  ).trim();
+  if (capabilityToken) return;
+  const instanceName = String(config?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
+  const error = new Error(`${instanceName} konnte nicht geladen werden: ctox.dev hat keinen nativen Capability-Token für diese verwaltete Verbindung geliefert.`);
+  error.code = 'CTOX_MANAGED_CAPABILITY_MISSING';
+  throw error;
 }
 
 function readStoredPairingConfig() {
@@ -10068,6 +10486,17 @@ async function normalizeBusinessOsLaunchConfig(config) {
     native_rxdb_peer_reason: config.native_rxdb_peer_reason || '',
     session: config.session || null,
     user: config.user || null,
+    desktop_instance: config.desktop_instance && typeof config.desktop_instance === 'object'
+      ? {
+          id: String(config.desktop_instance.id || ''),
+          source: String(config.desktop_instance.source || ''),
+          display_name: String(config.desktop_instance.display_name || ''),
+          domain: String(config.desktop_instance.domain || ''),
+        }
+      : null,
+    desktop_managed_auth: config.desktop_managed_auth?.required === true
+      ? { required: true }
+      : null,
     source: config.source || 'injected',
   };
 }
@@ -10150,7 +10579,11 @@ function workspaceStatusText() {
     : '';
   if (brandingName) return brandingName;
   const instanceName = getInstanceName();
-  if (instanceName && instanceName !== 'A6000' && !isLocalBusinessOsSurface()) {
+  const managedDesktop = (
+    launchConfigForPageSession?.desktop_instance?.source
+    || readUrlPairingConfig()?.desktop_instance?.source
+  ) === 'ctox_dev';
+  if (instanceName && (managedDesktop || (instanceName !== 'A6000' && !isLocalBusinessOsSurface()))) {
     return instanceName;
   }
   return shellText('localWorkspace');
@@ -10227,7 +10660,17 @@ function getFriendlyErrorMessage(error) {
   let description = 'Das Business OS konnte nicht vollständig geladen werden.';
   let advice = 'Bitte versuchen Sie die Seite neu zu laden. Falls das Problem weiterhin besteht, vergewissern Sie sich, dass der CTOX-Dienst im Hintergrund läuft.';
 
-  if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
+  if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || msg.includes('nativen Capability-Token')) {
+    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
+    title = `${instanceName} konnte nicht geladen werden`;
+    description = 'Die Anmeldung bei ctox.dev war erfolgreich, aber der Startlink enthält keine von der CTOX-Instanz signierte Datenberechtigung. Deshalb wurde der verwaltete Workspace sicher gestoppt.';
+    advice = 'Die ctox.dev-Desktop-Schnittstelle muss einen kurzlebigen nativen Capability-Token für diese Instanz ausstellen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
+  } else if (isManagedCollectionAuthorizationError(error)) {
+    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
+    title = `${instanceName} konnte nicht geladen werden`;
+    description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
+    advice = 'Bitte die native Capability-Ausstellung und die Collection-Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
+  } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
     title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
     description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
     advice = 'Bitte öffnen Sie die Anwendung über http://localhost:8765/ anstelle von http://127.0.0.1:8765/. Safari stuft "localhost" als sichere Herkunft ein und schaltet die benötigten Verschlüsselungsfunktionen (WebCrypto) frei.';
@@ -10262,6 +10705,14 @@ function getFriendlyErrorMessage(error) {
   }
 
   return { title, description, advice };
+}
+
+function isManagedCollectionAuthorizationError(error) {
+  const config = launchConfigForPageSession || readUrlPairingConfig();
+  if (config?.desktop_instance?.source !== 'ctox_dev') return false;
+  return /UNAUTHORIZED: peer is not authorized for this collection/i.test(
+    String(error?.message || error || '')
+  );
 }
 
 function isLocalRxDbStartupError(error) {

@@ -20334,6 +20334,54 @@ pub fn accept_rxdb_business_command_with_origin(
         }
     }
     match command.command_type.as_str() {
+        "ctox.maintenance.client_ready" => {
+            let _session = rxdb_authenticated_session(root, &command)?;
+            let lease_id = command
+                .payload
+                .get("lease_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let client_id = command
+                .payload
+                .get("client_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let module_id = command
+                .payload
+                .get("module_id")
+                .and_then(Value::as_str)
+                .unwrap_or(command.module.as_str())
+                .trim();
+            let required_collections = command
+                .payload
+                .get("required_collections")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && value.len() <= 128)
+                .take(256)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let outcome = crate::install::acknowledge_business_os_maintenance_ready(
+                root,
+                lease_id,
+                client_id,
+                module_id,
+                &required_collections,
+            )?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
         "ctox.app.action.run" => {
             let session = rxdb_authenticated_session(root, &command)?;
             let module_id = command
