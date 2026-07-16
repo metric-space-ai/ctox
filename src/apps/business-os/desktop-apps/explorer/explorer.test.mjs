@@ -97,6 +97,11 @@ describe('Explorer app helpers', () => {
     assert.match(shellSource, /schemaModuleIds\.map\(async \(moduleId\) => \{[\s\S]*?registerModuleSchemas\(schemaModule\)/);
   });
 
+  it('ensures a source module schema again when its Files provider is selected', () => {
+    assert.match(explorerSource, /if \(source\.moduleId\) await ctx\.ensureModuleData\?\.\(source\.moduleId\)/);
+    assert.match(shellSource, /ensureModuleData: async \(moduleId\) => \{[\s\S]*?registerModuleSchemas\(sourceModule\)/);
+  });
+
   it('gives the packaged Spreadsheets app only its declared system collections', () => {
     const scope = shellSource.match(/spreadsheets: Object\.freeze\(\[([\s\S]*?)\]\),/);
     assert.ok(scope, 'Spreadsheets must have an explicit packaged-system data scope');

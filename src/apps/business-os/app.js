@@ -3781,6 +3781,13 @@ async function openDesktopApp(appId, options = {}) {
       notifications: state.notifications,
       locale: shellLang(),
       args: options.args || {},
+      ensureModuleData: async (moduleId) => {
+        const sourceModule = state.modules.find((item) => item.id === moduleId);
+        if (!sourceModule) {
+          throw new Error(`Module schema is not available: ${moduleId}`);
+        }
+        await registerModuleSchemas(sourceModule);
+      },
       openDesktopApp,
       openBusinessChat,
       reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`desktop-app:${entry.id}`, error, {

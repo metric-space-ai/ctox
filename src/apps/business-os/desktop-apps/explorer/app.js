@@ -158,6 +158,7 @@ export async function mount(container, ctx) {
     state.query = '';
     refs.root.classList.toggle('is-filesystem', Boolean(source.filesystem));
     renderSidebar();
+    if (source.moduleId) await ctx.ensureModuleData?.(source.moduleId);
     await loadRows();
   }
 
