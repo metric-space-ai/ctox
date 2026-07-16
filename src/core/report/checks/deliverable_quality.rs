@@ -55,7 +55,13 @@ pub fn run_deliverable_quality_check(workspace: &Workspace<'_>) -> Result<CheckO
     }
 
     let metadata = workspace.run_metadata()?;
-    let evidence_register = workspace.evidence_register()?;
+    // Quality metrics and evidence floors are meaningful only for sources
+    // that passed the retrieval, snapshot, and eligibility gates.
+    let evidence_register: Vec<_> = workspace
+        .evidence_register()?
+        .into_iter()
+        .filter(|entry| entry.is_evidence_eligible())
+        .collect();
     let research_log_entries = workspace.research_log_entries()?;
     let manuscript = build_manuscript(workspace)?;
     let mut issues = Vec::new();

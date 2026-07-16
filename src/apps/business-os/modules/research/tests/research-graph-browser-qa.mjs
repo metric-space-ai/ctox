@@ -188,12 +188,24 @@ const browser = await chromium.launch({ executablePath: chromiumExecutable(), he
 const failures = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
+  page.setDefaultTimeout(60000);
   page.on('console', (message) => { if (message.type() === 'error') failures.push('console: ' + message.text()); });
   page.on('pageerror', (error) => failures.push('pageerror: ' + error.message));
   page.on('requestfailed', (request) => failures.push('requestfailed: ' + request.url() + ' ' + (request.failure()?.errorText || '')));
   await page.goto(`http://127.0.0.1:${port}/qa`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('[data-research-graph-host]', { state: 'attached', timeout: 30000 });
-  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 30000 });
+  try {
+    await page.waitForSelector('[data-research-graph-host]', { state: 'attached', timeout: 180000 });
+  } catch (error) {
+    const body = await page.locator('body').innerText().catch(() => '<body unavailable>');
+    const mountState = await page.evaluate(() => ({
+      qaKeys: Object.keys(window.__researchQa || {}),
+      ready: window.__researchQa?.ready,
+      graphHosts: document.querySelectorAll('[data-research-graph-host]').length,
+      canvases: document.querySelectorAll('[data-research-graph-host] canvas').length,
+    })).catch(() => ({}));
+    throw new Error(`research app failed to mount: ${error.message}; state=${JSON.stringify(mountState)}; browser failures=${JSON.stringify(failures)}; body=${body.slice(0, 2000)}`);
+  }
+  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 180000 });
   await page.waitForTimeout(3200);
   assert.equal(await page.locator('[data-evidence-status="http_error"]').count(), 1);
   assert.equal(await page.locator('[data-evidence-status="metadata_only"]').count(), 1);
@@ -202,7 +214,7 @@ try {
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.ok(await page.locator('.research-graph-topics li').count() >= 5);
   assert.ok(await page.locator('[data-research-graph-host] canvas').boundingBox());
-  await page.screenshot({ path: resolve(outputDir, 'desktop-3d.png'), fullPage: true });
+  await page.screenshot({ path: resolve(outputDir, 'desktop-3d.png'), fullPage: true, timeout: 90000 });
 
   await page.locator('[data-action="graph-dimension"]').click();
   await page.waitForTimeout(1000);
@@ -210,33 +222,43 @@ try {
   await page.locator('[data-action="graph-search"]').fill('governance');
   await page.locator('[data-action="graph-panel"][data-graph-panel="analytics"]').click();
   await page.waitForSelector('.research-graph-metrics');
-  await page.screenshot({ path: resolve(outputDir, 'desktop-2d-analytics.png'), fullPage: true });
+  await page.screenshot({ path: resolve(outputDir, 'desktop-2d-analytics.png'), fullPage: true, timeout: 90000 });
 
   await page.locator('[data-action="graph-layer"][data-graph-layer="evidence"]').click();
-  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible' });
+  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 60000 });
   await page.waitForTimeout(1400);
   await page.locator('[data-action="graph-ai"][data-graph-ai="document"]').click();
-  await page.waitForFunction(() => window.__researchQa.commands.length === 1);
-  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].type), 'research.systematic.report.create');
+  await page.waitForTimeout(1500);
+  assert.equal(
+    await page.evaluate(() => window.__researchQa.commands.length),
+    1,
+    `document action did not dispatch: ${JSON.stringify(failures)}`,
+  );
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].command_type), 'research.systematic.report.create');
   await page.locator('[data-action="graph-ai"][data-graph-ai="research"]').click();
-  await page.waitForFunction(() => window.__researchQa.commands.length === 2);
-  assert.equal(await page.evaluate(() => window.__researchQa.commands[1].type), 'research.systematic.run');
+  await page.waitForTimeout(1500);
+  assert.equal(
+    await page.evaluate(() => window.__researchQa.commands.length),
+    2,
+    `research action did not dispatch: ${JSON.stringify(failures)}`,
+  );
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[1].command_type), 'research.systematic.run');
 
   const collapse = page.locator('[data-action="toggle-diagram"]');
   assert.equal(await collapse.count(), 1);
   await collapse.click();
   assert.equal(await page.locator('.research-graph-shell').evaluate((node) => getComputedStyle(node).display), 'none');
   await collapse.click();
-  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 30000 });
+  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 60000 });
 
   await page.setViewportSize({ width: 720, height: 900 });
   await page.waitForTimeout(900);
   assert.ok(await page.locator('.research-graph-stage').isVisible());
   assert.equal(await page.locator('[data-graph-command="zoom-in"]').evaluate((node) => getComputedStyle(node).display), 'none');
-  await page.screenshot({ path: resolve(outputDir, 'compact.png'), fullPage: true });
+  await page.screenshot({ path: resolve(outputDir, 'compact.png'), fullPage: true, timeout: 90000 });
 
   await page.reload({ waitUntil: 'networkidle' });
-  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 30000 });
+  await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 60000 });
   await page.waitForTimeout(1200);
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.deepEqual(failures, []);

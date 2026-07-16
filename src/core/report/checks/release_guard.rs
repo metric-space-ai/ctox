@@ -165,7 +165,14 @@ pub fn run_release_guard_check(workspace: &Workspace) -> Result<CheckOutcome> {
         });
 
     let committed = workspace.committed_blocks()?;
-    let evidence = workspace.evidence_register()?;
+    // Release checks must never count discovery metadata or failed fetches as
+    // evidence. Keeping the context fail-closed also makes references to an
+    // unverified row surface through LINT-CITED-BUT-MISSING.
+    let evidence: Vec<_> = workspace
+        .evidence_register()?
+        .into_iter()
+        .filter(|entry| entry.is_evidence_eligible())
+        .collect();
 
     if committed.is_empty() {
         let payload = json!({
@@ -871,12 +878,12 @@ impl Lint for LintCitedButMissing {
                     severity: self.severity(),
                     instance_ids: vec![block.instance_id.clone()],
                     reason: format!(
-                        "Block {title} verweist auf Reference-ID {ref_id}, die nicht im Evidence-Register vorhanden ist.",
+                        "Block {title} verweist auf Reference-ID {ref_id}, die nicht als verifizierte Evidenz verfügbar ist.",
                         title = block.title,
                         ref_id = ref_id,
                     ),
                     goal: format!(
-                        "Lege {ref_id} im Evidence-Register an oder entferne die Verknüpfung aus {title}.",
+                        "Verifiziere {ref_id} durch einen erfolgreichen Abruf mit Snapshot-Hash oder entferne die Verknüpfung aus {title}.",
                         ref_id = ref_id,
                         title = block.title,
                     ),

@@ -5523,14 +5523,14 @@ fn load_office_runtime_settings(root: &Path) -> anyhow::Result<Value> {
         return Ok(settings);
     }
     Ok(serde_json::json!({
-            "documents_engine": "ctox_documents",
-            "spreadsheets_engine": "ctox_spreadsheets",
-            "updated_at_ms": 0,
-            "document_available": true,
-            "spreadsheet_available": true,
-            "protocol": super::office_engine::EDITOR_PROTOCOL,
-            "protocol_version": super::office_engine::EDITOR_PROTOCOL_VERSION,
-        }))
+        "documents_engine": "ctox_documents",
+        "spreadsheets_engine": "ctox_spreadsheets",
+        "updated_at_ms": 0,
+        "document_available": true,
+        "spreadsheet_available": true,
+        "protocol": super::office_engine::EDITOR_PROTOCOL,
+        "protocol_version": super::office_engine::EDITOR_PROTOCOL_VERSION,
+    }))
 }
 
 fn save_office_runtime_settings(
@@ -30720,8 +30720,8 @@ fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<
 
 fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
     use super::office_engine::{
-        apply_changes, delimited_text_to_xlsx, export, prepare, sha256_hex,
-        ApplyChangesOptions, OfficeKind, PrepareOptions,
+        apply_changes, delimited_text_to_xlsx, export, prepare, sha256_hex, ApplyChangesOptions,
+        OfficeKind, PrepareOptions,
     };
 
     let (kind, module_id, records_collection, versions_collection, chunks_collection) =
@@ -30788,7 +30788,9 @@ fn handle_office_control_command(root: &Path, command: &BusinessCommand) -> anyh
                     || record
                         .get("mime_type")
                         .and_then(Value::as_str)
-                        .is_some_and(|value| matches!(value, "text/csv" | "text/tab-separated-values"))
+                        .is_some_and(|value| {
+                            matches!(value, "text/csv" | "text/tab-separated-values")
+                        })
                     || record
                         .get("filename")
                         .and_then(Value::as_str)
@@ -31231,13 +31233,7 @@ fn persist_office_editor_blob(
                 record_field.to_string(),
                 Value::String(record_id.to_string()),
             );
-        upsert_business_record(
-            &tx,
-            chunks_collection,
-            &chunk_id,
-            now,
-            payload.clone(),
-        )?;
+        upsert_business_record(&tx, chunks_collection, &chunk_id, now, payload.clone())?;
         projections.push((chunk_id, payload));
     }
     tx.commit()?;

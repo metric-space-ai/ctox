@@ -9,7 +9,7 @@ use roxmltree::Document;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -2721,12 +2721,13 @@ fn fetch_page_content(
         return Ok(optimized);
     }
 
-    let response = build_agent(config)?
+    let mut request = build_agent(config)?
         .get(&hit.url)
-        .set(
-            "accept",
-            "text/html,application/xhtml+xml,application/xml,text/plain,application/pdf;q=0.9,*/*;q=0.3",
-        )
+        .set("accept", evidence_accept_header(&hit.url));
+    if is_json_api_url(&hit.url) {
+        request = request.set("user-agent", "ctox-research/0.3 (+https://ctox.dev)");
+    }
+    let response = request
         .call()
         .with_context(|| format!("failed to fetch evidence page {}", hit.url))?;
     let http_status = response.status();
@@ -2757,6 +2758,21 @@ fn fetch_page_content(
         content_type,
         final_url,
         http_status,
+    })
+}
+
+fn evidence_accept_header(url: &str) -> &'static str {
+    if is_json_api_url(url) {
+        "application/json,application/problem+json;q=0.9,*/*;q=0.1"
+    } else {
+        "text/html,application/xhtml+xml,application/xml,text/plain,application/pdf;q=0.9,*/*;q=0.3"
+    }
+}
+
+fn is_json_api_url(raw: &str) -> bool {
+    Url::parse(raw).is_ok_and(|url| {
+        let path = url.path().to_ascii_lowercase();
+        path == "/api" || path.starts_with("/api/") || path.ends_with(".json")
     })
 }
 
@@ -8680,6 +8696,17 @@ mod tests {
         );
         assert_eq!(not_found.http_status, Some(404));
         assert!(!not_found.evidence_eligible);
+    }
+
+    #[test]
+    fn json_api_urls_use_api_content_negotiation() {
+        assert!(is_json_api_url("https://zenodo.org/api/records/20111572"));
+        assert!(is_json_api_url("https://example.test/data/source.json"));
+        assert!(!is_json_api_url("https://example.test/research/article"));
+        assert_eq!(
+            evidence_accept_header("https://zenodo.org/api/records/20111572"),
+            "application/json,application/problem+json;q=0.9,*/*;q=0.1"
+        );
     }
 
     #[test]

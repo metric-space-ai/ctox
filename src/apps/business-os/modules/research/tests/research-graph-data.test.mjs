@@ -39,6 +39,7 @@ test('derives a clustered semantic graph with visual weights from research rows'
   assert.ok(projection.links.length > 5);
   assert.ok(projection.topics.length >= 1);
   assert.ok(projection.nodes.every((node) => Number.isFinite(node.importance) && node.visualSize > 0 && node.labelSize > 0));
+  assert.ok(projection.nodes.every((node) => node.visualSize <= 10.6 && node.labelSize <= 9));
   assert.ok(projection.links.every((link) => Number.isFinite(link.curvature) && link.visualWidth > 0));
   assert.ok(projection.nodes.some((node) => node.primary));
 });
