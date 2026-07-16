@@ -54,6 +54,7 @@ function main() {
   assert.equal(builderConfig.mac?.entitlements, "build/entitlements.mac.plist");
   assert.equal(builderConfig.mac?.entitlementsInherit, "build/entitlements.mac.plist");
   assert.equal(builderConfig.afterSign, "scripts/notarize-macos.cjs");
+  assert.equal(builderConfig.afterAllArtifactBuild, "scripts/notarize-macos-artifacts.cjs");
   assert.equal(builderConfig.mac?.notarize, false);
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.entitlements)), "macOS entitlements file is missing");
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.icon)), "desktop icon png is missing");
@@ -67,6 +68,8 @@ function main() {
   assert.equal(builderConfig.appx?.publisherDisplayName, "Michael Welsch");
   const notarizeSource = fs.readFileSync(path.join(appRoot, builderConfig.afterSign), "utf8");
   assert.match(notarizeSource, /isDirOnlyPack/);
+  const artifactNotarizeSource = fs.readFileSync(path.join(appRoot, builderConfig.afterAllArtifactBuild), "utf8");
+  assert.match(artifactNotarizeSource, /\.dmg/);
 
   const mainSource = fs.readFileSync(path.join(appRoot, packageJson.main), "utf8");
   assert.match(mainSource, /configureAutoUpdates/);

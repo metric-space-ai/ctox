@@ -20,7 +20,7 @@ test("signed artifact smoke writes platform evidence for all release targets", (
     const linuxEvidence = runSmoke(tmp, "linux");
     const winEvidence = runSmoke(tmp, "win");
 
-    assertEvidence(macEvidence, "mac", ["appBundle", "infoPlist", "appAsar", "bundledHelper", "signature"]);
+    assertEvidence(macEvidence, "mac", ["appBundle", "infoPlist", "appAsar", "bundledHelper", "dmg", "signature"]);
     assert.equal(macEvidence.checks.signature.skipped, true);
     assert.equal(macEvidence.checks.bundledHelper.executable, true);
     assertEvidence(linuxEvidence, "linux", ["appImage", "deb", "unpackedApp", "appAsar", "bundledHelper"]);
@@ -87,6 +87,7 @@ function assertEvidence(evidence, platform, checkKeys) {
 
 function createMacFixture(root) {
   const app = path.join(root, "mac-arm64", "CTOX Business-OS Desktop Beta.app");
+  writeFile(path.join(root, "CTOX Business-OS Desktop Beta.dmg"), "dmg");
   writeFile(path.join(app, "Contents", "Info.plist"), "<plist></plist>");
   writeFile(path.join(app, "Contents", "Resources", "app.asar"), "asar");
   writeExecutable(path.join(app, "Contents", "Resources", "ctox", "ctox"), "#!/bin/sh\n");
