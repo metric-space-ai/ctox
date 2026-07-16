@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { build } from 'esbuild';
+
+const explorerSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
 
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./app.js', import.meta.url))],
@@ -63,6 +66,16 @@ describe('Explorer app helpers', () => {
       && doc.path === '/CTOX'
       && doc.name === 'CTOX'
     )));
+  });
+
+  it('waits for desktop file replication before seeding and rendering Files', () => {
+    const replicationStart = explorerSource.indexOf("startCollection?.('desktop_files')");
+    const seedStart = explorerSource.indexOf('await ensureFileSystem(ctx.db)');
+    const renderStart = explorerSource.indexOf('await selectSource(FILE_SOURCE)');
+
+    assert.ok(replicationStart >= 0, 'Files must explicitly start desktop_files replication');
+    assert.ok(replicationStart < seedStart, 'native file metadata must arrive before browser seeds');
+    assert.ok(seedStart < renderStart, 'the populated collection must be rendered last');
   });
 
   it('validates new folder and rename inputs before persistence', () => {

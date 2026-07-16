@@ -131,6 +131,8 @@ export async function mount(container, ctx) {
   renderHeader();
   Promise.resolve()
     .then(async () => {
+      const fileBridge = await ctx.sync?.startCollection?.('desktop_files');
+      if (fileBridge) await waitForReplicationBridge(fileBridge, 'desktop_files');
       await ensureFileSystem(ctx.db);
       if (disposed) return;
       await selectSource(FILE_SOURCE);
