@@ -1890,6 +1890,7 @@ function wireShellActions() {
       renderShellCtoxWarning(state.ctoxHealth);
       renderShellCtoxVersion(state.ctoxHealth);
       postCurrentPreferencesToModule();
+      remountActiveModuleForLocale();
     } else if (control.matches('[data-theme-select]')) {
       applyShellTheme(control.value);
       syncHeaderControls();
@@ -4228,6 +4229,19 @@ function applyShellLanguage(lang, options = {}) {
   if (options.persist !== false) {
     writeAccountPrefs({ language: value });
   }
+}
+
+// Language-dependent module markup (labels, clock/date, static strings) is
+// bound at mount time from ctx.locale, so a live language switch does not
+// reach already-mounted modules. Re-mount the active in-process module so it
+// re-reads the freshly-applied locale. Windowed desktop apps receive the
+// preference event dispatched by postCurrentPreferencesToModule() instead.
+function remountActiveModuleForLocale() {
+  const active = state.activeModule;
+  if (!active?.id) return;
+  openModule(active.id, { force: true, isNavHistory: true }).catch((error) => {
+    console.warn('[business-os] locale remount failed:', error);
+  });
 }
 
 // Translate the static shell chrome markup (index.html ships German defaults).
