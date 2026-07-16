@@ -150,8 +150,9 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ matrix.builderPlatform == 'mac' && secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.builderPlatform == 'mac' && secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.builderPlatform == 'win' && 'false' || 'true' }}
           CTOX_WINDOWS_STORE_RELEASE: ${{ matrix.builderPlatform == 'win' && '1' || '0' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
