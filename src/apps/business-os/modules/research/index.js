@@ -341,6 +341,7 @@ const state = {
     reloadCount: 0,
     postSyncRefreshes: 0,
   },
+  initialDataReady: false,
   refreshTimer: null,
   cleanup: [],
   contextMenu: null,
@@ -353,6 +354,7 @@ export async function mount(ctx) {
   state.mountToken = mountToken;
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  state.initialDataReady = false;
 
   // Load dynamic translations
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
@@ -389,8 +391,12 @@ export async function mount(ctx) {
   wireRealtime();
   wireSyncDiagnosticsRefresh();
   startResearchCollections(mountToken)
-    .then(() => {
+    .then(async () => {
       if (state.mountToken !== mountToken) return;
+      await refreshAll({ seed: true, mountToken });
+      if (state.mountToken !== mountToken) return;
+      state.initialDataReady = true;
+      render();
       queueKnowledgeRefreshAfter(300);
       queueKnowledgeRefreshAfter(2500);
       queueKnowledgeRefreshAfter(6500);
@@ -448,13 +454,32 @@ async function startResearchCollections(mountToken) {
         }
         state.syncLeases.add(lease);
       } else {
-        await state.ctx.sync.startCollection(collection);
+        const bridge = await state.ctx.sync.startCollection(collection);
+        if (RESEARCH_REQUIRED_COLLECTIONS.includes(collection) && bridge) {
+          await waitForReplicationBridge(bridge, collection);
+        }
       }
       markCollectionDiagnostic(collection, 'sync', 'ok', state.t('syncReady', 'Sync bereit'));
     } catch (error) {
       markCollectionDiagnostic(collection, 'sync', 'failed', errorMessage(error));
     }
   }));
+}
+
+async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
+  const bridgeState = bridge?.state;
+  const wait = typeof bridgeState?.awaitInSync === 'function'
+    ? bridgeState.awaitInSync.bind(bridgeState)
+    : typeof bridgeState?.awaitInitialReplication === 'function'
+      ? bridgeState.awaitInitialReplication.bind(bridgeState)
+      : null;
+  if (!wait) return;
+  await Promise.race([
+    wait(),
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${collection} replication did not become ready in time`)), timeoutMs);
+    }),
+  ]);
 }
 
 async function ensureStyles() {
@@ -1181,6 +1206,12 @@ function renderNoSourcesEmpty(task) {
 }
 
 function emptyStateForNoTask() {
+  if (!state.initialDataReady) {
+    return {
+      title: state.t('loadingKnowledge', 'Knowledge wird geladen...'),
+      body: state.t('syncingResearchData', 'Research-Daten werden mit dieser Instanz synchronisiert.'),
+    };
+  }
   const failure = diagnosticFailures()[0];
   if (failure) {
     return {

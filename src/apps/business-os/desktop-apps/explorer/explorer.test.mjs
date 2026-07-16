@@ -80,12 +80,20 @@ describe('Explorer app helpers', () => {
   });
 
   it('replicates each selected Business OS source through the scoped Files facade', () => {
-    assert.match(explorerSource, /startCollection\?\.\(state\.activeSource\.id\)/);
+    assert.match(explorerSource, /const collectionId = sourceCollectionId\(state\.activeSource\)[\s\S]*?startCollection\?\.\(collectionId\)/);
     const scope = shellSource.match(/explorer: \[([\s\S]*?)\],/);
     assert.ok(scope, 'Files must have an explicit packaged-system data scope');
     for (const collection of ['documents', 'spreadsheets', 'knowledge_items', 'matching_objects', 'outbound_companies']) {
       assert.match(scope[1], new RegExp(`'${collection}'`));
     }
+  });
+
+  it('offers discoverable recent-file views and explicit sort choices', () => {
+    assert.match(explorerSource, /label: 'Zuletzt erstellt'[\s\S]*?recentSort: 'created'/);
+    assert.match(explorerSource, /label: 'Zuletzt geändert'[\s\S]*?recentSort: 'modified'/);
+    assert.match(explorerSource, /data-explorer-sort aria-label="Sortieren"/);
+    assert.match(explorerSource, /<option value="created">Erstellt: neueste<\/option>/);
+    assert.match(explorerSource, /activeData\.filter\(\(item\) => item\.kind !== 'folder'\)\.map\(normalizeFileRow\)/);
   });
 
   it('registers installed source schemas before mounting Files', () => {

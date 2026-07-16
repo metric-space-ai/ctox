@@ -15,9 +15,13 @@ export const manifest = {
 
 const ROOT_ID = 'fs_root';
 const CHUNK_SIZE = 16 * 1024;
-const FILE_SOURCE = { id: 'desktop_files', label: 'Files', section: 'On this Desktop', mark: 'FS', moduleId: null, kind: 'File System', filesystem: true };
+const FILE_SOURCE = { id: 'desktop_files', label: 'Files', section: 'On this Desktop', mark: 'FS', moduleId: null, kind: 'File System', filesystem: true, fileCollection: true };
+const RECENT_CREATED_SOURCE = { id: 'recent_created', collectionId: 'desktop_files', label: 'Zuletzt erstellt', section: 'On this Desktop', mark: 'NEU', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'created' };
+const RECENT_MODIFIED_SOURCE = { id: 'recent_modified', collectionId: 'desktop_files', label: 'Zuletzt geändert', section: 'On this Desktop', mark: 'ZEIT', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'modified' };
 const SOURCES = [
   FILE_SOURCE,
+  RECENT_CREATED_SOURCE,
+  RECENT_MODIFIED_SOURCE,
   { id: 'documents', label: 'Documents', section: 'Business OS', mark: 'DOC', moduleId: 'documents', kind: 'Document' },
   { id: 'spreadsheets', label: 'Spreadsheets', section: 'Business OS', mark: 'XLS', moduleId: 'spreadsheets', kind: 'Spreadsheet' },
   { id: 'knowledge_items', label: 'Knowledge', section: 'Business OS', mark: 'KNO', moduleId: 'knowledge', kind: 'Knowledge' },
@@ -29,6 +33,7 @@ const SORTERS = {
   name: (a, b) => labelFor(a).localeCompare(labelFor(b), undefined, { sensitivity: 'base' }),
   kind: (a, b) => kindFor(a).localeCompare(kindFor(b), undefined, { sensitivity: 'base' }),
   modified: (a, b) => timestampFor(b) - timestampFor(a),
+  created: (a, b) => Number(b.raw?.created_at_ms || 0) - Number(a.raw?.created_at_ms || 0),
 };
 
 export async function mount(container, ctx) {
@@ -75,6 +80,12 @@ export async function mount(container, ctx) {
               <span data-explorer-count></span>
             </div>
             <div class="app-explorer-view-toggle" aria-label="Ansicht">
+              <select data-explorer-sort aria-label="Sortieren">
+                <option value="modified">Geändert: neueste</option>
+                <option value="created">Erstellt: neueste</option>
+                <option value="name">Name</option>
+                <option value="kind">Art</option>
+              </select>
               <button type="button" class="is-active">Details</button>
             </div>
           </div>
@@ -101,11 +112,16 @@ export async function mount(container, ctx) {
     newFolder: container.querySelector('[data-explorer-new-folder]'),
     upload: container.querySelector('[data-explorer-upload]'),
     fileInput: container.querySelector('[data-explorer-file-input]'),
+    sort: container.querySelector('[data-explorer-sort]'),
   };
 
   renderSidebar();
   refs.search.addEventListener('input', () => {
     state.query = refs.search.value.trim();
+    renderRows();
+  });
+  refs.sort.addEventListener('change', () => {
+    state.sort = refs.sort.value || 'modified';
     renderRows();
   });
   refs.up.addEventListener('click', goUp);
@@ -156,6 +172,8 @@ export async function mount(container, ctx) {
     state.selectedId = '';
     refs.search.value = '';
     state.query = '';
+    state.sort = source.recentSort || state.sort;
+    refs.sort.value = state.sort;
     refs.root.classList.toggle('is-filesystem', Boolean(source.filesystem));
     renderSidebar();
     if (source.moduleId) await ctx.ensureModuleData?.(source.moduleId);
@@ -167,8 +185,9 @@ export async function mount(container, ctx) {
     refs.preview.innerHTML = emptyPreview();
     revokePreviewUrl();
     try {
-      const bridge = await ctx.sync?.startCollection?.(state.activeSource.id);
-      if (bridge) await waitForReplicationBridge(bridge, state.activeSource.id);
+      const collectionId = sourceCollectionId(state.activeSource);
+      const bridge = await ctx.sync?.startCollection?.(collectionId);
+      if (bridge) await waitForReplicationBridge(bridge, collectionId);
     } catch (error) {
       state.rows = [];
       state.lastLoad = {
@@ -182,7 +201,8 @@ export async function mount(container, ctx) {
       renderRows();
       return;
     }
-    const collection = ctx.db?.collection?.(state.activeSource.id);
+    const collectionId = sourceCollectionId(state.activeSource);
+    const collection = ctx.db?.collection?.(collectionId);
     if (!collection) {
       state.rows = [];
       state.lastLoad = {
@@ -190,7 +210,7 @@ export async function mount(container, ctx) {
         reason: 'missing_collection',
         total: 0,
         visible: 0,
-        message: `Collection "${state.activeSource.id}" ist nicht verfügbar.`,
+        message: `Collection "${collectionId}" ist nicht verfügbar.`,
       };
       renderHeader();
       renderRows();
@@ -201,12 +221,14 @@ export async function mount(container, ctx) {
       if (disposed) return;
       const data = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
       const activeData = data.filter((item) => !item.is_deleted);
-      if (isFilesystemSource()) {
+      if (isFileCollectionSource()) {
         state.folderDocs = new Map(activeData.filter((item) => item.kind === 'folder').map((item) => [item.id, item]));
       } else {
         state.folderDocs = new Map();
       }
-      state.rows = normalizeRowsForSource(data, state.activeSource, state.currentFolderId);
+      state.rows = state.activeSource.recentSort
+        ? activeData.filter((item) => item.kind !== 'folder').map(normalizeFileRow)
+        : normalizeRowsForSource(data, state.activeSource, state.currentFolderId);
       state.lastLoad = {
         ok: true,
         reason: '',
@@ -304,6 +326,7 @@ export async function mount(container, ctx) {
       button.setAttribute('aria-sort', button.dataset.sort === state.sort ? 'descending' : 'none');
       button.addEventListener('click', () => {
         state.sort = button.dataset.sort || 'modified';
+        refs.sort.value = state.sort;
         renderRows();
       });
     });
@@ -669,6 +692,14 @@ export async function mount(container, ctx) {
 
   function isFilesystemSource() {
     return state.activeSource.filesystem === true;
+  }
+
+  function isFileCollectionSource() {
+    return state.activeSource.fileCollection === true;
+  }
+
+  function sourceCollectionId(source) {
+    return source.collectionId || source.id;
   }
 
   function activeDocumentQueryForSource(source) {
@@ -1148,6 +1179,7 @@ function ensureStyles() {
     .app-explorer-view-toggle { display: inline-flex; gap: 4px; }
     .app-explorer-nav button,
     .app-explorer-actions button,
+    .app-explorer-view-toggle select,
     .app-explorer-view-toggle button,
     .app-explorer-preview button,
     .app-explorer-name-dialog button,
@@ -1273,6 +1305,15 @@ function ensureStyles() {
     .app-explorer-heading strong { font-size: 13px; }
     .app-explorer-heading span { color: var(--muted); font-size: 11px; }
     .app-explorer-view-toggle button { min-height: 26px; color: var(--muted); }
+    .app-explorer-view-toggle select {
+      min-height: 26px;
+      max-width: 150px;
+      border: 1px solid var(--hairline, var(--line));
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--surface) 76%, var(--surface-2));
+      color: var(--text);
+      padding: 0 24px 0 8px;
+    }
     .app-explorer-view-toggle button.is-active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); }
     .app-explorer-table {
       min-height: 0;

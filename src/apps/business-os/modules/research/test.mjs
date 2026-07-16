@@ -20,6 +20,7 @@ async function importBrowserBundle(relativePath) {
 }
 
 const { __researchTestHooks: hooks } = await importBrowserBundle('./index.js');
+const researchSource = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 
 const bases = [
   { domain: 'research/vendor-ai-agents', title: 'Vendor AI Agents' },
@@ -135,6 +136,13 @@ test('empty dashboard keeps standard header and disabled workbench controls', ()
   assert.match(markup, /disabled/);
   assert.match(markup, /Quellensuche|Source search/);
   assert.doesNotMatch(markup, /Reload Diagnose|Collection|Sync-Diagnosen|rows/);
+});
+
+test('initial research loading cannot masquerade as an empty knowledge base', () => {
+  assert.match(researchSource, /initialDataReady: false/);
+  assert.match(researchSource, /await waitForReplicationBridge\(bridge, collection\)/);
+  assert.match(researchSource, /if \(!state\.initialDataReady\)[\s\S]*?Research-Daten werden mit dieser Instanz synchronisiert/);
+  assert.match(researchSource, /await refreshAll\(\{ seed: true, mountToken \}\)[\s\S]*?state\.initialDataReady = true/);
 });
 
 test('research module catalog grants knowledge and document collections', async () => {
