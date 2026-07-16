@@ -749,7 +749,27 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         },
         rank: 1,
     };
-    let (doc, _) = build_evidence_doc(&config, &read_query, &hit)?;
+    let (doc, _) = match build_evidence_doc(&config, &read_query, &hit) {
+        Ok(result) => result,
+        Err(primary_error) => {
+            let Some(fallback_url) = canonical_read_fallback_url(&url) else {
+                return Err(primary_error);
+            };
+            crate::egress::assert_fetchable_url(&fallback_url)?;
+            let fallback_hit = SearchHit {
+                title: display_url(&fallback_url),
+                url: fallback_url,
+                snippet: hit.snippet.clone(),
+                source: format!("{}_canonical_fallback", hit.source),
+                rank: hit.rank,
+            };
+            build_evidence_doc(&config, &read_query, &fallback_hit).with_context(|| {
+                format!(
+                    "primary read failed ({primary_error:#}); canonical source fallback also failed"
+                )
+            })?
+        }
+    };
     let mut find_results = request
         .find
         .iter()
@@ -814,6 +834,23 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         // cache-loaded pages from older CTOX versions return null.
         "raw_html": doc.raw_html,
     }))
+}
+
+fn canonical_read_fallback_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim_start_matches("www.");
+    if host != "zenodo.org" {
+        return None;
+    }
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    if segments.len() == 2
+        && matches!(segments[0], "record" | "records")
+        && segments[1].chars().all(|ch| ch.is_ascii_digit())
+    {
+        Some(format!("https://zenodo.org/api/records/{}", segments[1]))
+    } else {
+        None
+    }
 }
 
 /// Resolve the source module that owns the given URL's host.
@@ -8707,6 +8744,20 @@ mod tests {
             evidence_accept_header("https://zenodo.org/api/records/20111572"),
             "application/json,application/problem+json;q=0.9,*/*;q=0.1"
         );
+    }
+
+    #[test]
+    fn zenodo_record_pages_have_canonical_api_fallbacks() {
+        assert_eq!(
+            canonical_read_fallback_url("https://zenodo.org/records/15856431").as_deref(),
+            Some("https://zenodo.org/api/records/15856431")
+        );
+        assert_eq!(
+            canonical_read_fallback_url("https://www.zenodo.org/record/20111572").as_deref(),
+            Some("https://zenodo.org/api/records/20111572")
+        );
+        assert!(canonical_read_fallback_url("https://zenodo.org/search?q=propeller").is_none());
+        assert!(canonical_read_fallback_url("https://example.org/records/15856431").is_none());
     }
 
     #[test]

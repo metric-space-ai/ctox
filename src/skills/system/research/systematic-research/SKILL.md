@@ -91,9 +91,11 @@ the same regardless of which output mode you pick.
    data. Use the source-class priority below.
 3. **Source-catalog table**: open a `source_catalog` table in
    `ctox knowledge data` (one row per candidate source, with provenance,
-   source-class tag, and a one-line note on what it contributes). Library
-   and decision-report mode both read from it. Build it up before drafting
-   the actual library schema or report blueprint.
+   source-class tag, verification state, snapshot hash, directness status, and a
+   one-line note on what it contributes). Candidate rows are discovery
+   receipts, not evidence. Library and decision-report mode may read only
+   rows whose `evidence_eligible` field is `true`. Build and verify the catalog
+   before drafting the actual library schema or report blueprint.
 4. **Schema/blueprint inference**: only after the source set is solid,
    decide what columns the library row needs (or which report-type
    blueprint fits). The schema is shaped by what the sources actually
@@ -110,11 +112,13 @@ for what the higher classes did not cover, not a starting point.
 - government technical-report repositories: NASA NTRS (ntrs.nasa.gov),
   DoD Defense Technical Information Center (apps.dtic.mil), DOE OSTI
   (osti.gov), national lab repositories, agency-hosted PDFs
-- scholarly literature: Google Scholar (scholar.google.com), Semantic
-  Scholar, OpenAlex, arXiv, ResearchGate, IEEE Xplore, SAE Mobilus, ACM
+- scholarly literature: Google Scholar (discovery only), Semantic Scholar
+  and OpenAlex (metadata discovery), arXiv, IEEE Xplore, SAE Mobilus, ACM
   Digital Library, Elsevier/Springer/Wiley DOIs
 - public dataset repositories: Zenodo, Figshare, Dataverse, HuggingFace
-  Datasets, Open Science Framework (OSF), Kaggle
+  Datasets, Open Science Framework (OSF). Kaggle is discovery-only unless
+  the record is demonstrably uploaded by the original data owner and its
+  files/checksums match the canonical source.
 - domain-specific reference databases (examples — adapt per topic):
   - aerospace/UAV: UIUC Propeller Database (m-selig.ae.illinois.edu),
     NASA MTB2 (rotorcraft.arc.nasa.gov), DARPA briefings, AIAA papers
@@ -146,6 +150,16 @@ Industry datasheets give you MTOW and headline specs; they do not give
 you measured rotor loads, fatigue curves, vibration spectra, or
 qualification-test reports.
 
+**Discovery-only aggregators — never cite as primary evidence**:
+
+- ResearchGate, Academia.edu, Google Scholar result pages, Semantic Scholar
+  and OpenAlex metadata pages, DOI resolver pages without extracted source
+  content, Kaggle reuploads, GitHub link/resource lists, and search snippets
+- use these only to locate the publisher, institutional repository, original
+  dataset owner, DOI, lawful open-access full text, or canonical data archive
+- a reachable aggregator does not inherit the authority of the source it
+  links to
+
 ### Discovery tools — strict ordering
 
 For technical/engineering/scientific topics, use the CTOX web stack in
@@ -164,9 +178,12 @@ catalog has its first entries.
    dataset + industry buckets into one ranked envelope. Use `--depth
    exhaustive --max-sources 40` when the catalog needs to be
    near-complete. The output JSON carries one entry per source with
-   `url`, `title`, `bucket`, `summary` — feed those directly into the
-   source-catalog. Do not invent URLs from training-data memory; only
-   record what this call (or the follow-up reads) returned.
+   `url`, `title`, `source_type`, `source_tier`, `verification_status`,
+   `canonical_url`, `transport_verified`, `content_extracted`, `evidence_eligible`,
+   `evidence_rejection_reason`, `http_status`, and `snapshot_hash`. Feed
+   those directly into the candidate source catalog. Do not invent URLs
+   from training-data memory; only record what this call (or the follow-up
+   reads) returned.
 
 2. **`ctox web scholarly search`** — for second-pass DOI / open-access
    PDF enrichment of specific entries that `deep-research` flagged but
@@ -208,6 +225,33 @@ will skew toward Tier 3, the catalog will miss the Tier 1 measurement
 data the deliverable actually needs, and the result will not be
 durable.
 
+### Evidence promotion - mandatory fail-closed gate
+
+Discovery results are candidates. Promote a candidate to evidence only
+after all applicable checks below pass:
+
+1. **Transport**: the canonical URL returned a successful response and CTOX
+   persisted a snapshot with a content hash.
+2. **Extraction**: the snapshot contains meaningful source content. A title,
+   cookie wall, login form, empty JavaScript shell, metadata card, or search
+   snippet is not evidence.
+3. **Directness**: the URL belongs to the publisher, institution, original
+   data owner, standards body, or lawful repository that hosts the actual
+   source. Mirrors, DOI resolver pages, and aggregators remain discovery-only.
+4. **Relevance**: the extracted content directly supports the research facet.
+   Shared keywords, adjacent domains, or a generic resource list do not pass.
+5. **Contribution**: classify the source as `direct_measurement`, `derived`,
+   `method`, `standard`, `manufacturer`, or `secondary`. Do not represent a
+   method paper or secondary summary as measured evidence.
+6. **Claim trace**: every factual or numerical claim records the exact file,
+   table/figure, row or range, column, unit, conversion, and derivation needed
+   to reproduce it. If the source cannot support that trace, the claim is not
+   eligible.
+
+Retain rejected candidates with their rejection reason for auditability, but
+exclude them from knowledge construction, calculations, and report evidence
+registers. Never fill a failed or missing read from model memory.
+
 ### Breadth before depth — facet the query, never settle for one pull
 
 A single `ctox web deep-research --query "<topic>"` returns one ranked
@@ -215,16 +259,17 @@ envelope. Ranking favors well-cited, canonical sources, so a single broad
 query converges on the obvious references and leaves the long tail of
 niche Tier-1 sources below the `--max-sources` cutoff — they never surface.
 One pull is a starting point, not a complete discovery. Treat discovery as
-a serial sweep, not a single call:
+a controlled facet sweep, not a single call:
 
 1. **Facet the topic into orthogonal sub-queries.** Decompose the topic
    into independent angles that each surface a different ranked list —
    e.g. by source-class, by sub-phenomenon, by data type, by methodology,
    or by regime/region. Each facet is its own `ctox web deep-research`
-   call. Run them **one after another in the same turn** — CTOX has no
-   parallel sub-agents; decomposition is serial. If the sweep needs to
-   span turns, persist a internal work item and resume. Vary the query string
-   between calls; re-issuing the same query just returns the same top hits.
+   call. Run dependent facets serially. Independent, orthogonal facets may use
+   bounded subagents, but the parent owns deduplication, verification, and
+   promotion decisions. If the sweep needs to span turns, persist an internal
+   work item and resume. Vary the query string between calls; re-issuing the
+   same query just returns the same top hits.
 
 2. **Exclude what you already hold.** The source-catalog table you are
    appending to *is* your exclusion list. Before each new facet, steer the
@@ -261,6 +306,23 @@ call. Reasons:
 - Provenance is preserved at row level: each row records `source_url`,
   `extracted_at`, the discovery query that found it, and the bucket
   the upstream tool assigned (`scholarly`, `agency`, `dataset`, …).
+
+After persisting a candidate batch, read each new canonical source and update
+its verification fields before another phase consumes it. A batch is not
+complete while any candidate lacks an explicit `eligible` or `rejected`
+decision.
+
+Before closing discovery, run three independent reviews over the persisted
+receipts:
+
+- **Source auditor**: reopens every eligible canonical URL and confirms
+  authority, content extraction, topical relevance, and snapshot hash.
+- **Data auditor**: reproduces every imported numeric field from the original
+  archive/table and verifies units, parsing, conversions, nulls, and row counts.
+- **Claim auditor**: checks each knowledge statement and report claim against
+  eligible source or data receipts and rejects unsupported strength or scope.
+
+The parent agent resolves disagreements and owns the final promotion decision.
 
 ## Phase 2A — Library mode
 
@@ -310,6 +372,11 @@ Curation discipline (non-negotiable):
   list across two tables. Use `--tag` or a dedicated column for subsets.
 - **Cite the table back**: when you report numbers in chat, name `domain`,
   `table_key`, and the snapshot timestamp.
+- **Locale-safe numeric storage**: store machine-readable numbers with `.` as
+  decimal separator and no thousands separator. Keep units in typed columns or
+  column metadata, never in numeric cells. German `,` formatting is a display
+  or explicitly declared export presentation only; CSV exports must declare
+  delimiter, encoding, decimal convention, and preserve Excel-safe columns.
 
 When the library work crosses into analysis that exceeds counts and simple
 group-bys (clustering, modeling, hypothesis tests, complex joins, custom

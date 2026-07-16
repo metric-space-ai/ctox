@@ -82,14 +82,20 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
     source_type: 'dataset',
     source_url: 'https://example.test/valid',
     verification_status: 'verified',
+    transport_verified: true,
+    content_extracted: true,
     http_status: 200,
     snapshot_hash: 'sha256:valid',
+    canonical_url: 'https://example.test/valid',
     evidence_eligible: true,
     source_tier: 'primary',
   };
   const rows = [
     valid,
     { ...valid, source_id: 'not-found', title: '404 candidate', http_status: 404 },
+    { ...valid, source_id: 'transport', title: 'Unverified transport', transport_verified: false },
+    { ...valid, source_id: 'empty', title: 'Empty source shell', content_extracted: false },
+    { ...valid, source_id: 'no-canonical', title: 'Canonical URL missing', canonical_url: '' },
     { ...valid, source_id: 'metadata', title: 'Metadata only candidate', metadata_only: true },
     { ...valid, source_id: 'off-topic', title: 'Fachfremde candidate', relevance_status: 'fachfremd' },
     { ...valid, source_id: 'rejected', title: 'Rejected candidate', verification_status: 'rejected', review_status: 'rejected' },
@@ -103,13 +109,13 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
   assert.ok(byId.get('valid').score > 4);
   assert.notEqual(byId.get('valid').dimensions.evidence_strength, null);
 
-  for (const id of ['not-found', 'metadata', 'off-topic', 'rejected', 'aggregated', 'legacy']) {
+  for (const id of ['not-found', 'transport', 'empty', 'no-canonical', 'metadata', 'off-topic', 'rejected', 'aggregated', 'legacy']) {
     const model = byId.get(id);
     assert.equal(model.evidenceEligible, false, id);
     assert.equal(model.score, null, id);
     assert.equal(model.grade, '—', id);
     assert.equal(model.dimensions.evidence_strength, null, id);
-    assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata only|Rejected|Aggregated|Legacy|not verified/i, id);
+    assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata only|Rejected|Aggregated|Legacy|not verified|Transport not verified|No source content extracted|Canonical source missing/i, id);
   }
   assert.deepEqual(models.filter((model) => model.evidenceEligible).map((model) => model.id), ['valid']);
   assert.equal(hooks.formatPortfolioScore(null), '—');
