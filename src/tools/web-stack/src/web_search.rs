@@ -873,7 +873,23 @@ fn render_direct_web_read_payload(
 }
 
 fn evidence_doc_has_meaningful_content(doc: &EvidenceDoc) -> bool {
-    !doc.summary.trim().is_empty() || !doc.excerpts.is_empty() || !doc.find_results.is_empty()
+    is_meaningful_evidence_text(&doc.summary)
+        || doc
+            .excerpts
+            .iter()
+            .any(|excerpt| is_meaningful_evidence_text(excerpt))
+        || doc.find_results.iter().any(|result| {
+            result
+                .matches
+                .iter()
+                .any(|text| is_meaningful_evidence_text(text))
+        })
+}
+
+fn is_meaningful_evidence_text(text: &str) -> bool {
+    let normalized = normalize_ws(text);
+    normalized.chars().count() >= 32
+        && normalized.chars().filter(|ch| ch.is_alphabetic()).count() >= 16
 }
 
 fn canonical_read_fallback_url(url: &str) -> Option<String> {
@@ -1006,6 +1022,10 @@ fn ctox_web_search_payload(
         .iter()
         .map(|hit| {
             let evidence = find_matching_evidence_doc(&result.evidence, &hit.url);
+            let transport_verified = evidence
+                .is_some_and(|doc| doc.verification_status == "verified"
+                    && doc.http_status.is_some_and(|status| (200..300).contains(&status)));
+            let content_extracted = evidence.is_some_and(evidence_doc_has_meaningful_content);
             json!({
                 "title": hit.title,
                 "url": hit.url,
@@ -1013,9 +1033,11 @@ fn ctox_web_search_payload(
                 "snippet": hit.snippet,
                 "source": hit.source,
                 "rank": hit.rank,
-                "verification_status": "unverified",
+                "verification_status": evidence.map(|doc| doc.verification_status.clone()).unwrap_or_else(|| "unverified".to_string()),
                 "discovery_status": "discovered",
                 "discovery_score": discovery_score_for_hit(hit, query_text),
+                "transport_verified": transport_verified,
+                "content_extracted": content_extracted,
                 "evidence_eligible": evidence.map(|doc| doc.evidence_eligible).unwrap_or(false),
                 "checked_at": evidence.and_then(|doc| nonzero_checked_at(doc)),
                 "http_status": evidence.and_then(|doc| doc.http_status),
@@ -1058,6 +1080,10 @@ fn ctox_web_search_payload(
         "citations": result
             .hits
             .iter()
+            .filter(|hit| {
+                find_matching_evidence_doc(&result.evidence, &hit.url)
+                    .is_some_and(|doc| doc.evidence_eligible)
+            })
             .take(3)
             .map(|hit| json!({ "title": hit.title, "url": hit.url }))
             .collect::<Vec<_>>(),
@@ -6433,7 +6459,7 @@ fn best_paragraphs_for_query(query: &str, paragraphs: &[String], limit: usize) -
         .map(|(_, _, paragraph)| paragraph.clone())
         .collect::<Vec<_>>();
 
-    if selected.is_empty() {
+    if selected.is_empty() && terms.is_empty() {
         let cleaned_fallback = clean_candidate_paragraphs(paragraphs.to_vec());
         if cleaned_fallback.is_empty() {
             selected = paragraphs
@@ -6496,7 +6522,7 @@ fn best_pdf_paragraphs_for_query(
         .map(|(_, _, page_number, paragraph)| format_pdf_excerpt(*page_number, paragraph))
         .collect::<Vec<_>>();
 
-    if selected.is_empty() {
+    if selected.is_empty() && terms.is_empty() {
         selected = sections
             .iter()
             .filter(|section| !section.text.trim().is_empty())
@@ -6505,7 +6531,7 @@ fn best_pdf_paragraphs_for_query(
             .collect();
     }
 
-    if selected.is_empty() && !fallback_text.trim().is_empty() {
+    if selected.is_empty() && terms.is_empty() && !fallback_text.trim().is_empty() {
         selected.push(trim_text(fallback_text, 240));
     }
 
@@ -6521,21 +6547,25 @@ fn format_pdf_excerpt(page_number: Option<u32>, text: &str) -> String {
 }
 
 fn score_paragraph_for_query(query: &str, terms: &[String], paragraph: &str) -> usize {
-    if paragraph.trim().is_empty() || is_low_value_paragraph(paragraph) {
+    if paragraph.trim().is_empty() {
         return 0;
     }
 
     let lowered = paragraph.to_ascii_lowercase();
     let query_lowered = query.to_ascii_lowercase();
+    let exact_query_match = query_lowered.len() >= 5 && lowered.contains(query_lowered.as_str());
+    if is_low_value_paragraph(paragraph) && !exact_query_match {
+        return 0;
+    }
     let term_hits = terms
         .iter()
         .filter(|term| lowered.contains(term.as_str()))
         .count();
     let mut score = term_hits * 100;
-    if query_lowered.len() >= 10 && lowered.contains(query_lowered.as_str()) {
+    if exact_query_match {
         score += 150;
     }
-    if (80..=420).contains(&paragraph.len()) {
+    if score > 0 && (80..=420).contains(&paragraph.len()) {
         score += 20;
     }
     score
@@ -7754,6 +7784,65 @@ mod tests {
         assert!(r_fenced.contains("Adversarial summary"));
         // The trusted instruction line is emitted before the fence opens.
         assert!(results_ctx[..r_open].contains("Use these web results as external context"));
+    }
+
+    #[test]
+    fn search_payload_preserves_verified_evidence_contract() {
+        let url = "https://example.com/verified".to_string();
+        let result = SearchResponse {
+            provider: "mock".to_string(),
+            hits: vec![SearchHit {
+                title: "Verified source".to_string(),
+                url: url.clone(),
+                snippet: "Measured propeller torque and thrust".to_string(),
+                source: "mock".to_string(),
+                rank: 1,
+            }],
+            evidence: vec![EvidenceDoc {
+                url: url.clone(),
+                canonical_url: url.clone(),
+                title: "Verified source".to_string(),
+                summary: "Measured propeller torque and thrust data.".to_string(),
+                verification_status: "verified".to_string(),
+                checked_at: 1,
+                http_status: Some(200),
+                snapshot_hash: Some("sha256:test".to_string()),
+                source_tier: Some("primary".to_string()),
+                evidence_eligible: true,
+                is_pdf: false,
+                pdf_total_pages: None,
+                page_sections: Vec::new(),
+                excerpts: vec!["Measured propeller torque and thrust data.".to_string()],
+                page_text: "Measured propeller torque and thrust data.".to_string(),
+                find_results: Vec::new(),
+                raw_html: None,
+            }],
+            executed_queries: vec!["propeller torque thrust".to_string()],
+            source_failures: Vec::new(),
+        };
+
+        let payload = ctox_web_search_payload(
+            "propeller torque thrust",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &result,
+            String::new(),
+        );
+        let row = &payload["results"][0];
+        assert_eq!(row["verification_status"], "verified");
+        assert_eq!(row["transport_verified"], true);
+        assert_eq!(row["content_extracted"], true);
+        assert_eq!(row["evidence_eligible"], true);
+        assert_eq!(payload["citations"][0]["url"], url);
+    }
+
+    #[test]
+    fn paragraph_selection_does_not_promote_unrelated_text() {
+        let paragraphs = vec![
+            "This paragraph discusses medieval manuscript preservation in libraries.".to_string(),
+        ];
+        assert!(best_paragraphs_for_query("propeller torque", &paragraphs, 3).is_empty());
+        assert_eq!(best_paragraphs_for_query("", &paragraphs, 3), paragraphs);
     }
 
     #[test]

@@ -1136,7 +1136,7 @@ fn assess_evidence_promotion(
         return (false, Some("metadata_or_aggregator"));
     }
     match source.get("discovery_score").and_then(Value::as_i64) {
-        Some(score) if score >= 0 => (true, None),
+        Some(score) if score >= 16 => (true, None),
         Some(_) => (false, Some("low_topic_relevance")),
         None => (false, Some("topic_relevance_not_scored")),
     }
@@ -1145,15 +1145,37 @@ fn assess_evidence_promotion(
 fn read_has_meaningful_evidence(read: &Value) -> bool {
     read.get("summary")
         .and_then(Value::as_str)
-        .is_some_and(|text| !text.trim().is_empty())
+        .is_some_and(is_meaningful_evidence_text)
         || read
             .get("excerpts")
             .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(is_meaningful_evidence_text)
+            })
         || read
             .get("find_results")
             .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("matches")
+                        .and_then(Value::as_array)
+                        .is_some_and(|matches| {
+                            matches
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .any(is_meaningful_evidence_text)
+                        })
+                })
+            })
+}
+
+fn is_meaningful_evidence_text(text: &str) -> bool {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.chars().count() >= 32
+        && normalized.chars().filter(|ch| ch.is_alphabetic()).count() >= 16
 }
 
 fn is_likely_reference_collection(source: &Value) -> bool {
@@ -2511,6 +2533,11 @@ mod tests {
             "excerpts": [],
             "find_results": [],
         })));
+        assert!(!read_has_meaningful_evidence(&json!({
+            "summary": "OK",
+            "excerpts": ["ready"],
+            "find_results": [],
+        })));
         assert!(read_has_meaningful_evidence(&json!({
             "summary": "Measured torque and radial load data",
             "excerpts": [],
@@ -2565,6 +2592,13 @@ mod tests {
             assess_evidence_promotion(&source, true, true),
             (false, Some("low_topic_relevance"))
         );
+        source["discovery_score"] = Value::Number(15.into());
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("low_topic_relevance"))
+        );
+        source["discovery_score"] = Value::Number(16.into());
+        assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
     }
 
     #[test]
