@@ -88,6 +88,15 @@ describe('Explorer app helpers', () => {
     }
   });
 
+  it('registers installed source schemas before mounting Files', () => {
+    const schemaModules = shellSource.match(/DESKTOP_APP_SCHEMA_MODULE_IDS = Object\.freeze\(\{[\s\S]*?explorer: Object\.freeze\(\[([\s\S]*?)\]\),/);
+    assert.ok(schemaModules, 'Files must declare the module schemas used by its source providers');
+    for (const moduleId of ['documents', 'spreadsheets', 'knowledge', 'matching', 'outbound']) {
+      assert.match(schemaModules[1], new RegExp(`'${moduleId}'`));
+    }
+    assert.match(shellSource, /schemaModuleIds\.map\(async \(moduleId\) => \{[\s\S]*?registerModuleSchemas\(schemaModule\)/);
+  });
+
   it('gives the packaged Spreadsheets app only its declared system collections', () => {
     const scope = shellSource.match(/spreadsheets: Object\.freeze\(\[([\s\S]*?)\]\),/);
     assert.ok(scope, 'Spreadsheets must have an explicit packaged-system data scope');

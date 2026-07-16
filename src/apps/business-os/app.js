@@ -3764,6 +3764,11 @@ async function openDesktopApp(appId, options = {}) {
   try {
     const moduleDef = state.modules.find((item) => item.id === appId);
     if (moduleDef) await registerModuleSchemas(moduleDef);
+    const schemaModuleIds = DESKTOP_APP_SCHEMA_MODULE_IDS[entry.id] || [];
+    await Promise.all(schemaModuleIds.map(async (moduleId) => {
+      const schemaModule = state.modules.find((item) => item.id === moduleId);
+      if (schemaModule) await registerModuleSchemas(schemaModule);
+    }));
     const appModule = await entry.loader();
     teardown = await appModule.mount(win.container, {
       db: createScopedSystemDbFacade(`desktop-app:${entry.id}`, DESKTOP_APP_DB_COLLECTIONS[entry.id] || []),
@@ -5425,6 +5430,18 @@ const DESKTOP_APP_DB_COLLECTIONS = {
     'desktop_files',
   ],
 };
+
+// Desktop utilities do not own module schemas. Register the installed source
+// modules before mounting utilities that expose their collections.
+const DESKTOP_APP_SCHEMA_MODULE_IDS = Object.freeze({
+  explorer: Object.freeze([
+    'documents',
+    'knowledge',
+    'matching',
+    'outbound',
+    'spreadsheets',
+  ]),
+});
 
 const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
   'app-store': Object.freeze([
