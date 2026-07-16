@@ -146,8 +146,8 @@ function smokeWindowsStorePackage(releaseRoot, storePackage) {
   const manifest = execFileSync("tar", ["-xOf", storePackage, "AppxManifest.xml"], {
     stdio: ["ignore", "pipe", "pipe"],
   }).toString();
-  assert.match(manifest, /Name="MichaelWelsch\.ctox"/);
-  assert.match(manifest, /Publisher="CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66"/);
+  assert.match(manifest, /Name=(["'])MichaelWelsch\.ctox\1/);
+  assert.match(manifest, /Publisher=(["'])CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66\1/);
   console.log(`desktop Store artifact smoke OK (win): ${storePackage}`);
   return createEvidence(releaseRoot, "win", {
     storePackage: fileEvidence(releaseRoot, storePackage),
