@@ -3873,7 +3873,16 @@ fn reload_launchd_user_agent(label: &str, plist_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let domain = format!("gui/{}", unsafe { libc::geteuid() });
+    let domain = {
+        #[cfg(target_os = "macos")]
+        {
+            format!("gui/{}", unsafe { libc::geteuid() })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            anyhow::bail!("launchd user agents are only supported on macOS");
+        }
+    };
     let target = format!("{domain}/{label}");
     let _ = Command::new("launchctl")
         .args(["bootout", target.as_str()])
