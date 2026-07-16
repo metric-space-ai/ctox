@@ -22,7 +22,7 @@ DEPENDENCIES_ROOT_EXPLICIT=0
 [[ -n "${CTOX_DEPENDENCIES_ROOT:-}" ]] && DEPENDENCIES_ROOT_EXPLICIT=1
 
 GREPPY_REPO="https://github.com/metric-space-ai/greppy.git"
-GREPPY_REV="1a1737822ede4988756df1f06669d9d6f9bae599"
+GREPPY_REV="b5a5582e37a02ebf9181423a91313b05d26220b6"
 GREPPY_RUST_TOOLCHAIN="1.95.0"
 
 # CLI flags
@@ -1588,6 +1588,20 @@ SHIMEOF
   chmod +x "$destination"
 }
 
+remove_managed_greppy_grep_shim() {
+  local destination="$1"
+  if [[ ! -e "$destination" && ! -L "$destination" ]]; then
+    printf '%s\n' "absent"
+    return 0
+  fi
+  if grep -q 'CTOX managed greppy shim' "$destination" 2>/dev/null; then
+    rm -f "$destination"
+    printf '%s\n' "removed-managed"
+    return 0
+  fi
+  printf '%s\n' "preserved-existing"
+}
+
 ensure_greppy_tool() {
   local started; started="$(date +%s)"
   tui_module_start "Installing greppy code navigation"
@@ -1612,6 +1626,8 @@ ensure_greppy_tool() {
     git -C "$source_dir" fetch --depth 1 origin "$GREPPY_REV" >/dev/null 2>&1 || return 1
   fi
   git -C "$source_dir" checkout -f "$GREPPY_REV" >/dev/null 2>&1 || return 1
+  [[ -x "$source_dir/tools/fetch_model_assets.sh" ]] || return 1
+  "$source_dir/tools/fetch_model_assets.sh" || return 1
 
   local -a cargo_cmd=("$cargo")
   local rustup; rustup="$(resolve_rustup 2>/dev/null || true)"
@@ -1631,11 +1647,8 @@ ensure_greppy_tool() {
   local greppy_bin="$install_root/bin/greppy"
   [[ -x "$greppy_bin" ]] || return 1
   write_greppy_shim "$BIN_DIR/greppy" "$greppy_bin" 1 || return 1
-  write_greppy_shim "$BIN_DIR/grep" "$greppy_bin" 0 || return 1
-  local grep_shim_status="managed"
-  if ! grep -q 'CTOX managed greppy shim' "$BIN_DIR/grep" 2>/dev/null; then
-    grep_shim_status="preserved-existing"
-  fi
+  local grep_shim_status
+  grep_shim_status="$(remove_managed_greppy_grep_shim "$BIN_DIR/grep")" || return 1
 
   cat > "$root/provenance.json" <<PROVEOF
 {
@@ -1645,7 +1658,7 @@ ensure_greppy_tool() {
   "rust_toolchain": "$GREPPY_RUST_TOOLCHAIN",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "binary": "$greppy_bin",
-  "shims": ["$BIN_DIR/greppy", "$BIN_DIR/grep"],
+  "shims": ["$BIN_DIR/greppy"],
   "greppy_shim_status": "managed",
   "grep_shim_status": "$grep_shim_status"
 }

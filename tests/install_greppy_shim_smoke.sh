@@ -12,8 +12,17 @@ trap cleanup EXIT
 source "$repo_root/install.sh"
 
 if [[ "$GREPPY_REPO@$GREPPY_REV" != \
-  "https://github.com/metric-space-ai/greppy.git@1a1737822ede4988756df1f06669d9d6f9bae599" ]]; then
+  "https://github.com/metric-space-ai/greppy.git@b5a5582e37a02ebf9181423a91313b05d26220b6" ]]; then
   printf 'unexpected Greppy installer provenance: %s@%s\n' "$GREPPY_REPO" "$GREPPY_REV" >&2
+  exit 1
+fi
+
+if ! grep -q 'fetch_model_assets.sh' "$repo_root/install.sh"; then
+  printf 'Greppy installer does not fetch pinned model assets\n' >&2
+  exit 1
+fi
+if grep -q 'write_greppy_shim "\$BIN_DIR/grep"' "$repo_root/install.sh"; then
+  printf 'Greppy installer must not create a global grep shim\n' >&2
   exit 1
 fi
 
@@ -48,6 +57,19 @@ if [[ "$grep_output" != "existing-grep:context auth" ]]; then
 fi
 if grep -q 'CTOX managed greppy shim' "$bin_dir/grep"; then
   printf 'existing grep was overwritten by greppy shim\n' >&2
+  exit 1
+fi
+
+grep_status="$(remove_managed_greppy_grep_shim "$bin_dir/grep")"
+if [[ "$grep_status" != "preserved-existing" || ! -x "$bin_dir/grep" ]]; then
+  printf 'expected existing grep to remain, status=%s\n' "$grep_status" >&2
+  exit 1
+fi
+
+write_greppy_shim "$bin_dir/managed-grep" "$target_one" 1
+managed_status="$(remove_managed_greppy_grep_shim "$bin_dir/managed-grep")"
+if [[ "$managed_status" != "removed-managed" || -e "$bin_dir/managed-grep" ]]; then
+  printf 'expected managed grep shim removal, status=%s\n' "$managed_status" >&2
   exit 1
 fi
 
