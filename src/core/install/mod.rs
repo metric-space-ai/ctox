@@ -3865,6 +3865,7 @@ fn refresh_launchd_signaling_agent(current_root: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn reload_launchd_user_agent(label: &str, plist_path: &Path) -> Result<()> {
     // Unit tests redirect HOME into a temporary directory and only verify the
     // generated contract. Never mutate the operator's real launchd domain from
@@ -3873,16 +3874,7 @@ fn reload_launchd_user_agent(label: &str, plist_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let domain = {
-        #[cfg(target_os = "macos")]
-        {
-            format!("gui/{}", unsafe { libc::geteuid() })
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            anyhow::bail!("launchd user agents are only supported on macOS");
-        }
-    };
+    let domain = format!("gui/{}", unsafe { libc::geteuid() });
     let target = format!("{domain}/{label}");
     let _ = Command::new("launchctl")
         .args(["bootout", target.as_str()])
@@ -3901,6 +3893,14 @@ fn reload_launchd_user_agent(label: &str, plist_path: &Path) -> Result<()> {
         3,
     )?;
     run_launchctl_required_with_retry(["kickstart", "-k", target.as_str()], label, 3)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reload_launchd_user_agent(_label: &str, _plist_path: &Path) -> Result<()> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    anyhow::bail!("launchd user agents are only supported on macOS")
 }
 
 fn run_launchctl_required<const N: usize>(args: [&str; N], label: &str) -> Result<()> {
