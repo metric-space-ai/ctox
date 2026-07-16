@@ -12,9 +12,25 @@ const {
   buildLocalCommandOptions,
   buildLocalPeerArgs,
   localCtoxBinaryCandidates,
+  normalizeLocalInstallOptions,
   normalizeLocalProfile,
   resolveLocalCtoxBinary,
 } = require("../src/main/sources.cjs");
+
+test("local install options use the bundled installer and a user-local CTOX binary", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-local-installer-"));
+  const installScriptPath = path.join(tempRoot, "install.sh");
+  fs.writeFileSync(installScriptPath, "#!/usr/bin/env bash\n", { mode: 0o700 });
+  const options = normalizeLocalInstallOptions({
+    platform: "darwin",
+    installScriptPath,
+    installedCtoxBinary: path.join(tempRoot, "bin", "ctox"),
+  });
+  assert.equal(options.backend, "metal");
+  assert.equal(options.apiProvider, "openai");
+  assert.equal(options.installScriptPath, installScriptPath);
+  assert.equal(options.ctoxBinary, path.join(tempRoot, "bin", "ctox"));
+});
 
 test("local profile validates CLI inputs", () => {
   assert.deepEqual(normalizeLocalProfile({ ctoxBinary: "ctox", ctoxRoot: "/opt/ctox" }), {
@@ -138,6 +154,51 @@ test("local daemon attach stores metadata only and builds webrtc launch", async 
   const launch = await source.getLaunchConfig(instance.id);
   assert.equal(launch.ctoxConfig.transport, "webrtc");
   assert.equal(launch.ctoxConfig.http_bridge_available, false);
+});
+
+test("local fresh install runs installer then registers the ensured peer", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-local-fresh-"));
+  const installScriptPath = path.join(tempRoot, "install.sh");
+  const installedCtoxBinary = path.join(tempRoot, "bin", "ctox");
+  fs.writeFileSync(installScriptPath, "#!/usr/bin/env bash\n", { mode: 0o700 });
+  let registry = createDefaultRegistry();
+  const secrets = new Map();
+  const installs = [];
+  const source = new LocalDaemonInstanceSource(
+    () => registry,
+    (next) => { registry = next; },
+    {
+      get: async (ref) => secrets.get(ref) || "",
+      set: async (ref, value) => secrets.set(ref, value),
+    },
+    {
+      runFreshInstallCommand: async (install) => {
+        installs.push(install);
+        return { ok: true, mode: "fresh" };
+      },
+      runEnsureCommand: async (profile) => ({
+        instance_id: "installed-local",
+        sync_room: "ctox-business-os:installed-local:room",
+        signaling_room_password: "installed-room-secret",
+        signaling_urls: ["wss://signaling.ctox.dev"],
+        native_rxdb_peer_available: true,
+        profile,
+      }),
+    },
+  );
+
+  const result = await source.installFresh({
+    platform: "darwin",
+    installScriptPath,
+    installedCtoxBinary,
+    displayName: "Installed Local",
+  });
+  assert.equal(result.install.mode, "fresh");
+  assert.equal(result.instance.displayName, "Installed Local");
+  assert.equal(result.instance.connection.ctoxBinary, installedCtoxBinary);
+  assert.equal(installs.length, 1);
+  assert.equal(registry.instances.length, 1);
+  assert.equal(JSON.stringify(registry).includes("installed-room-secret"), false);
 });
 
 test("local daemon attach survives app restart without ctox.dev account", async () => {

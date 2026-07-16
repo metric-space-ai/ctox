@@ -22,17 +22,115 @@
           <span id="current-instance-meta">⌘K</span>
         </button>
         <div class="actions">
-          <button id="login-ctox-dev" type="button">ctox.dev</button>
-          <button id="manual-pairing" type="button">Pairing</button>
-          <button id="logout-ctox-dev" type="button">Abmelden</button>
+          <button id="connect-instance" class="primary-action" type="button">Verbinden</button>
         </div>
       </header>
       <main class="content">
         <div id="empty-state" class="empty">
-          <h1>Instanz auswählen</h1>
-          <p>Beta-Version: Verbinde ctox.dev, SSH, lokale oder gekoppelte Instanzen und wechsle danach per Switcher.</p>
-          <button id="empty-open-switcher" type="button">Switcher öffnen</button>
+          <h1>Noch keine Instanz verbunden</h1>
+          <p>Verbinde einen lokalen CTOX-Daemon, einen SSH-Host, eine Einladung oder dein ctox.dev-Konto.</p>
+          <button id="empty-connect-instance" class="primary-action" type="button">Erste Instanz verbinden</button>
         </div>
+        <section id="connection-panel" class="connection-panel" hidden aria-labelledby="connection-title">
+          <div class="surface-header">
+            <div>
+              <h1 id="connection-title">Instanz verbinden</h1>
+              <p id="connection-subtitle">Wähle den Zugang zu deiner CTOX-Instanz.</p>
+            </div>
+            <button id="close-connection" class="icon-button" type="button" aria-label="Verbindung schließen">×</button>
+          </div>
+          <div class="connection-tabs" role="tablist" aria-label="Verbindungsart">
+            <button id="connection-tab-ctox-dev" type="button" role="tab" data-connection-tab="ctox_dev" aria-controls="connection-ctox-dev">ctox.dev</button>
+            <button id="connection-tab-invite" type="button" role="tab" data-connection-tab="invite" aria-controls="connection-invite">Peer2Peer</button>
+            <button id="connection-tab-local" type="button" role="tab" data-connection-tab="local" aria-controls="connection-local">Dieser Rechner</button>
+            <button id="connection-tab-ssh" type="button" role="tab" data-connection-tab="ssh" aria-controls="connection-ssh">Anderer Rechner (SSH)</button>
+          </div>
+          <div id="connection-status" class="connection-status" role="status" aria-live="polite" hidden></div>
+
+          <section id="connection-ctox-dev" class="connection-form" data-connection-pane="ctox_dev">
+            <div class="form-copy">
+              <h2>Mit ctox.dev anmelden</h2>
+              <p>Öffnet die CTOX-Instanzverwaltung in einem separaten Fenster. Dieses Fenster blockiert die anderen Verbindungsarten nicht.</p>
+            </div>
+            <div class="connection-choice-actions">
+              <button id="login-ctox-dev" class="primary-action" type="button">ctox.dev anmelden</button>
+              <button id="logout-ctox-dev" type="button">ctox.dev abmelden</button>
+              <button id="choose-peer-to-peer" type="button">Stattdessen Peer2Peer verbinden</button>
+            </div>
+          </section>
+
+          <form id="connection-local" class="connection-form" data-connection-pane="local">
+            <div class="form-copy">
+              <h2 id="local-form-title">CTOX auf diesem Rechner</h2>
+              <p id="local-form-copy">Installiere CTOX oder verbinde eine bereits vorhandene lokale Installation.</p>
+            </div>
+            <div class="form-grid">
+              <label class="span-two">Vorgang<select id="local-operation" name="operation">
+                <option value="install">CTOX installieren und verbinden</option>
+                <option value="attach">Vorhandenes CTOX verbinden</option>
+              </select></label>
+              <label>Anzeigename<input id="local-display-name" name="displayName" value="Local CTOX" autocomplete="off"></label>
+              <label id="local-root-field">CTOX-Root <span>optional</span><input id="local-root" name="ctoxRoot" placeholder="/Pfad/zur/Installation" autocomplete="off"></label>
+              <label id="local-binary-field" class="span-two">CTOX-Binary <span>optional</span><input id="local-binary" name="ctoxBinary" placeholder="Automatisch erkennen" autocomplete="off"></label>
+            </div>
+            <div id="local-inspection" class="inspection-result" hidden></div>
+            <div class="form-actions">
+              <button id="inspect-local" type="button">Verbindung prüfen</button>
+              <button id="attach-local" class="primary-action" type="submit">CTOX installieren</button>
+            </div>
+          </form>
+
+          <form id="connection-ssh" class="connection-form" data-connection-pane="ssh" hidden>
+            <div class="form-copy">
+              <h2 id="ssh-form-title">CTOX auf einem anderen Rechner</h2>
+              <p id="ssh-form-copy">Installiere CTOX per SSH oder verbinde eine vorhandene Installation. Der Hostschlüssel wird vorher geprüft.</p>
+            </div>
+            <div class="form-grid">
+              <label>Anzeigename <span>optional</span><input id="ssh-display-name" name="displayName" autocomplete="off"></label>
+              <label>Host<input id="ssh-host" name="host" required placeholder="server.example.com" autocomplete="off"></label>
+              <label>Benutzer<input id="ssh-user" name="user" required placeholder="ubuntu" autocomplete="username"></label>
+              <label>Port<input id="ssh-port" name="port" required type="number" min="1" max="65535" value="22" inputmode="numeric"></label>
+              <label>SSH-Passwort <span>optional</span><input id="ssh-password" name="sshPassword" type="password" autocomplete="current-password"></label>
+              <label>Sudo-Passwort <span>optional</span><input id="ssh-sudo-password" name="sudoPassword" type="password" autocomplete="current-password"></label>
+              <label class="span-two">Vorgang<select id="ssh-operation" name="operation">
+                <option value="install">CTOX stabil installieren und verbinden</option>
+                <option value="attach">Vorhandenes CTOX verbinden</option>
+                <option value="upgrade">Vorhandenes CTOX aktualisieren und verbinden</option>
+              </select></label>
+            </div>
+            <div id="ssh-host-key" class="inspection-result" hidden></div>
+            <label id="ssh-host-key-confirmation" class="confirmation" hidden>
+              <input id="ssh-host-key-trusted" type="checkbox">
+              <span>Der angezeigte SHA-256-Fingerprint stimmt mit dem Host überein.</span>
+            </label>
+            <div class="form-actions">
+              <button id="inspect-ssh" type="button">Hostschlüssel prüfen</button>
+              <button id="attach-ssh" class="primary-action" type="submit" disabled>CTOX per SSH installieren</button>
+            </div>
+          </form>
+
+          <form id="connection-invite" class="connection-form" data-connection-pane="invite" hidden>
+            <div class="form-copy">
+              <h2 id="invite-form-title">Peer2Peer verbinden</h2>
+              <p>Füge vorzugsweise den vollständigen Desktop-Link oder das JSON-Invite ein. Room-Passwort und Zugangs-Token werden nur im System-Schlüsselbund gespeichert.</p>
+            </div>
+            <label>Desktop-Einladung<textarea id="invite-payload" name="invite" rows="6" placeholder="ctox-business-os-desktop://pair?payload=…"></textarea></label>
+            <details id="manual-pairing-fields" class="manual-pairing-fields">
+              <summary>Raum und Passwort manuell eingeben</summary>
+              <div class="form-grid">
+                <label>Anzeigename<input id="pairing-display-name" autocomplete="off" placeholder="Meine CTOX-Instanz"></label>
+                <label>Signaling-URL<input id="pairing-signaling-url" type="url" autocomplete="url" value="wss://signaling.ctox.dev"></label>
+                <label class="span-two">Sync Room<input id="pairing-sync-room" autocomplete="off" placeholder="ctox-business-os:instance:room"></label>
+                <label class="span-two">Room-Passwort<input id="pairing-room-secret" type="password" autocomplete="new-password"></label>
+                <label class="span-two">Zugangs-Token<input id="pairing-capability-token" type="password" autocomplete="new-password" placeholder="Aus ctox business-os desktop invite"></label>
+              </div>
+            </details>
+            <div class="form-actions">
+              <button id="cancel-invite-rotation" type="button" hidden>Rotation abbrechen</button>
+              <button id="import-invite" class="primary-action" type="submit">Verbinden</button>
+            </div>
+          </form>
+        </section>
         <section id="instance-settings" class="settings-panel" hidden>
           <div class="settings-header">
             <div>

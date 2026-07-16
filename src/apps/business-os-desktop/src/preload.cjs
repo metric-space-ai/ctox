@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("ctoxDesktop", {
   revokePairing: (instance) => ipcRenderer.invoke("pairing:revoke", instance),
   inspectLocalDaemon: (options) => ipcRenderer.invoke("local:inspect", options),
   attachLocalDaemon: (options) => ipcRenderer.invoke("local:attach", options),
+  installLocalCtox: (options) => ipcRenderer.invoke("local:install", options),
   inspectSshHostKey: (options) => ipcRenderer.invoke("ssh:inspect-host-key", options),
   preflightSshManaged: (options) => ipcRenderer.invoke("ssh:preflight", options),
   attachSshManaged: (options) => ipcRenderer.invoke("ssh:attach", options),

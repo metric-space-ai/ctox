@@ -39,6 +39,11 @@ function validateInvite(invite, now = new Date()) {
   if (invite.expires_at && Date.parse(invite.expires_at) <= now.getTime()) {
     throw new Error("invite is expired");
   }
+  const capabilityToken = inviteCapabilityToken(invite);
+  const capabilityExpiresAtMs = Number(invite?.session?.capability_expires_at_ms || 0);
+  if (capabilityToken && capabilityExpiresAtMs > 0 && capabilityExpiresAtMs <= now.getTime()) {
+    throw new Error("invite capability is expired");
+  }
 }
 
 function instanceFromInvite(invite) {
@@ -46,6 +51,12 @@ function instanceFromInvite(invite) {
   const instanceId = String(invite.instance_id || invite.sync_room.split(":")[1] || invite.display_name).trim();
   const id = `paired:${stableId(["pairing_invite", instanceId])}`;
   const secretRef = `keychain://ctox-business-os-desktop/${id}/room`;
+  const capabilityToken = inviteCapabilityToken(invite);
+  const authorizationRef = capabilityToken
+    ? `keychain://ctox-business-os-desktop/${id}/authorization`
+    : "";
+  const capabilityExpiresAtMs = Number(invite?.session?.capability_expires_at_ms || 0);
+  const sessionUser = normalizeInviteSessionUser(invite?.session?.user);
   const instance = normalizeInstance({
     id,
     source: "pairing_invite",
@@ -56,8 +67,11 @@ function instanceFromInvite(invite) {
       syncRoom: invite.sync_room,
       signalingUrls: invite.signaling_urls,
       secretRef,
+      authorizationRef,
+      capabilityExpiresAtMs,
+      sessionUser,
     },
-    secretRefs: [secretRef],
+    secretRefs: [secretRef, authorizationRef].filter(Boolean),
     healthSummary: {
       dataPlane: "rxdb-webrtc",
       dataPlaneReady: true,
@@ -67,7 +81,10 @@ function instanceFromInvite(invite) {
   });
   return {
     instance,
-    secretMaterial: [{ ref: secretRef, value: invite.signaling_room_password }],
+    secretMaterial: [
+      { ref: secretRef, value: invite.signaling_room_password },
+      ...(authorizationRef ? [{ ref: authorizationRef, value: capabilityToken }] : []),
+    ],
   };
 }
 
@@ -87,9 +104,38 @@ function manualPairingToInvite(options = {}) {
     signaling_room_password: roomPassword,
     transport: "webrtc",
     expires_at: "2999-01-01T00:00:00.000Z",
+    ...(String(options.capabilityToken || "").trim()
+      ? {
+          session: {
+            authenticated: true,
+            source: "desktop_manual_pairing",
+            capability_token: String(options.capabilityToken).trim(),
+            user: {
+              id: String(options.userId || "desktop-user").trim(),
+              display_name: String(options.userDisplayName || displayName).trim(),
+              role: String(options.role || "user").trim(),
+            },
+          },
+        }
+      : {}),
   };
   validateInvite(invite);
   return invite;
+}
+
+function inviteCapabilityToken(invite) {
+  return String(invite?.session?.capability_token || invite?.capability_token || "").trim();
+}
+
+function normalizeInviteSessionUser(user) {
+  if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+  const id = String(user.id || "").trim();
+  if (!id) return null;
+  return {
+    id,
+    displayName: String(user.display_name || user.displayName || id).trim(),
+    role: String(user.role || "user").trim(),
+  };
 }
 
 function normalizeSignalingUrls(value) {

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, BrowserWindow, session } = require("electron");
 const { SourceManager } = require("../../src/main/source-manager.cjs");
+const { startBundledBusinessOsShell } = require("../../src/main/bundled-shell.cjs");
 const {
   buildCtoxDevManagedInstanceUrl,
   clearCtoxDevSession,
@@ -26,6 +27,9 @@ app.on("window-all-closed", () => undefined);
 
 app.whenReady().then(async () => {
   let exitCode = 0;
+  const bundledShell = await startBundledBusinessOsShell({
+    root: path.resolve(__dirname, "../../../business-os"),
+  });
   const credentials = await readCredentials();
   const password = credentials.password;
   let progress = { ok: false, baseUrl: options.baseUrl, stage: "password-read" };
@@ -62,6 +66,7 @@ app.whenReady().then(async () => {
       secretStore: new MemorySecretStore(),
       ctoxDevBaseUrl: options.baseUrl,
       shellUrl: registry.settings.shellUrl,
+      managedShellUrl: bundledShell.url,
       fetchImpl: session.defaultSession.fetch.bind(session.defaultSession),
     });
     const instances = await sourceManager.listInstances();
@@ -114,12 +119,19 @@ app.whenReady().then(async () => {
         displayName: selectedForOptionalFlows.displayName,
         launchUrlOrigin: safeOrigin(launchConfig.launchUrl),
         launchUrlPath: safePath(launchConfig.launchUrl),
+        launchUrlQueryKeys: safeQueryKeys(launchConfig.launchUrl),
+        ctoxConfigKeys: Object.keys(launchConfig.ctoxConfig || {}).sort(),
+        contractShape: launchConfig.contractShape || null,
         transport: launchConfig.ctoxConfig.transport,
         httpBridgeAvailable: launchConfig.ctoxConfig.http_bridge_available,
         signalingUrlCount: Array.isArray(launchConfig.ctoxConfig.signaling_urls)
           ? launchConfig.ctoxConfig.signaling_urls.length
           : 0,
         hasRoomPassword: Boolean(launchConfig.ctoxConfig.signaling_room_password),
+        roomPasswordIsRedacted: isRedactedMarker(launchConfig.ctoxConfig.signaling_room_password),
+        syncRoomIsRedacted: isRedactedMarker(launchConfig.ctoxConfig.sync_room),
+        signalingUrlRedactedMarkerCount: (launchConfig.ctoxConfig.signaling_urls || [])
+          .filter(isRedactedMarker).length,
         expiresAt: launchConfig.expiresAt || "",
       };
       if (options.renderLaunchFirst) {
@@ -206,6 +218,7 @@ app.whenReady().then(async () => {
       error: error instanceof Error ? error.message : String(error),
     });
   } finally {
+    await bundledShell.close();
     app.exit(exitCode);
   }
 });
@@ -291,10 +304,10 @@ function parseArgs(args) {
   return parsed;
 }
 
-function inspectRenderedLaunch(launchConfig, instance) {
+async function inspectRenderedLaunch(launchConfig, instance) {
+  const partition = instance.sessionPartition || `persist:ctox-render-${Date.now()}`;
+  const browserSession = session.fromPartition(partition);
   return new Promise((resolve) => {
-    const partition = instance.sessionPartition || `persist:ctox-render-${Date.now()}`;
-    const browserSession = session.fromPartition(partition);
     const window = new BrowserWindow({
       show: false,
       width: 1440,
@@ -339,7 +352,7 @@ function inspectRenderedLaunch(launchConfig, instance) {
         },
       );
     }
-    window.webContents.on("console-message", (_event, details) => {
+    window.webContents.on("console-message", (details) => {
       consoleMessages.push({
         level: details.level,
         message: String(details.message || "").slice(0, 240),
@@ -1138,10 +1151,22 @@ function safeOrigin(rawUrl) {
 function safePath(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
-    return `${url.pathname}${url.search}`;
+    return url.pathname;
   } catch (_error) {
     return "";
   }
+}
+
+function safeQueryKeys(rawUrl) {
+  try {
+    return Array.from(new URL(String(rawUrl || "")).searchParams.keys()).sort();
+  } catch (_error) {
+    return [];
+  }
+}
+
+function isRedactedMarker(value) {
+  return /<redacted>|\[redacted\]/i.test(String(value || ""));
 }
 
 function safePathWithoutSearch(rawUrl) {

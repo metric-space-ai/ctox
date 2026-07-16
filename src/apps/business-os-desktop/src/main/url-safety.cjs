@@ -19,6 +19,10 @@ const ALLOWED_BUSINESS_OS_CONTROL_PATHS = new Set([
 // the only kinds the default-deny boundary constrains, so document/script/style/
 // image/font loads for the shell itself are never blocked.
 const BUSINESS_OS_DATA_RESOURCE_TYPES = new Set(["xhr", "fetch", "websocket", "webSocket"]);
+const BUSINESS_OS_STATIC_ASSET_EXTENSIONS = new Set([
+  ".css", ".gif", ".html", ".ico", ".jpeg", ".jpg", ".js", ".json",
+  ".mjs", ".png", ".svg", ".ttf", ".wasm", ".webp", ".woff", ".woff2",
+]);
 
 // Schemes the desktop is willing to hand to the OS via shell.openExternal. Never
 // pass file:/data:/custom schemes to openExternal from a remotely-loaded view.
@@ -110,7 +114,16 @@ function isForbiddenBusinessOsDataResourceRequest(rawUrl, resourceType, launchOr
   const path = normalizePathname(url.pathname);
   if (ALLOWED_BUSINESS_OS_CONTROL_PATHS.has(path)) return false;
   if (path.startsWith("/rxdb/dist/")) return false;
+  if (isBusinessOsStaticAssetPath(path)) return false;
   return true;
+}
+
+function isBusinessOsStaticAssetPath(path) {
+  if (!path.startsWith("/business-os/")) return false;
+  const basename = path.slice(path.lastIndexOf("/") + 1);
+  const extensionIndex = basename.lastIndexOf(".");
+  if (extensionIndex < 1) return false;
+  return BUSINESS_OS_STATIC_ASSET_EXTENSIONS.has(basename.slice(extensionIndex));
 }
 
 function hostOf(origin) {

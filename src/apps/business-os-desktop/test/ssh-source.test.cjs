@@ -126,7 +126,7 @@ test("ssh preflight command checks os, systemd, sudo and ctox without password a
 
 test("ssh peer ensure command returns full status shape", () => {
   const command = buildSshPeerRemoteCommand({ installRoot: "~/.local/lib/ctox/current" }, "ensure");
-  assert.match(command, /ctox business-os peer ensure >\/dev\/null; ctox business-os peer status/);
+  assert.match(command, /ctox business-os peer ensure >\/dev\/null; ctox business-os desktop invite --format json --ttl-hours 12/);
   assert.match(command, /cd '~\/\.local\/lib\/ctox\/current'/);
   const status = buildSshPeerRemoteCommand({}, "status");
   assert.match(status, /ctox business-os peer status/);

@@ -21,6 +21,7 @@ const { SourceManager } = require("./source-manager.cjs");
 const { loadRegistry, saveRegistry } = require("./registry.cjs");
 const { createSecretStore } = require("./secret-store.cjs");
 const { createSupportBundleSnapshot } = require("./redaction.cjs");
+const { businessOsShellRoot, startBundledBusinessOsShell } = require("./bundled-shell.cjs");
 const {
   createInstanceBrowserView,
   layoutInstanceBrowserView,
@@ -45,9 +46,11 @@ let sourceManager;
 let registryPath;
 let registry;
 let secretStore;
+let bundledShell;
 let activeViewId = null;
 let chromeOverlayVisible = false;
 const views = new Map();
+const pendingViewLoads = new Map();
 const protocolHandling = installDesktopProtocolHandling({
   app,
   handlersProvider: protocolHandlers,
@@ -131,12 +134,20 @@ async function createWindow() {
     },
   });
   configureAutoUpdates({ app, autoUpdater, logger: console });
+  bundledShell = bundledShell || await startBundledBusinessOsShell({
+    root: businessOsShellRoot({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appDir: __dirname,
+    }),
+  });
   sourceManager = new SourceManager({
     registryProvider,
     registrySaver,
     secretStore,
     ctoxDevBaseUrl: registry.settings.ctoxDevBaseUrl,
     shellUrl: registry.settings.shellUrl,
+    managedShellUrl: bundledShell.url,
     fetchImpl: session.defaultSession.fetch.bind(session.defaultSession),
     knownHostsPath: path.join(app.getPath("userData"), "ssh", "known_hosts"),
   });
@@ -229,24 +240,7 @@ function showAppShell() {
 
 async function activateInstance(instance) {
   if (!mainWindow) throw new Error("window is not ready");
-  let view = views.get(instance.id);
-  if (!view) {
-    const launch = await sourceManager.getLaunchConfig(instance);
-    view = createInstanceBrowserView({
-      BrowserView,
-      instance,
-      launch,
-      shell,
-      scrubCtoxConfigFromWebContents,
-      isAllowedBusinessOsNavigation,
-      isForbiddenBusinessOsHttpDataRequest,
-      isForbiddenBusinessOsDataResourceRequest,
-      isSafeExternalUrl,
-    });
-    await view.webContents.loadURL(launch.launchUrl);
-    await scrubCtoxConfigFromWebContents(view.webContents).catch(() => undefined);
-    views.set(instance.id, view);
-  }
+  const view = await loadInstanceViewOnce(instance);
   detachActiveView();
   activeViewId = instance.id;
   updateCrashReportExtra(crashReporter, {
@@ -257,6 +251,42 @@ async function activateInstance(instance) {
   attachActiveView();
   sourceManager.markInstanceUsed(instance.id);
   return { ok: true };
+}
+
+async function loadInstanceViewOnce(instance) {
+  const existing = views.get(instance.id);
+  if (existing) return existing;
+  const pending = pendingViewLoads.get(instance.id);
+  if (pending) return pending;
+  const load = (async () => {
+    const launch = await sourceManager.getLaunchConfig(instance);
+    const view = createInstanceBrowserView({
+      BrowserView,
+      instance,
+      launch,
+      shell,
+      scrubCtoxConfigFromWebContents,
+      isAllowedBusinessOsNavigation,
+      isForbiddenBusinessOsHttpDataRequest,
+      isForbiddenBusinessOsDataResourceRequest,
+      isSafeExternalUrl,
+    });
+    try {
+      await view.webContents.loadURL(launch.launchUrl);
+      await scrubCtoxConfigFromWebContents(view.webContents).catch(() => undefined);
+      views.set(instance.id, view);
+      return view;
+    } catch (error) {
+      view.webContents?.close?.();
+      throw error;
+    }
+  })();
+  pendingViewLoads.set(instance.id, load);
+  try {
+    return await load;
+  } finally {
+    if (pendingViewLoads.get(instance.id) === load) pendingViewLoads.delete(instance.id);
+  }
 }
 
 async function removeInstance(instance) {
@@ -377,6 +407,7 @@ ipcMain.handle("pairing:rotate", async (_event, instance, rawInvite) => rotatePa
 ipcMain.handle("pairing:revoke", async (_event, instance) => revokePairing(instance));
 ipcMain.handle("local:inspect", async (_event, options) => sourceManager.inspectLocalDaemon(options || {}));
 ipcMain.handle("local:attach", async (_event, options) => sourceManager.attachLocalDaemon(options || {}));
+ipcMain.handle("local:install", async (_event, options) => sourceManager.installLocalCtox(options || {}));
 ipcMain.handle("ssh:inspect-host-key", async (_event, options) => sourceManager.inspectSshHostKey(options || {}));
 ipcMain.handle("ssh:preflight", async (_event, options) => sourceManager.preflightSshManaged(options || {}));
 ipcMain.handle("ssh:attach", async (_event, options) => sourceManager.attachSshManaged(options || {}));
@@ -406,6 +437,11 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  bundledShell?.close?.().catch(() => undefined);
+  bundledShell = null;
 });
 
 module.exports = {

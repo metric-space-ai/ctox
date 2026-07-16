@@ -118,6 +118,15 @@ test("authenticated session check completes the active ctox.dev login window", a
   assert.equal(FakeBrowserWindow.instances.at(-1).closed, true);
 });
 
+test("closing the login window does not touch destroyed web contents", async () => {
+  const loginPromise = openCtoxDevLoginWindow({
+    BrowserWindow: FakeBrowserWindow,
+    baseUrl: "https://ctox.dev",
+  });
+  FakeBrowserWindow.instances.at(-1).close();
+  assert.deepEqual(await loginPromise, { ok: true, completed: false });
+});
+
 test("custom protocol callback is a no-op without an active ctox.dev login window", () => {
   assert.deepEqual(
     completeCtoxDevLoginFromProtocol("ctox-business-os-desktop://auth/callback"),
@@ -135,10 +144,15 @@ class FakeBrowserWindow extends EventEmitter {
   constructor(options) {
     super();
     this.options = options;
-    this.webContents = new EventEmitter();
+    this._webContents = new EventEmitter();
     this.loadedUrl = "";
     this.closed = false;
     FakeBrowserWindow.instances.push(this);
+  }
+
+  get webContents() {
+    if (this.closed) throw new TypeError("Object has been destroyed");
+    return this._webContents;
   }
 
   loadURL(url) {

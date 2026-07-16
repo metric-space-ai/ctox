@@ -46,6 +46,13 @@ test("desktop CLI invite contract imports through JSON and desktop link", () => 
     data_plane: "rxdb-webrtc",
     http_bridge_available: false,
     secret_value_in_payload: true,
+    session: {
+      authenticated: true,
+      source: "desktop_invite",
+      capability_token: "native-capability",
+      capability_expires_at_ms: Date.parse("2099-01-01T00:00:00.000Z"),
+      user: { id: "desktop-owner", display_name: "Desktop Owner", role: "chef" },
+    },
   };
   const parsedJson = parseInvitePayload(invite);
   assert.equal(parsedJson.display_name, "CLI Lab");
@@ -53,6 +60,43 @@ test("desktop CLI invite contract imports through JSON and desktop link", () => 
   const parsedLink = parseInvitePayload(`ctox-business-os-desktop://pair?payload=${payload}`);
   assert.equal(parsedLink.sync_room, "ctox-business-os:cli_lab:room");
   assert.equal(parsedLink.transport, "webrtc");
+  assert.equal(parsedLink.session.capability_token, "native-capability");
+});
+
+test("desktop invite keeps capability outside registry and injects it into launch session", async () => {
+  let registry = createDefaultRegistry();
+  const secrets = new Map();
+  const source = new PairingInviteInstanceSource(
+    () => registry,
+    (next) => { registry = next; },
+    {
+      get: async (ref) => secrets.get(ref) || "",
+      set: async (ref, value) => secrets.set(ref, value),
+      delete: async (ref) => secrets.delete(ref),
+    },
+  );
+  const instance = await source.importInvite({
+    type: "ctox-business-os-invite",
+    version: 1,
+    display_name: "Authorized Lab",
+    instance_id: "authorized-lab",
+    sync_room: "ctox-business-os:authorized-lab:room",
+    signaling_urls: ["wss://signaling.ctox.dev"],
+    signaling_room_password: "room-secret",
+    transport: "webrtc",
+    expires_at: "2099-01-01T00:00:00.000Z",
+    session: {
+      authenticated: true,
+      capability_token: "native-capability",
+      capability_expires_at_ms: Date.parse("2099-01-01T00:00:00.000Z"),
+      user: { id: "desktop-owner", display_name: "Desktop Owner", role: "chef" },
+    },
+  });
+  assert.equal(JSON.stringify(registry).includes("native-capability"), false);
+  assert.equal(secrets.size, 2);
+  const launch = await source.getLaunchConfig(instance.id);
+  assert.equal(launch.ctoxConfig.session.capability_token, "native-capability");
+  assert.equal(launch.ctoxConfig.session.user.role, "chef");
 });
 
 test("pairing rotation replaces only matching invite secret and revoke clears local state", async () => {

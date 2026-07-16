@@ -20,7 +20,7 @@ const STATUS_VALUES = Object.freeze([
 ]);
 
 const SECRET_KEY_RE = SECRET_KEY_SUBSTRING_RE;
-const SECRET_KEY_ALLOWLIST = new Set(["secretRef", "secretRefs"]);
+const SECRET_KEY_ALLOWLIST = new Set(["secretRef", "secretRefs", "authorizationRef"]);
 const DYNAMIC_KEY_PATHS = new Set(["registry.usage"]);
 
 function stableId(parts) {
@@ -130,6 +130,22 @@ function normalizePairingMetadata(pairing) {
     signalingUrls,
     transport: "webrtc",
     secretRef: typeof pairing.secretRef === "string" ? pairing.secretRef : "",
+    authorizationRef: typeof pairing.authorizationRef === "string" ? pairing.authorizationRef : "",
+    capabilityExpiresAtMs: Number.isFinite(Number(pairing.capabilityExpiresAtMs))
+      ? Number(pairing.capabilityExpiresAtMs)
+      : 0,
+    sessionUser: normalizePairingSessionUser(pairing.sessionUser),
+  };
+}
+
+function normalizePairingSessionUser(user) {
+  if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+  const id = String(user.id || "").trim();
+  if (!id) return null;
+  return {
+    id,
+    displayName: String(user.displayName || user.display_name || id).trim(),
+    role: String(user.role || "user").trim(),
   };
 }
 

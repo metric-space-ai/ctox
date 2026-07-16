@@ -65,7 +65,7 @@ async function main() {
     assert.equal(instance.connection?.ctoxRoot, ctoxRepoRoot);
     assert.equal(instance.healthSummary?.dataPlane, "rxdb-webrtc");
     assert.equal(instance.healthSummary?.httpDataProxy, false);
-    assert.equal(secrets.size, 1);
+    assert.equal(secrets.size, 2);
     assert.equal(JSON.stringify(registry).includes("signaling_room_password"), false);
     assert.equal(JSON.stringify(registry).includes("ctox-room-"), false);
 
@@ -85,6 +85,7 @@ async function main() {
     assert.equal(launch.ctoxConfig.http_bridge_available, false);
     assert.ok(Array.isArray(launch.ctoxConfig.signaling_urls));
     assert.ok(String(launch.ctoxConfig.sync_room || "").startsWith("ctox-business-os:"));
+    assert.ok(String(launch.ctoxConfig.session?.capability_token || ""));
 
     console.log("desktop local runtime smoke OK");
   } finally {

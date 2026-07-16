@@ -43,6 +43,10 @@ test("default-denies unknown same-host data fetches but allows control plane and
   // Explicit control plane + static rxdb bundle stay reachable.
   assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/api/business-os/status", "xhr", origin), false);
   assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/rxdb/dist/ctox-rxdb-js.mjs", "fetch", origin), false);
+  assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/business-os/modules/desktop/index.html", "fetch", origin), false);
+  assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/business-os/modules/registry.json?v=1", "xhr", origin), false);
+  assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/business-os/records", "fetch", origin), true);
+  assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/business-os/modules/desktop/index", "fetch", origin), true);
   // Non-data resource types (the shell's own assets) are never constrained here.
   assert.equal(isForbiddenBusinessOsDataResourceRequest("https://tenant.example.com/app.js", "script", origin), false);
   // Cross-host requests (e.g. the signaling server) are out of scope for this layer.

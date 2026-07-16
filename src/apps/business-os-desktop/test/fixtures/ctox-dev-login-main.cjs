@@ -65,9 +65,14 @@ app.whenReady().then(async () => {
       shellUrl: `${baseUrl}/shell`,
       fetchImpl: session.defaultSession.fetch.bind(session.defaultSession),
     });
+    let loginWindowModal = null;
     const login = await openCtoxDevLoginWindow({
       BrowserWindow,
       baseUrl,
+      parentWindow: keepAliveWindow,
+      onWindowCreated: (loginWindow) => {
+        loginWindowModal = loginWindow.isModal();
+      },
     });
     const instances = await sourceManager.listInstances();
     const managedInstances = instances.filter((instance) => instance.source === "ctox_dev");
@@ -104,6 +109,7 @@ app.whenReady().then(async () => {
       launch,
       rotatedLaunch,
       evidence: server.evidence,
+      loginWindowModal,
     };
     writeResult(result);
     exitCode = result.ok ? 0 : 2;

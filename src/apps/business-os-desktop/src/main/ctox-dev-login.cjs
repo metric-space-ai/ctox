@@ -169,7 +169,10 @@ async function openCtoxDevLoginWindow({
     height,
     title: "CTOX Login",
     parent: parentWindow || undefined,
-    modal: Boolean(parentWindow),
+    // Keep the native connection chooser usable while ctox.dev authentication
+    // is open. A modal child made the managed login a dead end: users could
+    // neither switch to Peer2Peer nor return to the other connection methods.
+    modal: false,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -177,6 +180,7 @@ async function openCtoxDevLoginWindow({
     },
   });
   lockDownLoginWindowNavigation(loginWindow, shell);
+  const loginWebContents = loginWindow.webContents;
   return new Promise((resolve) => {
     let settled = false;
     let authCheckInFlight = false;
@@ -194,10 +198,12 @@ async function openCtoxDevLoginWindow({
       settled = true;
       if (timeout) clearTimeout(timeout);
       activeLoginProtocolCompletions.delete(handleProtocolCompletion);
-      loginWindow.webContents.removeListener("did-navigate", handleNavigation);
-      loginWindow.webContents.removeListener("did-redirect-navigation", handleNavigation);
-      loginWindow.webContents.removeListener("will-navigate", handleNavigation);
-      loginWindow.webContents.removeListener("did-finish-load", handleAuthCheckReady);
+      if (typeof loginWebContents.isDestroyed !== "function" || !loginWebContents.isDestroyed()) {
+        loginWebContents.removeListener("did-navigate", handleNavigation);
+        loginWebContents.removeListener("did-redirect-navigation", handleNavigation);
+        loginWebContents.removeListener("will-navigate", handleNavigation);
+        loginWebContents.removeListener("did-finish-load", handleAuthCheckReady);
+      }
       loginWindow.removeListener("closed", handleClosed);
       if (authCheckInterval) clearInterval(authCheckInterval);
       if (!loginWindow.isDestroyed()) loginWindow.close();
@@ -237,10 +243,10 @@ async function openCtoxDevLoginWindow({
       ? setInterval(checkAuthenticatedSession, authCheckIntervalMs)
       : null;
     activeLoginProtocolCompletions.add(handleProtocolCompletion);
-    loginWindow.webContents.on("did-navigate", handleNavigation);
-    loginWindow.webContents.on("did-redirect-navigation", handleNavigation);
-    loginWindow.webContents.on("will-navigate", handleNavigation);
-    loginWindow.webContents.on("did-finish-load", handleAuthCheckReady);
+    loginWebContents.on("did-navigate", handleNavigation);
+    loginWebContents.on("did-redirect-navigation", handleNavigation);
+    loginWebContents.on("will-navigate", handleNavigation);
+    loginWebContents.on("did-finish-load", handleAuthCheckReady);
     loginWindow.on("closed", handleClosed);
     if (typeof onWindowCreated === "function") {
       try {

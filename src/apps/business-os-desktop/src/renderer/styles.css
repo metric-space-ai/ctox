@@ -1,12 +1,17 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
   background: oklch(18% 0.01 230);
   color: oklch(94% 0.008 230);
 }
 
+
 * {
   box-sizing: border-box;
+}
+
+html [hidden] {
+  display: none !important;
 }
 
 body {
@@ -16,9 +21,11 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   border: 1px solid oklch(42% 0.018 230);
-  border-radius: 8px;
+  border-radius: 3px;
   font: inherit;
 }
 
@@ -32,17 +39,47 @@ button:hover {
   background: oklch(30% 0.018 230);
 }
 
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.primary-action {
+  background: oklch(52% 0.09 178);
+  border-color: oklch(62% 0.1 178);
+  color: oklch(97% 0.006 178);
+  font-weight: 650;
+}
+
+.primary-action:hover:not(:disabled) {
+  background: oklch(58% 0.1 178);
+}
+
 button:focus-visible,
 input:focus-visible {
   outline: 2px solid oklch(70% 0.11 175);
   outline-offset: 2px;
 }
 
-input {
+input,
+select,
+textarea {
   background: oklch(20% 0.012 230);
   color: oklch(94% 0.008 230);
   padding: 11px 12px;
   width: 100%;
+}
+
+textarea {
+  line-height: 1.45;
+  resize: vertical;
+}
+
+select {
+  min-height: 40px;
 }
 
 input::placeholder {
@@ -130,9 +167,7 @@ input::placeholder {
 }
 
 .content {
-  background:
-    radial-gradient(circle at 50% 18%, oklch(30% 0.04 178 / 0.24), transparent 28rem),
-    oklch(18% 0.01 230);
+  background: oklch(18% 0.01 230);
   height: calc(100vh - 56px);
   min-width: 0;
   overflow: auto;
@@ -158,6 +193,195 @@ input::placeholder {
 .empty button {
   min-height: 38px;
   padding: 8px 12px;
+}
+
+.connection-panel,
+.settings-panel {
+  max-width: 820px;
+}
+
+.surface-header {
+  align-items: flex-start;
+  border-bottom: 1px solid oklch(34% 0.016 230);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding-bottom: 16px;
+}
+
+.surface-header h1 {
+  font-size: 24px;
+  line-height: 1.2;
+  margin: 0 0 6px;
+}
+
+.surface-header p,
+.form-copy p {
+  color: oklch(72% 0.014 230);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 68ch;
+}
+
+.connection-tabs {
+  border-bottom: 1px solid oklch(34% 0.016 230);
+  display: flex;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.connection-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: oklch(72% 0.014 230);
+  font-size: 13px;
+  font-weight: 650;
+  min-height: 34px;
+  padding: 7px 12px 6px;
+}
+
+.connection-tabs button[aria-selected="true"] {
+  border-bottom-color: oklch(66% 0.1 178);
+  color: oklch(94% 0.008 230);
+}
+
+.connection-status,
+.inspection-result {
+  background: oklch(21% 0.012 230);
+  border: 1px solid oklch(38% 0.018 230);
+  border-radius: 4px;
+  color: oklch(82% 0.012 230);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 14px;
+  padding: 10px 12px;
+}
+
+.connection-status[data-tone="success"],
+.inspection-result[data-tone="success"] {
+  background: oklch(25% 0.035 152);
+  border-color: oklch(48% 0.07 152);
+}
+
+.connection-status[data-tone="warning"],
+.inspection-result[data-tone="warning"] {
+  background: oklch(25% 0.035 82);
+  border-color: oklch(50% 0.07 82);
+}
+
+.connection-status[data-tone="error"] {
+  background: oklch(24% 0.04 28);
+  border-color: oklch(52% 0.08 28);
+}
+
+.connection-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 20px;
+}
+
+.connection-choice-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.connection-choice-actions button {
+  min-height: 40px;
+  padding: 8px 14px;
+}
+
+.connection-form[hidden] {
+  display: none;
+}
+
+.form-copy h2 {
+  font-size: 16px;
+  line-height: 1.25;
+  margin: 0 0 5px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connection-form label {
+  color: oklch(78% 0.012 230);
+  display: grid;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+}
+
+.connection-form label > span {
+  color: oklch(62% 0.012 230);
+  font-weight: 400;
+}
+
+.connection-form .span-two {
+  grid-column: 1 / -1;
+}
+
+.inspection-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.inspection-result code,
+.connection-form code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.confirmation {
+  align-items: start;
+  display: flex !important;
+  font-weight: 400 !important;
+  grid-template-columns: max-content 1fr;
+}
+
+.confirmation input {
+  margin: 1px 0 0;
+  min-height: 16px;
+  padding: 0;
+  width: 16px;
+}
+
+.form-actions {
+  border-top: 1px solid oklch(32% 0.014 230);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+.manual-pairing-fields {
+  border-top: 1px solid oklch(32% 0.014 230);
+  padding-top: 12px;
+}
+
+.manual-pairing-fields summary {
+  color: oklch(78% 0.012 230);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.manual-pairing-fields[open] summary {
+  margin-bottom: 14px;
+}
+
+.form-actions button {
+  min-height: 34px;
+  padding: 7px 11px;
 }
 
 .switcher-backdrop {
@@ -328,10 +552,6 @@ input::placeholder {
   padding-top: 10px;
 }
 
-.settings-panel {
-  max-width: 820px;
-}
-
 .settings-header {
   align-items: flex-start;
   border-bottom: 1px solid oklch(34% 0.016 230);
@@ -463,6 +683,14 @@ input::placeholder {
     padding: 28px 20px;
   }
 
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-form .span-two {
+    grid-column: auto;
+  }
+
   .switcher-backdrop {
     padding: 12px;
   }
@@ -475,5 +703,158 @@ input::placeholder {
     border-left: 0;
     border-top: 1px solid oklch(34% 0.016 230);
     justify-content: flex-start;
+  }
+}
+
+/* Theme overrides stay last so both system themes preserve the same geometry. */
+@media (prefers-color-scheme: light) {
+  :root {
+    background: oklch(95% 0.006 230);
+    color: oklch(24% 0.012 230);
+  }
+
+  button {
+    background: oklch(97% 0.006 230);
+    border-color: oklch(78% 0.014 230);
+    color: oklch(24% 0.012 230);
+  }
+
+  button:hover {
+    background: oklch(92% 0.008 230);
+  }
+
+  .primary-action {
+    background: oklch(48% 0.09 178);
+    border-color: oklch(43% 0.085 178);
+    color: oklch(98% 0.004 178);
+  }
+
+  .primary-action:hover:not(:disabled) {
+    background: oklch(43% 0.09 178);
+  }
+
+  input,
+  select,
+  textarea {
+    background: oklch(98% 0.004 230);
+    border-color: oklch(76% 0.014 230);
+    color: oklch(24% 0.012 230);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: oklch(56% 0.012 230);
+  }
+
+  .topbar {
+    background: oklch(98% 0.004 230);
+    border-bottom-color: oklch(82% 0.012 230);
+  }
+
+  .brand,
+  #current-instance-name,
+  .surface-header h1,
+  .form-copy h2,
+  .settings-header h1,
+  .name,
+  .settings-fields dd {
+    color: oklch(20% 0.012 230);
+  }
+
+  .manual-pairing-fields {
+    border-color: oklch(80% 0.012 230);
+  }
+
+  .manual-pairing-fields summary {
+    color: oklch(36% 0.014 230);
+  }
+
+  #current-instance-meta,
+  .surface-header p,
+  .form-copy p,
+  .connection-form label,
+  .settings-meta,
+  .settings-fields dt,
+  .meta,
+  .switcher-header p,
+  .switcher-footer {
+    color: oklch(48% 0.014 230);
+  }
+
+  .content {
+    background: oklch(94% 0.006 230);
+  }
+
+  .switcher-backdrop {
+    background: oklch(20% 0.01 230 / 0.34);
+  }
+
+  .switcher-panel,
+  .password-dialog {
+    background: oklch(98% 0.004 230);
+    border-color: oklch(74% 0.014 230);
+    color: oklch(24% 0.012 230);
+  }
+
+  .instance,
+  .instance-actions,
+  .switcher-footer,
+  .surface-header,
+  .connection-tabs,
+  .form-actions,
+  .settings-header,
+  .settings-fields dt,
+  .settings-fields dd {
+    border-color: oklch(80% 0.012 230);
+  }
+
+  .instance-main[aria-selected="true"] {
+    background: oklch(91% 0.025 178);
+  }
+
+  .connection-tabs button {
+    color: oklch(50% 0.014 230);
+  }
+
+  .connection-tabs button[aria-selected="true"] {
+    color: oklch(22% 0.014 230);
+  }
+
+  .connection-status,
+  .inspection-result,
+  .badge {
+    background: oklch(94% 0.008 230);
+    border-color: oklch(76% 0.014 230);
+    color: oklch(34% 0.014 230);
+  }
+
+  .connection-status[data-tone="success"],
+  .inspection-result[data-tone="success"],
+  .badge-ok {
+    background: oklch(92% 0.035 152);
+    border-color: oklch(65% 0.07 152);
+    color: oklch(34% 0.07 152);
+  }
+
+  .connection-status[data-tone="warning"],
+  .inspection-result[data-tone="warning"],
+  .badge-warn,
+  .badge-progress {
+    background: oklch(94% 0.035 82);
+    border-color: oklch(69% 0.075 82);
+    color: oklch(39% 0.07 82);
+  }
+
+  .connection-status[data-tone="error"],
+  .badge-error {
+    background: oklch(93% 0.035 28);
+    border-color: oklch(67% 0.075 28);
+    color: oklch(38% 0.075 28);
+  }
+
+  .badge-managed {
+    background: oklch(93% 0.035 248);
+    border-color: oklch(68% 0.075 248);
+    color: oklch(38% 0.075 248);
   }
 }

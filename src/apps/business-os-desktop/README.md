@@ -10,8 +10,26 @@ must not market the desktop app as production-ready.
 The product goal is a Slack-like instance switcher that can show ctox.dev
 managed instances next to unmanaged local, SSH-managed, and invite-paired
 instances. The Business OS data plane remains RxDB/WebRTC-only; Electron may
-bootstrap shell URLs and launch context, but it must not add an HTTP data
-bridge.
+serve the bundled, version-matched shell on an ephemeral loopback port and
+inject launch context, but it must not add an HTTP data bridge. Managed
+ctox.dev launches decode the one-time packed pairing locally instead of using
+the tenant's legacy HTTP-login shell.
+
+The launcher exposes all implemented connection paths directly: local daemon,
+SSH host with pinned host-key confirmation, pasted Desktop invite/deep link,
+manual signaling URL + sync room + room password, and ctox.dev account login.
+Room and SSH passwords are stored in the platform keychain and are never
+written to the instance registry.
+
+After CTOX is installed on a host, create the preferred import payload with:
+
+```sh
+ctox business-os desktop invite --format json --display-name "My CTOX"
+```
+
+Use `--format link` for a `ctox-business-os-desktop://pair?...` deep link. Both
+formats contain the room secret and must be transferred like credentials; the
+Desktop app moves the secret into the platform keychain during import.
 
 Local user testing:
 
@@ -87,7 +105,9 @@ Release-related checks:
   `/dashboard?tenant=<tenant-id>` management deep link in the authenticated
   Electron cookie jar, and `--launch-first` to consume a short-lived desktop
   launch token for the first matching managed instance and verify a WebRTC-only
-  launch config. Add `--session-rotation` to prove that ctox.dev logout clears
+  launch config. Add `--render-launch-first` to serve the bundled shell and
+  require a real signaling/WebRTC-backed module start without a second tenant
+  login. Add `--session-rotation` to prove that ctox.dev logout clears
   Electron storage and domain cookies, blocks stale managed launches, then
   restores managed tenants and WebRTC-only launch after re-login.
   Add `--access-revocation --access-revocation-tenant <tenant>

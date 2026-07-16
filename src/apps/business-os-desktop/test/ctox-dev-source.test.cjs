@@ -59,6 +59,8 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
   const calls = [];
   const source = new CtoxDevInstanceSource({
     baseUrl: "https://ctox.dev",
+    shellUrl: "https://ctox.dev/business-os/",
+    shellUrl: "https://ctox.dev/business-os/",
     fetchImpl: async (url, options) => {
       calls.push([url, options]);
       if (url === "https://ctox.dev/api/desktop/launch-token") {
@@ -83,7 +85,8 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
   const launch = await source.getLaunchConfig("managed:tenant_skf");
   assert.equal(launch.source, "ctox_dev");
   const launchUrl = new URL(launch.launchUrl);
-  assert.equal(launchUrl.origin, "https://acme.ctox.dev");
+  assert.equal(launchUrl.origin, "https://ctox.dev");
+  assert.equal(launchUrl.pathname, "/business-os/");
   assert.equal(launchUrl.searchParams.has("ctox_config"), true);
   assert.deepEqual(decodeCtoxConfig(launchUrl), {
     transport: "webrtc",
@@ -122,8 +125,83 @@ test("ctox.dev source preserves server-packed launch URL when pairing metadata i
   });
 
   const launch = await source.getLaunchConfig("managed:tenant_skf");
-  assert.deepEqual(decodeCtoxConfig(new URL(launch.launchUrl)), packedConfig);
+  const launchUrl = new URL(launch.launchUrl);
+  assert.equal(launchUrl.origin, "https://ctox.dev");
+  assert.equal(launchUrl.pathname, "/business-os/");
+  assert.deepEqual(decodeCtoxConfig(launchUrl), packedConfig);
   assert.equal(launch.ctoxConfig.signaling_room_password, "<redacted>");
+});
+
+test("ctox.dev managed launch carries the selected workspace identity into the bundled shell", async () => {
+  const packedConfig = {
+    transport: "webrtc",
+    http_bridge_available: false,
+    sync_room: "ctox-business-os:skf:real-room",
+    signaling_room_password: "real-room-secret",
+    signaling_urls: ["wss://signaling.ctox.dev/?token=real-token"],
+    session: { capability_token: "native-signed-capability" },
+  };
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    shellUrl: "http://127.0.0.1:8765/",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return jsonResponse({
+        launchUrl: `https://skf.ctox.dev/?ctox_config=${Buffer.from(JSON.stringify(packedConfig), "utf8").toString("base64url")}`,
+        pairingConfig: {
+          transport: "webrtc",
+          http_bridge_available: false,
+          sync_room: "<redacted>",
+          signaling_room_password: "<redacted>",
+        },
+      });
+    },
+  });
+
+  const launch = await source.getLaunchConfig("managed:tenant_skf", {
+    id: "managed:tenant_skf",
+    source: "ctox_dev",
+    displayName: "SKF",
+    domain: "skf.ctox.dev",
+  });
+  const config = decodeCtoxConfig(new URL(launch.launchUrl));
+  assert.deepEqual(config.desktop_instance, {
+    id: "managed:tenant_skf",
+    source: "ctox_dev",
+    display_name: "SKF",
+    domain: "skf.ctox.dev",
+  });
+  assert.deepEqual(config.desktop_managed_auth, { required: true });
+  assert.equal(config.session.capability_token, "native-signed-capability");
+});
+
+test("ctox.dev source ignores redaction markers outside pairing fields", async () => {
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    shellUrl: "https://ctox.dev/business-os/",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return jsonResponse({
+        launchUrl: "https://legacy.ctox.dev/",
+        pairingConfig: {
+          transport: "webrtc",
+          sync_room: "ctox-business-os:skf",
+          signaling_room_password: "room-secret",
+          signaling_urls: ["wss://signaling.ctox.dev"],
+          session: { diagnostic: "<redacted>" },
+        },
+      });
+    },
+  });
+
+  const launch = await source.getLaunchConfig("managed:tenant_skf");
+  const url = new URL(launch.launchUrl);
+  assert.equal(url.origin, "https://ctox.dev");
+  assert.equal(url.pathname, "/business-os/");
 });
 
 test("ctox.dev source rejects redacted pairing metadata without a packed launch URL", async () => {
@@ -267,6 +345,26 @@ test("ctox.dev source rejects a launch config that tries to enable the HTTP brid
   await assert.rejects(
     () => source.getLaunchConfig("managed:tenant_skf"),
     /HTTP data bridge/,
+  );
+});
+
+test("ctox.dev source exposes the redacted public launch failure", async () => {
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ code: "capability_issue_failed", error: "CTOX capability command is unavailable." }),
+      };
+    },
+  });
+  await assert.rejects(
+    () => source.getLaunchConfig("managed:tenant_skf"),
+    /400 \(CTOX capability command is unavailable\.\)/,
   );
 });
 

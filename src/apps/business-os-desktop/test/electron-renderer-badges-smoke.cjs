@@ -17,6 +17,15 @@ async function main() {
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
   assert.equal(payload.ok, true, JSON.stringify(payload, null, 2));
   assert.equal(payload.initial.length, 3);
+  assert.equal(payload.connectionRequests.localAttach.length, 1);
+  assert.equal(payload.connectionRequests.localInstall.length, 1);
+  assert.equal(payload.connectionRequests.sshAttach.length, 1);
+  assert.equal(payload.connectionRequests.sshInstall.length, 1);
+  assert.equal(payload.connectionRequests.inviteImport.length, 1);
+  assert.equal(payload.connectionRequests.manualPairing.length, 1);
+  assert.equal(payload.connectionChoice.peerToPeerVisible, true);
+  assert.equal(payload.connectionChoice.ctoxDevLoginRequests, 1);
+  assert.equal(payload.connectionChoice.peerTabLabel, "Peer2Peer");
   assert.equal(payload.quickSwitchFocused, true);
   assert.deepEqual(payload.activateRequests.map((request) => request.source), [
     "ctox_dev",

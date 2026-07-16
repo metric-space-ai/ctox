@@ -53,8 +53,13 @@ function normalizeCtoxDevSessionPackage(payload) {
 }
 
 class CtoxDevInstanceSource {
-  constructor({ baseUrl = "https://ctox.dev", fetchImpl = globalThis.fetch } = {}) {
+  constructor({
+    baseUrl = "https://ctox.dev",
+    shellUrl = `${baseUrl.replace(/\/+$/, "")}/business-os/`,
+    fetchImpl = globalThis.fetch,
+  } = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.shellUrl = shellUrl;
     this.fetch = fetchImpl;
   }
 
@@ -70,7 +75,7 @@ class CtoxDevInstanceSource {
     return normalizeCtoxDevSessionPackage(await response.json());
   }
 
-  async getLaunchConfig(instanceId) {
+  async getLaunchConfig(instanceId, instance = null) {
     const tenantId = String(instanceId || "").replace(/^managed:/, "");
     const tokenResponse = await this.fetch(`${this.baseUrl}/api/desktop/launch-token`, {
       method: "POST",
@@ -93,18 +98,44 @@ class CtoxDevInstanceSource {
       credentials: "include",
       headers: { "x-ctox-desktop-client": "ctox-business-os-desktop" },
     });
-    if (!launchResponse.ok) throw new Error(`ctox.dev launch config failed: ${launchResponse.status}`);
-    const launchPayload = await launchResponse.json();
+    const launchPayload = await launchResponse.json().catch(() => ({}));
+    if (!launchResponse.ok) {
+      const publicReason = String(launchPayload?.error || launchPayload?.code || "").trim();
+      throw new Error(
+        `ctox.dev launch config failed: ${launchResponse.status}${publicReason ? ` (${publicReason})` : ""}`,
+      );
+    }
     // Re-assert the data-boundary invariant on the server-returned config instead
     // of trusting it verbatim: webrtc transport only, HTTP bridge never enabled.
-    const ctoxConfig = forceWebrtcLaunchConfig(launchPayload.pairingConfig);
-    const launchUrl = selectCtoxDevLaunchUrl(launchPayload.launchUrl, ctoxConfig);
+    const desktopInstance = instance && typeof instance === "object"
+      ? {
+          id: String(instance.id || instanceId),
+          source: "ctox_dev",
+          display_name: String(instance.displayName || instance.domain || tenantId),
+          domain: String(instance.domain || ""),
+        }
+      : null;
+    const ctoxConfig = withManagedDesktopInstance(
+      forceWebrtcLaunchConfig(launchPayload.pairingConfig),
+      desktopInstance,
+    );
+    const launchUrl = selectCtoxDevLaunchUrl(
+      launchPayload.launchUrl,
+      ctoxConfig,
+      this.shellUrl,
+      desktopInstance,
+    );
     assertSafeLaunchUrl(launchUrl);
     return {
       source: "ctox_dev",
       launchUrl,
       ctoxConfig,
       expiresAt: tokenPayload.expiresAt,
+      contractShape: {
+        tokenPayloadKeys: Object.keys(tokenPayload || {}).sort(),
+        launchPayloadKeys: Object.keys(launchPayload || {}).sort(),
+        pairingSessionKeys: Object.keys(launchPayload?.pairingConfig?.session || {}).sort(),
+      },
     };
   }
 }
@@ -152,17 +183,37 @@ function forceWebrtcLaunchConfig(config) {
   return next;
 }
 
-function selectCtoxDevLaunchUrl(rawLaunchUrl, ctoxConfig) {
+function selectCtoxDevLaunchUrl(rawLaunchUrl, ctoxConfig, shellUrl = "", desktopInstance = null) {
   const launchUrl = String(rawLaunchUrl || "").trim();
   if (!launchUrl) throw new Error("ctox.dev launch config is missing launchUrl");
-  if (launchUrlHasPackedConfig(launchUrl)) {
+  if (containsRedactedPairingSecret(ctoxConfig) && launchUrlHasPackedConfig(launchUrl)) {
     assertPackedLaunchConfigIsWebrtc(launchUrl);
-    return launchUrl;
+    const packedConfig = decodePackedLaunchConfig(launchUrl);
+    if (!packedConfig || typeof packedConfig !== "object") {
+      throw new Error("ctox.dev packed launch config could not be decoded");
+    }
+    return buildLaunchUrl(
+      String(shellUrl || launchUrl),
+      withManagedDesktopInstance(packedConfig, desktopInstance),
+    );
   }
   if (containsRedactedPairingSecret(ctoxConfig)) {
     throw new Error("ctox.dev launch config has only redacted pairing metadata and no packed launch URL");
   }
-  return buildLaunchUrl(launchUrl, ctoxConfig);
+  // Managed tenant hosts can require their own legacy HTTP login before serving
+  // the shell. The desktop already has a complete, short-lived WebRTC pairing
+  // config, so launch the public app shell and keep each tenant's IndexedDB in
+  // its isolated Electron partition. No account cookie is copied across sessions.
+  return buildLaunchUrl(String(shellUrl || launchUrl), ctoxConfig);
+}
+
+function withManagedDesktopInstance(config, desktopInstance) {
+  if (!desktopInstance) return config;
+  return {
+    ...(config && typeof config === "object" ? config : {}),
+    desktop_instance: desktopInstance,
+    desktop_managed_auth: { required: true },
+  };
 }
 
 function assertPackedLaunchConfigIsWebrtc(launchUrl) {
@@ -210,7 +261,20 @@ function launchUrlHasPackedConfig(rawLaunchUrl) {
 }
 
 function containsRedactedPairingSecret(value) {
-  return /<redacted>|\[redacted\]/i.test(JSON.stringify(value || {}));
+  const config = value && typeof value === "object" ? value : {};
+  const signalingUrls = Array.isArray(config.signaling_urls)
+    ? config.signaling_urls
+    : (Array.isArray(config.signalingUrls) ? config.signalingUrls : []);
+  const pairingValues = [
+    config.sync_room,
+    config.syncRoom,
+    config.signaling_room_password,
+    config.signalingRoomPassword,
+    config.room_password,
+    config.roomPassword,
+    ...signalingUrls,
+  ];
+  return pairingValues.some((entry) => /<redacted>|\[redacted\]/i.test(String(entry || "")));
 }
 
 class RegistryBackedSource {
@@ -310,6 +374,7 @@ class LocalDaemonInstanceSource extends RegistryBackedSource {
     super("local_daemon", registryProvider, registrySaver, secretStore, options);
     this.runStatusCommand = options.runStatusCommand || options.runCommand || runLocalPeerStatusCommand;
     this.runEnsureCommand = options.runEnsureCommand || options.runCommand || runLocalPeerEnsureCommand;
+    this.runFreshInstallCommand = options.runFreshInstallCommand || runLocalFreshInstallCommand;
   }
 
   async attachLocalDaemon(options = {}) {
@@ -350,6 +415,17 @@ class LocalDaemonInstanceSource extends RegistryBackedSource {
     } catch (error) {
       return localDaemonInspectionError(error, profile);
     }
+  }
+
+  async installFresh(options = {}) {
+    const install = normalizeLocalInstallOptions(options);
+    const installResult = await this.runFreshInstallCommand(install);
+    const instance = await this.attachLocalDaemon({
+      ...options,
+      ctoxBinary: install.ctoxBinary,
+      ctoxRoot: "",
+    });
+    return { instance, install: installResult };
   }
 
   async getLaunchConfig(instanceId) {
@@ -536,7 +612,53 @@ async function runLocalPeerEnsureCommand(profile) {
   await execFileAsync(profile.ctoxBinary, buildLocalPeerArgs("ensure"), {
     ...buildLocalCommandOptions(profile, 30000),
   });
-  return runLocalPeerStatusCommand(profile);
+  const { stdout } = await execFileAsync(
+    profile.ctoxBinary,
+    ["business-os", "desktop", "invite", "--format", "json", "--ttl-hours", "12"],
+    { ...buildLocalCommandOptions(profile, 30000) },
+  );
+  const invite = JSON.parse(stdout);
+  if (String(invite?.session?.capability_token || "").trim()) return invite;
+  const capabilityResult = await execFileAsync(
+    profile.ctoxBinary,
+    [
+      "business-os", "auth", "issue-capability",
+      "--user", "desktop-owner",
+      "--display-name", "Desktop Owner",
+      "--role", "chef",
+      "--ensure-user",
+    ],
+    { ...buildLocalCommandOptions(profile, 30000) },
+  );
+  return withDesktopInviteCapability(invite, JSON.parse(capabilityResult.stdout));
+}
+
+async function runLocalFreshInstallCommand(install) {
+  const { stdout, stderr } = await execFileAsync(
+    "bash",
+    [
+      install.installScriptPath,
+      `--backend=${install.backend}`,
+      `--api-provider=${install.apiProvider}`,
+    ],
+    {
+      timeout: 45 * 60 * 1000,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  if (!isExecutableFile(install.ctoxBinary)) {
+    throw new Error(`CTOX installation completed without an executable at ${install.ctoxBinary}`);
+  }
+  return {
+    ok: true,
+    mode: "fresh",
+    backend: install.backend,
+    apiProvider: install.apiProvider,
+    ctoxBinary: install.ctoxBinary,
+    stdout: String(stdout || "").slice(-8000),
+    stderr: String(stderr || "").slice(-8000),
+  };
 }
 
 function buildLocalCommandOptions(profile, timeout) {
@@ -577,7 +699,42 @@ async function runSshPeerStatusCommand(profile) {
 }
 
 async function runSshPeerEnsureCommand(profile) {
-  return runSshPeerCommand(profile, "ensure");
+  const invite = await runSshPeerCommand(profile, "ensure");
+  if (String(invite?.session?.capability_token || "").trim()) return invite;
+  const remoteCommand = [
+    "set -eu",
+    "export PATH=\"$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:/usr/local/bin:$PATH\"",
+    profile.installRoot ? `cd ${shellQuote(profile.installRoot)}` : "",
+    "ctox business-os auth issue-capability --user desktop-owner --display-name 'Desktop Owner' --role chef --ensure-user",
+  ].filter(Boolean).join("; ");
+  const { stdout } = await runSshProgram(profile, "ssh", buildSshArgs(profile, remoteCommand), {
+    timeout: 30000,
+    windowsHide: true,
+  });
+  return withDesktopInviteCapability(invite, JSON.parse(stdout));
+}
+
+function withDesktopInviteCapability(invite, capability) {
+  const capabilityToken = String(capability?.capability_token || "").trim();
+  const capabilityExpiresAtMs = Number(capability?.expires_at_ms || 0);
+  if (!capabilityToken || !Number.isFinite(capabilityExpiresAtMs) || capabilityExpiresAtMs <= Date.now()) {
+    throw new Error("CTOX did not issue a valid desktop capability");
+  }
+  return {
+    ...invite,
+    session: {
+      authenticated: true,
+      source: "desktop_invite",
+      capability_token: capabilityToken,
+      capability_expires_at_ms: capabilityExpiresAtMs,
+      user: {
+        id: "desktop-owner",
+        display_name: "Desktop Owner",
+        role: "chef",
+        is_admin: true,
+      },
+    },
+  };
 }
 
 async function runSshPeerCommand(profile, peerCommand) {
@@ -592,7 +749,7 @@ async function runSshPeerCommand(profile, peerCommand) {
 function buildSshPeerRemoteCommand(profile, peerCommand) {
   if (!["status", "ensure"].includes(peerCommand)) throw new Error(`unsupported ssh peer command: ${peerCommand}`);
   const peerLine = peerCommand === "ensure"
-    ? "ctox business-os peer ensure >/dev/null; ctox business-os peer status"
+    ? "ctox business-os peer ensure >/dev/null; ctox business-os desktop invite --format json --ttl-hours 12"
     : "ctox business-os peer status";
   return [
     "set -eu",
@@ -984,6 +1141,42 @@ function normalizeLocalProfile(options = {}) {
   };
 }
 
+function normalizeLocalInstallOptions(options = {}) {
+  const platform = String(options.platform || process.platform || "").trim();
+  if (!['darwin', 'linux'].includes(platform)) {
+    throw new Error("local CTOX installation is currently supported on macOS and Linux");
+  }
+  const backend = String(options.backend || (platform === 'darwin' ? 'metal' : 'cpu')).trim();
+  if (!['metal', 'cpu', 'cuda'].includes(backend)) {
+    throw new Error("local CTOX install backend must be metal, cpu or cuda");
+  }
+  const apiProvider = String(options.apiProvider || "openai").trim();
+  if (!/^[a-z0-9_-]+$/i.test(apiProvider)) {
+    throw new Error("local CTOX install API provider contains unsupported characters");
+  }
+  const installScriptPath = resolveLocalInstallScript(options);
+  const ctoxBinary = String(options.installedCtoxBinary || path.join(os.homedir(), ".local", "bin", platform === 'win32' ? 'ctox.exe' : 'ctox')).trim();
+  return { platform, backend, apiProvider, installScriptPath, ctoxBinary };
+}
+
+function resolveLocalInstallScript(options = {}) {
+  const explicit = String(options.installScriptPath || "").trim();
+  const candidates = [
+    explicit,
+    path.join(String(options.resourcesPath || process.resourcesPath || ""), LOCAL_CTOX_RESOURCE_DIR, "install.sh"),
+    path.resolve(__dirname, "../../../../../install.sh"),
+  ].filter(Boolean);
+  const installScriptPath = candidates.find((candidate) => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (!installScriptPath) throw new Error("bundled CTOX installer was not found");
+  return installScriptPath;
+}
+
 function resolveLocalCtoxBinary(options = {}) {
   const explicit = String(options.ctoxBinary || "").trim();
   if (explicit) return explicit;
@@ -1197,6 +1390,19 @@ function instanceFromPeerStatus(peerStatus, options) {
   const instanceId = String(peerStatus.instance_id || syncRoom.split(":")[1] || "").trim();
   const id = `${instanceIdPrefix(options.source)}:${stableId([options.source, instanceId, syncRoom])}`;
   const secretRef = `keychain://ctox-business-os-desktop/${id}/room`;
+  const capabilityToken = String(peerStatus?.session?.capability_token || peerStatus?.capability_token || "").trim();
+  const authorizationRef = capabilityToken
+    ? `keychain://ctox-business-os-desktop/${id}/authorization`
+    : "";
+  const capabilityExpiresAtMs = Number(peerStatus?.session?.capability_expires_at_ms || 0);
+  const rawSessionUser = peerStatus?.session?.user;
+  const sessionUser = rawSessionUser && typeof rawSessionUser === "object"
+    ? {
+        id: String(rawSessionUser.id || "").trim(),
+        displayName: String(rawSessionUser.display_name || rawSessionUser.displayName || rawSessionUser.id || "").trim(),
+        role: String(rawSessionUser.role || "user").trim(),
+      }
+    : null;
   const instance = normalizeInstance({
     id,
     source: options.source,
@@ -1207,8 +1413,11 @@ function instanceFromPeerStatus(peerStatus, options) {
       syncRoom,
       signalingUrls,
       secretRef,
+      authorizationRef,
+      capabilityExpiresAtMs,
+      sessionUser,
     },
-    secretRefs: [secretRef],
+    secretRefs: [secretRef, authorizationRef].filter(Boolean),
     healthSummary: {
       dataPlane: "rxdb-webrtc",
       dataPlaneReady: Boolean(peerStatus.native_rxdb_peer_available !== false),
@@ -1219,7 +1428,10 @@ function instanceFromPeerStatus(peerStatus, options) {
   });
   return {
     instance,
-    secretMaterial: [{ ref: secretRef, value: roomPassword }],
+    secretMaterial: [
+      { ref: secretRef, value: roomPassword },
+      ...(authorizationRef ? [{ ref: authorizationRef, value: capabilityToken }] : []),
+    ],
   };
 }
 
@@ -1391,6 +1603,8 @@ module.exports = {
   normalizeCtoxDevSessionPackage,
   instanceFromPeerStatus,
   normalizeLocalProfile,
+  normalizeLocalInstallOptions,
+  resolveLocalInstallScript,
   resolveLocalCtoxBinary,
   localCtoxBinaryCandidates,
   buildLocalPeerArgs,
@@ -1399,6 +1613,7 @@ module.exports = {
   buildSshPeerRemoteCommand,
   runLocalPeerStatusCommand,
   runLocalPeerEnsureCommand,
+  runLocalFreshInstallCommand,
   runSshPeerStatusCommand,
   runSshPeerEnsureCommand,
   runSshPreflightCommand,

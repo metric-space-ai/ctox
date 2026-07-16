@@ -5,9 +5,18 @@ const path = require("node:path");
 
 const UPDATE_FEED_URL = "https://ctox.dev/downloads/business-os-desktop";
 const ctoxHelperResourceDir = path.join(__dirname, "resources", "ctox");
-const extraResources = fs.existsSync(ctoxHelperResourceDir)
-  ? [{ from: "resources/ctox", to: "ctox" }]
-  : [];
+const extraResources = [
+  {
+    from: "../business-os",
+    to: "business-os",
+    filter: ["**/*", "!**/node_modules/**", "!**/.DS_Store"],
+  },
+  ...(fs.existsSync(ctoxHelperResourceDir) ? [{ from: "resources/ctox", to: "ctox" }] : []),
+  {
+    from: "../../../install.sh",
+    to: "ctox/install.sh",
+  },
+];
 
 module.exports = {
   appId: "ai.metric-space.ctox.business-os-desktop",
@@ -28,7 +37,7 @@ module.exports = {
     "!**/*.map",
     "!**/.DS_Store",
   ],
-  ...(extraResources.length ? { extraResources } : {}),
+  extraResources,
   protocols: [{
     name: "CTOX Business OS Desktop Beta Pairing",
     schemes: ["ctox-business-os-desktop"],
@@ -42,6 +51,11 @@ module.exports = {
     category: "public.app-category.business",
     hardenedRuntime: true,
     gatekeeperAssess: false,
+    signIgnore: [
+      "/Contents/Resources/business-os/",
+      "/Contents/Frameworks/Electron Framework\\.framework/.+\\.lproj/locale\\.pak$",
+    ],
+    binaries: ["Contents/Resources/ctox/ctox"],
     icon: "build/icon.icns",
     entitlements: "build/entitlements.mac.plist",
     entitlementsInherit: "build/entitlements.mac.plist",

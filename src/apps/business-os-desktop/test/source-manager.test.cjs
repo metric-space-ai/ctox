@@ -186,6 +186,32 @@ test("source manager blocks non-launchable ctox.dev instances before launch toke
   assert.deepEqual(calls, [["https://ctox.dev/api/desktop/session-package", "GET"]]);
 });
 
+test("source manager passes the selected managed instance into launch construction", async () => {
+  const manager = new SourceManager({
+    registryProvider: () => createDefaultRegistry(),
+    registrySaver: () => undefined,
+    secretStore: { get: async () => "", set: async () => undefined, delete: async () => undefined },
+    fetchImpl: async () => ({ status: 401, ok: false }),
+  });
+  const selected = {
+    id: "managed:tenant_skf",
+    source: "ctox_dev",
+    displayName: "SKF",
+    status: "available",
+  };
+  let received;
+  manager.sources.ctox_dev = {
+    getLaunchConfig: async (id, instance) => {
+      received = { id, instance };
+      return { launchUrl: "https://ctox.dev/business-os/" };
+    },
+  };
+
+  await manager.getLaunchConfig(selected);
+  assert.equal(received.id, selected.id);
+  assert.equal(received.instance, selected);
+});
+
 test("source manager routes ssh fresh installs separately from existing upgrades", async () => {
   const manager = new SourceManager({
     registryProvider: () => createDefaultRegistry(),
@@ -215,6 +241,21 @@ test("source manager routes ssh fresh installs separately from existing upgrades
     ["fresh", "fresh.example.com"],
     ["existing", "existing.example.com"],
   ]);
+});
+
+test("source manager routes local installation separately from local attachment", async () => {
+  const manager = new SourceManager({
+    registryProvider: () => createDefaultRegistry(),
+    registrySaver: () => undefined,
+    secretStore: { get: async () => "", set: async () => undefined, delete: async () => undefined },
+    fetchImpl: async () => ({ status: 401, ok: false }),
+  });
+  manager.sources.local_daemon = {
+    installFresh: async (options) => ({ ok: true, mode: "fresh", displayName: options.displayName }),
+  };
+  const result = await manager.installLocalCtox({ displayName: "This Mac" });
+  assert.equal(result.mode, "fresh");
+  assert.equal(result.displayName, "This Mac");
 });
 
 test("source manager routes ssh sudo password storage", async () => {

@@ -10,7 +10,7 @@ const {
 } = require("./sources.cjs");
 
 class SourceManager {
-  constructor({ registryProvider, registrySaver, secretStore, ctoxDevBaseUrl, shellUrl, fetchImpl, knownHostsPath }) {
+  constructor({ registryProvider, registrySaver, secretStore, ctoxDevBaseUrl, shellUrl, managedShellUrl, fetchImpl, knownHostsPath }) {
     this.registryProvider = registryProvider;
     this.registrySaver = registrySaver;
     // Wire an app-owned known_hosts path so SSH host-key pinning is durable and
@@ -18,7 +18,7 @@ class SourceManager {
     // implemented ensureKnownHost/UserKnownHostsFile machinery never ran in prod.
     const pairingOptions = { shellUrl, knownHostsPath };
     this.sources = {
-      ctox_dev: new CtoxDevInstanceSource({ baseUrl: ctoxDevBaseUrl, fetchImpl }),
+      ctox_dev: new CtoxDevInstanceSource({ baseUrl: ctoxDevBaseUrl, shellUrl: managedShellUrl || shellUrl, fetchImpl }),
       local_daemon: new LocalDaemonInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
       pairing_invite: new PairingInviteInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
       ssh_managed: new SshManagedInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
@@ -43,7 +43,7 @@ class SourceManager {
     if (instance.source === "ctox_dev" && instance.status && instance.status !== "available") {
       throw new Error(`ctox.dev managed instance is not launchable: ${instance.status}`);
     }
-    return source.getLaunchConfig(instance.id);
+    return source.getLaunchConfig(instance.id, instance);
   }
 
   async importInvite(rawInvite) {
@@ -74,6 +74,10 @@ class SourceManager {
 
   async inspectLocalDaemon(options) {
     return this.sources.local_daemon.inspectLocalDaemon(options);
+  }
+
+  async installLocalCtox(options) {
+    return this.sources.local_daemon.installFresh(options);
   }
 
   async inspectSshHostKey(options) {

@@ -22,6 +22,7 @@ async function main() {
   assert.deepEqual(payload.instanceNamesAfterRevocation, ["Example", "Local Lab"]);
   assert.deepEqual(payload.instanceNamesAfterLogout, ["Local Lab"]);
   assert.equal(payload.logout.ok, true);
+  assert.equal(payload.loginWindowModal, false);
   assert.equal(payload.evidence.sessionPackageSawCookie, true);
   assert.deepEqual(payload.evidence.sessionPackageCookieObservations, [true, true, false]);
   assert.equal(payload.evidence.sessionPackageLastSawCookie, false);

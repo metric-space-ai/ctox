@@ -61,7 +61,7 @@ async function main() {
     assert.equal(Boolean(instance.connection?.ctoxRoot), false);
     assert.equal(instance.healthSummary?.dataPlane, "rxdb-webrtc");
     assert.equal(instance.healthSummary?.httpDataProxy, false);
-    assert.equal(secrets.size, 1);
+    assert.equal(secrets.size, 2);
     assert.equal(JSON.stringify(registry).includes("bundled-room-secret"), false);
 
     const mixedList = await sourceManager().listInstances();
@@ -79,6 +79,7 @@ async function main() {
     assert.equal(launch.ctoxConfig.transport, "webrtc");
     assert.equal(launch.ctoxConfig.http_bridge_available, false);
     assert.equal(launch.ctoxConfig.signaling_room_password, "bundled-room-secret");
+    assert.equal(launch.ctoxConfig.session.capability_token, "bundled-native-capability");
     assert.ok(String(launch.ctoxConfig.sync_room || "").startsWith("ctox-business-os:"));
 
     console.log("desktop local bundled runtime smoke OK");
@@ -121,6 +122,16 @@ function writeBundledCtoxHelper(helperPath) {
     "    signaling_room_password: 'bundled-room-secret',",
     "    signaling_urls: ['wss://signaling.ctox.dev'],",
     "    native_rxdb_peer_available: true",
+    "  }));",
+    "  process.exit(0);",
+    "}",
+    "if (args[0] === 'business-os' && args[1] === 'desktop' && args[2] === 'invite') {",
+    "  console.log(JSON.stringify({",
+    "    type: 'ctox-business-os-invite', version: 1, display_name: 'Bundled Local',",
+    "    instance_id: 'bundled-local', sync_room: 'ctox-business-os:bundled-local:room',",
+    "    signaling_room_password: 'bundled-room-secret', signaling_urls: ['wss://signaling.ctox.dev'],",
+    "    transport: 'webrtc', expires_at: '2099-01-01T00:00:00.000Z',",
+    "    session: { authenticated: true, capability_token: 'bundled-native-capability', capability_expires_at_ms: 4070908800000, user: { id: 'desktop-owner', display_name: 'Desktop Owner', role: 'chef' } }",
     "  }));",
     "  process.exit(0);",
     "}",
