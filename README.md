@@ -13,6 +13,7 @@
 [Project page](https://metric-space-ai.github.io/ctox/)
 &middot; [Documentation](https://metric-space-ai.github.io/ctox/docs.html)
 &middot; [CLI reference](https://metric-space-ai.github.io/ctox/cli.html)
+&middot; [Business OS Desktop Beta](https://ctox.dev/downloads/business-os-desktop)
 &middot; [Harness guide](HARNESS.md)
 &middot; [Releases](https://github.com/metric-space-ai/ctox/releases)
 
@@ -56,6 +57,16 @@ curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.s
 Installer flags, model setup examples, and update commands
 (`ctox upgrade --stable`) are documented in the
 [installation docs](https://metric-space-ai.github.io/ctox/docs.html#install).
+
+### Business OS Desktop Beta
+
+The signed Desktop beta connects managed ctox.dev tenants, manual WebRTC
+pairings, local CTOX installations, and SSH-managed hosts from one launcher.
+Use the [Desktop download page](https://ctox.dev/downloads/business-os-desktop)
+for macOS and Linux packages. Windows is distributed through the
+[Microsoft Store](https://apps.microsoft.com/detail/9NHZ1TZF3V94) after Store
+certification; the `.appx` attached to the GitHub prerelease is the Store
+submission package, not an unsigned replacement installer.
 
 ## Quick start
 
