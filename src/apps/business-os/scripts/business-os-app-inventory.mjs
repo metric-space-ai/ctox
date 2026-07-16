@@ -45,8 +45,8 @@ export function loadBusinessOsAppInventory() {
   if (sourceApps.length !== 34) {
     throw new Error(`Business OS source inventory must contain exactly 34 apps; found ${sourceApps.length}`);
   }
-  if (coreApps.length !== 10) {
-    throw new Error(`Business OS system inventory must contain exactly 10 apps; found ${coreApps.length}`);
+  if (coreApps.length !== 11) {
+    throw new Error(`Business OS system inventory must contain exactly 11 apps; found ${coreApps.length}`);
   }
 
   return Object.freeze({
