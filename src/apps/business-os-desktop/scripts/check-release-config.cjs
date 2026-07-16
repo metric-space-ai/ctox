@@ -93,6 +93,15 @@ function assertDedicatedDesktopReleaseWorkflow() {
   }
   assert.match(workflow, /CTOX_WINDOWS_STORE_RELEASE/);
   assert.match(workflow, /Verify macOS signing secrets/);
+  assert.match(
+    workflow,
+    /APPLE_APP_SPECIFIC_PASSWORD:\s*\$\{\{ secrets\.APPLE_ID_PASSWORD \}\}/,
+    "dedicated release must expose the app-specific password under Electron Builder's required env name",
+  );
+  assert.match(
+    workflow,
+    /for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD;/,
+  );
   assert.match(workflow, /actions\/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/);
   assert.match(workflow, /softprops\/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65/);
 }
@@ -175,7 +184,7 @@ function assertReleaseWorkflowMatrix() {
   assert.match(workflow, /Verify macOS signing secrets/, "release workflow must preflight macOS signing secrets");
   assert.match(
     workflow,
-    /for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD;/,
+    /for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD;/,
     "release workflow missing complete macOS secret preflight variable list",
   );
   assert.match(workflow, /::error::\$\{variable\} is required/, "release workflow must emit explicit missing-secret errors");

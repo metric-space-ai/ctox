@@ -11,10 +11,10 @@ async function notarizeMacos(context) {
   if (!appPath) throw new Error("notarization context is missing app path");
 
   const appleId = process.env.APPLE_ID;
-  const appleIdPassword = process.env.APPLE_ID_PASSWORD;
+  const appleIdPassword = process.env.APPLE_APP_SPECIFIC_PASSWORD || process.env.APPLE_ID_PASSWORD;
   const teamId = process.env.APPLE_TEAM_ID;
   if (!appleId || !appleIdPassword || !teamId) {
-    throw new Error("macOS notarization requires APPLE_ID, APPLE_ID_PASSWORD and APPLE_TEAM_ID build secrets");
+    throw new Error("macOS notarization requires APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID build secrets");
   }
 
   await notarize({

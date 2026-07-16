@@ -550,12 +550,13 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
         run: |
           missing=0
-          for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD; do
+          for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD; do
             if [ -z "${!variable}" ]; then
               echo "::error::${variable} is required for signed/notarized macOS Business OS Desktop releases"
               missing=1
@@ -568,6 +569,7 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
