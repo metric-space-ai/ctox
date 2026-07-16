@@ -11080,24 +11080,48 @@ fn module_catalog_source_id(app_root: &Path, module: &Value) -> Option<String> {
         .get("template_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let template_path = app_root
-        .join("template-store")
-        .join(template_id)
-        .join("template.json");
-    let text = fs::read_to_string(&template_path).ok()?;
-    let template: TemplateManifest = serde_json::from_str(&text).ok()?;
-    let source = if template.source_module.trim().is_empty() {
-        template.id
-    } else {
-        template.source_module
-    };
-    let source = source.trim();
-    if source.is_empty() {
-        None
-    } else {
-        Some(source.to_owned())
+        .filter(|value| !value.is_empty());
+    if let Some(template_id) = template_id {
+        let template_path = app_root
+            .join("template-store")
+            .join(template_id)
+            .join("template.json");
+        let text = fs::read_to_string(&template_path).ok()?;
+        let template: TemplateManifest = serde_json::from_str(&text).ok()?;
+        let source = if template.source_module.trim().is_empty() {
+            template.id
+        } else {
+            template.source_module
+        };
+        let source = source.trim();
+        return (!source.is_empty()).then(|| source.to_owned());
     }
+
+    // Releases before catalog provenance stamping shipped selected apps as
+    // immutable runtime-installed CTOX bundles. Recognize only that exact
+    // legacy shape; bespoke installed apps without an upstream remain
+    // intentionally unmapped and cannot be overwritten by catalog update.
+    let id = module.get("id").and_then(Value::as_str)?.trim();
+    let legacy_distribution = module
+        .pointer("/store/distribution")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "ctox-runtime-installed-module");
+    let legacy_source_path = module
+        .pointer("/store/source_path")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.trim() == format!("installed-modules/{id}"));
+    let immutable_legacy_install = module
+        .pointer("/store/installable")
+        .and_then(Value::as_bool)
+        == Some(false)
+        && module.get("default_installed").and_then(Value::as_bool) == Some(true)
+        && module.get("developer").and_then(Value::as_str) == Some("CTOX");
+    let catalog_manifest = app_root.join("modules").join(id).join("module.json");
+    (legacy_distribution
+        && legacy_source_path
+        && immutable_legacy_install
+        && catalog_manifest.is_file())
+    .then(|| id.to_owned())
 }
 
 /// Read the declared version string of a catalog (`modules/<id>`) module.
@@ -43849,6 +43873,43 @@ mod tests {
             lifecycle.get("public").and_then(Value::as_bool),
             Some(false)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_ctox_runtime_install_resolves_same_id_catalog_source_only() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let app_root = temp.path().join("business-os");
+        let catalog_dir = app_root.join("modules/research");
+        fs::create_dir_all(&catalog_dir)?;
+        fs::write(catalog_dir.join("module.json"), r#"{"id":"research"}"#)?;
+
+        let legacy = serde_json::json!({
+            "id": "research",
+            "developer": "CTOX",
+            "default_installed": true,
+            "store": {
+                "distribution": "ctox-runtime-installed-module",
+                "source_path": "installed-modules/research",
+                "installable": false
+            }
+        });
+        assert_eq!(
+            module_catalog_source_id(&app_root, &legacy).as_deref(),
+            Some("research")
+        );
+
+        let bespoke = serde_json::json!({
+            "id": "research",
+            "developer": "Customer",
+            "default_installed": false,
+            "store": {
+                "distribution": "custom",
+                "source_path": "installed-modules/research",
+                "installable": false
+            }
+        });
+        assert_eq!(module_catalog_source_id(&app_root, &bespoke), None);
         Ok(())
     }
 

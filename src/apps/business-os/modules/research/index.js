@@ -1017,6 +1017,7 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
       title,
       subtitle: sourceClass,
       url: firstString(row, ['source_url', 'url', 'direct_url', 'doi']) || '',
+      canonicalUrl: firstString(row, ['canonical_url']) || '',
       sourceClass,
       note,
       row,
@@ -2214,7 +2215,7 @@ function renderSourcesTable(filteredList = state.sourceModels) {
             <td class="is-num"><span class="ctox-badge ${gradeBadgeClass(source.grade)}">${escapeHtml(source.grade)}${source.evidenceEligible ? ` · ${formatPortfolioScore(source.score)}` : ''}</span></td>
             <td class="is-num">${formatDimensionScore(source.dimensions[yAxis])}</td>
             <td class="is-num">${formatDimensionScore(source.dimensions[xAxis])}</td>
-            <td class="is-num">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
+            <td class="is-num">${source.evidenceEligible && source.canonicalUrl ? `<a href="${escapeHtml(source.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
       </tbody>
@@ -4373,6 +4374,7 @@ export const __researchTestHooks = {
   latestEvidenceRunForTask,
   researchScoringContract,
   researchReportsForTask,
+  renderSourcesTable,
   renderNoTaskCenter,
   researchDomainFromFormValue,
   shouldRetryEmptyKnowledgeTables,

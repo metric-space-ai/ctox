@@ -148,6 +148,41 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
   assert.equal(hooks.formatDimensionScore(null), '—');
 });
 
+test('source table exposes canonical links only for evidence-eligible sources', () => {
+  const markup = hooks.renderSourcesTable([
+    {
+      id: 'verified',
+      title: 'Verified source',
+      sourceClass: 'dataset',
+      evidenceStatus: 'verified',
+      evidenceStatusLabel: 'Verified',
+      evidenceEligible: true,
+      canonicalUrl: 'https://example.test/canonical',
+      url: 'https://example.test/discovery',
+      grade: 'A',
+      score: 85,
+      dimensions: {},
+    },
+    {
+      id: 'candidate',
+      title: 'Discovery candidate',
+      sourceClass: 'web',
+      evidenceStatus: 'unverified',
+      evidenceStatusLabel: 'Not verified',
+      evidenceEligible: false,
+      canonicalUrl: 'https://example.test/unverified-canonical',
+      url: 'https://example.test/unverified-discovery',
+      grade: '—',
+      score: null,
+      dimensions: {},
+    },
+  ]);
+
+  assert.match(markup, /https:\/\/example\.test\/canonical/);
+  assert.doesNotMatch(markup, /https:\/\/example\.test\/discovery/);
+  assert.doesNotMatch(markup, /unverified-canonical|unverified-discovery/);
+});
+
 test('evidence graph filtering removes unverified source nodes and provenance', () => {
   const filtered = hooks.filterGraphRowsForEvidence([
     { node_id: 'source:verified', label: 'Verified', source_ids_json: '["verified"]' },
