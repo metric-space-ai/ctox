@@ -10,7 +10,7 @@ import {
   nextQuickAppIdentity,
 } from './appCommands.js';
 
-const STYLE_BUILD = '20260706-kit-tokens1';
+const STYLE_BUILD = '20260716-label-clamp-v2';
 const LAYOUT_DOC_ID = 'layout';
 const ICON_POSITION_CACHE_KEY = 'ctox.businessOs.desktopIconPositions';
 const DESKTOP_SYNC_COLLECTIONS = Object.freeze([

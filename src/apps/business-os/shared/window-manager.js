@@ -25,6 +25,24 @@ const RESIZE_HANDLES = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'];
 
 const SNAP_ZONES = ['left', 'right', 'top', 'bottom', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
+export function clampNormalWindowPosition({ left, top, width, height }, viewport) {
+  const vp = viewport || {};
+  const minLeft = Math.max(0, Number(vp.left) || 0);
+  const minTop = Math.max(0, Number(vp.top) || 0);
+  const rightEdge = Math.max(minLeft, (Number(vp.w) || 0) - (Number(vp.right) || 0));
+  const bottomEdge = Math.max(minTop, (Number(vp.h) || 0) - (Number(vp.bottom) || 0));
+  const safeWidth = Math.max(0, Number(width) || 0);
+  const safeHeight = Math.max(0, Number(height) || 0);
+  const maxLeft = Math.max(minLeft, rightEdge - safeWidth);
+  const maxTop = Math.max(minTop, bottomEdge - safeHeight);
+  const requestedLeft = Number.isFinite(Number(left)) ? Number(left) : minLeft;
+  const requestedTop = Number.isFinite(Number(top)) ? Number(top) : minTop;
+  return {
+    left: Math.max(minLeft, Math.min(maxLeft, requestedLeft)),
+    top: Math.max(minTop, Math.min(maxTop, requestedTop)),
+  };
+}
+
 export function createWindowManager({
   windowLayer,
   surfaceEl,
@@ -200,16 +218,14 @@ export function createWindowManager({
     let height = Math.min(usableHeight, parsePx(el.style.height) || el.offsetHeight || minHeight);
     width = Math.max(minWidth, width);
     height = Math.max(minHeight, height);
-    const rightEdge = Math.max(vp.left, vp.w - vp.right);
-    const bottomEdge = Math.max(vp.top, vp.h - vp.bottom);
-    const visibleHeaderWidth = Math.min(96, width);
-    const visibleHeaderHeight = 40;
     let left = parsePx(el.style.left);
     let top = parsePx(el.style.top);
-    if (!Number.isFinite(left)) left = vp.left;
-    if (!Number.isFinite(top)) top = vp.top;
-    left = Math.max(vp.left - width + visibleHeaderWidth, Math.min(rightEdge - visibleHeaderWidth, left));
-    top = Math.max(vp.top, Math.min(bottomEdge - visibleHeaderHeight, top));
+    // Normal desktop windows must remain completely reachable. Allowing only
+    // a sliver of the title bar to remain visible made restored or dragged
+    // windows look detached from the Business OS canvas and could cover the
+    // fixed chat composition controls. Width and height have already been
+    // clamped to the usable viewport above, so full-window clamping is safe.
+    ({ left, top } = clampNormalWindowPosition({ left, top, width, height }, vp));
     Object.assign(el.style, {
       left: `${left}px`,
       top: `${top}px`,
@@ -745,12 +761,12 @@ export function createWindowManager({
         initialX = currentX;
         initialY = currentY;
         const vp = getNormalViewport();
-        const top = Math.max(vp.top, Math.min(vp.h - vp.bottom - 40, el.offsetTop - dy));
-        const visibleHeaderWidth = Math.min(96, el.offsetWidth);
-        const left = Math.max(
-          vp.left - el.offsetWidth + visibleHeaderWidth,
-          Math.min(vp.w - vp.right - visibleHeaderWidth, el.offsetLeft - dx),
-        );
+        const { top, left } = clampNormalWindowPosition({
+          left: el.offsetLeft - dx,
+          top: el.offsetTop - dy,
+          width: el.offsetWidth,
+          height: el.offsetHeight,
+        }, vp);
         el.style.top = `${top}px`;
         el.style.left = `${left}px`;
         applySnapPreview(currentX, currentY, { dragStartX, dragStartY });
@@ -769,6 +785,7 @@ export function createWindowManager({
             el.removeAttribute('data-snap-zone');
             if (win.stored?.width) el.style.width = win.stored.width;
             if (win.stored?.height) el.style.height = win.stored.height;
+            constrainNormalWindow(win);
           }
           const newWidth = el.offsetWidth;
           initialX = currentX;
