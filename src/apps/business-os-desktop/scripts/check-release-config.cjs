@@ -33,6 +33,7 @@ function main() {
 
   assert.equal(builderConfig.appId, "ai.metric-space.ctox.business-os-desktop");
   assert.equal(builderConfig.productName, "CTOX Business-OS Desktop Beta");
+  assert.match(builderConfig.executableName, /^[A-Za-z0-9._ -]+$/);
   assert.equal(builderConfig.asar, true);
   assert.equal(builderConfig.icon, "build/icon.png");
   assert.ok(builderConfig.files.includes("src/**/*"), "packaging must include app source");
@@ -58,6 +59,8 @@ function main() {
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.icon)), "macOS icon icns is missing");
   assert.equal(builderConfig.linux?.icon, "build/icon.png");
   assert.equal(builderConfig.linux?.maintainer, packageJson.author);
+  assert.equal(packageJson.desktopName, `${builderConfig.executableName}.desktop`);
+  assert.equal(builderConfig.linux?.syncDesktopName, true);
   assert.equal(builderConfig.appx?.identityName, "MichaelWelsch.ctox");
   assert.equal(builderConfig.appx?.publisher, "CN=A8C36C19-A31B-4FA0-8621-2C0AB781EA66");
   assert.equal(builderConfig.appx?.publisherDisplayName, "Michael Welsch");

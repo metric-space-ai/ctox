@@ -22,6 +22,7 @@ const extraResources = [
 module.exports = {
   appId: "ai.metric-space.ctox.business-os-desktop",
   productName: "CTOX Business-OS Desktop Beta",
+  executableName: "ctox-business-os-desktop",
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   asar: true,
   directories: {
@@ -91,6 +92,7 @@ module.exports = {
     category: "Office",
     icon: "build/icon.png",
     maintainer: "CTOX <oss@ctox.dev>",
+    syncDesktopName: true,
     target: ["AppImage", "deb"],
   },
 };
