@@ -3941,6 +3941,13 @@ async function openWindowedModule(mod, options = {}) {
   if (existing) {
     restoreAndFocusWindow(existing);
     const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
+    if (options.args?.openFile) {
+      state.eventBus?.emitAsync?.('desktop-app:open-file', {
+        appId: mod.id,
+        args: options.args,
+        windowId: existing.id,
+      });
+    }
     if (options.args && !launchDelivered) {
       throw new Error(`Module launch arguments could not be delivered: ${mod.id}`);
     }

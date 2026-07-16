@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
+use std::sync::LazyLock;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
@@ -17,6 +18,11 @@ pub const DOCUMENT_EDITOR_PROTOCOL: &str = "euro-office-word-binary-v10";
 pub const DOCUMENT_EDITOR_PROTOCOL_VERSION: u32 = 10;
 pub const SPREADSHEET_EDITOR_PROTOCOL: &str = "euro-office-cell-binary-v10";
 pub const SPREADSHEET_EDITOR_PROTOCOL_VERSION: u32 = 10;
+
+static DELIMITED_NUMERIC_CELL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+        .expect("numeric delimited-cell regex")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1990,6 +1996,175 @@ pub fn prepare(
             message: "The Rust prepare path validated the complete DOCX package for Euro-Office's native browser OOXML importer.".to_string(),
         }],
     })
+}
+
+/// Convert delimited text into the canonical XLSX package consumed by the
+/// CTOX Spreadsheets fork. Files remains the owner of the original CSV/TSV;
+/// this package is the editable Office representation of the same resource.
+pub fn delimited_text_to_xlsx(source_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    ensure!(
+        !source_bytes.is_empty(),
+        "delimited spreadsheet source is empty"
+    );
+    let delimiter = detect_delimited_text_separator(source_bytes);
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(delimiter)
+        .from_reader(source_bytes);
+    let mut rows = Vec::new();
+    let mut max_columns = 0usize;
+    for (index, record) in reader.records().enumerate() {
+        ensure!(
+            index < 1_048_576,
+            "delimited spreadsheet exceeds the XLSX row limit"
+        );
+        let record = record.context("parse delimited spreadsheet row")?;
+        ensure!(
+            record.len() <= 16_384,
+            "delimited spreadsheet exceeds the XLSX column limit"
+        );
+        let mut row = record.iter().map(str::to_string).collect::<Vec<_>>();
+        if index == 0 {
+            if let Some(first) = row.first_mut() {
+                *first = first.trim_start_matches('\u{feff}').to_string();
+            }
+        }
+        max_columns = max_columns.max(row.len());
+        rows.push(row);
+    }
+    ensure!(!rows.is_empty(), "delimited spreadsheet has no rows");
+
+    let mut shared_string_ids = BTreeMap::<String, u32>::new();
+    let mut shared_strings = Vec::<String>::new();
+    let mut shared_string_uses = 0usize;
+    let mut column_widths = vec![8usize; max_columns];
+    let mut worksheet_rows = String::new();
+    for (row_index, row) in rows.iter().enumerate() {
+        worksheet_rows.push_str(&format!("<row r=\"{}\">", row_index + 1));
+        for (column_index, raw) in row.iter().enumerate() {
+            column_widths[column_index] = column_widths[column_index]
+                .max(raw.chars().count().saturating_add(2))
+                .min(60);
+            let reference = cell_reference(row_index as u32, column_index as u32);
+            let style = if row_index == 0 { " s=\"1\"" } else { "" };
+            if let Some(number) = spreadsheet_number_from_delimited_cell(raw, delimiter) {
+                worksheet_rows.push_str(&format!(
+                    "<c r=\"{reference}\"{style}><v>{}</v></c>",
+                    escape_xml_text(&number)
+                ));
+            } else {
+                let next_id = shared_strings.len() as u32;
+                let id = *shared_string_ids.entry(raw.clone()).or_insert_with(|| {
+                    shared_strings.push(raw.clone());
+                    next_id
+                });
+                shared_string_uses += 1;
+                worksheet_rows.push_str(&format!(
+                    "<c r=\"{reference}\" t=\"s\"{style}><v>{id}</v></c>"
+                ));
+            }
+        }
+        worksheet_rows.push_str("</row>");
+    }
+
+    let mut shared_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"{shared_string_uses}\" uniqueCount=\"{}\">",
+        shared_strings.len()
+    );
+    for value in &shared_strings {
+        shared_xml.push_str(&format!(
+            "<si><t xml:space=\"preserve\">{}</t></si>",
+            escape_xml_text(value)
+        ));
+    }
+    shared_xml.push_str("</sst>");
+
+    let columns_xml = column_widths
+        .iter()
+        .enumerate()
+        .map(|(index, width)| {
+            let column = index + 1;
+            format!("<col min=\"{column}\" max=\"{column}\" width=\"{width}\" customWidth=\"1\"/>")
+        })
+        .collect::<String>();
+    let final_reference = cell_reference(
+        rows.len().saturating_sub(1) as u32,
+        max_columns.saturating_sub(1) as u32,
+    );
+    let worksheet_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"A1:{final_reference}\"/><sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight=\"15\"/><cols>{columns_xml}</cols><sheetData>{worksheet_rows}</sheetData></worksheet>"
+    );
+    let workbook_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Daten\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    let workbook_rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/></Relationships>";
+    let root_rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>";
+    let content_types = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/></Types>";
+    let styles_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"2\"><font><sz val=\"11\"/><name val=\"Arial\"/></font><font><b/><sz val=\"11\"/><name val=\"Arial\"/></font></fonts><fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"2\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/></cellXfs><cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles></styleSheet>";
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (path, bytes) in [
+        ("[Content_Types].xml", content_types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", workbook_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", workbook_rels.as_bytes()),
+        ("xl/styles.xml", styles_xml.as_bytes()),
+        ("xl/sharedStrings.xml", shared_xml.as_bytes()),
+        ("xl/worksheets/sheet1.xml", worksheet_xml.as_bytes()),
+    ] {
+        writer.start_file(path, options)?;
+        writer.write_all(bytes)?;
+    }
+    let bytes = writer.finish()?.into_inner();
+    inspect(OfficeKind::Spreadsheet, &bytes)?;
+    Ok(bytes)
+}
+
+fn detect_delimited_text_separator(source: &[u8]) -> u8 {
+    let mut counts = [(b',', 0usize), (b';', 0usize), (b'\t', 0usize)];
+    let mut quoted = false;
+    for byte in source.iter().copied().take(64 * 1024) {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'\n' | b'\r' if !quoted => break,
+            _ if !quoted => {
+                if let Some((_, count)) =
+                    counts.iter_mut().find(|(candidate, _)| *candidate == byte)
+                {
+                    *count += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| *count > 0)
+        .map(|(delimiter, _)| delimiter)
+        .unwrap_or(b',')
+}
+
+fn spreadsheet_number_from_delimited_cell(value: &str, delimiter: u8) -> Option<String> {
+    if value.is_empty() || value.trim() != value || value.starts_with('+') {
+        return None;
+    }
+    let normalized = if delimiter == b';' && value.contains(',') && !value.contains('.') {
+        value.replace(',', ".")
+    } else {
+        value.to_string()
+    };
+    let numeric = DELIMITED_NUMERIC_CELL.is_match(&normalized);
+    if !numeric
+        || (normalized.len() > 1 && normalized.starts_with('0') && !normalized.starts_with("0."))
+    {
+        return None;
+    }
+    normalized
+        .parse::<f64>()
+        .ok()
+        .filter(|number| number.is_finite())?;
+    Some(normalized)
 }
 
 /// First native Word writer slice. It follows the same length-prefixed record
@@ -14320,6 +14495,52 @@ mod tests {
         assert_eq!(manifest.tables[0].bytes, 2);
         assert_eq!(manifest.tables[1].name, "document");
         assert_eq!(manifest.tables[1].bytes, 3);
+    }
+
+    #[test]
+    fn delimited_text_becomes_a_real_office_spreadsheet_with_typed_numbers() {
+        let source = b"propeller_size,diameter_in,pitch_in,torque_Nm\n9x5,9,5,0.141293\n10x6,10,6,0.250000\n";
+        let xlsx = delimited_text_to_xlsx(source).unwrap();
+        assert!(xlsx.starts_with(b"PK"));
+        let prepared = prepare(
+            OfficeKind::Spreadsheet,
+            &xlsx,
+            PrepareOptions {
+                implemented_features: vec!["spreadsheet.open-render-sheets".to_string()],
+            },
+        )
+        .unwrap();
+        assert!(prepared.editor_payload.starts_with(b"XLSY;v10;0;"));
+        let manifest = prepared.editor_manifest.unwrap();
+        let cells = &manifest.worksheets[0].cells;
+        let cell = |reference: &str| {
+            cells
+                .iter()
+                .find(|cell| cell.reference == reference)
+                .unwrap()
+        };
+        assert_eq!(manifest.worksheets[0].name, "Daten");
+        assert_eq!(cell("A2").value_type, "shared_string");
+        assert_eq!(cell("A2").display, "9x5");
+        assert_eq!(cell("B2").value_type, "number");
+        assert_eq!(cell("B2").display, "9");
+        assert_eq!(cell("D2").value_type, "number");
+        assert_eq!(cell("D2").display, "0.141293");
+    }
+
+    #[test]
+    fn semicolon_csv_with_decimal_commas_keeps_metric_values_numeric() {
+        let source = "Durchmesser;Steigung;Moment_Nm\n9;5;0,141293\n".as_bytes();
+        let xlsx = delimited_text_to_xlsx(source).unwrap();
+        let editor = transcode_spreadsheet_to_editor_payload(&xlsx).unwrap();
+        let manifest = inspect_editor_payload(OfficeKind::Spreadsheet, &editor).unwrap();
+        let torque = manifest.worksheets[0]
+            .cells
+            .iter()
+            .find(|cell| cell.reference == "C2")
+            .unwrap();
+        assert_eq!(torque.value_type, "number");
+        assert_eq!(torque.display, "0.141293");
     }
 
     #[test]

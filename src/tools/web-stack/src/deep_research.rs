@@ -1549,7 +1549,7 @@ fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
 
 fn push_database_sources(
     database: &'static str,
-    query: &str,
+    _query: &str,
     items: Vec<Value>,
     seen_urls: &mut BTreeSet<String>,
     sources: &mut Vec<Value>,

@@ -213,26 +213,31 @@ export function createResearchGraph(host, options = {}) {
       group.add(halo);
     }
 
-    const label = new SpriteText(node.label || node.id);
-    label.color = node.color || '#d6eaf3';
-    label.textHeight = Math.max(3.6, node.labelSize || 5);
-    label.fontFace = 'Inter, ui-sans-serif, system-ui, sans-serif';
-    label.fontWeight = node.primary ? 520 : 440;
-    label.strokeWidth = node.primary ? 1.8 : 1.25;
-    label.strokeColor = BACKGROUND;
-    label.padding = [0.5, 1.1];
-    label.backgroundColor = 'rgba(12,14,15,0.12)';
-    label.center.set(0, 0.5);
-    label.position.set(size * 0.92, 0, node.primary ? size * 0.28 : 0);
-    label.material.depthWrite = false;
-    label.material.depthTest = dimensions !== 2;
-    label.material.transparent = true;
-    label.material.opacity = node.primary ? 0.98 : 0.9;
-    label.renderOrder = 10;
-    label.userData.role = 'label';
-    resources.add(label.material);
-    resources.add(label.material.map);
-    group.add(label);
+    // A graph with a label sprite for every node becomes unreadable long
+    // before it reaches the 120-node default. Keep persistent labels to the
+    // most important concepts; all remaining nodes retain the hover tooltip.
+    if (node.primary || Number(node.rank || 0) <= 28) {
+      const label = new SpriteText(node.label || node.id);
+      label.color = node.color || '#d6eaf3';
+      label.textHeight = Math.min(9, Math.max(3.2, node.labelSize || 4.5));
+      label.fontFace = 'Inter, ui-sans-serif, system-ui, sans-serif';
+      label.fontWeight = node.primary ? 520 : 440;
+      label.strokeWidth = node.primary ? 1.35 : 0.9;
+      label.strokeColor = BACKGROUND;
+      label.padding = [0.35, 0.75];
+      label.backgroundColor = 'rgba(12,14,15,0.18)';
+      label.center.set(0, 0.5);
+      label.position.set(size * 0.92, 0, node.primary ? size * 0.28 : 0);
+      label.material.depthWrite = false;
+      label.material.depthTest = dimensions !== 2;
+      label.material.transparent = true;
+      label.material.opacity = node.primary ? 0.98 : 0.86;
+      label.renderOrder = 10;
+      label.userData.role = 'label';
+      resources.add(label.material);
+      resources.add(label.material.map);
+      group.add(label);
+    }
     nodeObjects.set(node.id, group);
     return group;
   }

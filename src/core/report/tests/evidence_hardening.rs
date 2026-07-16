@@ -1,8 +1,8 @@
+use crate::report::checks::release_guard::run_release_guard_check;
 use crate::report::render::manuscript::build_manuscript;
-use crate::report::schema::{ensure_schema, open};
+use crate::report::schema::{ensure_schema, now_iso, open};
 use crate::report::scoring::{self, CellInput, RubricInput};
 use crate::report::state::{create_run, CreateRunParams};
-use crate::report::store;
 use crate::report::tests::fixtures::{insert_committed_block, TestRoot};
 use crate::report::workspace::Workspace;
 use rusqlite::params;
@@ -22,8 +22,41 @@ fn legacy_run_params() -> CreateRunParams {
 #[test]
 fn legacy_evidence_rows_migrate_as_unverified() {
     let root = TestRoot::new().unwrap();
-    let conn = store::open(root.path()).unwrap();
-    let now = store::now_iso();
+    let conn = open(root.path()).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE report_runs (
+             run_id TEXT PRIMARY KEY,
+             preset TEXT NOT NULL,
+             blueprint_version TEXT NOT NULL,
+             topic TEXT NOT NULL,
+             language TEXT NOT NULL,
+             status TEXT NOT NULL,
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
+         CREATE TABLE report_evidence (
+             evidence_id TEXT PRIMARY KEY,
+             run_id TEXT NOT NULL,
+             citation_kind TEXT NOT NULL,
+             canonical_id TEXT NOT NULL,
+             title TEXT,
+             authors_json TEXT,
+             venue TEXT,
+             year INTEGER,
+             publisher TEXT,
+             landing_url TEXT,
+             full_text_url TEXT,
+             abstract_md TEXT,
+             snippet_md TEXT,
+             retrieved_at TEXT,
+             resolver TEXT,
+             license TEXT,
+             integrity_hash TEXT,
+             created_at TEXT NOT NULL
+         );",
+    )
+    .unwrap();
+    let now = now_iso();
     conn.execute(
         "INSERT INTO report_runs(run_id, preset, blueprint_version, topic, language,
              status, created_at, updated_at)
@@ -55,10 +88,51 @@ fn legacy_evidence_rows_migrate_as_unverified() {
 }
 
 #[test]
+fn workspace_rejects_unverified_evidence_until_all_gates_hold() {
+    let root = TestRoot::new().unwrap();
+    let run_id = create_run(root.path(), legacy_run_params()).unwrap();
+    let conn = open(root.path()).unwrap();
+    ensure_schema(&conn).unwrap();
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO report_evidence_register(
+             evidence_id, run_id, kind, canonical_id, authors_json, resolver_used,
+             raw_payload_json, created_at, updated_at)
+         VALUES('ev-gated', ?1, 'url', 'https://example.test/doc', '[]',
+                'manual', '{}', ?2, ?2)",
+        params![run_id, now],
+    )
+    .unwrap();
+
+    let before = Workspace::load(root.path(), &run_id)
+        .unwrap()
+        .evidence_register()
+        .unwrap();
+    assert_eq!(before.len(), 1);
+    assert!(!before[0].is_evidence_eligible());
+
+    conn.execute(
+        "UPDATE report_evidence_register
+         SET verification_status = 'verified', http_status = 200,
+             snapshot_hash = 'snapshot', evidence_eligible = 1
+         WHERE evidence_id = 'ev-gated'",
+        [],
+    )
+    .unwrap();
+
+    let after = Workspace::load(root.path(), &run_id)
+        .unwrap()
+        .evidence_register()
+        .unwrap();
+    assert!(after[0].is_evidence_eligible());
+}
+
+#[test]
 fn scoring_rejects_unverified_evidence_until_all_gates_hold() {
     let root = TestRoot::new().unwrap();
-    let conn = store::open(root.path()).unwrap();
-    let now = store::now_iso();
+    let conn = open(root.path()).unwrap();
+    ensure_schema(&conn).unwrap();
+    let now = now_iso();
     conn.execute(
         "INSERT INTO report_runs(run_id, preset, blueprint_version, topic, language,
              status, created_at, updated_at)
@@ -138,10 +212,19 @@ fn manuscript_drops_unverified_reference_ids() {
              raw_payload_json, created_at, updated_at)
          VALUES('ev-unverified', ?1, 'url', 'https://example.test/doc', '[]',
                 'manual', '{}', ?2, ?2)",
-        params![run_id, store::now_iso()],
+        params![run_id, now_iso()],
     )
     .unwrap();
     let workspace = Workspace::load(root.path(), &run_id).unwrap();
     let manuscript = build_manuscript(&workspace).unwrap();
     assert!(manuscript.references.is_empty());
+
+    let guard = run_release_guard_check(&workspace).unwrap();
+    let issues = guard.raw_payload["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue["lint_id"] == "LINT-CITED-BUT-MISSING"
+            && issue["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("verifizierte Evidenz"))
+    }));
 }

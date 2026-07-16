@@ -148,7 +148,12 @@ function installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataReque
     (details, callback) => {
       const cancel = isForbiddenBusinessOsHttpDataRequest(details.url)
         || (typeof isForbiddenBusinessOsDataResourceRequest === "function"
-          && isForbiddenBusinessOsDataResourceRequest(details.url, details.resourceType, launchOrigin));
+          && isForbiddenBusinessOsDataResourceRequest(
+            details.url,
+            details.resourceType,
+            launchOrigin,
+            details.method,
+          ));
       callback({ cancel: Boolean(cancel) });
     },
   );

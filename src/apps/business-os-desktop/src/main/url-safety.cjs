@@ -19,9 +19,40 @@ const ALLOWED_BUSINESS_OS_CONTROL_PATHS = new Set([
 // the only kinds the default-deny boundary constrains, so document/script/style/
 // image/font loads for the shell itself are never blocked.
 const BUSINESS_OS_DATA_RESOURCE_TYPES = new Set(["xhr", "fetch", "websocket", "webSocket"]);
+// Static shell manifests and module assets are intentionally loaded with
+// fetch/XHR. Keep this allowlist path- and method-scoped so the Electron guard
+// can distinguish executable/presentation assets from Business OS data APIs.
+const BUSINESS_OS_STATIC_ASSET_PATHS = new Set([
+  "/system-apps.json",
+  "/modules/registry.json",
+]);
+const BUSINESS_OS_STATIC_ASSET_PREFIXES = [
+  "/assets/",
+  "/desktop-apps/",
+  "/installed-modules/",
+  "/local-modules/",
+  "/modules/",
+  "/shared/",
+  "/vendor/",
+];
 const BUSINESS_OS_STATIC_ASSET_EXTENSIONS = new Set([
-  ".css", ".gif", ".html", ".ico", ".jpeg", ".jpg", ".js", ".json",
-  ".mjs", ".png", ".svg", ".ttf", ".wasm", ".webp", ".woff", ".woff2",
+  "css",
+  "gif",
+  "html",
+  "ico",
+  "jpeg",
+  "jpg",
+  "js",
+  "json",
+  "mjs",
+  "otf",
+  "png",
+  "svg",
+  "ttf",
+  "wasm",
+  "webp",
+  "woff",
+  "woff2",
 ]);
 
 // Schemes the desktop is willing to hand to the OS via shell.openExternal. Never
@@ -98,7 +129,7 @@ function isForbiddenBusinessOsHttpDataRequest(rawUrl) {
 // asset path is blocked. This closes the gap where a NEW or differently-named
 // HTTP data route (e.g. /files, /sync, /business_commands) would otherwise
 // silently bridge Business-OS data off the RxDB/WebRTC plane.
-function isForbiddenBusinessOsDataResourceRequest(rawUrl, resourceType, launchOrigin) {
+function isForbiddenBusinessOsDataResourceRequest(rawUrl, resourceType, launchOrigin, method = "GET") {
   if (!BUSINESS_OS_DATA_RESOURCE_TYPES.has(String(resourceType || ""))) return false;
   let url;
   try {
@@ -114,16 +145,19 @@ function isForbiddenBusinessOsDataResourceRequest(rawUrl, resourceType, launchOr
   const path = normalizePathname(url.pathname);
   if (ALLOWED_BUSINESS_OS_CONTROL_PATHS.has(path)) return false;
   if (path.startsWith("/rxdb/dist/")) return false;
-  if (isBusinessOsStaticAssetPath(path)) return false;
+  if (isAllowedBusinessOsStaticAssetPath(path, method)) return false;
   return true;
 }
 
-function isBusinessOsStaticAssetPath(path) {
-  if (!path.startsWith("/business-os/")) return false;
-  const basename = path.slice(path.lastIndexOf("/") + 1);
-  const extensionIndex = basename.lastIndexOf(".");
-  if (extensionIndex < 1) return false;
-  return BUSINESS_OS_STATIC_ASSET_EXTENSIONS.has(basename.slice(extensionIndex));
+function isAllowedBusinessOsStaticAssetPath(path, method = "GET") {
+  const normalizedMethod = String(method || "GET").trim().toUpperCase();
+  if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") return false;
+  if (BUSINESS_OS_STATIC_ASSET_PATHS.has(path)) return true;
+  if (!BUSINESS_OS_STATIC_ASSET_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
+  const filename = path.slice(path.lastIndexOf("/") + 1);
+  const dot = filename.lastIndexOf(".");
+  if (dot <= 0 || dot === filename.length - 1) return false;
+  return BUSINESS_OS_STATIC_ASSET_EXTENSIONS.has(filename.slice(dot + 1));
 }
 
 function hostOf(origin) {

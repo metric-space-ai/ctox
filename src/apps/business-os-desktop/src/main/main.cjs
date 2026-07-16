@@ -8,6 +8,7 @@ const {
   crashReporter,
   dialog,
   ipcMain,
+  nativeImage,
   session,
   shell,
 } = require("electron");
@@ -40,6 +41,7 @@ const {
   completeCtoxDevLoginFromProtocol,
   openCtoxDevLoginWindow,
 } = require("./ctox-dev-login.cjs");
+const { installNativeFileDragBridge } = require("./file-drag.cjs");
 
 let mainWindow;
 let sourceManager;
@@ -425,6 +427,13 @@ ipcMain.handle("support:create-snapshot", async () => createSupportBundleSnapsho
     platform: process.platform,
   },
 }));
+
+installNativeFileDragBridge({
+  ipcMain,
+  app,
+  nativeImage,
+  viewsProvider: () => views,
+});
 
 app.whenReady().then(async () => {
   protocolHandling.registerDefaultProtocolClient();

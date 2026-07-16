@@ -1116,12 +1116,22 @@ fn knowledge_table_columns(table_key: &str, rows: &[Value]) -> Vec<Value> {
             column_def("source_id", "Source ID", "", "string", "Canonical source identifier used by reports, runbooks, and measurement rows.", ""),
             column_def("title", "Title", "", "string", "Human-readable source title.", ""),
             column_def("source_url", "Source URL", "", "string", "URL or DOI landing page for source verification.", ""),
+            column_def("canonical_url", "Canonical URL", "", "string", "Canonical publisher, repository, standards-body, or manufacturer URL that was actually verified.", ""),
             column_def("source_class", "Source class", "", "string", "Source type such as dataset, scholarly, manufacturer, standard, or web.", ""),
+            column_def("source_tier", "Source tier", "", "string", "Trust tier assigned during verification, for example primary, authoritative secondary, or discovery-only.", ""),
             column_def("bucket", "Bucket", "", "string", "Research bucket used for portfolio mapping.", ""),
             column_def("review_status", "Review status", "", "string", "Review state assigned during source curation.", ""),
+            column_def("verification_status", "Verification status", "", "string", "Machine-readable verification state. Only verified sources may contribute evidence scores, Knowledge claims, or report citations.", ""),
+            column_def("evidence_eligible", "Evidence eligible", "", "boolean", "True only after a relevant source returned a successful response and its retrieved content was stored with a snapshot hash.", ""),
+            column_def("checked_at", "Checked at", "", "datetime", "Timestamp of the latest source reachability and content verification.", ""),
+            column_def("http_status", "HTTP status", "", "number", "HTTP response status observed during the latest verification; redirects must resolve to canonical_url.", "numeric"),
+            column_def("snapshot_hash", "Snapshot hash", "", "string", "Content hash of the stored source snapshot used for extraction, Knowledge claims, and report citations.", ""),
+            column_def("provenance", "Provenance", "", "string", "Retrieval and extraction provenance needed to reproduce the source evidence.", ""),
             column_def("candidate_stage", "Candidate stage", "", "string", "Pipeline stage for the source candidate.", ""),
             column_def("year", "Year", "", "number", "Publication or source year when available.", "numeric"),
             column_def("doi", "DOI", "", "string", "Digital object identifier when available.", ""),
+            column_def("discovery_score", "Discovery score", "", "number", "Search relevance used only to prioritize verification; it is not an evidence score.", "numeric"),
+            column_def("evidence_score", "Evidence score", "", "number", "Evidence strength computed only for evidence-eligible verified sources.", "numeric"),
             column_def("contribution_note", "Contribution note", "", "string", "Why this source matters for the SKF drone-bearing use case.", ""),
             column_def("relevance_to_bearing_design", "Bearing-design relevance", "", "string", "Evidence value for bearing sizing, loads, materials, lubrication, sealing, or reliability.", ""),
             column_def("evidence_note", "Evidence note", "", "string", "Reviewer note about data quality and limitations.", ""),
@@ -1493,6 +1503,33 @@ mod tests {
         assert!(labels.contains(&"Pitch".to_string()));
         assert!(labels.contains(&"Torque".to_string()));
         assert!(labels.contains(&"Tangential equivalent force".to_string()));
+    }
+
+    #[test]
+    fn source_catalog_projection_exposes_verification_and_provenance_columns() {
+        let columns = knowledge_table_columns("source_catalog", &[]);
+        let keys: Vec<&str> = columns
+            .iter()
+            .filter_map(|column| column["key"].as_str())
+            .collect();
+
+        for required in [
+            "canonical_url",
+            "source_tier",
+            "verification_status",
+            "evidence_eligible",
+            "checked_at",
+            "http_status",
+            "snapshot_hash",
+            "provenance",
+            "discovery_score",
+            "evidence_score",
+        ] {
+            assert!(
+                keys.contains(&required),
+                "source catalog must expose {required}"
+            );
+        }
     }
 
     /// An archived catalog row must not be projected.

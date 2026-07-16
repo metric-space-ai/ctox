@@ -146,6 +146,32 @@ describe('Explorer app helpers', () => {
     assert.match(bundledSource, /reportFileIntegrityError/);
   });
 
+  it('supports bidirectional desktop file drag without an HTTP data path', () => {
+    assert.equal(explorer.dataTransferContainsFiles({ files: [{ name: 'input.csv' }], types: [] }), true);
+    assert.equal(explorer.dataTransferContainsFiles({ files: [], types: ['Files'] }), true);
+    assert.equal(explorer.dataTransferContainsFiles({ files: [], types: ['text/plain'] }), false);
+    assert.equal(explorer.safeDownloadName('../unsafe:report?.csv'), '_unsafe_report_.csv');
+    assert.match(explorerSource, /state\.activeSource\.recentSort/);
+    assert.match(explorerSource, /setData\('DownloadURL'/);
+    assert.match(explorerSource, /ctoxBusinessOsDesktop[\s\S]*?startFileDrag/);
+    assert.doesNotMatch(bundledSource, /fetch\([^)]*desktop_files/);
+  });
+
+  it('routes office files to their editing apps and keeps media in the viewer', () => {
+    assert.equal(explorer.associatedAppFor({ label: 'loads.csv', mimeType: 'text/plain' }), 'spreadsheets');
+    assert.equal(explorer.associatedAppFor({ label: 'loads.xlsx', mimeType: 'application/octet-stream' }), 'spreadsheets');
+    assert.equal(explorer.associatedAppFor({ label: 'report.docx', mimeType: 'application/octet-stream' }), 'documents');
+    assert.equal(explorer.associatedAppFor({ label: 'notes.txt', mimeType: 'text/plain' }), 'documents');
+    assert.equal(explorer.associatedAppFor({ label: 'manual.pdf', mimeType: 'application/pdf' }), '');
+    assert.equal(explorer.normalizedMimeType({ label: 'loads.csv', mimeType: 'text/plain' }), 'text/csv');
+    assert.equal(explorer.mimeFromName('report.docx'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  });
+
+  it('delivers file-open intents to an already running module window', () => {
+    assert.match(shellSource, /options\.args\?\.openFile[\s\S]*?'desktop-app:open-file'/);
+    assert.match(explorerSource, /associatedAppFor\(row\)[\s\S]*?openDesktopApp\(associatedApp/);
+  });
+
   it('stores uploaded file chunks in one bulk write without DataURL materialization', async () => {
     assert.doesNotMatch(bundledSource, /readAsDataURL/);
     const chunkWrites = [];

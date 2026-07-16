@@ -306,10 +306,10 @@ function enrichGraph(rawNodes, rawLinks) {
   nodes.forEach((node, rank) => {
     node.rank = rank + 1;
     node.primary = node.kind === 'topic' || rank < Math.min(12, Math.ceil(nodes.length * 0.12));
-    node.visualSize = 2.2 + Math.pow(Math.max(0.015, node.importance), 0.72) * 16.8;
+    node.visualSize = 2.2 + Math.pow(Math.max(0.015, node.importance), 0.72) * 8.4;
     node.labelSize = node.primary
-      ? 7.2 + Math.pow(Math.max(0.02, node.importance), 0.7) * 31
-      : 3.8 + Math.pow(Math.max(0.02, node.importance), 0.8) * 10;
+      ? 4.6 + Math.pow(Math.max(0.02, node.importance), 0.7) * 4.4
+      : 3.2 + Math.pow(Math.max(0.02, node.importance), 0.8) * 2.4;
   });
 
   const maxWeight = Math.max(1, ...links.map((link) => link.weight));

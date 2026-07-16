@@ -5925,6 +5925,14 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
     } else if request.clear_note {
         metadata.remove("status_note");
     }
+    let releases_deferred_work = request
+        .route_status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("pending"));
+    if releases_deferred_work {
+        metadata.remove("not_before");
+        metadata.remove("defer_reason");
+    }
     upsert_communication_message(
         &mut conn,
         UpsertMessage {
@@ -12695,6 +12703,11 @@ fn set_routing_status(
             route_status=excluded.route_status,
             lease_owner=NULL,
             leased_at=NULL,
+            lease_expires_at=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.lease_expires_at END,
+            retry_not_before=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.retry_not_before END,
+            hold_reason=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.hold_reason END,
+            wait_entity_type=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.wait_entity_type END,
+            wait_entity_id=CASE WHEN excluded.route_status='pending' THEN NULL ELSE communication_routing_state.wait_entity_id END,
             acked_at=excluded.acked_at,
             last_error=excluded.last_error,
             updated_at=excluded.updated_at
@@ -14376,6 +14389,94 @@ mod tests {
             .expect("failed to list blocked queue tasks");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].message_key, created.message_key);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn releasing_queue_task_clears_retry_and_defer_state() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-release-defer-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "release deferred queue task".to_string(),
+                prompt: "Resume this task immediately when explicitly released.".to_string(),
+                thread_key: "queue/release-deferred".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "not_before": "2099-01-01T00:00:00Z",
+                    "defer_reason": "review cooldown"
+                })),
+            },
+        )
+        .expect("failed to create deferred queue task");
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state
+             SET route_status='blocked', retry_not_before='2099-01-01T00:00:00Z',
+                 hold_reason='missing_review_evidence', wait_entity_type='review',
+                 wait_entity_id='review-1', lease_expires_at='2099-01-01T00:15:00Z'
+             WHERE message_key=?1",
+            params![&created.message_key],
+        )
+        .expect("failed to seed deferred routing state");
+        drop(conn);
+
+        let released = update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: created.message_key.clone(),
+                route_status: Some("pending".to_string()),
+                status_note: Some("operator release".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to release deferred queue task");
+        assert_eq!(released.route_status, "pending");
+        assert_eq!(
+            queue_task_deferred_until(&root, &created.message_key)
+                .expect("failed to inspect deferred state"),
+            None
+        );
+
+        let conn = open_channel_db(&db_path).expect("failed to reopen channel db");
+        let cleared: (i64, i64, i64, i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT retry_not_before IS NULL, hold_reason IS NULL,
+                        wait_entity_type IS NULL, wait_entity_id IS NULL,
+                        lease_expires_at IS NULL,
+                        json_extract(m.metadata_json, '$.not_before') IS NULL,
+                        json_extract(m.metadata_json, '$.defer_reason') IS NULL
+                 FROM communication_routing_state r
+                 JOIN communication_messages m ON m.message_key=r.message_key
+                 WHERE r.message_key=?1",
+                params![&created.message_key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .expect("failed to verify cleared defer state");
+        assert_eq!(cleared, (1, 1, 1, 1, 1, 1, 1));
 
         let _ = fs::remove_dir_all(&root);
     }

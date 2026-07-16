@@ -1,6 +1,6 @@
 {
   "schema": "ctox.business_os.command_consumer_inventory.v1",
-  "generated_at": "2026-07-11",
+  "generated_at": "2026-07-16",
   "dispatch_consumers": [
     "app.js",
     "desktop-apps/code-editor/app.js",
