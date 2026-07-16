@@ -12,7 +12,7 @@ trap cleanup EXIT
 source "$repo_root/install.sh"
 
 if [[ "$GREPPY_REPO@$GREPPY_REV" != \
-  "https://github.com/metric-space-ai/greppy.git@b5a5582e37a02ebf9181423a91313b05d26220b6" ]]; then
+  "https://github.com/metric-space-ai/greppy.git@560783c82c89150d519822d67fe92b3e2177ab99" ]]; then
   printf 'unexpected Greppy installer provenance: %s@%s\n' "$GREPPY_REPO" "$GREPPY_REV" >&2
   exit 1
 fi
