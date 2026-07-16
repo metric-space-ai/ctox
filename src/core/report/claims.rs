@@ -449,7 +449,12 @@ pub fn add_claim(
     for ev_id in &input.evidence_ids {
         let exists: Option<i64> = conn
             .query_row(
-                "SELECT 1 FROM report_evidence WHERE run_id = ?1 AND evidence_id = ?2",
+                "SELECT 1 FROM report_evidence_register
+                 WHERE run_id = ?1 AND evidence_id = ?2
+                   AND verification_status = 'verified'
+                   AND http_status BETWEEN 200 AND 299
+                   AND NULLIF(trim(snapshot_hash), '') IS NOT NULL
+                   AND evidence_eligible = 1",
                 params![run_id, ev_id],
                 |row| row.get(0),
             )

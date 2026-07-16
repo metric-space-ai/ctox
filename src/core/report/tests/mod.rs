@@ -6,6 +6,7 @@
 mod asset_pack_roundtrip;
 mod checks_smoke;
 mod cli_smoke;
+mod evidence_hardening;
 mod rascon_replay;
 mod release_guard_lints;
 mod workspace_smoke;
@@ -139,9 +140,11 @@ pub mod fixtures {
                  evidence_id, run_id, kind, canonical_id, title, authors_json,
                  venue, year, publisher, url_canonical, url_full_text,
                  license, abstract_md, snippet_md, retrieved_at,
-                 resolver_used, integrity_hash, citations_count
+                 resolver_used, integrity_hash, citations_count,
+                 verification_status, http_status, snapshot_hash, evidence_eligible
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL, NULL, NULL,
-                       NULL, NULL, NULL, ?8, 'manual', NULL, 0)",
+                       NULL, NULL, NULL, ?8, 'manual', NULL, 0,
+                       'verified', 200, 'fixture-snapshot', 1)",
             params![
                 evidence_id,
                 run_id,

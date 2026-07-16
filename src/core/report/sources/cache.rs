@@ -43,6 +43,24 @@ pub struct EvidenceEntry {
     pub citations_count: u32,
     pub created_at: String,
     pub updated_at: String,
+    pub verification_status: String,
+    pub http_status: Option<i64>,
+    pub snapshot_hash: Option<String>,
+    pub evidence_eligible: bool,
+}
+
+impl EvidenceEntry {
+    pub fn is_evidence_eligible(&self) -> bool {
+        self.verification_status == "verified"
+            && self
+                .http_status
+                .is_some_and(|status| (200..=299).contains(&status))
+            && self
+                .snapshot_hash
+                .as_deref()
+                .is_some_and(|hash| !hash.trim().is_empty())
+            && self.evidence_eligible
+    }
 }
 
 pub struct EvidenceCache<'a> {
@@ -73,7 +91,8 @@ impl<'a> EvidenceCache<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT evidence_id, run_id, kind, canonical_id, title, authors_json, venue, year, \
                     publisher, url_canonical, url_full_text, license, abstract_md, snippet_md, \
-                    resolver_used, raw_payload_json, citations_count, created_at, updated_at \
+                    resolver_used, raw_payload_json, citations_count, created_at, updated_at, \
+                    verification_status, http_status, snapshot_hash, evidence_eligible \
              FROM report_evidence_register \
              WHERE run_id = ?1 AND evidence_id = ?2",
         )?;
@@ -112,8 +131,11 @@ impl<'a> EvidenceCache<'a> {
                 "INSERT OR REPLACE INTO report_evidence_register \
                  (evidence_id, run_id, kind, canonical_id, title, authors_json, venue, year, \
                   publisher, url_canonical, url_full_text, license, abstract_md, snippet_md, \
-                  resolver_used, raw_payload_json, citations_count, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+                  full_text_md, full_text_source, full_text_chars, resolver_used, raw_payload_json, \
+                  verification_status, http_status, snapshot_hash, evidence_eligible, \
+                  citations_count, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, NULL, NULL, ?15, ?16, \
+                         'unverified', NULL, NULL, 0, \
                          COALESCE((SELECT citations_count FROM report_evidence_register \
                                    WHERE run_id = ?2 AND evidence_id = ?1), 0), \
                          ?17, ?18)",
@@ -142,11 +164,42 @@ impl<'a> EvidenceCache<'a> {
         Ok(evidence_id)
     }
 
+    pub fn mark_verified(
+        &self,
+        evidence_id: &str,
+        http_status: i64,
+        snapshot_hash: &str,
+    ) -> Result<()> {
+        if !(200..=299).contains(&http_status) {
+            anyhow::bail!("evidence verification requires a 2xx HTTP status");
+        }
+        if snapshot_hash.trim().is_empty() {
+            anyhow::bail!("evidence verification requires a snapshot hash");
+        }
+        self.conn
+            .execute(
+                "UPDATE report_evidence_register
+                 SET verification_status = 'verified', http_status = ?3,
+                     snapshot_hash = ?4, evidence_eligible = 1, updated_at = ?5
+                 WHERE run_id = ?1 AND evidence_id = ?2",
+                params![
+                    self.run_id,
+                    evidence_id,
+                    http_status,
+                    snapshot_hash,
+                    Utc::now().to_rfc3339(),
+                ],
+            )
+            .context("mark evidence register row verified")?;
+        Ok(())
+    }
+
     pub fn list_for_run(&self) -> Result<Vec<EvidenceEntry>> {
         let mut stmt = self.conn.prepare(
             "SELECT evidence_id, run_id, kind, canonical_id, title, authors_json, venue, year, \
                     publisher, url_canonical, url_full_text, license, abstract_md, snippet_md, \
-                    resolver_used, raw_payload_json, citations_count, created_at, updated_at \
+                    resolver_used, raw_payload_json, citations_count, created_at, updated_at, \
+                    verification_status, http_status, snapshot_hash, evidence_eligible \
              FROM report_evidence_register \
              WHERE run_id = ?1 \
              ORDER BY created_at ASC",
@@ -207,6 +260,12 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceEntry> {
     let citations_count: i64 = row.get(16)?;
     let created_at: String = row.get(17)?;
     let updated_at: String = row.get(18)?;
+    let verification_status: String = row
+        .get::<_, Option<String>>(19)?
+        .unwrap_or_else(|| "unverified".to_string());
+    let http_status: Option<i64> = row.get(20)?;
+    let snapshot_hash: Option<String> = row.get(21)?;
+    let evidence_eligible = row.get::<_, Option<i64>>(22)?.unwrap_or(0) != 0;
     let authors: Vec<String> = serde_json::from_str(&authors_json).unwrap_or_default();
     let raw_payload: Value = serde_json::from_str(&raw_payload_json).unwrap_or(Value::Null);
     Ok(EvidenceEntry {
@@ -229,6 +288,10 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceEntry> {
         citations_count: citations_count.max(0) as u32,
         created_at,
         updated_at,
+        verification_status,
+        http_status,
+        snapshot_hash,
+        evidence_eligible,
     })
 }
 
@@ -324,5 +387,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(entry.citations_count, 2);
+    }
+
+    #[test]
+    fn evidence_is_ineligible_until_verified_with_document_snapshot() {
+        let tmp = fresh_root();
+        let conn = open_register_conn(tmp.path()).unwrap();
+        let cache = EvidenceCache::new(&conn, "run-verification");
+        let evidence_id = cache.upsert(&sample_source()).unwrap();
+        let before = cache
+            .lookup(SourceKind::Doi, "10.1234/test")
+            .unwrap()
+            .unwrap();
+        assert!(!before.is_evidence_eligible());
+
+        cache
+            .mark_verified(&evidence_id, 200, "snapshot-hash")
+            .unwrap();
+        let after = cache
+            .lookup(SourceKind::Doi, "10.1234/test")
+            .unwrap()
+            .unwrap();
+        assert!(after.is_evidence_eligible());
+
+        cache
+            .mark_verified(&evidence_id, 302, "other-hash")
+            .unwrap_err();
+        cache.mark_verified(&evidence_id, 200, "").unwrap_err();
     }
 }

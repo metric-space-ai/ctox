@@ -14,6 +14,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use sha2::{Digest, Sha256};
 
 /// Outcome of a single full-text fetch attempt.
 #[derive(Debug, Clone)]
@@ -24,6 +25,8 @@ pub struct FullTextFetch {
     /// operator can later see how the text was obtained. One of
     /// `"open_access_pdf"`, `"open_access_html"`, `"web_read"`.
     pub source_label: String,
+    pub http_status: i64,
+    pub snapshot_hash: String,
 }
 
 /// Decide whether the supplied license string permits an automated
@@ -103,6 +106,12 @@ pub fn fetch_full_text(url: &str) -> Result<FullTextFetch> {
         .get(url)
         .call()
         .with_context(|| format!("HTTP GET failed for full-text URL {url}"))?;
+    let http_status = response.status() as i64;
+    if !(200..=299).contains(&http_status) {
+        return Err(anyhow!(
+            "full-text URL {url} returned non-success HTTP status {http_status}"
+        ));
+    }
 
     let content_type = response
         .header("content-type")
@@ -137,6 +146,8 @@ pub fn fetch_full_text(url: &str) -> Result<FullTextFetch> {
         Ok(FullTextFetch {
             markdown: text,
             source_label: "open_access_pdf".to_string(),
+            http_status,
+            snapshot_hash: sha256_hex(&bytes),
         })
     } else {
         let body = response
@@ -152,8 +163,15 @@ pub fn fetch_full_text(url: &str) -> Result<FullTextFetch> {
         Ok(FullTextFetch {
             markdown: stripped,
             source_label: "open_access_html".to_string(),
+            http_status,
+            snapshot_hash: sha256_hex(body.as_bytes()),
         })
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Coarse HTML-to-text: strip `<script>` / `<style>` blocks, drop tags,

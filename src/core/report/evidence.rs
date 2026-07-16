@@ -1,6 +1,6 @@
 //! `report evidence` — register evidence rows for the run.
 //!
-//! Two paths into `report_evidence`:
+//! Two paths into the canonical `report_evidence_register`:
 //! 1. Direct registration from a structured payload (manual or skill-driven).
 //! 2. Bulk import from a `tools/web-stack` deep_research evidence bundle,
 //!    optionally enriched via Crossref/OpenAlex/arXiv resolvers.
@@ -98,25 +98,34 @@ pub fn upsert_evidence(
     let now = store::now_iso();
     let snippet_for_hash = input.snippet_md.as_deref().unwrap_or("");
     let integrity_hash = sha256_hex(snippet_for_hash);
+    crate::report::schema::ensure_schema(conn)?;
     conn.execute(
-        "INSERT INTO report_evidence(evidence_id, run_id, citation_kind, canonical_id, title,
-            authors_json, venue, year, publisher, landing_url, full_text_url, abstract_md,
-            snippet_md, retrieved_at, resolver, license, integrity_hash, created_at)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+        "INSERT INTO report_evidence_register(
+            evidence_id, run_id, kind, canonical_id, title, authors_json, venue,
+            year, publisher, url_canonical, url_full_text, abstract_md, snippet_md,
+            retrieved_at, resolver_used, license, integrity_hash, created_at,
+            updated_at, verification_status, evidence_eligible)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18,
+                'unverified', 0)
          ON CONFLICT(evidence_id) DO UPDATE SET
             title = excluded.title,
             authors_json = excluded.authors_json,
             venue = excluded.venue,
             year = excluded.year,
             publisher = excluded.publisher,
-            landing_url = excluded.landing_url,
-            full_text_url = excluded.full_text_url,
+            url_canonical = excluded.url_canonical,
+            url_full_text = excluded.url_full_text,
             abstract_md = excluded.abstract_md,
             snippet_md = excluded.snippet_md,
             retrieved_at = excluded.retrieved_at,
-            resolver = excluded.resolver,
+            resolver_used = excluded.resolver_used,
             license = excluded.license,
-            integrity_hash = excluded.integrity_hash",
+            integrity_hash = excluded.integrity_hash,
+            updated_at = excluded.updated_at,
+            verification_status = 'unverified',
+            http_status = NULL,
+            snapshot_hash = NULL,
+            evidence_eligible = 0",
         params![
             evidence_id,
             run_id,
@@ -138,7 +147,7 @@ pub fn upsert_evidence(
             now,
         ],
     )
-    .context("failed to upsert report_evidence")?;
+    .context("failed to upsert report_evidence_register")?;
     state_machine::advance_to(conn, run_id, Status::Gathering)?;
     crate::report::runs::set_next_stage(conn, run_id, Some("score"))?;
     load_evidence(conn, run_id, &evidence_id)?
@@ -147,9 +156,10 @@ pub fn upsert_evidence(
 
 pub fn list_evidence(conn: &Connection, run_id: &str) -> Result<Vec<EvidenceView>> {
     let mut stmt = conn.prepare(
-        "SELECT evidence_id, citation_kind, canonical_id, title, authors_json, venue, year,
-                landing_url, full_text_url, snippet_md, resolver
-         FROM report_evidence WHERE run_id = ?1 ORDER BY created_at ASC",
+        "SELECT evidence_id, kind, canonical_id, title, authors_json, venue, year,
+                url_canonical, url_full_text, snippet_md, resolver_used,
+                verification_status, http_status, snapshot_hash, evidence_eligible
+         FROM report_evidence_register WHERE run_id = ?1 ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
         let authors_json: String = row.get(4)?;
@@ -177,9 +187,10 @@ pub fn load_evidence(
 ) -> Result<Option<EvidenceView>> {
     let row: Option<EvidenceView> = conn
         .query_row(
-            "SELECT evidence_id, citation_kind, canonical_id, title, authors_json, venue, year,
-                    landing_url, full_text_url, snippet_md, resolver
-             FROM report_evidence WHERE run_id = ?1 AND evidence_id = ?2",
+            "SELECT evidence_id, kind, canonical_id, title, authors_json, venue, year,
+                    url_canonical, url_full_text, snippet_md, resolver_used,
+                    verification_status, http_status, snapshot_hash, evidence_eligible
+             FROM report_evidence_register WHERE run_id = ?1 AND evidence_id = ?2",
             params![run_id, evidence_id],
             |row| {
                 let authors_json: String = row.get(4)?;

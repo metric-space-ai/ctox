@@ -209,6 +209,7 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
     let evidence_register = workspace.evidence_register()?;
     let evidence_by_id: HashMap<String, &EvidenceEntry> = evidence_register
         .iter()
+        .filter(|entry| entry.is_evidence_eligible())
         .map(|e| (e.evidence_id.clone(), e))
         .collect();
 
@@ -265,6 +266,7 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
             &active_modules,
             &modules,
             &committed_by_instance,
+            &evidence_by_id,
             &mut used_reference_ids_in_order,
             &mut seen_reference_ids,
             &mut abbreviations,
@@ -354,6 +356,7 @@ fn collect_doc_blocks(
     active_modules: &std::collections::HashSet<&str>,
     modules: &HashMap<String, &OptionalModule>,
     committed_by_instance: &HashMap<String, &BlockRecord>,
+    eligible_evidence_by_id: &HashMap<String, &EvidenceEntry>,
     used_reference_ids_in_order: &mut Vec<String>,
     seen_reference_ids: &mut std::collections::HashSet<String>,
     abbreviations: &mut Vec<AbbreviationRow>,
@@ -409,7 +412,9 @@ fn collect_doc_blocks(
 
         // Track reference usage in document order for the bibliography.
         for ref_id in &record.used_reference_ids {
-            if seen_reference_ids.insert(ref_id.clone()) {
+            if eligible_evidence_by_id.contains_key(ref_id)
+                && seen_reference_ids.insert(ref_id.clone())
+            {
                 used_reference_ids_in_order.push(ref_id.clone());
             }
         }
@@ -664,19 +669,6 @@ fn build_references(
                     .clone()
                     .or_else(|| entry.url_full_text.clone())
                     .unwrap_or_default(),
-            });
-        } else {
-            // Unknown reference id: keep the slot but leave the metadata
-            // empty so the renderer can still print [n] markers.
-            out.push(ReferenceEntry {
-                ref_n: n,
-                evidence_id: ref_id.clone(),
-                kind: String::new(),
-                authors: String::new(),
-                year: None,
-                title: ref_id.clone(),
-                venue: String::new(),
-                url: String::new(),
             });
         }
     }
