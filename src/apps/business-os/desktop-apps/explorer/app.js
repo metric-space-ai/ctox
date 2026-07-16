@@ -15,6 +15,8 @@ export const manifest = {
 
 const ROOT_ID = 'fs_root';
 const CHUNK_SIZE = 16 * 1024;
+const SPREADSHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xlsx', 'json']);
+const DOCUMENT_EXTENSIONS = new Set(['docx', 'md', 'markdown', 'txt']);
 const FILE_SOURCE = { id: 'desktop_files', label: 'Files', section: 'On this Desktop', mark: 'FS', moduleId: null, kind: 'File System', filesystem: true, fileCollection: true };
 const RECENT_CREATED_SOURCE = { id: 'recent_created', collectionId: 'desktop_files', label: 'Zuletzt erstellt', section: 'On this Desktop', mark: 'NEU', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'created' };
 const RECENT_MODIFIED_SOURCE = { id: 'recent_modified', collectionId: 'desktop_files', label: 'Zuletzt geändert', section: 'On this Desktop', mark: 'ZEIT', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'modified' };
@@ -47,6 +49,7 @@ export async function mount(container, ctx) {
     selectedId: '',
     rows: [],
     previewUrl: '',
+    dragExports: new Map(),
     lastLoad: null,
   };
 
@@ -129,14 +132,17 @@ export async function mount(container, ctx) {
   refs.newFolder.addEventListener('click', promptCreateFolder);
   refs.upload.addEventListener('click', openUploadDialog);
   refs.root.addEventListener('dragover', (event) => {
-    if (!isFilesystemSource()) return;
+    if (!canAcceptFileDrop() || !dataTransferContainsFiles(event.dataTransfer)) return;
     event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     refs.root.classList.add('is-dragging-files');
   });
   refs.root.addEventListener('dragleave', () => refs.root.classList.remove('is-dragging-files'));
   refs.root.addEventListener('drop', async (event) => {
-    if (!isFilesystemSource()) return;
+    if (!canAcceptFileDrop() || !dataTransferContainsFiles(event.dataTransfer)) return;
     event.preventDefault();
+    event.stopPropagation();
     refs.root.classList.remove('is-dragging-files');
     await uploadFiles(event.dataTransfer?.files);
   });
@@ -289,7 +295,7 @@ export async function mount(container, ctx) {
     refs.title.textContent = isFilesystemSource() ? folder?.name || 'Files' : state.activeSource.label;
     refs.up.disabled = !isFilesystemSource() || state.currentFolderId === ROOT_ID;
     refs.newFolder.hidden = !isFilesystemSource();
-    refs.upload.hidden = !isFilesystemSource();
+    refs.upload.hidden = !canAcceptFileDrop();
     refs.refresh.setAttribute('aria-label', `Aktualisieren: ${state.activeSource.label}`);
   }
 
@@ -361,6 +367,18 @@ export async function mount(container, ctx) {
     `;
     item.addEventListener('click', () => selectRow(row));
     item.addEventListener('dblclick', () => openRow(row));
+    if (row.sourceId === FILE_SOURCE.id && !row.isFolder) {
+      item.draggable = true;
+      item.title = `${row.label} ziehen oder doppelklicken`;
+      const prepare = () => {
+        void prepareDragExport(row).catch(() => undefined);
+      };
+      item.addEventListener('pointerenter', prepare);
+      item.addEventListener('focus', prepare);
+      item.addEventListener('mousedown', prepare);
+      item.addEventListener('dragstart', (event) => startFileDrag(event, row));
+      item.addEventListener('dragend', () => item.classList.remove('is-dragging-out'));
+    }
     item.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
@@ -398,6 +416,75 @@ export async function mount(container, ctx) {
       node.setAttribute('aria-selected', node.dataset.id === row.id ? 'true' : 'false');
     });
     renderPreview(row);
+    if (row.sourceId === FILE_SOURCE.id && !row.isFolder) {
+      void prepareDragExport(row).catch(() => undefined);
+    }
+  }
+
+  async function prepareDragExport(row) {
+    const existing = state.dragExports.get(row.id);
+    if (existing?.url) return existing;
+    if (existing?.promise) return existing.promise;
+    const promise = (async () => {
+      const mimeType = normalizedMimeType(row);
+      const blob = await readStoredFile(ctx, row.id, mimeType, row);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const entry = {
+        blob,
+        bytes,
+        mimeType,
+        name: safeDownloadName(row.label),
+        url: URL.createObjectURL(blob),
+      };
+      state.dragExports.set(row.id, entry);
+      return entry;
+    })().catch((error) => {
+      state.dragExports.delete(row.id);
+      throw error;
+    });
+    state.dragExports.set(row.id, { promise });
+    return promise;
+  }
+
+  function startFileDrag(event, row) {
+    const prepared = state.dragExports.get(row.id);
+    if (!prepared?.url) {
+      event.preventDefault();
+      void prepareDragExport(row)
+        .then(() => ctx.notifications?.info?.(`${row.label} ist zum Herausziehen bereit.`))
+        .catch((error) => renderDragError(row, error));
+      return;
+    }
+    const desktopBridge = globalThis.ctoxBusinessOsDesktop;
+    if (typeof desktopBridge?.startFileDrag === 'function') {
+      event.preventDefault();
+      desktopBridge.startFileDrag({
+        name: prepared.name,
+        mimeType: prepared.mimeType,
+        bytes: prepared.bytes,
+      });
+    } else if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('DownloadURL', `${prepared.mimeType}:${prepared.name}:${prepared.url}`);
+      event.dataTransfer.setData('text/uri-list', prepared.url);
+      event.dataTransfer.setData('text/plain', prepared.name);
+    }
+    event.currentTarget?.classList.add('is-dragging-out');
+  }
+
+  function renderDragError(row, error) {
+    ctx.reportFileIntegrityError?.(error, {
+      fileId: row.id,
+      mimeType: row.mimeType,
+      contentState: row.contentState,
+      contentGenerationId: row.contentGenerationId,
+      contentHashScheme: row.contentHashScheme,
+      operation: 'drag_export',
+    });
+    const body = refs.preview.querySelector('[data-preview-body]');
+    if (body) {
+      body.innerHTML = `<p class="app-explorer-message is-error">Datei konnte nicht zum Herausziehen vorbereitet werden: ${escapeHtml(error?.message || error)}</p>`;
+    }
   }
 
   function renderPreview(row) {
@@ -415,7 +502,7 @@ export async function mount(container, ctx) {
         <dt>Geändert</dt><dd>${escapeHtml(row.modified || '-')}</dd>
         <dt>ID</dt><dd>${escapeHtml(row.id)}</dd>
       </dl>
-      <button type="button" data-preview-open>${row.sourceId === FILE_SOURCE.id ? 'Öffnen' : 'Im Modul öffnen'}</button>
+      <button type="button" data-preview-open>${escapeHtml(openLabelFor(row))}</button>
       ${row.sourceId === FILE_SOURCE.id && !row.isFolder ? '<button type="button" data-preview-download>Herunterladen</button>' : ''}
     `;
     refs.preview.querySelector('[data-preview-open]')?.addEventListener('click', () => openRow(row));
@@ -466,6 +553,29 @@ export async function mount(container, ctx) {
         await loadRows();
         return;
       }
+      const associatedApp = associatedAppFor(row);
+      if (associatedApp && typeof ctx.openDesktopApp === 'function') {
+        try {
+          const blob = await readStoredFile(ctx, row.id, normalizedMimeType(row), row);
+          const file = new File([blob], row.label, {
+            type: normalizedMimeType(row),
+            lastModified: timestampFor(row.raw) || Date.now(),
+          });
+          await ctx.openDesktopApp(associatedApp, {
+            args: {
+              openFile: {
+                file,
+                sourceFileId: row.id,
+                sourcePath: row.localPath || row.path,
+              },
+            },
+          });
+          return;
+        } catch (error) {
+          renderOpenError(row, associatedApp, error);
+          return;
+        }
+      }
       if (typeof ctx.openDesktopApp === 'function') {
         ctx.openDesktopApp('file-viewer', {
           title: row.label,
@@ -507,6 +617,21 @@ export async function mount(container, ctx) {
       return;
     }
     if (row?.moduleId) location.hash = `#${encodeURIComponent(row.moduleId)}?record=${encodeURIComponent(row.id)}`;
+  }
+
+  function renderOpenError(row, appId, error) {
+    ctx.reportFileIntegrityError?.(error, {
+      fileId: row.id,
+      mimeType: row.mimeType,
+      contentState: row.contentState,
+      contentGenerationId: row.contentGenerationId,
+      contentHashScheme: row.contentHashScheme,
+      targetApp: appId,
+    });
+    const body = refs.preview.querySelector('[data-preview-body]');
+    if (body) {
+      body.innerHTML = `<p class="app-explorer-message is-error">Datei konnte nicht in ${escapeHtml(appTitle(appId))} geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
+    }
   }
 
   async function downloadRow(row) {
@@ -582,12 +707,29 @@ export async function mount(container, ctx) {
   }
 
   async function uploadFiles(fileList) {
-    if (!isFilesystemSource() || !fileList?.length) return;
-    const existingNames = state.rows.map((row) => row.label);
+    if (!canAcceptFileDrop() || !fileList?.length) return;
+    const targetFolder = isFilesystemSource() ? currentFolder() : state.folderDocs.get(ROOT_ID);
+    const targetFolderId = isFilesystemSource() ? state.currentFolderId : ROOT_ID;
+    const targetPath = targetFolder?.path || '/';
+    const filesCollection = ctx.db?.collection?.('desktop_files');
+    const existingDocs = await filesCollection?.find({}).exec?.() || [];
+    const existingNames = existingDocs
+      .map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+      .filter((entry) => !entry.is_deleted && entry.parent_id === targetFolderId)
+      .map((entry) => entry.name);
     for (const file of [...fileList]) {
       const name = uniqueName(file.name || 'Datei', existingNames);
       existingNames.push(name);
-      await storeFile(ctx.db, state.currentFolderId, currentFolder()?.path || '/', name, file);
+      await storeFile(ctx.db, targetFolderId, targetPath, name, file);
+    }
+    if (!isFilesystemSource()) {
+      state.activeSource = FILE_SOURCE;
+      state.currentFolderId = targetFolderId;
+      state.selectedId = '';
+      state.query = '';
+      refs.search.value = '';
+      refs.root.classList.add('is-filesystem');
+      renderSidebar();
     }
     await loadRows();
   }
@@ -694,6 +836,10 @@ export async function mount(container, ctx) {
     return state.activeSource.filesystem === true;
   }
 
+  function canAcceptFileDrop() {
+    return isFilesystemSource() || Boolean(state.activeSource.recentSort);
+  }
+
   function isFileCollectionSource() {
     return state.activeSource.fileCollection === true;
   }
@@ -731,6 +877,10 @@ export async function mount(container, ctx) {
   return () => {
     disposed = true;
     revokePreviewUrl();
+    for (const entry of state.dragExports.values()) {
+      if (entry?.url) URL.revokeObjectURL(entry.url);
+    }
+    state.dragExports.clear();
     container.replaceChildren();
   };
 }
@@ -1033,6 +1183,53 @@ function isPreviewable(row) {
   return row.mimeType?.startsWith('image/') || row.mimeType?.startsWith('text/') || ['application/json', 'application/xml'].includes(row.mimeType);
 }
 
+function associatedAppFor(row = {}) {
+  if (row.isFolder) return '';
+  const extension = extensionFor(row.label || row.path || '');
+  const mimeType = String(row.mimeType || '').toLowerCase();
+  if (SPREADSHEET_EXTENSIONS.has(extension)
+    || mimeType === 'text/csv'
+    || mimeType === 'text/tab-separated-values'
+    || mimeType.includes('spreadsheetml')) return 'spreadsheets';
+  if (DOCUMENT_EXTENSIONS.has(extension)
+    || mimeType === 'text/markdown'
+    || mimeType.includes('wordprocessingml')) return 'documents';
+  return '';
+}
+
+function normalizedMimeType(row = {}) {
+  const fromName = mimeFromName(row.label || row.path || '');
+  const current = String(row.mimeType || '').trim().toLowerCase();
+  if (!current || current === 'application/octet-stream' || current === 'text/plain') return fromName;
+  return current;
+}
+
+function dataTransferContainsFiles(dataTransfer) {
+  if (!dataTransfer) return false;
+  if (Number(dataTransfer.files?.length || 0) > 0) return true;
+  return Array.from(dataTransfer.types || []).includes('Files');
+}
+
+function safeDownloadName(value) {
+  const name = String(value || 'Datei')
+    .replace(/[\u0000-\u001f<>:"/\\|?*]+/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  return (name || 'Datei').slice(0, 180);
+}
+
+function openLabelFor(row = {}) {
+  const appId = row.sourceId === FILE_SOURCE.id ? associatedAppFor(row) : '';
+  if (appId) return `In ${appTitle(appId)} öffnen`;
+  return row.sourceId === FILE_SOURCE.id ? 'Öffnen' : 'Im Modul öffnen';
+}
+
+function appTitle(appId) {
+  if (appId === 'spreadsheets') return 'Spreadsheets';
+  if (appId === 'documents') return 'Documents';
+  return 'der passenden App';
+}
+
 function labelFor(data) {
   return data.title || data.label || data.name || data.subject || data.filename || data.id || 'Unbenannt';
 }
@@ -1089,8 +1286,13 @@ function mimeKind(mime) {
 
 function mimeFromName(name) {
   const extension = extensionFor(name);
-  if (extension === 'txt' || extension === 'md' || extension === 'csv') return 'text/plain';
+  if (extension === 'txt') return 'text/plain';
+  if (extension === 'md' || extension === 'markdown') return 'text/markdown';
+  if (extension === 'csv') return 'text/csv';
+  if (extension === 'tsv') return 'text/tab-separated-values';
   if (extension === 'json') return 'application/json';
+  if (extension === 'xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (extension === 'docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (extension === 'png') return 'image/png';
   if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
   if (extension === 'gif') return 'image/gif';
@@ -1648,12 +1850,16 @@ export const __explorerTestHooks = {
   FILE_SOURCE,
   SOURCES,
   ensureFileSystem,
+  associatedAppFor,
+  dataTransferContainsFiles,
   formatBytes,
   joinPath,
   mimeFromName,
+  normalizedMimeType,
   normalizeBusinessRow,
   normalizeFileRow,
   normalizeRowsForSource,
+  safeDownloadName,
   storeFile,
   uniqueName,
   validateEntryName,

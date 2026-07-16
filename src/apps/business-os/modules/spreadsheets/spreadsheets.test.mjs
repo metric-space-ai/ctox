@@ -91,6 +91,15 @@ test('import validation requires a supported spreadsheet file', () => {
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, false);
 });
 
+test('file-open deduplication reuses the imported spreadsheet with the same source hash', () => {
+  const records = [
+    { id: 'sheet_other', source_sha256: 'aaaa' },
+    { id: 'sheet_loads', source_sha256: 'BEEF' },
+  ];
+  assert.equal(hooks.spreadsheetBySourceSha(records, 'beef')?.id, 'sheet_loads');
+  assert.equal(hooks.spreadsheetBySourceSha(records, 'missing'), null);
+});
+
 test('spreadsheet engine selection defaults to CTOX Spreadsheets and preserves explicit legacy rollback', () => {
   assert.equal(hooks.officeEngineFromSettings({}), 'ctox_spreadsheets');
   assert.equal(hooks.officeEngineFromSettings({ office: { spreadsheets_engine: 'legacy' } }), 'legacy');

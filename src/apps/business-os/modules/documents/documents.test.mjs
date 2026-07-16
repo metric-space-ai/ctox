@@ -146,8 +146,17 @@ test('documents become stale when their linked knowledge item is newer', () => {
 test('import validation requires a supported file', () => {
   assert.equal(hooks.validateImportInput({ file: null }).valid, false);
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.md', { type: 'text/plain' }) }).valid, true);
-  assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, false);
+  assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, true);
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'image.png', { type: 'image/png' }) }).valid, false);
+});
+
+test('file-open deduplication reuses the imported document with the same source hash', () => {
+  const records = [
+    { id: 'doc_other', source_sha256: 'aaaa' },
+    { id: 'doc_report', source_sha256: 'CAFE' },
+  ];
+  assert.equal(hooks.documentBySourceSha(records, 'cafe')?.id, 'doc_report');
+  assert.equal(hooks.documentBySourceSha(records, 'missing'), null);
 });
 
 test('document blob chunks are persisted with one bulk write', async () => {

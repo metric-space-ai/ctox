@@ -165,6 +165,11 @@ test('research module catalog grants knowledge and document collections', async 
   assert.ok(registryModule, 'registry exposes the research module');
   assert.deepEqual(moduleJson.collections, required);
   assert.deepEqual(registryModule.collections, required);
+  assert.equal(moduleJson.launch_kind, 'desktop-app');
+  assert.equal(moduleJson.layout.shell, 'windowed');
+  assert.equal(moduleJson.presentation.default_mode, 'window');
+  assert.equal(registryModule.launch_kind, 'desktop-app');
+  assert.equal(registryModule.layout.shell, 'windowed');
 });
 
 test('presentation layer stays compact and shell-native', async () => {

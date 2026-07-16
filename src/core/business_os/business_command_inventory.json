@@ -51,8 +51,7 @@
     "ctox.subscription_auth.start",
     "ctox.task.delete",
     "ctox.task.update",
-    "knowledge.command",
-    "web_stack.person_research"
+    "knowledge.command"
   ],
   "predicate_control_types": [
     "ats.consent.check",
@@ -224,7 +223,6 @@
     "is_customers_active_command(command_type)",
     "is_iot_active_command(command_type)",
     "is_outbound_active_command(command_type)",
-    "super::external_sql_sync::is_external_sql_command(command_type)",
     "super::support::is_support_command(command_type)",
     "super::threads::is_threads_command(command_type)"
   ],

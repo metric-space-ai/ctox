@@ -153,12 +153,18 @@ export async function mount(ctx) {
     localSubscriptionCleanup: null,
     contextMenu: null,
     contextMenuCleanup: null,
+    openFileToken: null,
+    openFilePromise: Promise.resolve(),
     disposed: false,
     t,
     lang: ctx.locale === 'en' ? 'en' : 'de',
   };
 
   wireModule(state);
+  state.openFileToken = ctx.eventBus?.on?.('desktop-app:open-file', (payload = {}) => {
+    if (payload.appId !== 'documents') return;
+    enqueueDocumentOpenFile(state, payload.args?.openFile);
+  }) || null;
   state.localSubscriptionCleanup = wireLocalRealtime(state);
   // Mount the workbench immediately. Seed/query work can legitimately wait
   // for WebRTC catch-up and must not leave the window-manager promise pending
@@ -169,7 +175,9 @@ export async function mount(ctx) {
   Promise.resolve()
     .then(() => ensureSeedRunbooks(ctx))
     .then(() => Promise.all([refreshRunbooks(state), refreshDocuments(state), refreshOfficeEngineSettings(state)]))
-    .then(() => {
+    .then(async () => {
+      if (state.disposed) return;
+      if (ctx.args?.openFile) await enqueueDocumentOpenFile(state, ctx.args.openFile);
       if (state.disposed) return;
       renderLeft(state);
       renderRight(state);
@@ -182,12 +190,51 @@ export async function mount(ctx) {
     state.disposed = true;
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
     state.contextMenuCleanup?.();
+    if (state.openFileToken) ctx.eventBus?.off?.('desktop-app:open-file', state.openFileToken);
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
     flushActiveEditorDraft(state).catch((error) => console.error('[documents] final editor draft save failed', error));
     state.editorHandle?.destroy?.();
   };
+}
+
+function enqueueDocumentOpenFile(state, input) {
+  if (!input?.file) return state.openFilePromise;
+  state.openFilePromise = state.openFilePromise
+    .then(() => openDocumentFile(state, input))
+    .catch((error) => {
+      console.error('[documents] opening file from Files failed', error);
+      renderError(state, error?.message || String(error));
+      return null;
+    });
+  return state.openFilePromise;
+}
+
+async function openDocumentFile(state, input) {
+  const file = input?.file;
+  const validation = validateImportInput({ file });
+  if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sourceSha = await sha256Hex(bytes);
+  await refreshDocuments(state);
+  const existing = documentBySourceSha(state.documents, sourceSha);
+  if (existing) {
+    state.selectedId = existing.id;
+    state.selectedVersion = null;
+    await loadSelectedVersion(state);
+    renderLeft(state);
+    renderRight(state);
+    renderCenter(state);
+    return existing;
+  }
+  return importDocumentFile(state, file);
+}
+
+function documentBySourceSha(records = [], sourceSha = '') {
+  const expected = String(sourceSha || '').trim().toLowerCase();
+  if (!expected) return null;
+  return records.find((record) => String(record?.source_sha256 || '').trim().toLowerCase() === expected) || null;
 }
 
 async function loadDocumentFormatModule() {
@@ -518,10 +565,10 @@ async function createMarkdownDocument(state, input = {}) {
 async function importDocumentFile(state, file, workflow = {}) {
   requireDocumentPersistence(state.ctx);
   if (!isSupportedDocumentFile(file)) {
-    renderError(state, 'Nur .docx, .md oder .markdown Dateien werden akzeptiert.');
+    renderError(state, 'Nur .docx, .md, .markdown oder .txt Dateien werden akzeptiert.');
     return null;
   }
-  const isMarkdown = isMarkdownFile(file);
+  const isMarkdown = isMarkdownFile(file) || isTextFile(file);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const documentId = `doc_${crypto.randomUUID()}`;
   const versionId = `${documentId}_v1`;
@@ -549,7 +596,7 @@ async function importDocumentFile(state, file, workflow = {}) {
     id: versionId,
     document_id: documentId,
     version: 1,
-    source_kind: isMarkdown ? 'imported_markdown' : 'imported_docx',
+    source_kind: isTextFile(file) ? 'imported_text' : isMarkdown ? 'imported_markdown' : 'imported_docx',
     blob_id: blobId,
     model_json: parsed.document,
     diagnostics: parsed.diagnostics,
@@ -1487,7 +1534,7 @@ function validateImportInput(input = {}) {
     return { valid: false, key: 'validationFileRequired', message: 'Datei erforderlich.' };
   }
   if (!isSupportedDocumentFile(file)) {
-    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur DOCX oder Markdown.' };
+    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur DOCX, Markdown oder Text.' };
   }
   if (input.importMode === 'runbook' && !String(input.runbookId || '').trim()) {
     return { valid: false, key: 'validationRunbookRequired', message: 'Runbook fehlt.' };
@@ -2593,7 +2640,7 @@ function renderError(state, message) {
 }
 
 function isSupportedDocumentFile(file) {
-  return isDocxFile(file) || isMarkdownFile(file);
+  return isDocxFile(file) || isMarkdownFile(file) || isTextFile(file);
 }
 
 function isDocxFile(file) {
@@ -2603,6 +2650,10 @@ function isDocxFile(file) {
 function isMarkdownFile(file) {
   const hasMarkdownExtension = /\.(md|markdown)$/i.test(file.name);
   return file.type === MARKDOWN_MIME || (hasMarkdownExtension && (!file.type || file.type === 'text/plain'));
+}
+
+function isTextFile(file) {
+  return /\.txt$/i.test(file.name) && (!file.type || file.type === 'text/plain');
 }
 
 function isMarkdownFilename(filename) {
@@ -2641,7 +2692,7 @@ function actionIcon(state, name, size = 16, strokeWidth = 1.8) {
 }
 
 function titleFromFilename(filename) {
-  return filename.replace(/\.(docx|md|markdown)$/i, '').trim() || 'Untitled document';
+  return filename.replace(/\.(docx|md|markdown|txt)$/i, '').trim() || 'Untitled document';
 }
 
 function sanitizeDocumentTitle(value) {
@@ -2720,6 +2771,7 @@ function ensureSuperDocStyles() {
 
 export const __documentsTestHooks = {
   documentKnowledgeLink,
+  documentBySourceSha,
   isDocumentKnowledgeStale,
   isActiveDocumentRecord,
   knowledgeCandidates,

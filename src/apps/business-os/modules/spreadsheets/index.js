@@ -103,6 +103,8 @@ export async function mount(ctx) {
     tagFilter: 'all',
     sortBy: 'updated_desc',
     localSubscriptionCleanup: null,
+    openFileToken: null,
+    openFilePromise: Promise.resolve(),
     contextMenu: null,
     contextMenuCleanup: null,
     t,
@@ -111,6 +113,10 @@ export async function mount(ctx) {
 
   // Wire event handlers and load libs
   wireModule(state);
+  state.openFileToken = ctx.eventBus?.on?.('desktop-app:open-file', (payload = {}) => {
+    if (payload.appId !== 'spreadsheets') return;
+    enqueueSpreadsheetOpenFile(state, payload.args?.openFile);
+  }) || null;
   state.localSubscriptionCleanup = wireLocalRealtime(state);
   let disposed = false;
   renderLeft(state);
@@ -127,6 +133,10 @@ export async function mount(ctx) {
         refreshOfficeEngineSettings(state).catch((error) => console.warn('[spreadsheets] office engine settings failed', error)),
       ]);
       if (disposed) return;
+      if (ctx.args?.openFile) {
+        await enqueueSpreadsheetOpenFile(state, ctx.args.openFile);
+      }
+      if (disposed) return;
       if (state.selectedId) {
         await loadSelectedVersion(state).catch((error) => {
           console.warn('[spreadsheets] initial selected version load failed', error);
@@ -142,6 +152,7 @@ export async function mount(ctx) {
     disposed = true;
     if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
     state.contextMenuCleanup?.();
+    if (state.openFileToken) ctx.eventBus?.off?.('desktop-app:open-file', state.openFileToken);
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
@@ -154,6 +165,50 @@ export async function mount(ctx) {
     }
     state.editorHandle = null;
   };
+}
+
+function enqueueSpreadsheetOpenFile(state, input) {
+  if (!input?.file) return state.openFilePromise;
+  state.openFilePromise = state.openFilePromise
+    .then(() => openSpreadsheetFile(state, input))
+    .catch((error) => {
+      console.error('[spreadsheets] opening file from Files failed', error);
+      renderSpreadsheetOpenError(state, error);
+      return null;
+    });
+  return state.openFilePromise;
+}
+
+async function openSpreadsheetFile(state, input) {
+  const file = input?.file;
+  const validation = validateImportInput({ file });
+  if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sourceSha = await sha256Hex(bytes);
+  await refreshSpreadsheets(state);
+  const existing = spreadsheetBySourceSha(state.spreadsheets, sourceSha);
+  if (existing) {
+    state.selectedId = existing.id;
+    state.selectedVersion = null;
+    await loadSelectedVersion(state);
+    renderLeft(state);
+    renderRight(state);
+    renderCenter(state);
+    return existing;
+  }
+  await importSpreadsheetFile(state, file);
+  return selectedRecord(state);
+}
+
+function spreadsheetBySourceSha(records = [], sourceSha = '') {
+  const expected = String(sourceSha || '').trim().toLowerCase();
+  if (!expected) return null;
+  return records.find((record) => String(record?.source_sha256 || '').trim().toLowerCase() === expected) || null;
+}
+
+function renderSpreadsheetOpenError(state, error) {
+  const host = state.ctx.host.querySelector('[data-spreadsheets-editor]') || state.ctx.host;
+  host.innerHTML = `<div class="spreadsheets-empty"><strong>Datei konnte nicht geöffnet werden</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
 }
 
 async function ensureSpreadsheetRuntimeReady(ctx) {
@@ -2180,6 +2235,7 @@ export const __spreadsheetsTestHooks = {
   normalizeSpreadsheetRecord,
   normalizeSpreadsheetModel,
   officeEngineFromSettings,
+  spreadsheetBySourceSha,
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,

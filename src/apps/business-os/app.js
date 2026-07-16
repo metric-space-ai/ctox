@@ -52,7 +52,7 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260716-files-research-sync-v106';
+const APP_BUILD = '20260716-file-bridge-v108';
 
 ensureShellStylesheets();
 
@@ -3837,6 +3837,13 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
+    if (options.args?.openFile) {
+      state.eventBus?.emitAsync?.('desktop-app:open-file', {
+        appId: mod.id,
+        args: options.args,
+        windowId: existing.id,
+      });
+    }
     return existing.id;
   }
   const win = state.windowManager.create({
