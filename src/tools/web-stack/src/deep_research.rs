@@ -292,6 +292,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         });
                     }
                     Err(err) => {
+                        mark_source_read_failure(&mut source, "transport_not_verified");
                         source["read"] = json!({
                             "ok": false,
                             "url": url,
@@ -302,6 +303,13 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     }
                 }
             }
+        } else {
+            let reason = if is_non_scoreable_source(&source) {
+                "metadata_or_aggregator"
+            } else {
+                "read_not_attempted"
+            };
+            mark_source_not_read(&mut source, reason);
         }
         enriched.push(source);
     }
@@ -1170,6 +1178,22 @@ fn read_has_meaningful_evidence(read: &Value) -> bool {
                         })
                 })
             })
+}
+
+fn mark_source_read_failure(source: &mut Value, reason: &str) {
+    source["verification_status"] = Value::String("failed".to_string());
+    source["transport_verified"] = Value::Bool(false);
+    source["content_extracted"] = Value::Bool(false);
+    source["evidence_eligible"] = Value::Bool(false);
+    source["evidence_rejection_reason"] = Value::String(reason.to_string());
+}
+
+fn mark_source_not_read(source: &mut Value, reason: &str) {
+    source["verification_status"] = Value::String("unverified".to_string());
+    source["transport_verified"] = Value::Bool(false);
+    source["content_extracted"] = Value::Bool(false);
+    source["evidence_eligible"] = Value::Bool(false);
+    source["evidence_rejection_reason"] = Value::String(reason.to_string());
 }
 
 fn is_meaningful_evidence_text(text: &str) -> bool {
@@ -2599,6 +2623,23 @@ mod tests {
         );
         source["discovery_score"] = Value::Number(16.into());
         assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn read_failures_are_explicit_on_the_source_envelope() {
+        let mut source = json!({
+            "verification_status": "unverified",
+            "evidence_eligible": true,
+        });
+        mark_source_read_failure(&mut source, "transport_not_verified");
+        assert_eq!(source["verification_status"], "failed");
+        assert_eq!(source["transport_verified"], false);
+        assert_eq!(source["content_extracted"], false);
+        assert_eq!(source["evidence_eligible"], false);
+        assert_eq!(
+            source["evidence_rejection_reason"],
+            "transport_not_verified"
+        );
     }
 
     #[test]
