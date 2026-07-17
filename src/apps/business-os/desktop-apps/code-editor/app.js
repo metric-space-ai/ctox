@@ -31,6 +31,8 @@ export async function mount(container, ctx) {
     model: null,
     usingMonaco: false,
     diffOpen: false,
+    historyOpen: false,
+    commits: [],
     sourceDenied: false,
     lockedModule: Boolean(ctx.args?.lockedModule),
   };
@@ -62,6 +64,8 @@ export async function mount(container, ctx) {
             <button type="button" data-source-revert aria-label="Änderungen verwerfen" title="Änderungen verwerfen"><span aria-hidden="true">↶</span><span>Revert</span></button>
             <button type="button" data-source-reload aria-label="Neu laden" title="Neu laden"><span aria-hidden="true">↻</span><span>Laden</span></button>
             <button type="button" data-source-save aria-label="Speichern" title="Speichern"><span aria-hidden="true">✓</span><span>Speichern</span></button>
+            <button type="button" data-source-commit aria-label="Commit erstellen" title="Änderungen als Commit versiegeln"><span aria-hidden="true">⎇</span><span>Commit</span></button>
+            <button type="button" data-source-history aria-label="History anzeigen" title="Commit-History"><span aria-hidden="true">≡</span><span>History</span></button>
           </div>
         </header>
         <div class="source-editor-workbench" data-source-workbench>
@@ -75,6 +79,7 @@ export async function mount(container, ctx) {
             <span>Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.</span>
           </div>
           <aside class="source-editor-diff" data-source-diff-panel hidden></aside>
+          <aside class="source-editor-diff source-editor-history" data-source-history-panel hidden></aside>
         </div>
         <footer class="source-editor-status" data-source-status>Lade Source...</footer>
       </main>
@@ -99,6 +104,9 @@ export async function mount(container, ctx) {
     openApp: container.querySelector('[data-source-open-app]'),
     diff: container.querySelector('[data-source-diff]'),
     diffPanel: container.querySelector('[data-source-diff-panel]'),
+    commit: container.querySelector('[data-source-commit]'),
+    history: container.querySelector('[data-source-history]'),
+    historyPanel: container.querySelector('[data-source-history-panel]'),
     monacoHost: container.querySelector('[data-source-monaco]'),
     fallback: container.querySelector('[data-source-fallback]'),
     placeholder: container.querySelector('[data-source-placeholder]'),
@@ -146,6 +154,21 @@ export async function mount(container, ctx) {
     if (!state.moduleId) return;
     if (typeof ctx.showApp === 'function') ctx.showApp();
     else location.hash = `#${encodeURIComponent(state.moduleId)}`;
+  });
+  refs.commit.addEventListener('click', commitActiveModule);
+  refs.history.addEventListener('click', () => {
+    if (!state.moduleId) return;
+    state.historyOpen = !state.historyOpen;
+    if (state.historyOpen && state.diffOpen) {
+      state.diffOpen = false;
+      refs.diffPanel.hidden = true;
+      refs.diff.classList.remove('is-active');
+      refs.diff.setAttribute('aria-pressed', 'false');
+    }
+    refs.historyPanel.hidden = !state.historyOpen;
+    refs.history.classList.toggle('is-active', state.historyOpen);
+    refs.history.setAttribute('aria-pressed', state.historyOpen ? 'true' : 'false');
+    if (state.historyOpen) renderHistory();
   });
 
   const monacoReady = initMonaco().catch((error) => {
@@ -635,13 +658,86 @@ export async function mount(container, ctx) {
     refs.revert.disabled = !actions.revert;
     refs.reload.disabled = !actions.reload;
     refs.save.disabled = !actions.save;
+    if (refs.commit) refs.commit.disabled = !state.moduleId || state.readonly || state.saving || state.loading;
+    if (refs.history) refs.history.disabled = !state.moduleId;
   }
 
   async function ensureSourceReplication() {
     await Promise.all([
       ctx.sync?.startCollection?.('business_module_source_files'),
+      ctx.sync?.startCollection?.('business_module_commits'),
       ctx.sync?.startCollection?.('business_commands'),
     ]);
+  }
+
+  async function loadCommitsFromRxdb() {
+    const collection = ctx.db?.collection?.('business_module_commits');
+    if (!collection) return [];
+    const docs = await collection.find({
+      selector: { module_id: state.moduleId },
+    }).exec();
+    return docs
+      .map((doc) => (doc.toJSON ? doc.toJSON() : doc))
+      .filter((commit) => !commit._deleted)
+      .sort((left, right) => Number(right.seq || 0) - Number(left.seq || 0));
+  }
+
+  async function renderHistory() {
+    if (!refs.historyPanel) return;
+    refs.historyPanel.innerHTML = '<p class="source-editor-empty">Lade History…</p>';
+    let commits = [];
+    try {
+      commits = await loadCommitsFromRxdb();
+    } catch (error) {
+      refs.historyPanel.innerHTML = `<p class="source-editor-empty">History nicht verfügbar: ${escapeHtml(String(error?.message || error))}</p>`;
+      return;
+    }
+    state.commits = commits;
+    if (!commits.length) {
+      refs.historyPanel.innerHTML = '<p class="source-editor-empty">Noch keine Commits. „Commit" versiegelt die aktuellen Änderungen zu einem Versionspunkt.</p>';
+      return;
+    }
+    const rows = commits.map((commit) => {
+      const when = Number(commit.authored_at_ms || commit.created_at_ms || 0);
+      const stamp = when ? new Date(when).toLocaleString() : '';
+      const message = escapeHtml(String(commit.message || commit.origin || 'commit'));
+      const meta = escapeHtml(`#${commit.seq ?? '?'} · ${commit.author || 'unbekannt'}${stamp ? ` · ${stamp}` : ''}`);
+      const files = Array.isArray(commit.file_manifest) ? commit.file_manifest.length : 0;
+      return `<li class="source-editor-commit"><strong>${message}</strong><span>${meta}</span><span class="source-editor-commit-files">${files} Datei${files === 1 ? '' : 'en'}</span></li>`;
+    }).join('');
+    refs.historyPanel.innerHTML = `<ol class="source-editor-commit-list" aria-label="Commit-History">${rows}</ol>`;
+  }
+
+  async function commitActiveModule() {
+    if (!state.moduleId || state.readonly || state.saving) return;
+    const message = (typeof window !== 'undefined' && typeof window.prompt === 'function')
+      ? window.prompt('Commit-Nachricht:', '')
+      : '';
+    if (message === null) return; // cancelled
+    state.saving = true;
+    updateActionState();
+    setStatus('Committe Änderungen…');
+    try {
+      const accepted = await dispatchSourceCommand('ctox.source.commit', {
+        module_id: state.moduleId,
+        message: String(message || '').trim(),
+        title: `Commit ${state.moduleId} source`,
+      });
+      const result = accepted?.result || {};
+      if (result.ok === false) {
+        setStatus(result.error || 'Nichts zu committen.', true);
+      } else {
+        const seq = result.commit?.seq;
+        setStatus(`Commit erstellt${seq != null ? ` (#${seq})` : ''}.`);
+        if (state.historyOpen) await renderHistory();
+      }
+    } catch (error) {
+      console.error('[source-editor] commit failed:', error);
+      setStatus(`Commit fehlgeschlagen: ${error?.message || error}`, true);
+    } finally {
+      state.saving = false;
+      updateActionState();
+    }
   }
 
   async function loadSourceFilesFromRxdb() {
