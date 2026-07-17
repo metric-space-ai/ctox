@@ -9184,7 +9184,7 @@ fn record_report_command(
             "severity": severity,
             "surface": "business-os",
             "description": summary,
-            "evidence": client_context,
+            "evidence": redact_client_context_secrets(&client_context),
             "payload": {
                 "kind": kind,
                 "expected": expected,
@@ -19130,6 +19130,12 @@ fn upsert_rxdb_collection_record_with_writer(
             Value::Number(serde_json::Number::from(updated_at_ms)),
         );
     }
+    // SECURITY: strip bearer credentials from client_context on the FINAL merged
+    // document before it lands in the replicated RxDB store. Applied post-merge so
+    // a capability_token that survived a deep-merge from an earlier peer-authored
+    // record is scrubbed too. The verified token lives only in the native
+    // business_commands.client_context_json column, which peers never receive.
+    redact_document_client_context_secrets(&mut payload);
     let mut columns = vec!["id".to_string(), "data".to_string()];
     let mut values = vec![
         SqlValue::Text(record_id.to_string()),
@@ -37753,6 +37759,59 @@ fn command_prompt_sensitive_key(key: &str) -> bool {
         || key.ends_with("_private_key")
 }
 
+/// Deep-strip bearer-credential keys — most importantly the native-signed
+/// `capability_token` the browser attaches to Business OS commands — from a
+/// `client_context` value before it is written into any peer-visible /
+/// replicated representation.
+///
+/// SECURITY: the verified token is consumed from the *in-memory* command and
+/// from the native `business_commands.client_context_json` column (which
+/// `load_business_command` re-reads for execution-time revalidation) BEFORE this
+/// runs, so redaction never affects authorization, signing, or dispatch. It only
+/// prevents the live token from replicating to other chef/admin peers who could
+/// otherwise harvest it from their local replica and replay it at the sync layer
+/// until it expires. Legitimate context (actor.id, actor.user_id, display_name,
+/// scope, module_id, …) is preserved byte-for-byte; only keys that name a bearer
+/// credential (`command_prompt_sensitive_key`) are dropped, at any nesting depth.
+fn redact_client_context_secrets(client_context: &Value) -> Value {
+    match client_context {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (key, child) in map {
+                if command_prompt_sensitive_key(key) {
+                    continue;
+                }
+                out.insert(key.clone(), redact_client_context_secrets(child));
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(redact_client_context_secrets).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Redact bearer credentials from the `client_context` field of a document about
+/// to be written into a peer-visible / replicated store. Applied at the two
+/// low-level store writers (`upsert_business_record` and
+/// `upsert_rxdb_collection_record_with_writer`) so no projection, outbox, or
+/// merge path can leak a live capability token to other peers. This runs on the
+/// FINAL payload after any merge with the existing record, so a token that
+/// survived a deep-merge from an earlier (browser-authored) document is also
+/// stripped.
+fn redact_document_client_context_secrets(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if let Some(context) = object.get("client_context") {
+        if context.is_object() || context.is_array() {
+            let redacted = redact_client_context_secrets(context);
+            object.insert("client_context".to_string(), redacted);
+        }
+    }
+}
+
 fn business_os_app_command_prompt(
     command_id: &str,
     command: &BusinessCommand,
@@ -38168,6 +38227,10 @@ pub(super) fn upsert_business_record(
         obj.insert("_deleted".to_string(), Value::Bool(false));
         obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
     }
+    // SECURITY: strip bearer credentials (capability_token, …) from client_context
+    // before this record replicates to peers. The verified token is retained only
+    // in the native business_commands.client_context_json column, never here.
+    redact_document_client_context_secrets(&mut payload);
     conn.execute(
         "INSERT INTO business_records
             (collection, record_id, rev, deleted, updated_at_ms, payload_json)
@@ -42313,6 +42376,202 @@ mod tests {
             trusted.get("status").and_then(Value::as_str),
             Some("completed"),
             "trusted-local CLI command must not be downgraded"
+        );
+        Ok(())
+    }
+
+    // SYNC-10: the native-signed capability_token is verified from the in-memory
+    // command and retained ONLY in the native business_commands.client_context_json
+    // column (for execution-time revalidation). It must never survive into any
+    // peer-visible / replicated representation, where a chef/admin peer could
+    // harvest and replay it.
+    #[test]
+    fn redact_client_context_secrets_strips_capability_token_preserves_actor() {
+        let context = serde_json::json!({
+            "actor": { "id": "chef1", "user_id": "chef1", "display_name": "Chef One" },
+            "user_id": "chef1",
+            "scope": { "module_id": "ats", "visible_scope": "team" },
+            "capability_token": "SIGNED_BEARER_TOKEN_SHOULD_NOT_LEAK",
+        });
+        let redacted = redact_client_context_secrets(&context);
+        assert!(
+            redacted.get("capability_token").is_none(),
+            "capability_token must be dropped"
+        );
+        // Every legitimate field survives byte-for-byte.
+        assert_eq!(
+            redacted.pointer("/actor/id").and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert_eq!(
+            redacted.pointer("/actor/user_id").and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert_eq!(
+            redacted
+                .pointer("/actor/display_name")
+                .and_then(Value::as_str),
+            Some("Chef One")
+        );
+        assert_eq!(
+            redacted.get("user_id").and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert_eq!(
+            redacted.pointer("/scope/module_id").and_then(Value::as_str),
+            Some("ats")
+        );
+        assert!(!serde_json::to_string(&redacted)
+            .unwrap()
+            .contains("SIGNED_BEARER_TOKEN_SHOULD_NOT_LEAK"));
+    }
+
+    #[test]
+    fn redact_client_context_secrets_strips_sibling_bearer_keys_at_any_depth() {
+        let context = serde_json::json!({
+            "actor": { "id": "u1" },
+            "authorization": "Bearer leak",
+            "session_secret": "leak",
+            "access_token": "leak",
+            "refresh_token": "leak",
+            "nested": { "capability_token": "leak", "keep": "value" },
+            "list": [{ "id_token": "leak", "keep": "value" }],
+        });
+        let redacted = redact_client_context_secrets(&context);
+        let serialized = serde_json::to_string(&redacted).unwrap();
+        assert!(
+            !serialized.contains("leak"),
+            "no bearer credential may survive, got: {serialized}"
+        );
+        assert_eq!(
+            redacted.pointer("/actor/id").and_then(Value::as_str),
+            Some("u1")
+        );
+        assert_eq!(
+            redacted.pointer("/nested/keep").and_then(Value::as_str),
+            Some("value")
+        );
+        assert_eq!(
+            redacted.pointer("/list/0/keep").and_then(Value::as_str),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn redact_client_context_secrets_leaves_token_free_context_unchanged() {
+        let context = serde_json::json!({
+            "actor": { "id": "u1", "display_name": "User One" },
+            "scope": { "module_id": "ats" },
+            "mode": "app",
+        });
+        assert_eq!(redact_client_context_secrets(&context), context);
+    }
+
+    // Chokepoint applied post-merge (as the RxDB store writer does): a token that
+    // survived a deep-merge from an earlier document is scrubbed from the FINAL
+    // payload before it is written to a peer-visible store.
+    #[test]
+    fn redact_document_client_context_secrets_scrubs_merged_payload_field() {
+        let mut doc = serde_json::json!({
+            "id": "cmd_x",
+            "status": "accepted",
+            "client_context": {
+                "actor": { "id": "chef1" },
+                "capability_token": "MERGE_RETAINED_TOKEN_SHOULD_NOT_LEAK",
+            },
+        });
+        redact_document_client_context_secrets(&mut doc);
+        assert!(doc.pointer("/client_context/capability_token").is_none());
+        assert_eq!(
+            doc.pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert_eq!(doc.get("status").and_then(Value::as_str), Some("accepted"));
+    }
+
+    // End-to-end via the real persist path: a command carrying a valid token is
+    // verified and dispatched, the token is RETAINED in the native
+    // business_commands.client_context_json (so execution-time revalidation still
+    // sees it), yet the replicated business_records projection is scrubbed and the
+    // token remains independently valid.
+    #[test]
+    fn capability_token_redacted_in_projection_but_retained_natively() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        let now = now_ms() as i64;
+        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+
+        let cid = "cmd_sync10_redact";
+        let accepted = accept_rxdb_business_command_with_origin(
+            root.path(),
+            serde_json::json!({
+                "id": cid,
+                "command_id": cid,
+                "module": "ats",
+                "command_type": "ats.intake.capture",
+                "payload": { "name": "T", "email": "t@example.test" },
+                "client_context": {
+                    "actor": { "id": "chef1", "user_id": "chef1", "display_name": "Chef One" },
+                    "capability_token": chef_token,
+                },
+            }),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(
+            accepted.get("status").and_then(Value::as_str),
+            Some("completed"),
+            "a valid chef token must verify and dispatch"
+        );
+
+        let conn = open_store(root.path())?;
+
+        // Native canonical column retains the token — revalidation depends on it.
+        let native_ctx: String = conn.query_row(
+            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            params![cid],
+            |row| row.get(0),
+        )?;
+        assert!(
+            native_ctx.contains(&chef_token),
+            "capability token must be retained in the native business_commands column"
+        );
+        let reloaded = load_business_command(&conn, cid)?;
+        assert_eq!(
+            reloaded
+                .client_context
+                .get("capability_token")
+                .and_then(Value::as_str),
+            Some(chef_token.as_str())
+        );
+
+        // Replicated projection is scrubbed but keeps the non-secret actor context.
+        let projected = outbound_load_required(&conn, "business_commands", cid, "command")?;
+        let projected_str = serde_json::to_string(&projected)?;
+        assert!(
+            !projected_str.contains(&chef_token),
+            "capability token leaked into the replicated business_commands projection: {projected_str}"
+        );
+        assert!(
+            projected
+                .pointer("/client_context/capability_token")
+                .is_none(),
+            "client_context must not carry the token in the replicated projection"
+        );
+        assert_eq!(
+            projected
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chef1"),
+            "non-secret actor context must survive redaction"
+        );
+        drop(conn);
+
+        // The retained token is still a valid, replayable-by-native credential —
+        // proving redaction ran AFTER verification, not before it.
+        assert_eq!(
+            verify_capability_actor(root.path(), &chef_token).map(|(id, _)| id),
+            Some("chef1".to_string())
         );
         Ok(())
     }
