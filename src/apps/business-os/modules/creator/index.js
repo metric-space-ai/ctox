@@ -348,10 +348,10 @@ function renderCreatorRightRail(host) {
 
 function renderInstalledAppCard(app) {
   return `
-    <article class="creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}" data-context-record-id="${escapeHtml(app.id)}" data-context-record-type="application" data-context-label="${escapeHtml(app.title || app.id)}">
+    <article class="ctox-list-item creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}" data-context-record-id="${escapeHtml(app.id)}" data-context-record-type="application" data-context-label="${escapeHtml(app.title || app.id)}">
       <div class="creator-mini-card-main">
         <strong>${escapeHtml(app.title)}</strong>
-        <span>${escapeHtml(app.category)} · ${escapeHtml(app.version)}</span>
+        <span class="creator-mini-card-meta">${escapeHtml(app.category)} · ${escapeHtml(app.version)}</span>
         ${app.description ? `<p>${escapeHtml(app.description)}</p>` : ''}
       </div>
       <div class="creator-mini-actions">
@@ -384,10 +384,10 @@ function creatorActionIcon(name, size = 16) {
 function renderCreatorRequestCard(item) {
   const request = item.request.length > 140 ? `${item.request.slice(0, 137)}...` : item.request;
   return `
-    <article class="creator-mini-card" data-creator-request="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="app-request" data-context-label="${escapeHtml(item.title || item.id)}">
+    <article class="ctox-list-item creator-mini-card" data-creator-request="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="app-request" data-context-label="${escapeHtml(item.title || item.id)}">
       <div class="creator-mini-card-main">
         <strong>${escapeHtml(item.title)}</strong>
-        <span>${escapeHtml(item.status)}</span>
+        <span class="ctox-badge">${escapeHtml(item.status)}</span>
         <p>${escapeHtml(request)}</p>
       </div>
       <div class="creator-mini-actions">
@@ -503,7 +503,7 @@ function wireUi(host) {
       const row = document.createElement('div');
       row.className = 'collection-row';
       row.innerHTML = `
-        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(coll)}</span>
+        <span class="creator-collection-name">${escapeHtml(coll)}</span>
         <button type="button" class="ctox-icon-button is-danger" data-remove-idx="${idx}" aria-label="Datentabelle ${coll} entfernen" title="Datentabelle entfernen">
           ${creatorActionIcon('close')}
         </button>
@@ -592,7 +592,7 @@ function wireUi(host) {
 
   function renderInspirationUrls() {
     inspirationList.innerHTML = state.inspirationUrls.map((url, index) => `
-      <span class="creator-url-chip">
+      <span class="ctox-badge creator-url-chip">
         <span title="${escapeHtml(url)}">${escapeHtml(url)}</span>
         <button type="button" data-remove-inspiration="${index}" aria-label="${escapeHtml(state.t('removeInspiration', 'URL entfernen'))}">×</button>
       </span>

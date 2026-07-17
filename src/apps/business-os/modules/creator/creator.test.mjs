@@ -185,10 +185,13 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
   assert.doesNotMatch(presentationSource, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
   assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix|var\(--panel-shadow\))/);
-  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) minmax\(240px, 290px\)/);
-  assert.match(css, /@container business-app-window \(max-width: 820px\)/);
-  assert.match(css, /@container business-app-window \(max-width: 560px\)/);
+  // Frame is now the shared kit workspace with the shell-wired declarative
+  // column resizer (was a module-owned grid + custom resizer before the
+  // standard-class migration).
+  assert.match(html, /class="ctox-workspace[^"]*"[^>]*data-resize-frame/);
+  assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
+  assert.match(css, /@container business-app-window \(max-width: 760px\)/);
+  assert.match(css, /@container business-app-window \(max-width: 520px\)/);
   assert.match(html, /data-example-prompts/);
   assert.match(html, /id="creator-inspiration-url"/);
-  assert.doesNotMatch(html, /data-resizer-var=/);
 });

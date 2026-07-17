@@ -1,20 +1,17 @@
+/* Creator — module-specific CSS only. Frame, panes, resizer, pane headers,
+   labels, inputs, buttons, badges, chips, lists and empty states come from
+   shared/base.css + app.css (the standard shell/kit classes). */
+
 .creator-module[data-creator-root] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 290px);
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-sans);
+  /* Standard two-pane frame: library rail left, composer canvas right.
+     The rail width is a custom property so the shell-owned declarative
+     resizer ([data-resizer-var="--ctox-left-width"]) works without module JS. */
+  --ctox-left-width: 290px;
 }
 
-.creator-module [hidden] { display: none !important; }
-
+/* custom: the composer is a centered, document-style form canvas (prompt,
+   examples, options), not a data pane — content column is width-capped. */
 .creator-workspace {
-  min-width: 0;
-  overflow: auto;
   padding: clamp(18px, 3vw, 38px);
 }
 
@@ -23,74 +20,36 @@
   margin-inline: auto;
 }
 
-.creator-intro { margin-bottom: 22px; }
-
-.os-kicker {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-
-.os-title {
-  margin: 0;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: clamp(24px, 3vw, 34px);
-  font-weight: 720;
-  line-height: 1.12;
-}
-
-.os-subtitle {
-  max-width: 640px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
 .creator-composer {
   padding-bottom: 22px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
+/* custom: large central prompt field — the signature input of this app. */
 .creator-request-textarea {
   min-height: 150px;
   max-height: 300px;
   margin-top: 7px;
-  padding: 14px;
-  font-size: 15px;
-  line-height: 1.55;
-  resize: vertical;
 }
 
 .creator-inspiration { margin-top: 14px; }
 
+/* custom: section heading + explanatory hint pairing inside the composer
+   canvas (the kit has no heading-with-hint composite outside pane headers). */
 .creator-section-heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 3px;
   margin-bottom: 9px;
 }
 
-.creator-section-heading strong {
-  display: block;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
+.creator-section-heading .ctox-field-label { margin: 0; }
+
+.creator-hint {
+  margin: 0;
+  color: var(--muted);
 }
 
-.creator-section-heading span {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
+.creator-intro .creator-hint { margin-top: 6px; }
 
 .creator-url-row {
   display: grid;
@@ -98,6 +57,8 @@
   gap: 8px;
 }
 
+/* custom: removable reference token — kit badge plus URL ellipsis and a bare
+   remove button (the kit chip is a clickable filter, this one is static). */
 .creator-url-list {
   display: flex;
   flex-wrap: wrap;
@@ -105,20 +66,9 @@
   margin-top: 8px;
 }
 
-.creator-url-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  max-width: 100%;
-  padding: 5px 7px 5px 9px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  color: var(--muted);
-  background: var(--surface-2);
-  font-size: 11px;
-}
+.creator-url-chip { max-width: 100%; }
 
-.creator-url-chip span {
+.creator-url-chip > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -130,14 +80,15 @@
   padding: 0;
   background: transparent;
   color: inherit;
+  font: inherit;
   cursor: pointer;
 }
 
+/* custom: inline form-readiness status line (data-state is a JS hook). */
 .creator-request-diagnostics {
   min-height: 18px;
   margin: 9px 0 0;
   color: var(--muted);
-  font-size: 11px;
 }
 
 .creator-request-diagnostics[data-state="ready"] { color: var(--success); }
@@ -145,43 +96,45 @@
 
 .creator-examples { padding: 22px 0; }
 
+/* custom: prompt suggestion picker — a bordered two-column choice grid with
+   accent hover, not a data list or table. */
 .creator-example-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--hairline, var(--line));
 }
 
 .creator-example {
   min-width: 0;
   padding: 12px 12px 12px 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline, var(--line));
   background: transparent;
   color: var(--text);
+  font: inherit;
   text-align: left;
   cursor: pointer;
   transition: color 120ms ease, transform 120ms ease;
 }
 
-.creator-example:nth-child(odd) { border-right: 1px solid var(--line); }
+.creator-example:nth-child(odd) { border-right: 1px solid var(--hairline, var(--line)); }
 .creator-example:nth-child(even) { padding-left: 12px; }
 .creator-example:hover { color: var(--accent); transform: translateX(2px); }
-.creator-example:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.creator-example:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .creator-example strong,
 .creator-example span { display: block; }
-.creator-example strong { font-size: 13px; }
 .creator-example span {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
   line-height: 1.4;
 }
 
+/* custom: progressive-disclosure sections (the kit has no accordion pattern). */
 .creator-options,
 .creator-status-details,
 .creator-requests-details {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--hairline, var(--line));
 }
 
 .creator-options summary,
@@ -189,7 +142,6 @@
 .creator-requests-details summary {
   padding: 12px 0;
   color: var(--muted);
-  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -200,13 +152,14 @@
   padding: 4px 0 18px;
 }
 
-.form-group { display: grid; gap: 6px; }
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+/* custom: form layout helpers for the options grid (visual only). */
+.creator-form-group { display: grid; gap: 6px; }
+.creator-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .creator-options-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .collections-editor {
   padding: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: var(--surface-2);
 }
@@ -220,6 +173,19 @@
 .collection-row:last-child { margin-bottom: 0; }
 .collection-row .ctox-input { flex: 1; }
 
+/* custom: mono collection-name chip inside a collection row. */
+.creator-collection-name {
+  flex: 1;
+  overflow: hidden;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* custom: sticky composer action bar — readiness status plus the single
+   signature .ctox-run-control of this app. */
 .creator-submit {
   position: sticky;
   bottom: -1px;
@@ -229,8 +195,8 @@
   justify-content: space-between;
   gap: 14px;
   padding: 14px 0;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
+  border-top: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
 }
 
 .creator-submit #btn-deploy-app {
@@ -238,13 +204,14 @@
   justify-content: space-between;
 }
 
+/* custom: live readiness dot (sync-dot/is-blocked/is-ready/is-saving are JS
+   hooks set via className in index.js). */
 .sync-status {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
 }
 
 .sync-dot {
@@ -259,6 +226,7 @@
 .sync-dot.is-saving { background: var(--warning); animation: creator-pulse .8s infinite alternate; }
 @keyframes creator-pulse { from { opacity: .35; } to { opacity: 1; } }
 
+/* custom: technical log console — mono diagnostic stream, not kit content. */
 .creator-status-details { margin-top: 2px; }
 .console-logs {
   max-height: 140px;
@@ -274,101 +242,70 @@
 .console-log-entry.warning { color: var(--warning); }
 .console-log-entry.error { color: var(--danger); }
 
-.creator-library {
-  min-width: 0;
-  overflow: hidden;
-  border-left: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.creator-library-header {
-  padding: 20px 14px 13px;
-  border-bottom: 1px solid var(--line);
-}
-
+/* Library rail content layout (pane frame/header/scroll/list/empty are kit). */
 .creator-right-body {
   display: grid;
   align-content: start;
   gap: 18px;
-  height: calc(100% - 72px);
   padding: 12px;
-  overflow: auto;
 }
 
 .creator-right-block { display: grid; gap: 8px; }
-.creator-section-heading--compact { margin-bottom: 0; }
-.creator-right-list { display: grid; gap: 7px; }
 
-.creator-right-empty {
-  padding: 10px 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
+/* custom: record rows with inline actions inside the kit list — the row is
+   not itself clickable (actions are the icon buttons), so it keeps the kit
+   row padding/hover but a grid layout and default cursor. */
 .creator-mini-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 8px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--line);
+  cursor: default;
 }
 
-.creator-mini-card-main { min-width: 0; }
+.creator-mini-card-main {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
 .creator-mini-card-main strong {
   display: block;
+  max-width: 100%;
   overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.creator-mini-card-main span {
-  display: block;
-  margin-top: 3px;
-  color: var(--accent);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
+
+.creator-mini-card-meta { color: var(--muted); }
+
 .creator-mini-card-main p {
   display: -webkit-box;
-  margin: 5px 0 0;
+  margin: 2px 0 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+
 .creator-mini-actions { display: flex; gap: 5px; }
 
-.creator-module .ctox-icon-button.is-danger:hover {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-}
+/* The kit collapses the workspace frame to one column at 760px; these are
+   the creator-specific inner adjustments for the stacked layout. */
+@container business-app-window (max-width: 760px) {
+  /* Keep the primary task (composer) first when the panes stack. */
+  .creator-main { order: -1; }
 
-@container business-app-window (max-width: 820px) {
-  .creator-module[data-creator-root] {
-    grid-template-columns: minmax(0, 1fr);
-    overflow: auto;
-  }
-  .creator-workspace { overflow: visible; }
-  .creator-library {
-    border-top: 1px solid var(--line);
-    border-left: 0;
-  }
-  .creator-right-body { height: auto; max-height: 380px; }
-}
-
-@container business-app-window (max-width: 560px) {
-  .creator-workspace { padding: 18px 12px; }
   .creator-example-grid,
-  .form-grid,
+  .creator-form-grid,
   .creator-options-grid { grid-template-columns: minmax(0, 1fr); }
   .creator-example:nth-child(odd) { border-right: 0; }
   .creator-example:nth-child(even) { padding-left: 0; }
+}
+
+@container business-app-window (max-width: 520px) {
+  .creator-workspace { padding: 18px 12px; }
   .creator-url-row { grid-template-columns: minmax(0, 1fr); }
   .creator-submit { align-items: stretch; flex-direction: column; }
   .creator-submit #btn-deploy-app { width: 100%; }
