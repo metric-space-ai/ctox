@@ -3202,7 +3202,7 @@ async function buildKnowledgeFromResearch() {
     updated_at_ms: now,
   });
   task.payload = { ...(task.payload || {}), knowledge_refresh: knowledgeRefresh };
-  sessionStorage.setItem('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
+  state.ctx.storageScope.set('ctox.businessOs.knowledge.openDomain', task.knowledge_domain);
   setStatus(state.t('knowledgeQueued', 'Knowledge-Aufbau wurde an CTOX uebergeben.'));
   render();
 }

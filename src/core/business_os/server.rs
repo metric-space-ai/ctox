@@ -3263,7 +3263,8 @@ mod tests {
         let runtime_root = temp.path().join("runtime");
         for (id, scope) in [
             ("ctox", "store"),
-            ("research", "store"),
+            ("research", "internal"),
+            ("marketplace-research", "store"),
             ("rogue-system", "core"),
         ] {
             let dir = source_root.join("modules").join(id);
@@ -3306,6 +3307,12 @@ mod tests {
         );
         assert_eq!(
             by_id
+                .get("research")
+                .map(|module| module.install_scope.as_str()),
+            Some("internal")
+        );
+        assert_eq!(
+            by_id
                 .get("public-addon")
                 .map(|module| module.install_scope.as_str()),
             Some("installed")
@@ -3316,7 +3323,7 @@ mod tests {
                 .map(|module| module.install_scope.as_str()),
             Some("local")
         );
-        assert!(!by_id.contains_key("research"));
+        assert!(!by_id.contains_key("marketplace-research"));
         assert!(!by_id.contains_key("rogue-system"));
         Ok(())
     }
