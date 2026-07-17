@@ -135,16 +135,17 @@ export function normalizeInspirationUrl(value) {
   }
 }
 
-export function computeCreatorActionState({ request, appId, appTitle, appDesc, appCollections, isDeploying = false }) {
+export function computeCreatorActionState({ request, appId, appTitle, appDesc, appCollections, isDeploying = false, lang = 'de' }) {
   const requestText = String(request || '').trim();
   const validationErrors = validateCreatorSpec({ appId, appTitle, appDesc, appCollections });
   const hasRequest = Boolean(requestText);
   const isBusy = Boolean(isDeploying);
   const deployReady = hasRequest && validationErrors.length === 0 && !isBusy;
-  let diagnostic = 'Auftrag fehlt. Beschreibe zuerst die App.';
-  if (isDeploying) diagnostic = 'CTOX App-Auftrag läuft.';
+  const en = lang === 'en';
+  let diagnostic = en ? 'Job missing. Describe the app first.' : 'Auftrag fehlt. Beschreibe zuerst die App.';
+  if (isDeploying) diagnostic = en ? 'CTOX app job is running.' : 'CTOX App-Auftrag läuft.';
   else if (hasRequest && validationErrors.length > 0) diagnostic = validationErrors[0];
-  else if (deployReady) diagnostic = 'Bereit. CTOX baut die App aus diesem Auftrag.';
+  else if (deployReady) diagnostic = en ? 'Ready. CTOX builds the app from this job.' : 'Bereit. CTOX baut die App aus diesem Auftrag.';
 
   return { hasRequest, validationErrors, deployReady, diagnostic };
 }
@@ -440,12 +441,13 @@ function wireUi(host) {
       appTitle: inputTitle.value,
       appDesc: inputDesc.value,
       appCollections: state.appCollections,
-      isDeploying: state.isDeploying
+      isDeploying: state.isDeploying,
+      lang: ctx?.locale === 'en' ? 'en' : 'de'
     });
     btnDeploy.disabled = !actionState.deployReady;
     btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
     btnDeploy.title = actionState.deployReady
-      ? 'App-Erstellung durch CTOX starten'
+      ? (ctx?.locale === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
     if (requestDiagnostics) {

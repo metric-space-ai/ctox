@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-startmenu-locale-v124';
+const APP_BUILD = '20260717-creator-diag-v125';
 
 ensureShellStylesheets();
 
@@ -3828,8 +3828,10 @@ function windowHeaderOptionsForModule(mod) {
       {
         id: 'versions',
         icon: '↺',
-        label: 'Versionen',
-        title: `Versionen, Freigabe und Rollback von ${title} öffnen`,
+        label: shellLang() === 'de' ? 'Versionen' : 'Versions',
+        title: shellLang() === 'de'
+          ? `Versionen, Freigabe und Rollback von ${title} öffnen`
+          : `Open versions, release and rollback for ${title}`,
       },
     ].filter(Boolean),
     onHeaderAction: (action) => {
