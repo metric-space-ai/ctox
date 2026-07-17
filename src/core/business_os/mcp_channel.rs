@@ -9730,10 +9730,11 @@ mod tests {
     fn module_without_external_sql_does_not_expose_sql_actions() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        let app_root = root.join("business-os");
-        let module_root = app_root.join("local-modules/inventory");
+        let source_app_root = root.join("business-os");
+        let module_root = root.join("runtime/business-os/local-modules/inventory");
         std::fs::create_dir_all(&module_root)?;
-        std::fs::write(app_root.join("index.html"), "")?;
+        std::fs::create_dir_all(&source_app_root)?;
+        std::fs::write(source_app_root.join("index.html"), "")?;
         std::fs::write(
             module_root.join("module.json"),
             serde_json::to_string(&serde_json::json!({

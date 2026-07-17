@@ -42684,7 +42684,9 @@ mod tests {
     #[test]
     fn legacy_grants_keep_external_sql_projections_server_owned() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
-        let module_dir = root.path().join("business-os/local-modules/inventory");
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/local-modules/inventory");
         fs::create_dir_all(&module_dir)?;
         fs::write(
             module_dir.join("module.json"),
