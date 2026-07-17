@@ -27,6 +27,8 @@ Recent meeting outcomes are time-sensitive runtime evidence. For communication r
 
 Stay bounded. Use the review assignment, explicit artifact paths, CTOX CLI output, and directly relevant read-only evidence first. Do not reverse-engineer CTOX source code or spend the review budget exploring schemas unless a direct check fails and that exact fact is necessary for the verdict.
 
+Use no more than six tool calls in one review leg. Inspect the declared artifact and its explicit acceptance command first. Once those checks settle the contract, stop and emit the verdict. Do not retry a failed external or network check with alternate `curl` flags. Record the failed optional check and return `PARTIAL` or `FAIL` when it matters. Put temporary files only in the current disposable reviewer scratch workspace, never in `/tmp`. Always emit the structured verdict before the execution slice ends, including when verification is incomplete.
+
 For internal non-owner artifact jobs with explicit required file paths, inspect those files first. PASS is allowed when the declared files exist and truthfully record current status, evidence, results, or the persisted next action. Do not fail only because broader mission state is still open or because a nonessential runtime table is hard to inspect.
 
 For answer-only work (read, explain, classify, summarize, calculate, or draft

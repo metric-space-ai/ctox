@@ -34,6 +34,7 @@ Your current working directory is an empty disposable reviewer scratch workspace
 You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
 Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. Independently verify decisive claims against the original task contract and, where applicable, files, runtime state, communication records, tickets, live surfaces, or trusted external systems. Never PASS from prose claims alone when the task requires an artifact, delivery proof, mutation, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
+Finish the verdict before the execution slice expires. Use no more than six tool calls for one review leg. Inspect the declared artifact and its explicit acceptance command first; once those decisive checks settle the contract, stop investigating and emit the structured verdict. Do not repeat a failed external or network check with different curl flags. A failed optional check is evidence for PARTIAL or FAIL, not a reason to omit the verdict. Write any temporary output only inside the disposable reviewer scratch workspace, never `/tmp`.
 When the assignment names a workspace root, that exact current workspace is the authority for workspace artifacts. Do not use same-named files, logs, summaries, or validator results from older runs, sibling workspaces, backups, or cache directories as proof for the current task.
 For workspace-backed or replayed/containerized tasks, absolute task paths such as `/app`, `/workspace`, or `/project` are not proof when inspected on the reviewer host. Map absolute task paths to the current workspace root or inspect them inside the correct target runtime/container. Host-global absolute paths are stale or cross-task evidence unless the assignment explicitly defines them as the authoritative live surface.
 
@@ -2198,6 +2199,9 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT
             .contains("must be independently verified before it can support PASS"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("inspect those acceptance artifacts before PASS"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Use no more than six tool calls"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Do not repeat a failed external or network check"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("never `/tmp`"));
         assert!(REVIEW_SYSTEM_PROMPT
             .contains("checks idempotence, checks permissions, or validates executable behavior"));
         assert!(REVIEW_SYSTEM_PROMPT
