@@ -27,9 +27,9 @@ export class CtoxRecoveryJournal {
     this.replayers = new Map();
   }
 
-  registerCollection(collection, { schemaHash = '', applyBatch, resolveConflict = null } = {}) {
+  registerCollection(collection, { schemaHash = '', applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== 'function') return;
-    this.replayers.set(collection, { schemaHash, applyBatch, resolveConflict });
+    this.replayers.set(collection, { schemaHash, applyBatch, resolveConflict, applyMaster });
   }
 
   async appendBatch({ collection, schemaHash = '', primaryPath = 'id', operation = 'write', rows = [], baseById = null }) {
@@ -218,6 +218,24 @@ export class CtoxRecoveryJournal {
     } else if (resolution === 'restore_as_copy') {
       const rows = normalizeConflictRows(conflict.local).map((row) => restoreAsCopy(row?.document || row));
       await (replayer.resolveConflict || replayer.applyBatch)({ operation: 'write', rows, baseById: null });
+    } else if (resolution === 'keep_master') {
+      // SYNC-42: a quarantined structured conflict left the LOCAL row in the
+      // primary store and advanced the pull checkpoint past the master row, so
+      // the master is not re-delivered. Apply the journaled master state
+      // authoritatively (origin-stamped, non-pushable, base cleared) to replace
+      // the local edit. Conflict types whose master document is present
+      // (structured_field_conflict, update_vs_update, a delete_vs_update
+      // tombstone) apply the same way; a record with no master document
+      // (recovery_schema_mismatch) or an unregistered collection stays a no-op,
+      // matching the previous keep_master behaviour.
+      const master = conflict.master;
+      if (master && replayer?.applyMaster) {
+        await replayer.applyMaster({
+          operation: 'write',
+          rows: [{ document: structuredCloneSafe(master) }],
+          baseById: null,
+        });
+      }
     }
     await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
       ...current,

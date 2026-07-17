@@ -905,9 +905,9 @@ var CtoxRecoveryJournal = class {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
   }
-  registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null } = {}) {
+  registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
-    this.replayers.set(collection, { schemaHash: schemaHash2, applyBatch, resolveConflict });
+    this.replayers.set(collection, { schemaHash: schemaHash2, applyBatch, resolveConflict, applyMaster });
   }
   async appendBatch({ collection, schemaHash: schemaHash2 = "", primaryPath = "id", operation = "write", rows = [], baseById = null }) {
     const normalizedRows = structuredCloneSafe2(rows);
@@ -1085,6 +1085,15 @@ var CtoxRecoveryJournal = class {
     } else if (resolution === "restore_as_copy") {
       const rows = normalizeConflictRows(conflict.local).map((row) => restoreAsCopy(row?.document || row));
       await (replayer.resolveConflict || replayer.applyBatch)({ operation: "write", rows, baseById: null });
+    } else if (resolution === "keep_master") {
+      const master = conflict.master;
+      if (master && replayer?.applyMaster) {
+        await replayer.applyMaster({
+          operation: "write",
+          rows: [{ document: structuredCloneSafe2(master) }],
+          baseById: null
+        });
+      }
     }
     await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
       ...current,
@@ -2217,6 +2226,20 @@ var CtoxIndexedDbCollection = class {
           // HLC and durable WAL entry before the primary row changes.
           resolveConflict: (batch) => this.bulkWrite(batch.rows || [], {
             baseById: batch.baseById || null
+          }),
+          // SYNC-42: keep_master resolution of a quarantined conflict. The
+          // pull checkpoint already advanced past the master row, so it will
+          // not be re-delivered — apply the journaled master state
+          // authoritatively (origin-stamped, non-pushable, base cleared). Force
+          // bypasses the LWW gate (the local edit may outrank the master lwt)
+          // and `authoritativeMaster` bypasses the three-way merge that would
+          // otherwise just re-throw the same structured conflict. `reconciled`
+          // suppresses the delete_vs_update journaling for a master tombstone.
+          applyMaster: (batch) => this.bulkWrite(batch.rows || [], {
+            replicationOrigin: { role: "ctox_instance", reconciled: true },
+            force: true,
+            authoritativeMaster: true,
+            skipJournal: true
           })
         });
         await this.acknowledgePersistedMasterRecovery();
@@ -2338,6 +2361,7 @@ var CtoxIndexedDbCollection = class {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
@@ -2352,6 +2376,7 @@ var CtoxIndexedDbCollection = class {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2382,12 +2407,19 @@ var CtoxIndexedDbCollection = class {
           replicationOrigin
         });
         if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-        const resolved = this.resolveIncomingWrite({
-          previous,
-          doc: nextDocument,
-          lwt,
-          replicationOrigin
-        });
+        let resolved;
+        try {
+          resolved = this.resolveIncomingWrite({
+            previous,
+            doc: nextDocument,
+            lwt,
+            replicationOrigin
+          });
+        } catch (conflictError) {
+          if (conflictError?.code !== "structured_conflict_requires_resolution") throw conflictError;
+          structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+          continue;
+        }
         if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
           resolved.lwt = Number(previous.lwt) + 1;
         }
@@ -2426,7 +2458,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
   async bulkWrite(rows, {
     now = Date.now(),
@@ -2434,7 +2466,8 @@ var CtoxIndexedDbCollection = class {
     baseById = null,
     skipJournal = false,
     recoveryReplay = false,
-    force = false
+    force = false,
+    authoritativeMaster = false
   } = {}) {
     await this.initializeRecovery();
     const journalWrite = Boolean(this.recoveryJournal) && !skipJournal && !replicationOrigin?.role && Array.isArray(rows);
@@ -2454,7 +2487,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force }),
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
       );
     } catch (error) {
@@ -2462,11 +2495,12 @@ var CtoxIndexedDbCollection = class {
       throw error;
     }
     await this.persistOverwrittenLocalConflicts(result);
+    await this.persistStructuredConflictQuarantine(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -2476,6 +2510,7 @@ var CtoxIndexedDbCollection = class {
     const success = {};
     const error = [];
     const overwrittenLocalConflicts = [];
+    const structuredConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2505,13 +2540,24 @@ var CtoxIndexedDbCollection = class {
           replicationOrigin
         });
         if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
-        const resolved = this.resolveIncomingWrite({
-          previous,
-          doc,
-          lwt,
-          replicationOrigin,
-          explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
-        });
+        let resolved;
+        if (authoritativeMaster) {
+          resolved = { doc, lwt, replicationOrigin, base: void 0 };
+        } else {
+          try {
+            resolved = this.resolveIncomingWrite({
+              previous,
+              doc,
+              lwt,
+              replicationOrigin,
+              explicitBase: baseById && Object.prototype.hasOwnProperty.call(baseById, id) ? baseById[id] : void 0
+            });
+          } catch (conflictError) {
+            if (conflictError?.code !== "structured_conflict_requires_resolution") throw conflictError;
+            structuredConflicts.push(quarantineConflictRecord(conflictError, this.name, id, this.primaryPath));
+            continue;
+          }
+        }
         if (resolved.replicationOrigin?.role && previous && Number(previous.lwt || 0) >= resolved.lwt) {
           resolved.lwt = Number(previous.lwt) + 1;
         }
@@ -2550,7 +2596,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error, overwrittenLocalConflicts };
+    return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -2609,6 +2655,24 @@ var CtoxIndexedDbCollection = class {
     const conflicts = result?.overwrittenLocalConflicts;
     if (Array.isArray(result?.overwrittenLocalConflicts)) delete result.overwrittenLocalConflicts;
     if (!Array.isArray(conflicts)) return;
+    for (const conflict of conflicts) {
+      await this.recoveryJournal?.recordConflict?.(conflict);
+    }
+  }
+  // SYNC-42: journal the documents QUARANTINED by the batch apply (an
+  // unmergeable structured field conflict). Collected inside the storage
+  // transaction and journaled here AFTER it commits — so a quota-retried
+  // transaction never journals twice, and the good documents in the same batch
+  // are already durable. Each record carries a deterministic conflict id, so an
+  // idempotent re-delivery of the same batch (e.g. a crash between the primary
+  // commit and the pull checkpoint advancing) OVERWRITES the same record
+  // instead of appending a duplicate. The record captures local + master + base
+  // so db.conflicts.resolve() stays fully functional after the checkpoint has
+  // moved past the master row.
+  async persistStructuredConflictQuarantine(result) {
+    const conflicts = result?.structuredConflicts;
+    if (Array.isArray(result?.structuredConflicts)) delete result.structuredConflicts;
+    if (!Array.isArray(conflicts) || !conflicts.length) return;
     for (const conflict of conflicts) {
       await this.recoveryJournal?.recordConflict?.(conflict);
     }
@@ -3278,6 +3342,20 @@ function lwwOverwriteConflict({
     master: incomingDocument,
     message: skewed ? "A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here." : "The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.",
     ...skewed ? { clock: hybridLogicalClockStatus() } : {}
+  };
+}
+function quarantineConflictRecord(error, collection, id, primaryPath = "id") {
+  return {
+    conflictId: `structured:${collection}:${id}`,
+    code: "structured_conflict_requires_resolution",
+    conflictType: "structured_field_conflict",
+    collection,
+    primaryPath,
+    fields: Array.isArray(error?.fields) ? error.fields : [],
+    base: error?.base ?? null,
+    local: error?.local ?? null,
+    master: error?.master ?? null,
+    message: error?.message || `Concurrent structured edits to ${collection}/${id} require manual resolution.`
   };
 }
 function isForwardReplicatedBusinessCommandState(existingDocument, incomingDocument) {
