@@ -22,9 +22,10 @@ test("bundled shell serves the Business OS entry and blocks traversal", async ()
 });
 
 test("bundled shell root resolves dev and packaged layouts", () => {
+  const resourcesPath = path.join(path.parse(process.cwd()).root, "Applications", "Test.app", "Contents", "Resources");
   assert.equal(
-    businessOsShellRoot({ isPackaged: true, resourcesPath: "/Applications/Test.app/Contents/Resources" }),
-    "/Applications/Test.app/Contents/Resources/business-os",
+    businessOsShellRoot({ isPackaged: true, resourcesPath }),
+    path.join(resourcesPath, "business-os"),
   );
   assert.equal(
     businessOsShellRoot({ appDir: path.resolve(__dirname, "../src/main") }),

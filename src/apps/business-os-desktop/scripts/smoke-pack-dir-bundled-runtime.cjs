@@ -22,8 +22,6 @@ async function main() {
   const helperDir = path.join(resourcesRoot, "ctox");
   const helperPath = path.join(helperDir, "ctox");
   const releaseDir = path.join(appRoot, "release", `mac-${process.arch}`);
-  const appPath = path.join(releaseDir, "CTOX Business-OS Desktop Beta.app");
-  const packagedHelperPath = path.join(appPath, "Contents", "Resources", "ctox", "ctox");
   const resourcesRootExisted = fs.existsSync(resourcesRoot);
   const helperDirExisted = fs.existsSync(helperDir);
   let helperCreated = false;
@@ -36,6 +34,8 @@ async function main() {
     writeBundledCtoxHelper(helperPath);
     helperCreated = true;
     runPackDir(appRoot);
+    const appPath = findPackagedApp(releaseDir);
+    const packagedHelperPath = path.join(appPath, "Contents", "Resources", "ctox", "ctox");
     assertPackagedHelper(packagedHelperPath);
     await exercisePackagedHelper(packagedHelperPath);
     console.log(`desktop pack dir bundled runtime smoke OK: ${packagedHelperPath}`);
@@ -44,6 +44,14 @@ async function main() {
     if (!helperDirExisted) fs.rmSync(helperDir, { recursive: true, force: true });
     if (!resourcesRootExisted) fs.rmSync(resourcesRoot, { recursive: true, force: true });
   }
+}
+
+function findPackagedApp(releaseDir) {
+  const appPaths = fs.readdirSync(releaseDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"))
+    .map((entry) => path.join(releaseDir, entry.name));
+  assert.equal(appPaths.length, 1, `expected exactly one packaged app in ${releaseDir}, found ${appPaths.length}`);
+  return appPaths[0];
 }
 
 function runPackDir(appRoot) {
