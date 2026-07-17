@@ -84,6 +84,25 @@ body {
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Business OS behaves like an application canvas, not a selectable web page.
+   Text selection is opt-in for real text-entry, document, code, message, and
+   explicitly copyable surfaces. This prevents a drag that leaves a board,
+   pane, or window from highlighting unrelated shell and app labels. */
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]),
+[role="textbox"],
+pre,
+code,
+.ctox-chat-body,
+[data-ctox-text-selectable],
+.ctox-text-selectable {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 button,
