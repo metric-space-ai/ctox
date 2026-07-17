@@ -7,43 +7,50 @@
           <h2 class="ctox-pane-title" data-imp-title>App Importer</h2>
         </div>
       </div>
-      <p class="imp-subtitle ctox-record-workbench__subtitle" data-imp-subtitle>
+      <p class="ctox-record-workbench__subtitle" data-imp-subtitle>
         Conceived in a prompt. Born with the first deploy. Raised in CTOX.
       </p>
     </header>
-    <div class="ctox-pane-scroll imp-body ctox-record-workbench__body">
-      <div class="imp-notice" data-imp-notice hidden></div>
+    <div class="ctox-pane-scroll ctox-record-workbench__body">
+      <div class="ctox-callout" data-imp-notice hidden></div>
 
-      <section class="imp-section" data-imp-source-section>
-        <h3 class="imp-section-title" data-imp-source-title>Source</h3>
-        <div class="imp-source-row">
-          <button type="button" class="ctox-button is-primary" data-imp-pick-folder>Choose folder…</button>
-          <span class="imp-or" data-imp-or>or</span>
-          <form class="imp-github ctox-compact-form" data-imp-github-form>
-            <input type="url" class="ctox-input" data-imp-github-url placeholder="https://github.com/owner/repo" spellcheck="false" />
-            <button type="submit" class="ctox-button" data-imp-github-btn>Fetch from GitHub</button>
-          </form>
-        </div>
-        <p class="imp-hint" data-imp-source-hint></p>
-      </section>
-
-      <section class="imp-section" data-imp-report-section hidden>
-        <h3 class="imp-section-title" data-imp-report-title>Report</h3>
-        <div class="imp-report" data-imp-report></div>
-        <div class="imp-details ctox-compact-form" data-imp-details hidden>
-          <div class="ctox-compact-form__fields">
-            <label class="ctox-compact-field"><span data-imp-id-label>Module id</span><input type="text" class="ctox-input" data-imp-module-id spellcheck="false" /></label>
-            <label class="ctox-compact-field"><span data-imp-title-label>Title</span><input type="text" class="ctox-input" data-imp-module-title /></label>
+      <section class="ctox-card" data-imp-source-section>
+        <header data-imp-source-title>Source</header>
+        <div class="ctox-card-body imp-card-body">
+          <div class="imp-source-row">
+            <button type="button" class="ctox-button is-primary" data-imp-pick-folder>Choose folder…</button>
+            <span class="imp-or" data-imp-or>or</span>
+            <form class="imp-github" data-imp-github-form>
+              <input type="url" class="ctox-input" data-imp-github-url placeholder="https://github.com/owner/repo" spellcheck="false" />
+              <button type="submit" class="ctox-button" data-imp-github-btn>Fetch from GitHub</button>
+            </form>
           </div>
-          <div class="ctox-compact-form__actions">
-            <button type="button" class="ctox-button is-primary" data-imp-install>Install into local-modules…</button>
-          </div>
+          <p class="imp-hint" data-imp-source-hint></p>
         </div>
       </section>
 
-      <section class="imp-section" data-imp-done-section hidden>
-        <h3 class="imp-section-title" data-imp-done-title>Installed</h3>
-        <div class="imp-report" data-imp-done></div>
+      <section class="ctox-card" data-imp-report-section hidden>
+        <header data-imp-report-title>Report</header>
+        <div class="ctox-card-body imp-card-body">
+          <dl class="ctox-fields" data-imp-report></dl>
+          <p class="imp-hint" data-imp-report-hint hidden></p>
+          <div class="ctox-compact-form" data-imp-details hidden>
+            <div class="ctox-compact-form__fields">
+              <label class="ctox-compact-field"><span data-imp-id-label>Module id</span><input type="text" class="ctox-input" data-imp-module-id spellcheck="false" /></label>
+              <label class="ctox-compact-field"><span data-imp-title-label>Title</span><input type="text" class="ctox-input" data-imp-module-title /></label>
+            </div>
+            <div class="ctox-compact-form__actions">
+              <button type="button" class="ctox-button is-primary" data-imp-install>Install into local-modules…</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ctox-card" data-imp-done-section hidden>
+        <header data-imp-done-title>Installed</header>
+        <div class="ctox-card-body imp-card-body">
+          <div data-imp-done></div>
+        </div>
       </section>
     </div>
   </section>

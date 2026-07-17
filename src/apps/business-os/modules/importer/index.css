@@ -1,17 +1,24 @@
-.importer-module .imp-body { display: flex; flex-direction: column; gap: 18px; }
-.importer-module .imp-subtitle { color: var(--muted); }
-.importer-module .imp-section { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--surface); }
-.importer-module .imp-section-title { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--text-strong); }
+/* Importer module — the frame, pane header, cards, field list, compact form,
+   buttons, inputs and the notice callout all come from shared/base.css.
+   Only genuinely module-specific layout/copy remains below. */
+
+/* custom: source strip — folder button + "or" + GitHub form on one wrapping
+   line; the kit has no inline choose-a-source row. */
 .importer-module .imp-source-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .importer-module .imp-or { color: var(--muted); font-size: 12px; }
 .importer-module .imp-github { display: flex; gap: 8px; flex: 1 1 320px; }
 .importer-module .imp-github .ctox-input { flex: 1; min-width: 220px; }
-.importer-module .imp-hint { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
-.importer-module .imp-notice { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
-.importer-module .imp-notice.is-error { border-left-color: var(--danger); color: var(--danger); }
-.importer-module .imp-report { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
-.importer-module .imp-report .imp-row { display: flex; gap: 8px; }
-.importer-module .imp-report .imp-key { min-width: 160px; color: var(--muted); }
-.importer-module .imp-report .imp-bad { color: var(--danger); font-weight: 600; }
-.importer-module .imp-report .imp-good { color: var(--success); font-weight: 600; }
-.importer-module .imp-details { margin-top: 14px; }
+
+/* custom: vertical rhythm inside the importer cards (source row + hint,
+   report fields + install form); .ctox-card-body is a plain padded block. */
+.importer-module .imp-card-body { display: grid; gap: 10px; align-content: start; }
+
+/* custom: muted hint/status copy under source and report — the kit ships no
+   hint-text utility. */
+.importer-module .imp-hint { margin: 0; font-size: 12px; color: var(--muted); }
+.importer-module .imp-hint:empty { display: none; }
+
+/* custom: ok/problem tint on report values. These are long data strings that
+   must wrap, so .ctox-badge (white-space: nowrap) cannot carry them. */
+.importer-module .imp-good { color: var(--success); font-weight: 600; }
+.importer-module .imp-bad { color: var(--danger); font-weight: 600; }

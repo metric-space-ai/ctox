@@ -174,6 +174,7 @@ export async function mount(ctx) {
     reportSection: root.querySelector('[data-imp-report-section]'),
     reportTitle: root.querySelector('[data-imp-report-title]'),
     report: root.querySelector('[data-imp-report]'),
+    reportHint: root.querySelector('[data-imp-report-hint]'),
     details: root.querySelector('[data-imp-details]'),
     idLabel: root.querySelector('[data-imp-id-label]'),
     titleLabel: root.querySelector('[data-imp-title-label]'),
@@ -205,11 +206,13 @@ export async function mount(ctx) {
   const notify = (text, isError = false) => {
     refs.notice.hidden = !text;
     refs.notice.textContent = text || '';
-    refs.notice.classList.toggle('is-error', isError);
+    // Notice is a .ctox-callout; errors use the kit's danger variant.
+    refs.notice.classList.toggle('is-danger', isError);
   };
 
+  // Report rows render into a .ctox-fields <dl>: key -> dt, value -> dd.
   const row = (key, value, cls = '') =>
-    `<div class="imp-row"><span class="imp-key">${key}</span><span class="${cls}">${value}</span></div>`;
+    `<dt>${key}</dt><dd${cls ? ` class="${cls}"` : ''}>${value}</dd>`;
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
@@ -219,6 +222,7 @@ export async function mount(ctx) {
   function renderReport() {
     const { files, result } = state;
     if (!files || !result) return;
+    refs.reportHint.hidden = true;
     const lines = [row(t('filesRead', 'Files read'), Object.keys(files).length)];
     if (result.report?.error === 'entry_not_found') {
       lines.push(row(t('entry', 'Entry'), esc(t('entryMissing', 'No entry found.')), 'imp-bad'));
@@ -229,7 +233,9 @@ export async function mount(ctx) {
       lines.push(row(t('cssFiles', 'Stylesheets'), esc(result.cssFiles.join(', ') || '—')));
       if (result.report.unsupported.length) {
         lines.push(row(t('unsupported', 'Not portable'), esc(result.report.unsupported.join(', ')), 'imp-bad'));
-        lines.push(`<p class="imp-hint">${esc(t('unsupportedHint', ''))}</p>`);
+        const hint = t('unsupportedHint', '');
+        refs.reportHint.textContent = hint;
+        refs.reportHint.hidden = !hint;
         refs.details.hidden = true;
       } else {
         lines.push(row(t('unsupported', 'Not portable'), t('ok', 'ready'), 'imp-good'));
