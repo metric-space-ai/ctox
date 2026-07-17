@@ -14,7 +14,9 @@
     "business_module_acl",
     "business_module_releases",
     "business_module_reports",
-    "business_module_source_files"
+    "business_module_source_files",
+    "business_module_commits",
+    "business_module_source_blob_chunks"
   ],
   "layout": {
     "shell": "windowed",

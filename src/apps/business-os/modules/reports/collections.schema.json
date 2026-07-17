@@ -237,6 +237,70 @@
       "type": "object",
       "version": 0
     },
+    "business_module_commits": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "authored_at_ms": {
+          "type": "number"
+        },
+        "bundle_sha256": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "file_manifest": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "sealed": {
+          "type": "boolean"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "seq",
+        "bundle_sha256",
+        "origin",
+        "authored_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "business_module_releases": {
       "additionalProperties": true,
       "primaryKey": "id",
@@ -342,10 +406,60 @@
       "type": "object",
       "version": 0
     },
+    "business_module_source_blob_chunks": {
+      "additionalProperties": false,
+      "primaryKey": "id",
+      "properties": {
+        "blob_id": {
+          "type": "string"
+        },
+        "commit_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "idx": {
+          "type": "number"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "blob_id",
+        "module_id",
+        "commit_id",
+        "idx",
+        "total",
+        "encoding",
+        "data",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
     "business_module_source_files": {
       "additionalProperties": true,
       "primaryKey": "id",
       "properties": {
+        "commit_id": {
+          "type": "string"
+        },
         "content": {
           "type": "string"
         },

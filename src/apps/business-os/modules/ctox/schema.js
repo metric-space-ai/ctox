@@ -276,6 +276,7 @@ export const collections = {
       sha256: { type: 'string' },
       previous_sha256: { type: 'string' },
       snapshot_id: { type: 'string' },
+      commit_id: { type: 'string' },
       size_bytes: { type: 'number' },
       content: { type: 'string' },
       source_kind: { type: 'string' },
@@ -284,6 +285,47 @@ export const collections = {
     },
     required: ['id', 'module_id', 'path', 'sha256', 'updated_at_ms'],
     additionalProperties: true
+  },
+  business_module_commits: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 512 },
+      module_id: { type: 'string' },
+      seq: { type: 'number' },
+      parent_id: { type: 'string' },
+      bundle_sha256: { type: 'string' },
+      message: { type: 'string' },
+      origin: { type: 'string' },
+      label: { type: 'string' },
+      author: { type: 'string' },
+      authored_at_ms: { type: 'number' },
+      sealed: { type: 'boolean' },
+      file_manifest: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' }
+    },
+    required: ['id', 'module_id', 'seq', 'bundle_sha256', 'origin', 'authored_at_ms', 'updated_at_ms'],
+    additionalProperties: true
+  },
+  business_module_source_blob_chunks: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 180 },
+      blob_id: { type: 'string' },
+      module_id: { type: 'string' },
+      commit_id: { type: 'string' },
+      idx: { type: 'number' },
+      total: { type: 'number' },
+      encoding: { type: 'string' },
+      data: { type: 'string' },
+      created_at_ms: { type: 'number' }
+    },
+    required: ['id', 'blob_id', 'module_id', 'commit_id', 'idx', 'total', 'encoding', 'data', 'created_at_ms'],
+    additionalProperties: false
   }
 };
 
