@@ -264,6 +264,7 @@ fn record_browser_detection_signal(root: &Path, payload: &Value) {
         return;
     }
     let probe_url = detection.get("url").and_then(Value::as_str);
+    #[cfg(feature = "full")]
     crate::unlock::record_signal_lossy(
         root,
         "browser_automation",
@@ -275,6 +276,8 @@ fn record_browser_detection_signal(root: &Path, payload: &Value) {
             "automation_ok": payload.get("ok").cloned().unwrap_or(Value::Null),
         }),
     );
+    #[cfg(not(feature = "full"))]
+    let _ = (root, probe_url, markers);
 }
 
 pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -> Result<Value> {
