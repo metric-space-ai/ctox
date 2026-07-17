@@ -154,6 +154,10 @@ test('conversations presentation follows compact Business OS contract', async ()
 
   assert.doesNotMatch(html, /ctox-pane--glass/);
   assert.doesNotMatch(css, /border-(left|right)\s*:\s*(?:[2-9]|\d{2,})px/i);
+  // Inspector cards ride on the kit .ctox-card — the module must not
+  // re-declare their border/background/radius.
+  assert.match(html, /class="ctox-card conv-card"/);
+  assert.doesNotMatch(css, /\.conv-card\s*\{[^}]*(border|background|border-radius)/s);
+  // The chat timeline stays a custom view and keeps its compact radius.
   assert.match(css, /\.conv-message\s*\{[^}]*border-radius:\s*var\(--control-radius\)/s);
-  assert.match(css, /\.conv-card\s*\{[^}]*border-radius:\s*var\(--control-radius\)/s);
 });

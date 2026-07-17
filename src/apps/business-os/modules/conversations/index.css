@@ -1,10 +1,12 @@
 /* Reference migration to the shared design system: the frame, panes, stacked
    pane bodies, empty states, header band, search, filter selects, chips
-   (.ctox-chip/.ctox-chip-count), segmented tabs (.ctox-pane-tab), avatars
-   (.ctox-avatar), key/value fields (.ctox-fields) and text buttons
-   (.ctox-button) all come from shared/base.css + app.css. This file only
-   keeps what is conversations-specific (channel brand dots, thread cards,
-   timeline rows, channel state, right-pane facts).
+   (.ctox-chip/.ctox-chip-count), segmented tabs (.ctox-pane-tab), list rows
+   (.ctox-list/.ctox-list-item with .is-selected), inspector cards
+   (.ctox-card/.ctox-card-body), status pills (.ctox-badge + is-* variants),
+   buttons (.ctox-button), avatars (.ctox-avatar) and key/value fields
+   (.ctox-fields) all come from shared/base.css + app.css. This file only
+   keeps what is conversations-specific (channel brand dots, the chat
+   timeline, thread-row content grid, right-pane fact rows).
    The width aliases keep the persisted resizer layout working — the shell
    resizer writes --conversations-*-width onto the frame element. */
 .conv-module {
@@ -35,11 +37,7 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-/* Empty counts must not leave a dangling flex gap inside the chip. */
-.conv-channel-filters .ctox-chip-count:empty {
-  display: none;
-}
-
+/* custom: channel brand dots (deliberately hardcoded brand colors) */
 .conv-channel-dot {
   width: 8px;
   height: 8px;
@@ -86,43 +84,21 @@
   color: var(--danger);
 }
 
-.conv-thread-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 4px 6px;
-  display: grid;
-  align-content: start;
-  gap: 2px;
-}
-
+/* Thread list: kit .ctox-list rows; the module class only adds the
+   avatar + preview content grid inside each row. Selection styling
+   (hover, .is-selected accent bar) comes from the kit. */
+/* custom: thread rows are list items with an avatar column + preview grid */
 .conv-thread-item {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  width: 100%;
-  appearance: none;
-  color: var(--text);
-}
-
-.conv-thread-item:hover {
-  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
-}
-
-.conv-thread-item.is-active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
 }
 
 .conv-thread-item .ctox-avatar {
   align-self: start;
 }
 
+/* custom: thread-row content (name/time/preview/direction/channel dots) */
 .conv-thread-body {
   display: grid;
   gap: 2px;
@@ -174,7 +150,7 @@
   place-items: center;
   width: 14px;
   height: 14px;
-  border-radius: 4px;
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
   color: var(--muted);
   font-size: 10px;
@@ -199,6 +175,7 @@
   height: 6px;
 }
 
+/* custom: accent unread counter — an attention marker, not a status badge */
 .conv-thread-item .conv-unread-badge {
   display: inline-grid;
   place-items: center;
@@ -212,15 +189,14 @@
   font-weight: 800;
 }
 
-/* Center pane — detail timeline */
+/* Center pane — detail timeline.
+   custom: chat header = contact identity row inside the standard pane band
+   (.ctox-pane-header/.ctox-pane-band supply padding and hairline). */
 .conv-center-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--hairline, var(--line));
-  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
 }
 
 .conv-detail-identity {
@@ -252,14 +228,15 @@
   white-space: nowrap;
 }
 
-/* Channel view switcher: kit .ctox-pane-tab buttons on a module scroll row. */
+/* custom: full-width horizontally scrollable tab band for kit .ctox-pane-tab
+   buttons (the kit's inline .ctox-pane-tabs group cannot scroll a long
+   channel list across the pane) */
 .conv-channel-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--hairline, var(--line));
-  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -278,6 +255,8 @@
   height: 7px;
 }
 
+/* custom: chat timeline with direction-aligned message bubbles — a genuine
+   special view the kit does not express (bubble alignment, channel tints) */
 .conv-timeline {
   min-height: 0;
   overflow: auto;
@@ -385,79 +364,17 @@
   font-weight: 600;
 }
 
-.conv-attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--bg);
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.conv-message-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  align-self: flex-start;
-  padding: 2px 6px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.conv-message-status-icon {
-  font-size: 11px;
-  line-height: 1;
-}
-
-.conv-message[data-status="delivered"] .conv-message-status,
-.conv-message[data-status="read"] .conv-message-status {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-}
-
-.conv-message[data-status="failed"] .conv-message-status {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
-  background: var(--danger-soft);
-}
+/* Message send state uses the kit .ctox-badge (variant set in JS via
+   badgeVariantForMessageStatus) — a status display, not a button. */
 
 .conv-message[data-seen="0"][data-direction="inbound"] {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
 }
 
-.conv-message-cc {
-  color: var(--muted);
-  font-size: 11px;
-}
-
+/* HTML/plain toggle is a kit small ghost button; only the alignment is local. */
 .conv-message-html-toggle {
-  appearance: none;
   align-self: flex-start;
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-}
-
-.conv-message-html-toggle:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
 }
 
 /* Deliberately white: the sandboxed iframe renders foreign email HTML, which
@@ -479,31 +396,9 @@
   align-items: center;
 }
 
-.conv-message-task-chip {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: border-color 100ms ease, color 100ms ease, background-color 100ms ease;
-}
-
-.conv-message-task-chip:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
-}
-
+/* Task/work chip is a kit .ctox-chip; only the inner kind/id/jump typography
+   is module-specific. The route status is a kit .ctox-badge (variant set in
+   JS via badgeVariantForRouteStatus). */
 .conv-message-task-chip:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -524,49 +419,10 @@
 }
 
 .conv-message-task-chip-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0;
-}
-
-.conv-message-task-chip-status {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-  color: var(--muted);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.conv-message-task-chip-status[data-route-status="queued"],
-.conv-message-task-chip-status[data-route-status="pending"],
-.conv-message-task-chip-status[data-route-status="accepted"] {
-  background: var(--warning-soft);
-  color: var(--warning);
-}
-
-.conv-message-task-chip-status[data-route-status="leased"],
-.conv-message-task-chip-status[data-route-status="running"],
-.conv-message-task-chip-status[data-route-status="working"] {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
-}
-
-.conv-message-task-chip-status[data-route-status="done"],
-.conv-message-task-chip-status[data-route-status="completed"],
-.conv-message-task-chip-status[data-route-status="handled"] {
-  background: var(--success-soft);
-  color: var(--success);
-}
-
-.conv-message-task-chip-status[data-route-status="failed"],
-.conv-message-task-chip-status[data-route-status="blocked"],
-.conv-message-task-chip-status[data-route-status="stale_missing_native"],
-.conv-message-task-chip-status[data-route-status="cancelled"],
-.conv-message-task-chip-status[data-route-status="canceled"] {
-  background: var(--danger-soft);
-  color: var(--danger);
 }
 
 .conv-message-task-chip-jump {
@@ -608,7 +464,7 @@ details[open] > .conv-message-details-summary::before {
   margin-top: 6px;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
   font-size: 11px;
 }
@@ -625,16 +481,16 @@ details[open] > .conv-message-details-summary::before {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .conv-message-details-meta {
   grid-column: 1 / -1;
   margin: 4px 0 0;
   padding: 6px;
-  border-radius: 4px;
+  border-radius: var(--control-radius);
   background: var(--bg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   overflow: auto;
   max-height: 180px;
@@ -642,7 +498,7 @@ details[open] > .conv-message-details-summary::before {
   word-break: break-all;
 }
 
-/* Channel-specific tints (brand colors, deliberately hardcoded) */
+/* custom: channel-specific tints (brand colors, deliberately hardcoded) */
 .conv-message[data-channel="whatsapp"][data-direction="outbound"] {
   background: color-mix(in srgb, #25d366 8%, var(--surface));
   border-color: color-mix(in srgb, #25d366 34%, var(--line));
@@ -673,7 +529,9 @@ details[open] > .conv-message-details-summary::before {
   border-color: color-mix(in srgb, #f6a050 34%, var(--line));
 }
 
-/* Right pane — base empty-state styling comes from .ctox-empty. */
+/* Right pane — inspector cards use the kit .ctox-card/.ctox-card-body
+   (border, radius, surface, uppercase header label). Only the stacked
+   content layout inside the body is local. */
 .conv-right-empty span {
   overflow-wrap: anywhere;
 }
@@ -686,28 +544,9 @@ details[open] > .conv-message-details-summary::before {
   overflow: auto;
 }
 
-.conv-card {
+.conv-card-body {
   display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-}
-
-.conv-card header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.conv-card header span {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  gap: 6px;
 }
 
 .conv-contact-row {
@@ -737,12 +576,7 @@ details[open] > .conv-message-details-summary::before {
   white-space: nowrap;
 }
 
-.conv-card-body {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-
+/* custom: outbound highlight — the one accent-tinted inspector card */
 .conv-outbound-card {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
@@ -767,7 +601,7 @@ details[open] > .conv-message-details-summary::before {
   line-height: 1.35;
 }
 
-/* Boxed variant of .ctox-fields inside the outbound card. */
+/* custom: boxed variant of .ctox-fields inside the outbound card */
 .conv-outbound-facts {
   margin: 2px 0;
   padding: 8px;
@@ -804,6 +638,8 @@ details[open] > .conv-message-details-summary::before {
   text-transform: uppercase;
 }
 
+/* custom: compact bordered fact rows inside inspector cards (channel /
+   account / folder) — record-specific content rows, not kit list items */
 .conv-channel-row {
   display: flex;
   align-items: center;
@@ -893,55 +729,11 @@ details[open] > .conv-message-details-summary::before {
   font-weight: 700;
 }
 
+/* "Load older" is a kit ghost button; only placement inside the timeline
+   grid is local. */
 .conv-load-older {
-  appearance: none;
-  align-self: stretch;
-  margin: 0 auto 16px;
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.conv-load-older:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-}
-
-.conv-link-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  cursor: pointer;
-}
-
-.conv-link-row:hover {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 50%, var(--surface));
-}
-
-.conv-link-row strong {
-  font-size: 12px;
-}
-
-.conv-link-row span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-/* Base empty-state styling comes from .ctox-empty in shared/base.css. */
-.conv-empty--list {
-  padding: 24px 16px;
+  justify-self: center;
+  margin-bottom: 16px;
 }
 
 @container business-app-window (max-width: 1080px) {

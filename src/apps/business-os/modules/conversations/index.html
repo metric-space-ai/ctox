@@ -96,8 +96,8 @@
       <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
     </div>
     <div class="ctox-pane-body conv-left-body">
-      <div class="conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
-      <div class="ctox-empty conv-empty conv-empty--list" data-conv-empty-list hidden>
+      <div class="ctox-list conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
+      <div class="ctox-empty conv-empty" data-conv-empty-list hidden>
         <strong data-empty-list-title>Keine Konversationen</strong>
         <span data-empty-list-body>Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami oder MS Teams führt.</span>
       </div>
@@ -107,7 +107,7 @@
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--conversations-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <section class="ctox-pane conv-pane conv-center" aria-label="Conversation Detail">
-    <header class="conv-center-header" data-conv-detail-header hidden>
+    <header class="ctox-pane-header ctox-pane-band conv-center-header" data-conv-detail-header hidden>
       <div class="conv-detail-identity">
         <span class="ctox-avatar" data-conv-detail-avatar></span>
         <div class="conv-detail-title">
@@ -135,11 +135,11 @@
         <span data-right-empty-body>Kontaktdaten und verknüpfte Datensätze erscheinen hier.</span>
       </div>
       <div class="conv-right-detail" data-conv-right-detail hidden>
-        <section class="conv-card" data-conv-contact-card>
+        <section class="ctox-card conv-card" data-conv-contact-card>
           <header>
             <span data-conv-card-label-contact>Kontakt</span>
           </header>
-          <div class="conv-contact-row">
+          <div class="ctox-card-body conv-contact-row">
             <span class="ctox-avatar ctox-avatar--lg" data-conv-contact-avatar></span>
             <div class="conv-contact-meta">
               <strong data-conv-contact-name></strong>
@@ -147,35 +147,36 @@
             </div>
           </div>
         </section>
-        <section class="conv-card conv-outbound-card" data-conv-outbound-card hidden>
+        <section class="ctox-card conv-card conv-outbound-card" data-conv-outbound-card hidden>
           <header>
             <span data-conv-card-label-outbound>Outbound</span>
           </header>
-          <div class="conv-card-body" data-conv-outbound-card-body></div>
+          <div class="ctox-card-body conv-card-body" data-conv-outbound-card-body></div>
         </section>
-        <section class="conv-card" data-conv-channels-card>
+        <section class="ctox-card conv-card" data-conv-channels-card>
           <header>
             <span data-conv-card-label-channels>Aktive Channels</span>
           </header>
-          <div class="conv-card-body" data-conv-channels-card-body></div>
+          <div class="ctox-card-body conv-card-body" data-conv-channels-card-body></div>
         </section>
-        <section class="conv-card" data-conv-accounts-card>
+        <section class="ctox-card conv-card" data-conv-accounts-card>
           <header>
             <span data-conv-card-label-accounts>CTOX-Accounts</span>
           </header>
-          <div class="conv-card-body" data-conv-accounts-card-body></div>
+          <div class="ctox-card-body conv-card-body" data-conv-accounts-card-body></div>
         </section>
-        <section class="conv-card" data-conv-folder-card hidden>
+        <section class="ctox-card conv-card" data-conv-folder-card hidden>
           <header>
             <span data-conv-card-label-folder>Folder</span>
           </header>
-          <div class="conv-card-body" data-conv-folder-card-body></div>
+          <div class="ctox-card-body conv-card-body" data-conv-folder-card-body></div>
         </section>
-        <section class="conv-card" data-conv-stats-card>
+        <section class="ctox-card conv-card" data-conv-stats-card>
           <header>
             <span data-conv-card-label-stats>Aktivität</span>
           </header>
-          <dl class="ctox-fields">
+          <div class="ctox-card-body">
+            <dl class="ctox-fields">
             <dt data-conv-stat-label-messages>Nachrichten</dt>
             <dd data-conv-stat-messages>0</dd>
             <dt data-conv-stat-label-first>Erste</dt>
@@ -187,6 +188,7 @@
             <dt data-conv-stat-label-trust>Trust</dt>
             <dd data-conv-stat-trust>—</dd>
           </dl>
+          </div>
         </section>
       </div>
     </div>

@@ -6,7 +6,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260706-kit-migration1';
+const STYLE_BUILD = '20260717-kit-migration2';
 const SUPPORTED_CHANNELS = [
   'whatsapp',
   'email',
@@ -929,13 +929,13 @@ export async function mount(ctx) {
   function buildBucketItem(bucket) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'conv-thread-item';
+    btn.className = 'ctox-list-item conv-thread-item';
     btn.dataset.bucketKey = bucket.key;
     btn.dataset.contextRecordId = bucket.key;
     btn.dataset.contextRecordType = 'conversation';
     btn.dataset.contextLabel = bucket.displayName || bucket.key;
     btn.setAttribute('role', 'option');
-    if (view.selectedBucketKey === bucket.key) btn.classList.add('is-active');
+    if (view.selectedBucketKey === bucket.key) btn.classList.add('is-active', 'is-selected');
 
     const avatar = document.createElement('span');
     avatar.className = 'ctox-avatar';
@@ -997,7 +997,10 @@ export async function mount(ctx) {
 
   function markActiveBucket() {
     for (const node of refs.threadList.querySelectorAll('.conv-thread-item')) {
-      node.classList.toggle('is-active', node.dataset.bucketKey === view.selectedBucketKey);
+      // is-active is the module hook; is-selected drives the kit list-item style.
+      const active = node.dataset.bucketKey === view.selectedBucketKey;
+      node.classList.toggle('is-active', active);
+      node.classList.toggle('is-selected', active);
     }
   }
 
@@ -1089,7 +1092,7 @@ export async function mount(ctx) {
     if (view.timelineTotal > view.timelineMessages.length) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'conv-load-older';
+      btn.className = 'ctox-button ctox-button--ghost conv-load-older';
       btn.textContent = `${t('loadOlder', 'Ältere laden')} (${view.timelineMessages.length} ${t('olderTotal', 'von')} ${view.timelineTotal})`;
       btn.addEventListener('click', () => {
         view.timelineLimit += MESSAGE_PAGE_SIZE;
@@ -1177,7 +1180,7 @@ export async function mount(ctx) {
       if (hasHtml && msg.channel === 'email') {
         const toggle = document.createElement('button');
         toggle.type = 'button';
-        toggle.className = 'conv-message-html-toggle';
+        toggle.className = 'ctox-button ctox-button--sm ctox-button--ghost conv-message-html-toggle';
         toggle.textContent = t('showHtml', 'HTML anzeigen');
         let htmlVisible = false;
         let iframe = null;
@@ -1216,7 +1219,7 @@ export async function mount(ctx) {
       wrap.className = 'conv-message-attachments';
       const pill = document.createElement('button');
       pill.type = 'button';
-      pill.className = 'conv-attachment';
+      pill.className = 'ctox-button ctox-button--sm conv-attachment';
       pill.textContent = `📎 ${msg.raw_payload_ref || ''}`.trim() || '📎';
       pill.title = msg.raw_payload_ref || '';
       pill.addEventListener('click', (event) => {
@@ -1230,7 +1233,8 @@ export async function mount(ctx) {
 
     if (msg.status) {
       const status = document.createElement('span');
-      status.className = 'conv-message-status';
+      const variant = badgeVariantForMessageStatus(msg.status);
+      status.className = `ctox-badge conv-message-status${variant ? ` ${variant}` : ''}`;
       status.innerHTML = `<span class="conv-message-status-icon"></span><span></span>`;
       status.querySelector('.conv-message-status-icon').textContent = iconForStatus(msg.status);
       status.querySelectorAll('span')[1].textContent = labelForStatus(msg.status, t);
@@ -1282,14 +1286,14 @@ export async function mount(ctx) {
   function buildTaskChip({ kind, label, id, routeStatus, onActivate }) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'conv-message-task-chip';
+    btn.className = 'ctox-chip conv-message-task-chip';
     btn.dataset.kind = kind;
     if (routeStatus) btn.dataset.routeStatus = routeStatus;
     btn.title = `${label}: ${id}${routeStatus ? ` · ${labelForRouteStatus(routeStatus, t)}` : ''}`;
     btn.innerHTML = `
       <span class="conv-message-task-chip-kind"></span>
       <span class="conv-message-task-chip-id"></span>
-      <span class="conv-message-task-chip-status"></span>
+      <span class="ctox-badge conv-message-task-chip-status"></span>
       <span class="conv-message-task-chip-jump">↗</span>
     `;
     btn.querySelector('.conv-message-task-chip-kind').textContent = label;
@@ -1298,6 +1302,8 @@ export async function mount(ctx) {
     if (routeStatus) {
       statusEl.textContent = labelForRouteStatus(routeStatus, t);
       statusEl.dataset.routeStatus = routeStatus;
+      const variant = badgeVariantForRouteStatus(routeStatus);
+      if (variant) statusEl.classList.add(variant);
     } else {
       statusEl.hidden = true;
     }
@@ -2314,8 +2320,6 @@ export async function mount(ctx) {
       .filter(Boolean);
     if (!accounts.length) {
       const empty = document.createElement('span');
-      empty.style.color = 'var(--muted)';
-      empty.style.fontSize = '12px';
       empty.textContent = '—';
       refs.accountsBody.appendChild(empty);
       return;
@@ -2882,6 +2886,37 @@ function iconForStatus(status) {
     case 'failed': return '⚠';
     case 'queued': return '⏳';
     default: return '·';
+  }
+}
+
+// Kit badge variants (.ctox-badge.is-*) for message send state.
+function badgeVariantForMessageStatus(status) {
+  switch (status) {
+    case 'failed': return 'is-danger';
+    case 'delivered':
+    case 'read': return 'is-info';
+    default: return '';
+  }
+}
+
+// Kit badge variants for queue route state on task/work chips.
+function badgeVariantForRouteStatus(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'queued':
+    case 'pending':
+    case 'accepted': return 'is-warning';
+    case 'leased':
+    case 'running':
+    case 'working': return 'is-info';
+    case 'done':
+    case 'completed':
+    case 'handled': return 'is-success';
+    case 'failed':
+    case 'blocked':
+    case 'stale_missing_native':
+    case 'cancelled':
+    case 'canceled': return 'is-danger';
+    default: return '';
   }
 }
 
