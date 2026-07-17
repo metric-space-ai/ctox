@@ -65,6 +65,14 @@ const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_BUFFER_STALLED_ERROR_CODE: &str = "ctox_webrtc_send_buffer_stalled";
 const MAX_PEER_SEND_QUEUE_FRAMES: usize = 1024;
 const MAX_PEER_SEND_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+// Bound on the completed-frame-ack cache. Mirrors the browser twin
+// (`webrtc-native.mjs`: `COMPLETED_FRAME_ACK_TTL_MS`/512). An entry lets a
+// `resume` probe that arrives AFTER a chunked transfer already completed still
+// receive a final ack (docs §6.3). Without a bound the map grew one entry per
+// completed transfer for the peer's whole lifetime. The TTL must cover a
+// realistic resume-after-complete window; 60s matches the browser.
+const COMPLETED_FRAME_ACK_TTL_MS: u64 = 60_000;
+const COMPLETED_FRAME_ACK_CAP: usize = 512;
 const FAIR_SEND_SCHEDULE: [SendPriority; 7] = [
     SendPriority::High,
     SendPriority::High,
@@ -189,6 +197,9 @@ struct CompletedFrameAck {
     peer: PeerId,
     ack_seq: usize,
     received_frames: usize,
+    /// Wall-clock insertion time (`now_ms`) used for TTL eviction. See
+    /// `record_completed_frame_ack`/`prune_completed_frame_acks`.
+    inserted_at_ms: u64,
 }
 
 struct PendingFrameAck {
@@ -622,6 +633,39 @@ impl WebRTCRsConnectionHandler {
             .lock()
             .retain(|_, completed| completed.peer != *peer);
         self.refresh_dynamic_transport_status();
+    }
+
+    /// Insert a completed-frame-ack entry and opportunistically bound the cache
+    /// (TTL + size), mirroring the browser twin's `cleanupCompletedFrameAcks`.
+    /// The freshly inserted entry is always retained: its age is 0 (< TTL) and
+    /// cap-eviction only removes the oldest entries.
+    fn record_completed_frame_ack(&self, transfer_id: String, ack: CompletedFrameAck) {
+        let mut cache = self.completed_frame_acks.lock();
+        cache.insert(transfer_id, ack);
+        Self::prune_completed_frame_acks(&mut cache, now_ms());
+    }
+
+    /// Evict completed-frame-ack entries older than `COMPLETED_FRAME_ACK_TTL_MS`
+    /// and cap the total at `COMPLETED_FRAME_ACK_CAP`, dropping the oldest first.
+    /// A `resume` within the TTL window still finds its ack (docs §6.3); only
+    /// entries past the window — which a legitimately-delayed resume no longer
+    /// needs — are removed.
+    fn prune_completed_frame_acks(cache: &mut HashMap<String, CompletedFrameAck>, now_ms: u64) {
+        cache.retain(|_, ack| {
+            now_ms.saturating_sub(ack.inserted_at_ms) < COMPLETED_FRAME_ACK_TTL_MS
+        });
+        while cache.len() > COMPLETED_FRAME_ACK_CAP {
+            let oldest_key = cache
+                .iter()
+                .min_by_key(|(_, ack)| ack.inserted_at_ms)
+                .map(|(key, _)| key.clone());
+            match oldest_key {
+                Some(key) => {
+                    cache.remove(&key);
+                }
+                None => break,
+            }
+        }
     }
 
     fn start_signaling_tasks(self: &Arc<Self>) {
@@ -2042,12 +2086,13 @@ impl WebRTCRsConnectionHandler {
                 Ok(None)
             }
             FrameReceiveStatus::Complete { text, ack_seq } => {
-                self.completed_frame_acks.lock().insert(
+                self.record_completed_frame_ack(
                     transfer_id.clone(),
                     CompletedFrameAck {
                         peer: peer.clone(),
                         ack_seq,
                         received_frames: ack_seq + 1,
+                        inserted_at_ms: now_ms(),
                     },
                 );
                 self.refresh_dynamic_transport_status();
@@ -3732,6 +3777,7 @@ mod tests {
                 peer: peer.clone(),
                 ack_seq: 0,
                 received_frames: 1,
+                inserted_at_ms: now_ms(),
             },
         );
         let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
@@ -3771,5 +3817,89 @@ mod tests {
             .expect("queued result sender must be resolved")
             .expect_err("queued send must be rejected");
         assert_eq!(queued_error.code(), SEND_BUFFER_STALLED_ERROR_CODE);
+    }
+
+    #[test]
+    fn completed_frame_ack_cache_evicts_aged_but_keeps_fresh_within_window() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-resume".to_string();
+        let now = now_ms();
+
+        // A stale entry, past the TTL, and a fresh entry still inside the
+        // resume-after-complete window.
+        handler.completed_frame_acks.lock().insert(
+            "aged".to_string(),
+            CompletedFrameAck {
+                peer: peer.clone(),
+                ack_seq: 3,
+                received_frames: 4,
+                inserted_at_ms: now.saturating_sub(COMPLETED_FRAME_ACK_TTL_MS + 1_000),
+            },
+        );
+        handler.completed_frame_acks.lock().insert(
+            "fresh".to_string(),
+            CompletedFrameAck {
+                peer: peer.clone(),
+                ack_seq: 7,
+                received_frames: 8,
+                inserted_at_ms: now,
+            },
+        );
+
+        // A newly completed transfer triggers the opportunistic prune.
+        handler.record_completed_frame_ack(
+            "newest".to_string(),
+            CompletedFrameAck {
+                peer: peer.clone(),
+                ack_seq: 1,
+                received_frames: 2,
+                inserted_at_ms: now,
+            },
+        );
+
+        let cache = handler.completed_frame_acks.lock();
+        // Aged entry is gone; a delayed resume for it correctly gets no ack.
+        assert!(
+            !cache.contains_key("aged"),
+            "aged entry must be evicted past TTL"
+        );
+        // The fresh entry survives, so a resume within the window still finds
+        // its final ack (docs §6.3).
+        let fresh = cache.get("fresh").expect("fresh entry must survive prune");
+        assert_eq!(fresh.ack_seq, 7);
+        assert_eq!(fresh.received_frames, 8);
+        assert_eq!(fresh.peer, peer);
+        assert!(cache.contains_key("newest"));
+    }
+
+    #[test]
+    fn completed_frame_ack_cache_caps_size_dropping_oldest_first() {
+        let now = now_ms();
+        let mut cache: HashMap<String, CompletedFrameAck> = HashMap::new();
+        // One over the cap; each entry gets a distinct (recent) timestamp so the
+        // oldest is unambiguous and none are TTL-evicted.
+        for i in 0..=COMPLETED_FRAME_ACK_CAP {
+            cache.insert(
+                format!("t{i}"),
+                CompletedFrameAck {
+                    peer: "peer".to_string(),
+                    ack_seq: i,
+                    received_frames: i + 1,
+                    // i == 0 is the oldest (largest subtraction).
+                    inserted_at_ms: now.saturating_sub((COMPLETED_FRAME_ACK_CAP - i) as u64),
+                },
+            );
+        }
+        assert_eq!(cache.len(), COMPLETED_FRAME_ACK_CAP + 1);
+
+        WebRTCRsConnectionHandler::prune_completed_frame_acks(&mut cache, now);
+
+        assert_eq!(cache.len(), COMPLETED_FRAME_ACK_CAP);
+        // The oldest entry is the one dropped to honor the cap.
+        assert!(
+            !cache.contains_key("t0"),
+            "oldest entry must be evicted first"
+        );
+        assert!(cache.contains_key(&format!("t{COMPLETED_FRAME_ACK_CAP}")));
     }
 }
