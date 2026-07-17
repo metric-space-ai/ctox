@@ -67,6 +67,166 @@ test('document knowledge context references a chunked table only once', () => {
   assert.equal(tables[0].domain, 'drone_bearing_design_verified');
 });
 
+test('document knowledge aggregation is deterministic and preserves every chunk lineage', () => {
+  const tables = hooks.mergeKnowledgeTableReferences([
+    {
+      id: 'table:loads:chunk:0002',
+      payload: {
+        logical_table_id: 'table:loads',
+        domain: 'drone_bearing_design_verified',
+        chunk_index: 2,
+        chunk_count: 3,
+        chunk_row_offset: 3,
+        chunk_row_count: 1,
+        row_count: 4,
+        projected_row_count: 4,
+        rows: [{ source_row: 3 }],
+      },
+    },
+    {
+      id: 'table:loads',
+      payload: {
+        logical_table_id: 'table:loads',
+        domain: 'drone_bearing_design_verified',
+        chunk_index: 0,
+        chunk_count: 3,
+        chunk_row_offset: 0,
+        chunk_row_count: 2,
+        row_count: 4,
+        projected_row_count: 4,
+        rows: [{ source_row: 0 }, { source_row: 1 }],
+      },
+    },
+    {
+      id: 'table:loads:chunk:0001',
+      payload: {
+        logical_table_id: 'table:loads',
+        domain: 'drone_bearing_design_verified',
+        chunk_index: 1,
+        chunk_count: 3,
+        chunk_row_offset: 2,
+        chunk_row_count: 1,
+        row_count: 4,
+        projected_row_count: 4,
+        rows: [{ source_row: 2 }],
+      },
+    },
+  ]);
+
+  assert.equal(tables.length, 1);
+  assert.equal(tables[0].id, 'table:loads');
+  assert.deepEqual(tables[0].rows.map((row) => row.source_row), [0, 1, 2, 3]);
+  assert.equal(tables[0].rows_complete, true);
+  assert.equal(tables[0].chunk_status, 'complete');
+  assert.deepEqual(tables[0].chunk_ids, [
+    'table:loads',
+    'table:loads:chunk:0001',
+    'table:loads:chunk:0002',
+  ]);
+  assert.deepEqual(tables[0].chunk_lineage.map((entry) => [entry.chunk_index, entry.row_offset]), [
+    [0, 0],
+    [1, 2],
+    [2, 3],
+  ]);
+  assert.deepEqual(tables[0].payload.chunk_lineage, tables[0].chunk_lineage);
+});
+
+test('document knowledge aggregation marks duplicate and missing chunk indices incomplete', () => {
+  const [table] = hooks.mergeKnowledgeTableReferences([
+    {
+      id: 'table:loads',
+      logical_table_id: 'table:loads',
+      chunk_index: 0,
+      chunk_count: 3,
+      rows: [{ source_row: 0 }],
+    },
+    {
+      id: 'table:loads:chunk:0001a',
+      logical_table_id: 'table:loads',
+      chunk_index: 1,
+      chunk_count: 3,
+      rows: [{ source_row: 1 }],
+    },
+    {
+      id: 'table:loads:chunk:0001b',
+      logical_table_id: 'table:loads',
+      chunk_index: 1,
+      chunk_count: 3,
+      rows: [{ source_row: 1.5 }],
+    },
+  ]);
+
+  assert.equal(table.rows_complete, false);
+  assert.equal(table.chunk_status, 'incomplete');
+  assert.ok(table.chunk_validation_errors.includes('duplicate_chunk_index'));
+  assert.ok(table.chunk_validation_errors.includes('missing_chunk_index:2'));
+  assert.equal(table.payload.rows_complete, false);
+});
+
+test('document knowledge aggregation marks inconsistent counts and offsets incomplete', () => {
+  const [table] = hooks.mergeKnowledgeTableReferences([
+    {
+      id: 'table:loads',
+      payload: {
+        logical_table_id: 'table:loads',
+        chunk_index: 0,
+        chunk_count: 2,
+        chunk_row_offset: 0,
+        chunk_row_count: 1,
+        row_count: 3,
+        projected_row_count: 3,
+        rows: [{ source_row: 0 }],
+      },
+    },
+    {
+      id: 'table:loads:chunk:0001',
+      payload: {
+        logical_table_id: 'table:loads',
+        chunk_index: 1,
+        chunk_count: 4,
+        chunk_row_offset: 3,
+        chunk_row_count: 1,
+        row_count: 4,
+        projected_row_count: 4,
+        rows: [{ source_row: 1 }],
+      },
+    },
+  ]);
+
+  assert.equal(table.rows_complete, false);
+  assert.ok(table.chunk_validation_errors.includes('inconsistent_chunk_count'));
+  assert.ok(table.chunk_validation_errors.includes('inconsistent_chunk_offset'));
+  assert.ok(table.chunk_validation_errors.includes('inconsistent_total_rows'));
+  assert.ok(table.chunk_validation_errors.includes('inconsistent_projected_row_count'));
+});
+
+test('table-only Knowledge is selectable as data context, never as a procedural skill', () => {
+  const state = {
+    knowledgeItems: [],
+    knowledgeRunbooks: [],
+    knowledgeTables: [hooks.normalizeKnowledgeRecord({
+      id: 'table:loads',
+      kind: 'dataframe',
+      title: 'Measured load points',
+      domain: 'drone_bearing_design',
+      rows: [{ source_row: 0 }],
+    })],
+  };
+
+  const candidates = hooks.knowledgeCandidates(state);
+  assert.deepEqual(candidates.map((item) => item.id), ['table:loads']);
+  assert.equal(candidates[0].selection_type, 'table');
+  assert.equal(candidates[0].is_procedural_skill, false);
+
+  const context = hooks.resolveKnowledgeContext(state, 'table:loads', 'load points');
+  assert.equal(context.id, 'table:loads');
+  assert.equal(context.kind, 'dataframe');
+  assert.equal(context.selection_type, 'table');
+  assert.equal(context.is_procedural_skill, false);
+  assert.deepEqual(context.table_ids, ['table:loads']);
+  assert.match(hooks.knowledgeContextInstruction(context), /kein prozeduraler Skill/);
+});
+
 test('only superseded draft blobs are reclaimed, never the original or current blob', () => {
   // Successive autosaves: the previous draft blob is collectable.
   assert.equal(hooks.isReclaimableDraftBlob('v1_draft_100', 'v1_draft_200'), true);
