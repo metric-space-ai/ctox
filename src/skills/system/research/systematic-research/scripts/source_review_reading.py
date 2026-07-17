@@ -11,17 +11,19 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import http.client
 import json
 import re
-import subprocess
 import sys
 import urllib.parse
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+
+from evidence_guard import BLOCKED_CONTENT, LOGIN_INTERSTITIAL, validate_url
 
 
 USER_AGENT = "ctox-source-review-reading/1.0"
@@ -202,6 +204,10 @@ def add_url(out: list[ReadCandidate], seen: set[str], kind: str, url: Any) -> No
         return
     if not value.startswith(("http://", "https://")):
         return
+    try:
+        validate_url(value, "original_content")
+    except ValueError:
+        return
     seen.add(value)
     out.append(ReadCandidate(kind, value))
 
@@ -213,24 +219,16 @@ def resolve_read_candidates(row: dict[str, str], work: dict[str, Any] | None) ->
     if work:
         best = work.get("best_oa_location") if isinstance(work.get("best_oa_location"), dict) else {}
         primary = work.get("primary_location") if isinstance(work.get("primary_location"), dict) else {}
-        open_access = work.get("open_access") if isinstance(work.get("open_access"), dict) else {}
         add_url(out, seen, "openalex_best_pdf", best.get("pdf_url"))
-        add_url(out, seen, "openalex_oa_url", open_access.get("oa_url"))
-        add_url(out, seen, "openalex_best_landing", best.get("landing_page_url"))
         add_url(out, seen, "openalex_primary_pdf", primary.get("pdf_url"))
-        add_url(out, seen, "openalex_primary_landing", primary.get("landing_page_url"))
         locations = work.get("locations")
         if isinstance(locations, list):
             for loc in locations[:10]:
                 if not isinstance(loc, dict):
                     continue
                 add_url(out, seen, "openalex_location_pdf", loc.get("pdf_url"))
-                add_url(out, seen, "openalex_location_landing", loc.get("landing_page_url"))
 
     add_url(out, seen, "candidate_url", row.get("url"))
-    doi = normalize_doi(row.get("doi") or row.get("url"))
-    if doi:
-        add_url(out, seen, "doi", f"https://doi.org/{doi}")
     return out
 
 
@@ -247,24 +245,6 @@ def readable_priority(row: dict[str, str]) -> float:
     return score + boost
 
 
-def run_ctox_web_read(url: str, timeout_sec: int) -> tuple[bool, str, str]:
-    try:
-        proc = subprocess.run(
-            ["ctox", "web", "read", "--url", url],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_sec,
-            check=False,
-        )
-    except Exception as exc:
-        return False, "", f"ctox web read failed: {exc}"
-    text = proc.stdout.strip()
-    if proc.returncode == 0 and len(text) >= 500:
-        return True, text[:MAX_TEXT_CHARS], ""
-    return False, text[:2000], (proc.stderr.strip() or f"ctox web read returned {proc.returncode}")[:2000]
-
-
 def strip_html(value: str) -> str:
     value = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", value)
     value = re.sub(r"(?s)<[^>]+>", " ", value)
@@ -272,7 +252,7 @@ def strip_html(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def direct_fetch_text(url: str, timeout_sec: int) -> tuple[bool, str, str]:
+def direct_fetch_text(url: str, timeout_sec: int) -> tuple[bool, str, str, bytes]:
     try:
         status, data, response_headers = http_get(
             url,
@@ -284,10 +264,10 @@ def direct_fetch_text(url: str, timeout_sec: int) -> tuple[bool, str, str]:
             max_bytes=12_000_000,
         )
         if not (200 <= status < 300):
-            return False, "", f"http {status}"
+            return False, "", f"http {status}", b""
         content_type = response_headers.get("content-type", "").lower()
     except Exception as exc:
-        return False, "", f"fetch failed: {exc}"
+        return False, "", f"fetch failed: {exc}", b""
 
     if "pdf" in content_type or url.lower().endswith(".pdf"):
         try:
@@ -298,18 +278,22 @@ def direct_fetch_text(url: str, timeout_sec: int) -> tuple[bool, str, str]:
             for page in reader.pages[:40]:
                 pages.append(page.extract_text() or "")
             text = re.sub(r"\s+", " ", "\n".join(pages)).strip()
-            return len(text) >= 500, text[:MAX_TEXT_CHARS], "" if len(text) >= 500 else "pdf text too short"
+            blocked = BLOCKED_CONTENT.search(text) or (len(text) < 1500 and LOGIN_INTERSTITIAL.search(text))
+            ok = len(text) >= 500 and not blocked
+            return ok, text[:MAX_TEXT_CHARS], "" if ok else "pdf text missing or interstitial", data
         except Exception as exc:
-            return False, "", f"pdf parse failed: {exc}"
+            return False, "", f"pdf parse failed: {exc}", data
 
     for encoding in ("utf-8", "latin-1"):
         try:
             decoded = data.decode(encoding, errors="ignore")
             text = strip_html(decoded)
-            return len(text) >= 500, text[:MAX_TEXT_CHARS], "" if len(text) >= 500 else "html text too short"
+            blocked = BLOCKED_CONTENT.search(text) or (len(text) < 1500 and LOGIN_INTERSTITIAL.search(text))
+            ok = len(text) >= 500 and not blocked
+            return ok, text[:MAX_TEXT_CHARS], "" if ok else "source text missing or interstitial", data
         except Exception:
             continue
-    return False, "", "decode failed"
+    return False, "", "decode failed", data
 
 
 def snippets_for_terms(text: str) -> list[dict[str, str]]:
@@ -403,6 +387,8 @@ def main(argv: list[str]) -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     text_dir = args.out_dir / "texts"
     text_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = args.out_dir / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     candidates = list(csv.DictReader(candidate_path.open(encoding="utf-8")))
     candidates.sort(key=readable_priority, reverse=True)
@@ -415,53 +401,48 @@ def main(argv: list[str]) -> int:
 
     for index, row in enumerate(selected, start=1):
         work = openalex_work(row, args.read_timeout_sec)
-        abstract = compact_abstract(work.get("abstract_inverted_index")) if work else ""
         urls = resolve_read_candidates(row, work)
         tried: list[str] = []
         read_text = ""
         read_url = ""
         read_method = ""
         last_error = ""
+        raw_data = b""
 
         for candidate in urls[: args.max_urls_per_source]:
             tried.append(f"{candidate.kind}:{candidate.url}")
-            ok, text, error = direct_fetch_text(candidate.url, args.read_timeout_sec)
+            ok, text, error, downloaded = direct_fetch_text(candidate.url, args.read_timeout_sec)
             if ok:
                 read_text = text
                 read_url = candidate.url
                 read_method = f"direct:{candidate.kind}"
+                raw_data = downloaded
                 break
             last_error = error
-
-            ok, text, error = run_ctox_web_read(candidate.url, args.read_timeout_sec)
-            if ok:
-                read_text = text
-                read_url = candidate.url
-                read_method = f"ctox_web_read:{candidate.kind}"
-                break
-            last_error = error
-
-        if not read_text and abstract:
-            read_text = abstract
-            read_url = row.get("url", "")
-            read_method = "metadata_abstract"
 
         source_measurements: list[dict[str, str]] = []
         text_path = ""
+        snapshot_path = ""
+        snapshot_sha256 = ""
         if read_text:
             text_path = str(text_dir / f"{index:03d}_{slugify(row.get('title', 'source'))}.txt")
             Path(text_path).write_text(read_text, encoding="utf-8")
+            snapshot_file = snapshot_dir / f"{index:03d}_{slugify(row.get('title', 'source'))}.bin"
+            snapshot_file.write_bytes(raw_data)
+            snapshot_path = str(snapshot_file)
+            snapshot_sha256 = hashlib.sha256(raw_data).hexdigest()
             source_measurements = extract_measurements(row, read_url, read_text)
             measurement_rows.extend(source_measurements)
 
-        if not read_text:
-            status = "blocked"
-        elif read_method == "metadata_abstract":
-            status = "metadata_only"
-        elif source_measurements:
-            status = "extracted"
+        try:
+            score = float(row.get("relevance_score") or 0)
+        except ValueError:
+            score = 0
+        evidence_eligible = bool(read_text and score >= 8 and snapshot_sha256)
+        if evidence_eligible:
+            status = "evidence" if source_measurements else "evidence_no_measurements"
         else:
-            status = "readable_no_measurements"
+            status = "rejected" if read_text else "blocked"
 
         status_rows.append(
             {
@@ -476,9 +457,12 @@ def main(argv: list[str]) -> int:
                 "read_url": read_url,
                 "text_chars": len(read_text),
                 "measurement_rows": len(source_measurements),
+                "evidence_eligible": str(evidence_eligible).lower(),
                 "tried_urls": " | ".join(tried),
                 "last_error": last_error,
                 "text_path": text_path,
+                "snapshot_path": snapshot_path,
+                "snapshot_sha256": snapshot_sha256,
             }
         )
 
@@ -521,9 +505,12 @@ def main(argv: list[str]) -> int:
             "read_url",
             "text_chars",
             "measurement_rows",
+            "evidence_eligible",
             "tried_urls",
             "last_error",
             "text_path",
+            "snapshot_path",
+            "snapshot_sha256",
         ],
     )
     write_csv(
@@ -536,10 +523,10 @@ def main(argv: list[str]) -> int:
 
     summary = {
         "selected_sources": len(selected),
-        "readable_sources": sum(1 for row in status_rows if row["status"] in {"extracted", "readable_no_measurements"}),
-        "metadata_only_sources": sum(1 for row in status_rows if row["status"] == "metadata_only"),
+        "readable_sources": sum(1 for row in status_rows if row["evidence_eligible"] == "true"),
+        "metadata_only_sources": 0,
         "blocked_sources": sum(1 for row in status_rows if row["status"] == "blocked"),
-        "extracted_sources": sum(1 for row in status_rows if row["status"] == "extracted"),
+        "extracted_sources": sum(1 for row in status_rows if row["status"] in {"evidence", "evidence_no_measurements"}),
         "measurement_rows": len(measurement_rows),
         "outputs": {
             "reading_status": str(args.out_dir / "reading_status.csv"),

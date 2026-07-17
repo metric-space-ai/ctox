@@ -112,13 +112,13 @@ Output payload fields (success):
 | `focus`          | `string`         | Echo of the input focus.                                                                             |
 | `summary`        | `string`         | <= 800 chars. Synthesis across the returned sources, written by the research tool, not the writer.   |
 | `evidence_axis`  | `string`         | Which `evidence_axes[]` entry this call was meant to cover. Used by the manager to track coverage.   |
-| `sources[]`      | `array<object>`  | See below.                                                                                            |
+| `sources[]`      | `array<object>`  | Discovery candidates only; no candidate is Evidence until `evidence_guard.py` passes.                 |
 
-Each `sources[]` entry:
+Each `sources[]` entry is a discovery receipt, not Evidence:
 
 | Field                   | Type            | Meaning                                                                                            |
 | ----------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `evidence_id`           | `string`        | Stable id (e.g. `e_017`). Used as the citation key in block markdown.                              |
+| `candidate_id`          | `string`        | Stable discovery id. It is not a citation key and cannot support a claim.                         |
 | `kind`                  | `"doi" \| "arxiv" \| "openalex" \| "web"` | Source class.                                                                            |
 | `title`                 | `string`        | Verbatim from the resolver (Crossref-canonical for DOIs).                                          |
 | `authors[]`             | `array<string>` | Verbatim from the resolver. Manager never edits.                                                    |
@@ -126,9 +126,14 @@ Each `sources[]` entry:
 | `venue`                 | `string`        | Journal / conference / publisher / domain.                                                          |
 | `doi`                   | `string \| null`| Crossref-resolved. Empty for non-DOI sources.                                                       |
 | `url`                   | `string`        | Canonical URL.                                                                                      |
-| `excerpts[]`            | `array<object>` | Each: `{ excerpt_id, text, locator }`. `text` is a short verbatim quote; `locator` is page/section. |
+| `excerpts[]`            | `array<object>` | Discovery hints only; they never satisfy the Evidence floor or support a claim.                    |
 | `license`               | `string`        | License declaration if discoverable; empty otherwise.                                                |
-| `crossref_resolved`     | `boolean`       | `true` if the DOI passed Crossref resolution (DOIs only). Always `false` for non-DOI sources.       |
+| `crossref_resolved`     | `boolean`       | Metadata provenance only; it never makes a candidate eligible.                                    |
+
+An Evidence entry additionally requires an original canonical non-metadata
+URL, current 2xx response, full-text/original-data content, downloaded
+SHA-256 snapshot, `relevance_score >= 8`, and the immutable Claim -> Evidence
+-> Snapshot -> Source lineage in `references/evidence_integrity.md`.
 
 Failure codes: `research_disabled`, `research_budget_reached`,
 `research_empty`, `research_timeout`, `research_aborted`, `research_error`.

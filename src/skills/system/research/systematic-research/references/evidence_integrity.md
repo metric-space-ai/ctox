@@ -1,0 +1,71 @@
+# Evidence Integrity Contract
+
+Use this contract for every durable systematic-research run. Discovery is a
+candidate queue; it is never an evidence register and its fields (`title`,
+`snippet`, DOI, abstract, ranking, or metadata) must not support a claim.
+
+## Eligible evidence
+
+An evidence entry is eligible only when all of these are true:
+
+- `evidence_status=eligible`, `http_status` is 200–299, and the URL is the
+  current canonical URL of the publisher, institution, original data owner,
+  standards body, or lawful repository.
+- `url_role` is `original_content` or `original_data`. DOI resolvers,
+  publisher/DOI landing pages, metadata APIs, aggregators, mirrors, search
+  results, and snippets are discovery-only.
+- `freshness_status=current` is recorded at retrieval time and the snapshot is
+  the bytes actually downloaded from that URL. A failed, stale, redirected,
+  login, cookie, JavaScript shell, metadata, abstract-only, or snippet read is
+  rejected, never repaired from model memory.
+- `content_scope=full_text` for prose or `content_kind=data_file` for data.
+  The snapshot is non-empty, its SHA-256 is recorded in both the snapshot and
+  evidence row, and the hash verifies before every downstream use.
+- `relevance_score` is numeric and at least 8/10, with a short reason tied to
+  the research facet. A shared keyword is not a relevance decision.
+
+Required lineage is immutable and exact:
+
+```text
+claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url
+```
+
+Claims repeat the linked IDs and URL and carry `lineage_sha256`, computed over
+`claim_id`, `claim_text`, `evidence_id`, `snapshot_id`, `source_id`, and
+`canonical_url`. Never update a snapshot, source URL, evidence row, or claim
+in place; create a new version and invalidate dependants.
+
+## Original data files
+
+For every dataset used in a calculation, download the original file from its
+canonical data URL. Record its SHA-256, byte count, format, parser and parser
+version. Run a deterministic check that verifies the file hash, schema/column
+names, row count, encoding/delimiter, units, null handling, and any required
+checksums. Only `downloaded=true`, `original_data=true`, `generated=false`,
+`quarantine_status=accepted`, and `deterministic_check.status=pass` may enter a
+table or claim. Missing, corrupt, ambiguous, transformed, or invented rows go
+to a quarantine record with a reason; do not impute or fabricate replacements.
+
+## Independent review and living outputs
+
+Before promotion, persist three independent, passing reviews with distinct
+reviewer identities: `source` (authority, URL, 2xx, freshness, full content,
+relevance), `data` (download and deterministic parsing), and `claim` (scope,
+units, derivation, and exact lineage). The parent agent resolves conflicts;
+one review cannot self-approve another.
+
+Living Knowledge and reports are append-only versions. A refresh creates a new
+Knowledge version from new snapshots, reruns all three reviews, and records
+explicit invalidations for claims/tables/reports that depended on superseded
+snapshots. A report records its Knowledge version and claim IDs. A superseded
+or invalidated version is never silently made current.
+
+Run the deterministic guard before importing data, promoting Knowledge, or
+publishing a report:
+
+```sh
+python3 src/skills/system/research/systematic-research/scripts/evidence_guard.py \
+  /path/to/evidence-manifest.json
+```
+
+The guard exits non-zero on any missing or inconsistent field.

@@ -356,58 +356,45 @@ treat them as release contracts:
 
 ### 3. Build the evidence register
 
-You need at least the depth profile's `min_evidence_count` evidences in the
-register before you start drafting blocks. **Stub evidences (title only,
-no real source content) are rejected by the tool** — every entry must
-carry either a resolver-fetched abstract, or a manually-supplied
-abstract/snippet of at least 200 characters from `ctox web read`.
+You need at least the depth profile's `min_evidence_count` eligible evidences
+in the register before you start drafting blocks. Discovery receipts, stub
+entries, resolver metadata, abstracts, snippets, DOI landing pages and
+publisher landing pages are not evidence. Each evidence must be represented
+in the manifest described by `references/evidence_integrity.md` and pass
+`scripts/evidence_guard.py`.
 
-#### a) Resolver path (preferred, when a DOI or arXiv id is known)
-
-```bash
-# By DOI — resolver pulls Crossref + OpenAlex metadata, including the
-# abstract. Use this path whenever a DOI exists.
-ctox report add-evidence --run-id RUN_ID --doi "10.1016/j.compstruct.2020.112345"
-
-# By arXiv id — resolver pulls the arXiv summary (often the canonical
-# abstract for preprints).
-ctox report add-evidence --run-id RUN_ID --arxiv-id "2401.12345"
-```
-
-Both paths populate `abstract_md` from the source automatically.
-
-If a web page URL contains a DOI (for example a publisher URL ending in
-`/10.xxxx/...`), still prefer registering the DOI with `--doi` as a separate
-evidence item. If the DOI resolver fails but the URL page/PDF is readable, add
-the URL evidence with real extracted content and do not cite the bare DOI in
-the prose unless the release guard recognises it as registered evidence. Never
-leave a DOI string in a block that is not backed by the current run's evidence
-register.
-
-#### b) Manual path (book, standard, magazine, web page)
-
-For sources without a DOI / arXiv id, you must fetch the content yourself
-with `ctox web read` and pass it via `--abstract-file`:
+#### a) DOI/arXiv discovery path (never evidence by itself)
 
 ```bash
-# 1. fetch the source page
-ctox web read --url "https://www.nasa.gov/sti/some-paper" \
-    > /tmp/nasa_lightning_raw.json
-# 2. extract the abstract / key excerpts into /tmp/nasa_lightning_abs.md
-#    (you do this — strip JSON envelope, keep the textual content)
-# 3. register
-ctox report add-evidence --run-id RUN_ID \
-    --title "Lightning protection of CFRP structures" \
-    --authors "Smith, A; Doe, J" \
-    --year 2024 \
-    --url "https://www.nasa.gov/sti/some-paper" \
-    --abstract-file /tmp/nasa_lightning_abs.md
+# DOI resolves a candidate only. It does not create evidence.
+ctox web scholarly search --query "10.1016/j.compstruct.2020.112345"
+
+# arXiv metadata/summary is also discovery-only.
+ctox web scholarly search --query "arXiv 2401.12345"
 ```
 
-The CLI **rejects** every manual call where neither `--abstract-file` nor
-`--snippet-file` carries at least 200 characters of real source content.
-Title-only entries are not citable — that's what produced the previous
-fake feasibility study.
+Follow the resolved candidate to the original full-text or original-data URL,
+download it, record a current SHA-256 snapshot, and register that snapshot
+only after the guard passes. A DOI string may remain as provenance metadata,
+but it cannot satisfy the evidence floor or support a claim.
+
+#### b) Original-content path (book, standard, web page, dataset)
+
+Fetch the original canonical content or data file yourself. `ctox web read`
+and search output can locate a URL, but their extracted text is not a snapshot
+and must not be passed as evidence:
+
+```bash
+curl --fail --location --proto '=https' --output /tmp/source.snapshot \
+  "https://example.edu/original/full-text.pdf"
+sha256sum /tmp/source.snapshot
+python3 skills/system/research/systematic-research/scripts/evidence_guard.py \
+  /tmp/RUN_ID_evidence_manifest.json
+```
+
+The guard rejects title-only, abstract-only, snippet, login/cookie/shell,
+404, non-2xx, metadata, aggregator, DOI-landing, stale, hash-invalid and
+below-8-relevance entries. Do not weaken the guard to make the evidence floor.
 
 #### Available web tools
 
@@ -596,11 +583,10 @@ highest-scoring source families and perform a targeted reading/extraction pass
 against source pages, PDFs, datasets and tables before writing a client-facing
 research report.
 
-Use the bundled reading runner for that pass. It resolves OpenAlex open-access
-locations, tries direct PDF/HTML extraction plus `ctox web read`, writes a
-readability ledger, and extracts measurement snippets into a separate evidence
-table. A client-facing report must not claim full-text review for sources that
-are only `metadata_only` or `blocked`.
+Use the bundled reading runner for that pass. It resolves original downloadable
+PDF/HTML/data URLs, downloads them directly, writes SHA-256 snapshots, and
+extracts measurement locators into a separate table. A client-facing report
+must not claim evidence for rejected, metadata-only, or blocked sources.
 
 ```bash
 python3 skills/system/research/systematic-research/scripts/source_review_reading.py \
@@ -613,14 +599,16 @@ python3 skills/system/research/systematic-research/scripts/source_review_reading
 
 Mandatory reading artifacts:
 
-- `reading_status.csv`: one row per selected source with `extracted`,
-  `readable_no_measurements`, `metadata_only`, or `blocked`.
+- `reading_status.csv`: one row per selected source with an explicit
+  `evidence_eligible` decision; failed reads remain rejected/quarantined.
 - `extracted_measurements.csv`: normalized evidence rows with value, unit,
-  measurement family and source snippet.
+  measurement family and exact snapshot/source locator. A snippet is a
+  locator, never the evidence content.
+- `snapshots/`: downloaded original bytes plus SHA-256 metadata.
 - `reading_graph.json`: source-to-evidence graph for later report figures and
   audit.
 
-If fewer than 15 selected sources are actually readable, continue source
+If fewer than 15 selected sources are actually eligible, continue source
 resolution and targeted follow-up before drafting the report, or state the
 access limitation explicitly. Do not turn a metadata-only corpus into a
 research report.
@@ -637,6 +625,7 @@ python3 skills/system/research/systematic-research/scripts/source_review_report.
   --title "<client-facing report title>" \
   --discovery-dir "/tmp/RUN_ID_source_discovery" \
   --reading-dir "/tmp/RUN_ID_source_reading" \
+  --evidence-manifest "/tmp/RUN_ID_evidence_manifest.json" \
   --out-docx "output/doc/RUN_ID_source_review_report.docx" \
   --out-xlsx "output/doc/RUN_ID_source_review_workbook.xlsx"
 ```
@@ -667,9 +656,10 @@ persisted evidence, not hand-written count inflation.
 For Business OS research runs, persist the final app-facing result only after
 agent review and agent scoring. Prepare a JSON object with the complete
 ResearchRun fields the app renders: `sources`, counts, `graph`, `summary` and
-criteria. Every source must have a direct URL/DOI, `score`, `scoreValue`,
-`contribution`, `use`, and `missing` based on what you actually read. Do not
-write `metadata_only` records, raw search hits, or mechanically scored rows.
+criteria. Every source must have a direct original-content/data URL, `score`,
+`scoreValue`, `contribution`, `use`, and `missing` based on what you actually
+read. Do not write metadata-only records, raw search hits, or mechanically
+scored rows. Run `evidence_guard.py` before the writeback.
 
 ```bash
 python3 skills/system/research/systematic-research/scripts/business_research_writeback.py \
@@ -950,15 +940,13 @@ ctox report table-add --run-id RUN_ID \
 # → prints table_id: tbl_<hex>; cite as {{tbl:tbl_<hex>}}.
 ```
 
-### 4. Draft block markdown — MUST load abstracts first
+### 4. Draft block markdown — MUST load verified snapshots first
 
-**Hard rule: before drafting any block, load the source content for
-every evidence_id you intend to cite into your working context.** The
-resolver path (`add-evidence --doi`) writes the metadata + abstract +
-(when the source is open-access) the full PDF text to SQLite, but
-nothing is in your conversation context across turns. If you write
-block prose without re-loading the content, you will hallucinate from
-priors and the prose will not actually use the sources.
+**Hard rule: before drafting any block, load the verified full-text/data
+snapshot for every evidence_id you intend to cite into your working context.**
+Metadata, abstracts, DOI resolver output, and snippets are discovery receipts,
+not claim support. If you write block prose without re-loading the verified
+snapshot, stop and return to the evidence gate.
 
 For each evidence_id you plan to cite:
 
@@ -1108,11 +1096,9 @@ re-run the failed check.
 Treat a failed check as a transition to the revision state, not as the end of
 the run. In particular:
 
-- `LINT-FAB-DOI`: for every DOI in the goals, first try
-  `ctox report add-evidence --run-id RUN_ID --doi "<doi>"`. If it resolves,
-  re-run `release_guard`. If it does not resolve, remove the DOI string from
-  the implicated block or replace it with the already-registered URL/source
-  citation and re-stage that block.
+- `LINT-FAB-DOI`: treat every DOI as a discovery pointer. Resolve it to an
+  original full-text/data URL, create and verify a current snapshot, then
+  re-run `evidence_guard.py`. A resolved DOI alone never repairs the lint.
 - `LINT-CITED-BUT-MISSING` / `LINT-FAB-AUTHOR`: rewrite the sentence so it
   cites only evidence ids present in `ctox report evidence-show --all`.
 - `LINT-MIN-CHARS` / `LINT-MAX-CHARS` / duplicate openings: revise form only;

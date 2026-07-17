@@ -12,6 +12,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from evidence_guard import validate_manifest
+
 
 def load_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -163,9 +165,9 @@ def source_identifier(row: dict[str, str]) -> str:
 
 def plain_status(status: str) -> str:
     return {
-        "extracted": "read and extracted",
-        "readable_no_measurements": "readable, no numeric extraction yet",
-        "metadata_only": "metadata only",
+        "evidence": "eligible evidence",
+        "evidence_no_measurements": "eligible full text, no numeric extraction",
+        "rejected": "rejected by evidence gate",
         "blocked": "blocked",
         "not_read_in_pass": "not read in current pass",
     }.get(status or "", status or "not read in current pass")
@@ -173,9 +175,9 @@ def plain_status(status: str) -> str:
 
 def evidence_grade(status: str) -> str:
     return {
-        "extracted": "A - direct evidence extracted",
-        "readable_no_measurements": "B - readable follow-up source",
-        "metadata_only": "C - metadata only",
+        "evidence": "A - eligible evidence extracted",
+        "evidence_no_measurements": "B - eligible full text, no numeric extraction",
+        "rejected": "D - rejected by evidence gate",
         "blocked": "D - access blocked",
     }.get(status or "", "C - not read in pass")
 
@@ -197,8 +199,8 @@ def why_source_matters(row: dict[str, str], status: dict[str, str] | None = None
         lead = "Useful for load-cell, balance, structural or test-instrumentation context."
     else:
         lead = "Useful as supporting UAV load-data literature."
-    if status and status.get("status") == "metadata_only":
-        lead += " Full-text access still needs follow-up."
+    if status and status.get("status") == "rejected":
+        lead += " The source did not pass the evidence gate."
     if status and status.get("status") == "blocked":
         lead += " Access was blocked in this run."
     return f"{lead} {snippet}".strip()
@@ -217,7 +219,7 @@ def indexed_reading_status(reading_rows: list[dict[str, str]], row: dict[str, st
 def recommended_sources(candidates: list[dict[str, str]], reading_rows: list[dict[str, str]], limit: int = 24) -> list[dict[str, str]]:
     def rank(row: dict[str, str]) -> tuple[int, int]:
         status = indexed_reading_status(reading_rows, row).get("status", "")
-        status_weight = {"extracted": 40, "readable_no_measurements": 25, "metadata_only": 5, "blocked": -15}.get(status, 0)
+        status_weight = {"evidence": 40, "evidence_no_measurements": 25, "rejected": -10, "blocked": -15}.get(status, 0)
         return (status_weight + int_or_zero(row.get("relevance_score")), int_or_zero(row.get("relevance_score")))
 
     rows = sorted(candidates, key=rank, reverse=True)
@@ -333,6 +335,8 @@ def build_docx(
     discovery_graph = load_json(discovery_dir / "discovery_graph.json")
     reading_rows = load_csv(reading_dir / "reading_status.csv")
     measurements = load_csv(reading_dir / "extracted_measurements.csv")
+    eligible_urls = {row.get("read_url") for row in reading_rows if row.get("evidence_eligible") == "true"}
+    measurements = [row for row in measurements if row.get("source_url") in eligible_urls]
     discovery_summary = load_json(discovery_dir / "summary.json")
     reading_summary = load_json(reading_dir / "reading_summary.json")
     mass_limit_kg = infer_mass_limit_kg(topic)
@@ -412,9 +416,9 @@ def build_docx(
         doc,
         ["Reading status", "Count", "Meaning"],
         [
-            ["extracted", str(statuses.get("extracted", 0)), "Readable and numeric evidence extracted"],
-            ["readable_no_measurements", str(statuses.get("readable_no_measurements", 0)), "Readable but no numeric evidence found in current pass"],
-            ["metadata_only", str(statuses.get("metadata_only", 0)), "Only abstract/metadata used"],
+            ["evidence", str(statuses.get("evidence", 0)), "Eligible and numeric evidence extracted"],
+            ["evidence_no_measurements", str(statuses.get("evidence_no_measurements", 0)), "Eligible full text but no numeric extraction"],
+            ["rejected", str(statuses.get("rejected", 0)), "Failed the evidence gate"],
             ["blocked", str(statuses.get("blocked", 0)), "No readable source text available from attempted URLs"],
         ],
     )
@@ -562,7 +566,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--reading-dir", type=Path, required=True)
     parser.add_argument("--out-docx", type=Path, required=True)
     parser.add_argument("--out-xlsx", type=Path)
+    parser.add_argument("--evidence-manifest", type=Path, required=True)
     args = parser.parse_args(argv)
+
+    manifest = json.loads(args.evidence_manifest.read_text(encoding="utf-8"))
+    validate_manifest(manifest, args.evidence_manifest.parent)
 
     summary = build_docx(args.title, args.topic, args.discovery_dir, args.reading_dir, args.out_docx)
     if args.out_xlsx:

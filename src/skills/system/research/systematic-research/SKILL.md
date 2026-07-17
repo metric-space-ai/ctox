@@ -36,6 +36,25 @@ Spreadsheets, or Files before claiming completion.
   found, state that the local CTOX Knowledge lookup returned no applicable
   prior knowledge.
 
+## Evidence boundary (fail closed)
+
+Discovery and Evidence are different states. Search/deep-research results,
+source catalogs, titles, snippets, DOI strings, abstracts, resolver metadata,
+rankings, and landing pages are **candidates only**. They may locate a source,
+but they may never be cited, imported, used in calculations, or promoted into
+Knowledge/Reports. Read [evidence_integrity.md](references/evidence_integrity.md)
+for the manifest contract and run `scripts/evidence_guard.py` before every
+promotion or publication.
+
+Evidence exists only when the original canonical non-metadata URL returned a
+current 2xx response and the downloaded original content/data is present in a
+SHA-256-verified snapshot. Require actual full text or original data content,
+`relevance_score >= 8`, and the immutable
+`claim_id -> evidence_id -> snapshot_id -> source_id -> canonical_url` chain.
+404, login/cookie walls, JavaScript shells, snippets, aggregators, mirrors,
+DOI resolver/landing URLs, and metadata are permanent rejection states. Never
+fill them from memory or a second-hand summary.
+
 ## Choosing the output mode
 
 Look at the deliverable the operator described, not the verb. There are
@@ -229,26 +248,22 @@ durable.
 
 ### Evidence promotion - mandatory fail-closed gate
 
-Discovery results are candidates. Promote a candidate to evidence only
-after all applicable checks below pass:
+Discovery results are candidates. Promote a candidate to evidence only after
+the evidence manifest passes the deterministic guard and all checks below pass:
 
-1. **Transport**: the canonical URL returned a successful response and CTOX
-   persisted a snapshot with a content hash.
-2. **Extraction**: the snapshot contains meaningful source content. A title,
-   cookie wall, login form, empty JavaScript shell, metadata card, or search
-   snippet is not evidence.
-3. **Directness**: the URL belongs to the publisher, institution, original
-   data owner, standards body, or lawful repository that hosts the actual
-   source. Mirrors, DOI resolver pages, and aggregators remain discovery-only.
-4. **Relevance**: the extracted content directly supports the research facet.
-   Shared keywords, adjacent domains, or a generic resource list do not pass.
-5. **Contribution**: classify the source as `direct_measurement`, `derived`,
-   `method`, `standard`, `manufacturer`, or `secondary`. Do not represent a
-   method paper or secondary summary as measured evidence.
-6. **Claim trace**: every factual or numerical claim records the exact file,
-   table/figure, row or range, column, unit, conversion, and derivation needed
-   to reproduce it. If the source cannot support that trace, the claim is not
-   eligible.
+1. **Transport/freshness**: the canonical non-metadata URL returned 2xx and
+   the snapshot is current, downloaded bytes, and SHA-256 verified.
+2. **Content**: the snapshot contains actual full text or original data. A
+   title, abstract, metadata card, cookie/login wall, empty shell, snippet,
+   DOI landing page, mirror, or aggregator is never evidence.
+3. **Relevance/directness**: the original owner URL directly supports the
+   facet and has an explicit relevance score of at least 8/10.
+4. **Data integrity**: every original data file was downloaded and passed the
+   deterministic hash/schema/row/unit/null check; failures are quarantined,
+   not guessed or imputed.
+5. **Claim trace**: every factual or numerical claim records the exact file,
+   table/figure, row/range, column, unit, conversion, derivation, and the
+   immutable Claim -> Evidence -> Snapshot -> Source lineage.
 
 Retain rejected candidates with their rejection reason for auditability, but
 exclude them from knowledge construction, calculations, and report evidence
@@ -315,7 +330,8 @@ complete while any candidate lacks an explicit `eligible` or `rejected`
 decision.
 
 Before closing discovery, run three independent reviews over the persisted
-receipts:
+receipts. They must be distinct, passing reviews, not three labels on one
+agent's unchecked output:
 
 - **Source auditor**: reopens every eligible canonical URL and confirms
   authority, content extraction, topical relevance, and snapshot hash.
@@ -323,6 +339,9 @@ receipts:
   archive/table and verifies units, parsing, conversions, nulls, and row counts.
 - **Claim auditor**: checks each knowledge statement and report claim against
   eligible source or data receipts and rejects unsupported strength or scope.
+
+Run `scripts/evidence_guard.py` after these reviews. A failed check blocks
+library import, Knowledge promotion, and report publication.
 
 The parent agent resolves disagreements and owns the final promotion decision.
 
@@ -423,7 +442,8 @@ the chain. Promote them into procedural Knowledge before drafting documents:
    derivations, and caveats. The source snapshot remains the place to read the
    underlying evidence.
 4. Require the trace `knowledge_version -> claim_id -> evidence_id ->
-   snapshot_id -> source_id` for every factual or numerical statement. Missing,
+   snapshot_id -> source_id -> canonical_url` for every factual or numerical
+   statement, including the claim lineage hash. Missing,
    unreachable, rejected, or hash-invalid evidence invalidates the dependent
    claim; it must not silently fall back to model memory.
 5. Preserve conflicts as contested claims with both evidence paths. Do not
@@ -432,11 +452,13 @@ the chain. Promote them into procedural Knowledge before drafting documents:
    research run through `ctox knowledge link`. A UI consumer must be able to
    traverse Research → Knowledge → source snapshot and Knowledge → Documents.
 
-Knowledge is living state. On refresh, use this order as one atomic promotion
-workflow: discover candidates → verify snapshots → build/version data → rerun
-data and claim audits → create a new Knowledge version → mark dependent reports
-stale → regenerate or explicitly revalidate them. Never mutate an old source
-hash or data version in place merely to keep a report appearing current.
+Knowledge is living state. On refresh, use this order as one append-only
+promotion workflow: discover candidates -> verify new snapshots -> download
+and deterministically check original data -> build a new data/Knowledge version
+-> rerun independent Source/Data/Claim reviews -> record invalidations for
+dependent claims and reports -> regenerate or explicitly revalidate reports.
+Never mutate an old source hash, claim, table, Knowledge version, or report in
+place merely to keep it appearing current.
 
 ## Phase 2B — Decision-report mode
 
