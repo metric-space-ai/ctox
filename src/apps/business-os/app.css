@@ -22,6 +22,11 @@
   --panel-radius: 4px;
   --control-radius: 3px;
   --panel-shadow: 0 1px 2px oklch(0.22 0.015 235 / 0.08);
+  /* Kit additions: raised step above --surface-2 (active segments, hovered
+     chips in dark surfaces) and the softer content radius for callouts,
+     choice rows and code blocks. Consumed by shared/base.css. */
+  --surface-3: oklch(0.996 0.002 235);
+  --kit-radius: 6px;
   --glass-bg: var(--surface);
   --glass-blur: none;
   --shell-topbar-bg: var(--surface);
@@ -71,6 +76,10 @@
   --panel-radius: 4px;
   --control-radius: 3px;
   --panel-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  /* Kit additions: raised step above --surface-2 (active segments) and the
+     softer content radius. Consumed by shared/base.css. */
+  --surface-3: #232b36;
+  --kit-radius: 6px;
   --glass-bg: var(--surface);
   --glass-blur: none;
   --shell-topbar-bg: var(--surface);
@@ -5785,26 +5794,22 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   font-size: var(--os-btn-font-size);
   font-weight: var(--os-btn-weight);
   cursor: pointer;
-  border: var(--os-btn-border, 1px solid var(--line));
+  border: var(--os-btn-border, 1px solid var(--hairline, var(--line)));
   background: var(--os-btn-bg, var(--surface-2));
   color: var(--os-btn-color, var(--text));
-  transition: transform 0.2s var(--spring-bounce),
-              background-color 0.2s var(--spring-ease),
-              border-color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease);
+  transition: background-color 0.15s ease,
+              border-color 0.15s ease,
+              color 0.15s ease;
   user-select: none;
   text-decoration: none;
 }
 
 .os-btn:hover {
-  transform: translateY(-1px) scale(1.015);
-  background: var(--os-btn-hover-bg, color-mix(in srgb, var(--surface-2) 90%, var(--accent-soft)));
-  border-color: color-mix(in srgb, var(--line) 80%, var(--accent));
-  box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.06);
+  background: var(--os-btn-hover-bg, color-mix(in srgb, var(--surface-2) 88%, var(--text)));
 }
 
 .os-btn:active {
-  transform: translateY(0) scale(0.97);
+  background: var(--os-btn-hover-bg, color-mix(in srgb, var(--surface-2) 80%, var(--text)));
 }
 
 .os-btn:focus-visible {
@@ -5815,7 +5820,7 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
 /* Primary Accent Variant */
 .os-btn.os-btn-primary {
   --os-btn-bg: var(--accent);
-  --os-btn-color: var(--bg);
+  --os-btn-color: var(--accent-foreground);
   --os-btn-border: 1px solid transparent;
   --os-btn-hover-bg: color-mix(in srgb, var(--accent) 88%, #fff);
 }
@@ -5829,21 +5834,19 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   appearance: none;
   outline: none;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--os-btn-radius);
   padding: 8px 12px;
   font-size: 13px;
   color: var(--text);
-  transition: border-color 0.2s var(--spring-ease),
-              box-shadow 0.2s var(--spring-ease),
-              transform 0.2s var(--spring-ease);
+  transition: border-color 0.15s ease,
+              box-shadow 0.15s ease;
 }
 
 .os-input:focus,
 .os-select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
-  transform: translateY(-0.5px);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .os-select {
