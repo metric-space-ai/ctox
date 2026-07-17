@@ -927,13 +927,12 @@ pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn command_file_names(program: &str) -> Vec<String> {
-    let names = vec![program.to_string()];
     #[cfg(windows)]
     {
         if Path::new(program).extension().is_some() {
-            return names;
+            return vec![program.to_string()];
         }
-        let mut names = names;
+        let mut names = Vec::new();
         let path_extensions =
             std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
         names.extend(
@@ -943,10 +942,13 @@ fn command_file_names(program: &str) -> Vec<String> {
                 .filter(|extension| !extension.is_empty())
                 .map(|extension| format!("{program}{extension}")),
         );
+        // Git-for-Windows also ships extensionless POSIX shims such as `npm`.
+        // Prefer native PATHEXT launchers (`npm.cmd`) before that fallback.
+        names.push(program.to_string());
         names
     }
     #[cfg(not(windows))]
-    names
+    vec![program.to_string()]
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
