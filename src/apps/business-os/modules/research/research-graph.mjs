@@ -36,6 +36,7 @@ export function createResearchGraph(host, options = {}) {
   let focusFrame = 0;
   let disposed = false;
   host.dataset.graphReheatCount = '0';
+  let projectionFingerprint = graphProjectionFingerprint(projection);
 
   const graph = ForceGraph3D({
     controlType: 'orbit',
@@ -129,9 +130,16 @@ export function createResearchGraph(host, options = {}) {
       const positionedNodes = new Map(
         (graph.graphData?.().nodes || []).map((node) => [node.id, node]),
       );
-      projection = normalizeProjection(nextProjection);
-      const nextTopologyKey = projectionTopologyKey(projection);
+      const next = normalizeProjection(nextProjection);
+      const nextFingerprint = graphProjectionFingerprint(next);
+      const nextTopologyKey = projectionTopologyKey(next);
       const topologyChanged = nextTopologyKey !== topologyKey;
+      const semanticChanged = nextFingerprint !== projectionFingerprint;
+      const visibilityChanged = !sameIdSet(next.visibleNodeIds, projection.visibleNodeIds)
+        || !sameIdSet(next.visibleLinkIds, projection.visibleLinkIds);
+      if (!topologyChanged && !semanticChanged && !visibilityChanged) return false;
+      projection = next;
+      projectionFingerprint = nextFingerprint;
       topologyKey = nextTopologyKey;
       projection.nodes = projection.nodes.map((node) => {
         const positioned = positionedNodes.get(node.id);
@@ -152,17 +160,18 @@ export function createResearchGraph(host, options = {}) {
       for (const timer of cameraFitTimers) window.clearTimeout(timer);
       cameraFitTimers.clear();
       rebuildAdjacency();
-      if (topologyChanged) {
+      if (topologyChanged || semanticChanged) {
         graph.graphData(cloneProjection(projection));
         disposeStaleNodeObjects(new Set(projection.nodes.map((node) => node.id)));
       }
       applyVisibilityState();
       configureForces();
-      if (topologyChanged) {
+      if (topologyChanged || semanticChanged) {
         host.dataset.graphReheatCount = String(Number(host.dataset.graphReheatCount || 0) + 1);
-        graph.d3ReheatSimulation?.();
+        if (topologyChanged) graph.d3ReheatSimulation?.();
         if (selectedId || hoveredId) applyFocusState();
       }
+      return true;
     },
     setDimensions(nextDimensions) {
       if (disposed) return;
@@ -224,6 +233,9 @@ export function createResearchGraph(host, options = {}) {
       host.replaceChildren();
     },
     graph,
+    fingerprint() {
+      return projectionFingerprint;
+    },
   };
 
   rebuildAdjacency();
@@ -513,6 +525,72 @@ function formatProvenance(value) {
   return [value.method, value.table, value.evidenceId, value.kind].filter(Boolean).join(' · ') || 'verified';
 }
 
+// The renderer receives a clone for ForceGraph, so the update gate must be
+// based on stable semantic input rather than object identity or topology only.
+// Exclude force-layout coordinates and renderer-only fields; retain the
+// research meaning that must trigger a graphData refresh.
+export function graphProjectionFingerprint(value) {
+  const projection = normalizeProjection(value);
+  const nodes = projection.nodes
+    .map((node) => ({
+      id: node.id,
+      label: node.label,
+      kind: node.kind,
+      tags: node.tags,
+      description: node.description,
+      cluster: node.cluster,
+      clusterHint: node.clusterHint,
+      provenance: node.provenance,
+      sourceIds: node.sourceIds,
+      metadata: node.metadata,
+      occurrences: node.occurrences,
+      documentCount: node.documentCount,
+    }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const links = projection.links
+    .map((link) => ({
+      id: link.id,
+      source: nodeId(link.source),
+      target: nodeId(link.target),
+      kind: link.kind,
+      relation: link.relation,
+      label: link.label,
+      tags: link.tags,
+      description: link.description,
+      cluster: link.cluster,
+      provenance: link.provenance,
+      sourceIds: link.sourceIds,
+      metadata: link.metadata,
+      weight: link.weight,
+    }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  return `graph:${stableSemanticHash({
+    metadata: projection.metadata,
+    tags: projection.tags,
+    description: projection.description,
+    clusters: projection.clusters,
+    provenance: projection.provenance,
+    nodes,
+    links,
+  })}`;
+}
+
+function stableSemanticHash(value) {
+  const canonical = canonicalize(value);
+  let hash = 2166136261;
+  for (const character of JSON.stringify(canonical)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
 function cloneProjection(projection) {
   return {
     nodes: projection.nodes.map((node) => ({ ...node })),
@@ -522,6 +600,16 @@ function cloneProjection(projection) {
       target: nodeId(link.target),
     })),
   };
+}
+
+export function cloneResearchGraphData(value) {
+  return cloneProjection(normalizeProjection(value));
+}
+
+function sameIdSet(left, right) {
+  if (left?.size !== right?.size) return false;
+  for (const id of left || []) if (!right?.has(id)) return false;
+  return true;
 }
 
 function nodeId(value) {

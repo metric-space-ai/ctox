@@ -4,6 +4,9 @@ import test from 'node:test';
 
 import { buildResearchGraphProjection } from '../research-graph-data.mjs';
 
+globalThis.window = {};
+const { cloneResearchGraphData, graphProjectionFingerprint } = await import('../research-graph.mjs');
+
 test('derives a clustered semantic graph with visual weights from research rows', () => {
   const projection = buildResearchGraphProjection({
     task: {
@@ -220,4 +223,49 @@ test('projects SKF-sized research data within an interactive budget', () => {
   assert.ok(projection.nodes.length <= 120);
   assert.ok(projection.links.length <= 1800);
   assert.ok(elapsedMs < 1200, `projection took ${elapsedMs.toFixed(1)} ms`);
+});
+
+test('graph fingerprint changes for metadata-only updates and ignores layout coordinates', () => {
+  const base = {
+    metadata: { domain: 'drone_bearing_design' },
+    nodes: [{
+      id: 'concept:load',
+      label: 'Bearing load',
+      kind: 'concept',
+      tags: ['mechanics'],
+      description: 'Radial load transferred into the bearing.',
+      cluster: 1,
+      provenance: { source_id: 'source_a', method: 'direct' },
+      sourceIds: ['source_a'],
+      x: 12,
+      y: 8,
+    }],
+    links: [{
+      id: 'edge:load-force',
+      source: 'concept:load',
+      target: 'concept:force',
+      relation: 'supports',
+      provenance: { source_id: 'source_a' },
+      weight: 4,
+      z: 9,
+    }],
+  };
+  const layoutOnly = structuredClone(base);
+  layoutOnly.nodes[0].x = 900;
+  layoutOnly.nodes[0].y = -120;
+  layoutOnly.links[0].z = 44;
+  assert.equal(graphProjectionFingerprint(layoutOnly), graphProjectionFingerprint(base));
+
+  const metadataOnly = structuredClone(base);
+  metadataOnly.nodes[0].tags = ['mechanics', 'uav'];
+  metadataOnly.nodes[0].description = 'Updated description from the verified source record.';
+  metadataOnly.nodes[0].provenance = { source_id: 'source_b', method: 'reviewed' };
+  assert.notEqual(graphProjectionFingerprint(metadataOnly), graphProjectionFingerprint(base));
+
+  const graphData = cloneResearchGraphData(metadataOnly);
+  assert.deepEqual(graphData.nodes[0].tags, ['mechanics', 'uav']);
+  assert.equal(graphData.nodes[0].description, metadataOnly.nodes[0].description);
+  assert.deepEqual(graphData.nodes[0].provenance, metadataOnly.nodes[0].provenance);
+  assert.equal(graphData.links[0].relation, 'supports');
+  assert.notEqual(graphData.nodes[0], metadataOnly.nodes[0]);
 });

@@ -388,9 +388,16 @@ const state = {
     postSyncRefreshes: 0,
   },
   initialDataReady: false,
-  refreshTimer: null,
   refreshInFlight: null,
   refreshDirty: false,
+  researchRefreshTimer: null,
+  knowledgeRefreshTimer: null,
+  refreshSequences: {
+    research: 0,
+    knowledge: 0,
+  },
+  rowLimitWarnings: [],
+  chunkDiagnostics: [],
   cleanup: [],
   contextMenu: null,
   mountToken: null,
@@ -476,8 +483,12 @@ export async function mount(ctx) {
     state.cleanup.forEach((fn) => fn?.());
     state.cleanup = [];
     disposeResearchGraph();
-    if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
-    state.refreshTimer = null;
+    if (state.researchRefreshTimer) window.clearTimeout(state.researchRefreshTimer);
+    if (state.knowledgeRefreshTimer) window.clearTimeout(state.knowledgeRefreshTimer);
+    state.researchRefreshTimer = null;
+    state.knowledgeRefreshTimer = null;
+    state.refreshSequences.research += 1;
+    state.refreshSequences.knowledge += 1;
     state.contextMenu?.remove();
     state.contextMenu = null;
     ctx.host.replaceChildren();
@@ -764,10 +775,12 @@ function schedulePostSyncRefresh(delay = 250) {
 }
 
 function scheduleLocalRefresh(delay = 80) {
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  if (state.researchRefreshTimer) window.clearTimeout(state.researchRefreshTimer);
+  const sequence = ++state.refreshSequences.research;
   const mountToken = state.mountToken;
-  state.refreshTimer = window.setTimeout(async () => {
-    state.refreshTimer = null;
+  state.researchRefreshTimer = window.setTimeout(async () => {
+    if (sequence !== state.refreshSequences.research) return;
+    state.researchRefreshTimer = null;
     if (!mountToken || state.mountToken !== mountToken) return;
     await loadLocalState({ mountToken });
     if (state.mountToken !== mountToken) return;
@@ -776,10 +789,12 @@ function scheduleLocalRefresh(delay = 80) {
 }
 
 function scheduleKnowledgeRefresh(delay = 120) {
-  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  if (state.knowledgeRefreshTimer) window.clearTimeout(state.knowledgeRefreshTimer);
+  const sequence = ++state.refreshSequences.knowledge;
   const mountToken = state.mountToken;
-  state.refreshTimer = window.setTimeout(async () => {
-    state.refreshTimer = null;
+  state.knowledgeRefreshTimer = window.setTimeout(async () => {
+    if (sequence !== state.refreshSequences.knowledge) return;
+    state.knowledgeRefreshTimer = null;
     if (!mountToken || state.mountToken !== mountToken) return;
     const knowledgeBases = await loadKnowledgeBases();
     if (state.mountToken !== mountToken) return;
@@ -1044,6 +1059,8 @@ async function loadDashboardData() {
   state.graphProjection = null;
   state.graphContractStatus = '';
   state.graphContractErrors = [];
+  state.rowLimitWarnings = [];
+  state.chunkDiagnostics = [];
   if (!task) return;
   const base = knowledgeBaseForTask(task);
   const sourceTable = tableForKey(base, task.source_catalog_key) || firstTableMatching(base, /source|catalog|curated/i);
@@ -1081,6 +1098,7 @@ async function loadDashboardData() {
     graphContractStatus: evidenceGraphRows.status,
     graphContractErrors: evidenceGraphRows.errors,
   });
+  state.graphProjection = enrichGraphSemanticMetadata(state.graphProjection, graphNodeRows, graphEdgeRows, task);
   if (!state.selectedSourceId || !state.sourceModels.some((item) => item.id === state.selectedSourceId)) {
     state.selectedSourceId = state.sourceModels[0]?.id || '';
   }
@@ -1091,6 +1109,47 @@ async function fetchTableRows(tableId) {
   const table = state.knowledgeBases
     .flatMap((base) => base.tables || [])
     .find((entry) => entry.id === tableId);
+  const normalized = normalizeKnowledgeTableRows(table, tableId);
+  if (normalized.valid && normalized.rows.length) return applyRowLimit(normalized.rows, table, tableId, normalized.rowCount);
+  if (!normalized.valid) return [];
+  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
+  // the authoritative peer, materializes the parquet records into the synced
+  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
+  // yet, we surface nothing until replication delivers them.
+  markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
+  return [];
+}
+
+function normalizeKnowledgeTableRows(table, tableId = '') {
+  const source = table?.payload && typeof table.payload === 'object' ? table.payload : table;
+  const chunks = firstArray(
+    table?.chunks,
+    table?.row_chunks,
+    table?.rows_chunks,
+    source?.chunks,
+    source?.row_chunks,
+    source?.rows_chunks,
+    source?.dataframe?.chunks,
+  );
+  if (chunks.length) {
+    const result = validateChunkSequence(chunks, {
+      expectedChunkCount: firstPositiveNumber(table, ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks'])
+        || firstPositiveNumber(source, ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks']),
+      expectedItemCount: firstPositiveNumber(table, ['row_count', 'rowCount', 'total_row_count', 'totalRows'])
+        || firstPositiveNumber(source, ['row_count', 'rowCount', 'total_row_count', 'totalRows']),
+      indexFields: ['index', 'idx', 'chunk_index', 'chunkIndex'],
+      countFields: ['chunk_count', 'chunkCount', 'total_chunks', 'totalChunks'],
+      offsetFields: ['offset', 'row_offset', 'rowOffset', 'start'],
+      itemCountFields: ['row_count', 'rowCount', 'rows_count', 'rowsCount', 'count'],
+      itemArrayFields: ['rows', 'records', 'dataframe.rows', 'payload.rows', 'payload.records'],
+      itemLabel: 'rows',
+    });
+    if (!result.valid) {
+      recordChunkDiagnostic(tableId, result.reason);
+      return result;
+    }
+    return result;
+  }
   const rows = firstArray(
     table?.rows,
     table?.records,
@@ -1101,15 +1160,122 @@ async function fetchTableRows(tableId) {
     table?.dataframe?.rows,
     table?.payload?.dataframe?.rows,
   );
-  if (rows.length) {
-    return rows.slice(0, ROW_LIMIT).map((row) => row && typeof row === 'object' ? row : { value: row });
+  return {
+    valid: true,
+    rows: rows.map((row) => row && typeof row === 'object' ? row : { value: row }),
+    rowCount: rows.length,
+  };
+}
+
+function applyRowLimit(rows, table, tableId, declaredRowCount = rows.length) {
+  const sourceRowCount = Math.max(rows.length, Number(declaredRowCount) || 0, Number(table?.row_count) || 0, Number(table?.payload?.row_count) || 0);
+  if (sourceRowCount > ROW_LIMIT || rows.length > ROW_LIMIT) {
+    state.rowLimitWarnings.push({
+      tableId,
+      cap: ROW_LIMIT,
+      sourceRowCount,
+      returnedRowCount: Math.min(rows.length, ROW_LIMIT),
+    });
   }
-  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
-  // the authoritative peer, materializes the parquet records into the synced
-  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
-  // yet, we surface nothing until replication delivers them.
-  markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
+  return rows.slice(0, ROW_LIMIT);
+}
+
+function recordChunkDiagnostic(tableId, reason) {
+  const message = `knowledge_tables ${tableId || 'unknown'}: ${reason}`;
+  state.chunkDiagnostics.push({ tableId, reason, message });
+  markCollectionDiagnostic('knowledge_tables', 'read', 'failed', message);
+}
+
+function validateChunkSequence(chunks, options = {}) {
+  if (!Array.isArray(chunks) || !chunks.length) return { valid: false, reason: 'Keine Chunks vorhanden.', rows: [], rowCount: 0, chunkCount: 0 };
+  const indexFields = options.indexFields || ['idx', 'index', 'chunk_index', 'chunkIndex'];
+  const countFields = options.countFields || ['total', 'chunk_count', 'chunkCount'];
+  const offsetFields = options.offsetFields || ['offset', 'row_offset', 'rowOffset', 'start'];
+  const itemCountFields = options.itemCountFields || ['row_count', 'rowCount', 'count'];
+  const itemArrayFields = options.itemArrayFields || ['rows', 'records', 'data'];
+  const itemValueFields = options.itemValueFields || [];
+  const normalized = [];
+  const indices = new Set();
+  const declaredCounts = new Set();
+  for (const [position, chunk] of chunks.entries()) {
+    if (!chunk || typeof chunk !== 'object') return { valid: false, reason: `Chunk ${position} ist kein Objekt.`, rows: [], rowCount: 0, chunkCount: 0 };
+    const index = finiteNonNegative(firstNumber(chunk, indexFields));
+    if (index === null) return { valid: false, reason: `Chunk ${position} hat keinen gültigen Index.`, rows: [], rowCount: 0, chunkCount: 0 };
+    if (indices.has(index)) return { valid: false, reason: `Chunk-Index ${index} ist doppelt vorhanden.`, rows: [], rowCount: 0, chunkCount: 0 };
+    indices.add(index);
+    const declaredCount = finitePositive(firstNumber(chunk, countFields));
+    if (declaredCount !== null) declaredCounts.add(declaredCount);
+    const rows = extractChunkItems(chunk, itemArrayFields, itemValueFields);
+    if (options.requireItems && !rows.length) return { valid: false, reason: `Chunk ${index} enthält keine Daten.`, rows: [], rowCount: 0, chunkCount: 0 };
+    const itemCount = finiteNonNegative(firstNumber(chunk, itemCountFields));
+    if (itemCount !== null && itemCount !== rows.length) {
+      return { valid: false, reason: `Chunk ${index} meldet ${itemCount} ${options.itemLabel || 'Elemente'}, enthält aber ${rows.length}.`, rows: [], rowCount: 0, chunkCount: 0 };
+    }
+    normalized.push({ index, rows, offset: finiteNonNegative(firstNumber(chunk, offsetFields)) });
+  }
+  const ordered = normalized.sort((left, right) => left.index - right.index);
+  if (ordered.some((chunk, position) => chunk.index !== position)) {
+    return { valid: false, reason: 'Chunk-Indizes sind nicht lückenlos von 0 bis N-1.', rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  const expectedChunkCount = Number(options.expectedChunkCount) || null;
+  const declaredChunkCount = declaredCounts.size ? [...declaredCounts] : [];
+  if (declaredChunkCount.length > 1 || (declaredChunkCount.length && declaredChunkCount[0] !== ordered.length)) {
+    return { valid: false, reason: 'chunk_count ist zwischen den Chunks nicht konsistent.', rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  if (expectedChunkCount !== null && expectedChunkCount !== ordered.length) {
+    return { valid: false, reason: `chunk_count ${expectedChunkCount} stimmt nicht mit ${ordered.length} Chunks überein.`, rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  const rows = ordered.flatMap((chunk) => chunk.rows);
+  let runningOffset = 0;
+  for (const chunk of ordered) {
+    if (chunk.offset !== null && chunk.offset !== runningOffset) {
+      return { valid: false, reason: `Chunk ${chunk.index} beginnt bei Offset ${chunk.offset}, erwartet wurde ${runningOffset}.`, rows: [], rowCount: 0, chunkCount: 0 };
+    }
+    runningOffset += chunkAdvance(chunk.rows, options.offsetUnit);
+  }
+  const expectedItemCount = Number(options.expectedItemCount) || null;
+  if (expectedItemCount !== null && expectedItemCount !== rows.length) {
+    return { valid: false, reason: `Die Row-Summe ${rows.length} stimmt nicht mit ${expectedItemCount} überein.`, rows: [], rowCount: 0, chunkCount: 0 };
+  }
+  return { valid: true, rows, rowCount: rows.length, chunkCount: ordered.length };
+}
+
+function extractChunkItems(chunk, itemArrayFields, itemValueFields = []) {
+  for (const field of itemArrayFields) {
+    const value = field.split('.').reduce((current, key) => current?.[key], chunk);
+    if (Array.isArray(value)) return value;
+  }
+  for (const field of itemValueFields) {
+    const value = field.split('.').reduce((current, key) => current?.[key], chunk);
+    if (typeof value === 'string' && value.length) return [value];
+  }
   return [];
+}
+
+function chunkAdvance(items, offsetUnit) {
+  if (offsetUnit === 'payload') return items.reduce((sum, item) => sum + String(item || '').length, 0);
+  return items.length;
+}
+
+function firstNumber(value, keys) {
+  for (const key of keys) {
+    const candidate = value?.[key];
+    if (candidate !== null && candidate !== undefined && String(candidate).trim() !== '') return Number(candidate);
+  }
+  return null;
+}
+
+function firstPositiveNumber(value, keys) {
+  const number = firstNumber(value, keys);
+  return finitePositive(number) || null;
+}
+
+function finiteNonNegative(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function finitePositive(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
@@ -1861,7 +2027,7 @@ function currentGraphProjection(task = selectedTask()) {
   const evidenceGraphRows = filterGraphRowsForEvidence(state.graphNodeRows, state.graphEdgeRows, evidenceSourceIds(state.sourceModels));
   const key = graphProjectionFingerprint(task, evidenceGraphRows, state.graph.layer, state.sourceModels, state.measurementRows);
   const cached = state.graphProjectionCache.get(key);
-  const baseProjection = cached || buildResearchGraphProjection({
+  const baseProjection = cached || enrichGraphSemanticMetadata(buildResearchGraphProjection({
       task,
       sourceModels: evidenceSourceModels(state.sourceModels),
       measurementRows: filterMeasurementRowsForEvidence(state.measurementRows),
@@ -1873,7 +2039,7 @@ function currentGraphProjection(task = selectedTask()) {
       verifiedSourceIds: evidenceSourceIds(state.sourceModels),
       graphContractStatus: evidenceGraphRows.status,
       graphContractErrors: evidenceGraphRows.errors,
-    });
+    }), evidenceGraphRows.nodes, evidenceGraphRows.edges, task);
   const projection = baseProjection.status === 'invalid_graph_contract'
     ? baseProjection
     : sliceResearchGraphProjection(baseProjection, state.graph.detailLevel, state.graph.visibleLimit, state.graph.layer);
@@ -1881,6 +2047,44 @@ function currentGraphProjection(task = selectedTask()) {
   if (!cached) state.graphProjectionCache.set(key, baseProjection);
   while (state.graphProjectionCache.size > 8) state.graphProjectionCache.delete(state.graphProjectionCache.keys().next().value);
   return projection;
+}
+
+function enrichGraphSemanticMetadata(projection, graphNodeRows = [], graphEdgeRows = [], task = null) {
+  const nodeMetadata = new Map(graphNodeRows.map((row) => [firstString(row, ['node_id', 'id', 'concept_id', 'key']), graphSemanticMetadata(row)]));
+  const edgeMetadata = new Map(graphEdgeRows.map((row) => [firstString(row, ['edge_id', 'id']), graphSemanticMetadata(row)]));
+  return {
+    ...projection,
+    metadata: {
+      ...(projection?.metadata || {}),
+      task: task ? { id: task.id || '', title: task.title || '', knowledge_domain: task.knowledge_domain || '' } : null,
+      provenance: 'research-graph-projection',
+    },
+    nodes: (projection?.nodes || []).map((node) => ({
+      ...node,
+      ...nodeMetadata.get(node.id),
+    })),
+    links: (projection?.links || []).map((link) => ({
+      ...link,
+      ...edgeMetadata.get(link.id),
+    })),
+  };
+}
+
+function graphSemanticMetadata(row) {
+  if (!row || typeof row !== 'object') return {};
+  const metadata = parseObject(row.metadata_json ?? row.metadata) || {};
+  return compactDefined({
+    label: firstString(row, ['label', 'title', 'concept', 'term']) || undefined,
+    tags: parseStringList(row.tags_json ?? row.tags ?? row.labels),
+    description: firstString(row, ['description', 'summary', 'note']) || undefined,
+    clusterHint: firstString(row, ['cluster_id', 'cluster', 'community']) || undefined,
+    provenance: parseObject(row.provenance_json ?? row.provenance) || undefined,
+    metadata: Object.keys(metadata).length ? metadata : undefined,
+  });
+}
+
+function compactDefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
 function graphProjectionFingerprint(task, graphRows, layer, sourceModels, measurementRows) {
@@ -2900,6 +3104,7 @@ function renderKnowledgeTables(task) {
   const base = knowledgeBaseForTask(task);
   return `
     <div class="research-knowledge-list">
+      ${renderDataQualityNotices()}
       ${(base?.tables || []).map((table) => `
         <button type="button" data-action="open-knowledge" data-table-id="${escapeHtml(table.id)}">
           <strong>${escapeHtml(table.title || table.table_key)}</strong>
@@ -2908,6 +3113,15 @@ function renderKnowledgeTables(task) {
       `).join('') || `<div class="research-empty">${escapeHtml(state.t('noKnowledgeConnected', 'Keine Knowledge-Tabellen verknüpft.'))}</div>`}
     </div>
   `;
+}
+
+function renderDataQualityNotices() {
+  const notices = [
+    ...state.rowLimitWarnings.map((warning) => `Anzeige auf ${ROW_LIMIT.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} Zeilen begrenzt (${warning.sourceRowCount.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} vorhanden).`),
+    ...state.chunkDiagnostics.map((diagnostic) => `Tabelle ${diagnostic.tableId || 'unbekannt'} wurde wegen unvollständiger Chunk-Metadaten nicht geladen: ${diagnostic.reason}`),
+  ];
+  if (!notices.length) return '';
+  return `<div class="research-data-quality-notices" role="status">${notices.map((notice) => `<span>${escapeHtml(notice)}</span>`).join('')}</div>`;
 }
 
 function renderRight() {
@@ -4484,6 +4698,27 @@ function firstArray(...values) {
   return values.find(Array.isArray) || [];
 }
 
+function parseStringList(value) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch {}
+  return value.split(/[,;|]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function parseObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceId(row) {
   return firstString(row, ['source_id', 'id', 'record_id', 'source_key']);
 }
@@ -4931,11 +5166,20 @@ async function loadReportContentFromRxdb(filename) {
     const blobId = version && typeof version.toJSON === 'function' ? version.toJSON().blob_id : null;
     if (blobId) {
       const chunkDocs = await blobChunks.find({ selector: { blob_id: blobId } }).exec();
-      const chunks = chunkDocs
-        .map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c))
-        .sort((a, b) => (a.idx || 0) - (b.idx || 0));
-      if (chunks.length) {
-        const joined = chunks.map((c) => c.data || '').join('');
+      const chunks = chunkDocs.map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c));
+      const validation = validateChunkSequence(chunks, {
+        indexFields: ['idx', 'index', 'chunk_index', 'chunkIndex'],
+        countFields: ['total', 'chunk_count', 'chunkCount'],
+        offsetFields: ['offset', 'byte_offset', 'byteOffset', 'start'],
+        itemCountFields: [],
+        itemArrayFields: [],
+        itemValueFields: ['data'],
+        itemLabel: 'Daten',
+        requireItems: true,
+        offsetUnit: 'payload',
+      });
+      if (validation.valid) {
+        const joined = validation.rows.join('');
         try {
           const bytes = Uint8Array.from(atob(joined), (ch) => ch.charCodeAt(0));
           return new TextDecoder('utf-8').decode(bytes);
@@ -4943,6 +5187,7 @@ async function loadReportContentFromRxdb(filename) {
           return joined;
         }
       }
+      throw new Error(`Dokument-Chunks sind unvollständig: ${validation.reason}`);
     }
   }
   throw new Error(`Kein Inhalt für ${filename}`);
@@ -5076,11 +5321,13 @@ export const __researchTestHooks = {
   researchScoringContract,
   researchReportsForTask,
   renderSourcesTable,
+  normalizeKnowledgeTableRows,
   renderNoTaskCenter,
   researchDomainFromFormValue,
   metricPropellerLength,
   shouldRetryEmptyKnowledgeTables,
   tangentialEquivalentForce,
+  validateChunkSequence,
   validateResearchTaskInput,
   validateSelectedResearchTask,
 };

@@ -249,6 +249,63 @@ test('knowledge lineage selects the latest run that actually used accepted evide
   assert.equal(hooks.latestEvidenceRunForTask('missing', runs), null);
 });
 
+test('validates and flattens a realistic 4,876-row chunked table within the explicit display cap', () => {
+  const chunkSizes = [1000, 1000, 1000, 1000, 876];
+  let offset = 0;
+  const chunks = chunkSizes.map((size, index) => {
+    const rows = Array.from({ length: size }, (_, rowIndex) => ({
+      source_id: `source_${offset + rowIndex}`,
+      rpm: 9000 + (offset + rowIndex) % 1200,
+      force_N: 12.5 + ((offset + rowIndex) % 17) / 10,
+    }));
+    const chunk = { index, chunk_count: chunkSizes.length, offset, row_count: rows.length, rows };
+    offset += size;
+    return chunk;
+  });
+  const startedAt = performance.now();
+  const result = hooks.validateChunkSequence(chunks, {
+    expectedChunkCount: 5,
+    expectedItemCount: 4876,
+    indexFields: ['index'],
+    countFields: ['chunk_count'],
+    offsetFields: ['offset'],
+    itemCountFields: ['row_count'],
+    itemArrayFields: ['rows'],
+    itemLabel: 'rows',
+  });
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(result.valid, true);
+  assert.equal(result.chunkCount, 5);
+  assert.equal(result.rowCount, 4876);
+  assert.equal(result.rows[0].source_id, 'source_0');
+  assert.equal(result.rows.at(-1).source_id, 'source_4875');
+  assert.ok(elapsedMs < 500, `chunk validation took ${elapsedMs.toFixed(1)}ms`);
+  assert.equal(hooks.normalizeKnowledgeTableRows({ row_count: 4876, rows: result.rows }, 'table:4876').rows.length, 4876);
+});
+
+test('rejects duplicate, gapped, inconsistent, and misaligned table chunks', () => {
+  const valid = [
+    { index: 0, chunk_count: 2, offset: 0, row_count: 2, rows: [{ id: 1 }, { id: 2 }] },
+    { index: 1, chunk_count: 2, offset: 2, row_count: 1, rows: [{ id: 3 }] },
+  ];
+  const options = {
+    expectedChunkCount: 2,
+    expectedItemCount: 3,
+    indexFields: ['index'],
+    countFields: ['chunk_count'],
+    offsetFields: ['offset'],
+    itemCountFields: ['row_count'],
+    itemArrayFields: ['rows'],
+  };
+  assert.equal(hooks.validateChunkSequence(valid, options).valid, true);
+  assert.equal(hooks.validateChunkSequence([{ ...valid[0] }, { ...valid[1], index: 0 }], options).valid, false);
+  assert.equal(hooks.validateChunkSequence([{ ...valid[0] }, { ...valid[1], index: 2 }], options).valid, false);
+  assert.equal(hooks.validateChunkSequence([{ ...valid[0] }, { ...valid[1], chunk_count: 3 }], options).valid, false);
+  assert.equal(hooks.validateChunkSequence([{ ...valid[0] }, { ...valid[1], offset: 3 }], options).valid, false);
+  assert.equal(hooks.validateChunkSequence([{ ...valid[0] }, { ...valid[1], row_count: 4 }], options).valid, false);
+});
+
 test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sources', () => {
   const task = {
     title: 'Drone bearing loads',
@@ -510,6 +567,16 @@ test('initial research loading cannot masquerade as an empty knowledge base', ()
   assert.match(researchSource, /await waitForReplicationBridge\(bridge, collection\)/);
   assert.match(researchSource, /if \(!state\.initialDataReady\)[\s\S]*?Research-Daten werden mit dieser Instanz synchronisiert/);
   assert.match(researchSource, /await refreshAll\(\{ seed: true, mountToken \}\)[\s\S]*?state\.initialDataReady = true/);
+});
+
+test('research and knowledge events use independent refresh timers', () => {
+  assert.match(researchSource, /researchRefreshTimer: null/);
+  assert.match(researchSource, /knowledgeRefreshTimer: null/);
+  assert.match(researchSource, /function scheduleLocalRefresh[\s\S]*?state\.researchRefreshTimer/);
+  assert.match(researchSource, /function scheduleKnowledgeRefresh[\s\S]*?state\.knowledgeRefreshTimer/);
+  assert.doesNotMatch(researchSource, /state\.refreshTimer/);
+  assert.match(researchSource, /rowLimitWarnings/);
+  assert.match(researchSource, /Anzeige auf \$\{ROW_LIMIT/);
 });
 
 test('research module catalog grants knowledge and document collections', async () => {
