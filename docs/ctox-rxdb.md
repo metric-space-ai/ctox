@@ -599,7 +599,7 @@ that fails on the pre-fix code.
 | Invariant | Bug it encodes (symptom) | Enforced in | Pinned by |
 |---|---|---|---|
 | **lwt stamping and storage commit are atomic** under `locked_run`. Never stamp `_meta.lwt` before taking the database lock. | Concurrent writers committed out of lwt order; a pull reading in the window advanced its checkpoint past uncommitted lower-lwt rows — those rows were invisible to checkpoint iteration forever (churn mode: 21/23 chunks of an updated file never reached the browser). | `rx_storage_helper.rs::DatabaseWrappedStorageInstance::bulk_write` | `checkpoint_iteration_never_skips_docs_under_concurrent_writers` |
-| **Master pulls are authoritative in the browser LWW gate.** Master rows arrive without `_meta.lwt` (keep_meta=false), so their lwt falls back to the app-level `updated_at_ms` field — that heuristic must never veto a replication write. Only an unsynced LOCAL write (no `ctoxReplicationOrigin` marker) with a newer lwt may win. Accepted master rows keep the stored lwt monotonic. | Any master change whose payload timestamp did not advance was silently dropped while the pull checkpoint advanced past it — permanent divergence per document. | `storage-indexeddb.mjs::shouldAcceptDocumentWrite` / `bulkWrite` | `replication-lww-origin-smoke` |
+| **Master pulls are authoritative in the browser LWW gate.** Master rows arrive without `_meta.lwt` (keep_meta=false), so their lwt falls back to the app-level `updated_at_ms` field — that heuristic must never veto a replication write. Only an unsynced LOCAL write (no `ctoxReplicationOrigin` marker) that outranks the master row may win: ordered by `_meta.ctoxHlc` when both sides carry one (SYNC-11 — the same ordering as push conflicts), by wall-clock lwt otherwise (mixed-version fallback). A local edit that loses the gate is journaled as `update_vs_update` unless the master row acknowledges it (own push round-trip). Accepted master rows keep the stored lwt monotonic. | Any master change whose payload timestamp did not advance was silently dropped while the pull checkpoint advanced past it — permanent divergence per document. Separately, pull ordering by wall-clock while push ordered by HLC made two concurrent LWW edits resolve interleaving-dependently, silently dropping the losing unsynced edit with no conflict record (SYNC-02 convergence mode). | `storage-indexeddb.mjs::shouldAcceptDocumentWrite` / `lwwOverwriteConflict` / `bulkWrite` | `replication-lww-origin-smoke`, `hlc-conflict-smoke`, SYNC-02 convergence E2E |
 | **Every browser-store write carrying master state passes `{ replicationOrigin }`** — replication pulls, query/file demand-loader materialisation, cache-eviction tombstones. | Unstamped demand-fetched docs counted as local writes: they vetoed later master pulls (above) **and** were push-eligible — cache-eviction tombstones (`_deleted: true`) of partial query windows could replay to the master as real deletions. | `query-demand-loader.mjs`, `file-demand-loader.mjs`, wired in `replication-webrtc.mjs::enableDemandLoading` | `replication-lww-origin-smoke` (§4) |
 | **Local-push changed-since reads use the pushable index for CTOX-origin exclusion.** Browser storage keeps `pushable=1` only for local/browser writes and indexes `[collection, pushable, lwt, id]`; CTOX-origin rows are skipped by index selection, not post-cursor filtering. | File-sharing or demand materialisation created many CTOX-origin rows; the next local push walked those rows just to discard them, causing a local-write scan multiplier while the daemon was otherwise idle. | `storage-indexeddb.mjs::getChangedDocumentsSince` / `collectionPushableLwtId` | `storage-index-smoke` |
 | **The desktop-file index scan is change-detecting and self-healing.** A rescan of an unchanged file is a byte-level no-op (fingerprint match + chunk-set completeness check); content changes re-chunk; incomplete chunk sets are repaired. | Every 15 s scan pass minted a fresh timestamped generation per file and tombstoned the previous one — ~200 docs/scan of insert/tombstone churn that pull (batchSize 2 for chunks) could never catch up with. | `rxdb_peer.rs::upsert_desktop_file_with_parent` | `rescan_of_unchanged_workspace_is_a_no_op` |
@@ -628,10 +628,18 @@ replication model).
 
 Whole-document rows carry `_meta.ctoxHlc`. Browser writes advance a stable
 device HLC; native rows preserve the field across `keep_meta=false` wire
-normalization and receive a deterministic fallback stamp when absent. On a
-push conflict, the larger HLC wins. `business_commands` and
-`ctox_queue_tasks` remain native-authoritative regardless of browser clock.
-This avoids wall-clock-only LWW while preserving mixed-version behavior.
+normalization and receive a deterministic fallback stamp when absent. The
+larger HLC wins in BOTH directions: on a push conflict
+(`resolveWholeDocumentLwwConflicts`) and in the pull gate's local-veto
+decision (`shouldAcceptDocumentWrite`, SYNC-11) — one ordering, so the
+winner of two concurrent edits does not depend on relay-vs-push
+interleaving. When either side lacks an HLC the pull gate falls back to
+wall-clock lwt. An unsynced local edit that loses the gate whole-doc is
+journaled into the conflict store as `update_vs_update` (the
+`delete_vs_update` pattern generalized) unless the master row acknowledges
+it — no silent drop. `business_commands` and `ctox_queue_tasks` remain
+native-authoritative regardless of browser clock. This avoids
+wall-clock-only LWW while preserving mixed-version behavior.
 
 - The storage layer tracks a **merge base** per locally-edited row: the last
   master-confirmed doc before the local edit (`record.base`, never inside
@@ -702,7 +710,10 @@ The database facade exposes:
 Portable artifacts use `ctox.browser-recovery.v2` inside an authenticated
 PBKDF2-SHA-256/AES-256-GCM envelope. Passwords are never persisted and v2 does
 not permit instance remapping. Native tombstones remain authoritative, while a
-delete-vs-update local version is retained in the conflict store.
+delete-vs-update local version is retained in the conflict store. An unsynced
+local update that loses the whole-doc LWW gate to a master row is retained
+the same way as `update_vs_update` (SYNC-11) and additionally supports
+`keep_local` resolution (re-applied as a fresh pushable write).
 
 Exactly one tab owns the WebRTC line per database/room. Web Locks are primary;
 a TTL'd BroadcastChannel lease with deterministic tie-break is the fallback.
@@ -757,7 +768,7 @@ A mismatch makes the browser load a **second copy of the bundle** — two
 module graphs, two shared-room-peer registries, duplicate peers in the room.
 After any `src/` change: rebuild dist with the command above **and** bump the
 buster in both files (current value at the time of writing:
-`20260711-recovery-index-v21`).
+`20260717-hlc-pull-gate-v66`).
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
@@ -800,7 +811,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `field-merge-conflict-smoke` | Opt-in field-merge strategy (§8.2): three-way merge semantics, merge-base tracking, merged docs stored as local pushable writes, and untouched LWW pass-through for default collections. |
 | `file-demand-loader-smoke` | File chunk fetch, resume, concurrent dedup. |
 | `frame-chunking-smoke` | **Regression:** byte-correct (JSON-escaped) chunk budgeting vs the chars-vs-bytes channel-killer. |
-| `hlc-conflict-smoke` | Hybrid Logical Clock formatting, ordering and deterministic whole-document conflict decisions. |
+| `hlc-conflict-smoke` | Hybrid Logical Clock formatting, ordering and deterministic whole-document conflict decisions, incl. the HLC-ordered pull-gate veto both ways (SYNC-11). |
 | `mixed-mode-handshake-smoke` | V1.5 browser vs V1 server handshake compatibility. |
 | `multi-tab-broker-smoke` | BroadcastChannel leader election (and absence of BroadcastChannel). |
 | `no-package-manager-import-smoke` | Bundle imports with no package manager present. |
@@ -813,7 +824,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |
-| `replication-lww-origin-smoke` | **Regression:** master pulls are authoritative in the LWW gate; unsynced local writes survive; demand loaders stamp the replication origin (§8.1). |
+| `replication-lww-origin-smoke` | **Regression:** master pulls are authoritative in the LWW gate; unsynced local writes survive (HLC-ordered veto, wall-clock fallback); losing local edits journal as `update_vs_update`; demand loaders stamp the replication origin (§8.1, SYNC-11). |
 | `replication-recovery-smoke` | **Regression:** push re-run flag, pull retry, validity-keyed checkpoint retention. |
 | `rollback-drill-smoke` | V1.5 activation leaves the V1 primary data path byte-identical. |
 | `rtc-critical-pool-smoke` | Phase-3 multiplex admission contract + shell-critical collection set. |

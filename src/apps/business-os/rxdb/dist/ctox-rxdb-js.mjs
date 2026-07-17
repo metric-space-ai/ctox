@@ -2198,6 +2198,7 @@ var CtoxIndexedDbCollection = class {
       await this.persistStructuredConflict(error);
       throw error;
     }
+    await this.persistOverwrittenLocalConflicts(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
@@ -2211,6 +2212,7 @@ var CtoxIndexedDbCollection = class {
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
+    const overwrittenLocalConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2229,10 +2231,18 @@ var CtoxIndexedDbCollection = class {
           lwt = Math.max(lwt, localWriteLwtFloor);
           localWriteLwtFloor = lwt + 1;
         }
-        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name)) {
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy)) {
           if (previous?.doc) success[id] = previous.doc;
           continue;
         }
+        const overwriteConflict = lwwOverwriteConflict({
+          previous,
+          incomingDocument: nextDocument,
+          collectionName: this.name,
+          conflictStrategy: this.conflictStrategy,
+          replicationOrigin
+        });
+        if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
         const resolved = this.resolveIncomingWrite({
           previous,
           doc: nextDocument,
@@ -2277,7 +2287,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error };
+    return { success, error, overwrittenLocalConflicts };
   }
   async bulkWrite(rows, {
     now = Date.now(),
@@ -2311,6 +2321,7 @@ var CtoxIndexedDbCollection = class {
       await this.persistStructuredConflict(error);
       throw error;
     }
+    await this.persistOverwrittenLocalConflicts(result);
     if (batchId) await this.recoveryJournal.commitBatch(batchId, result.success);
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
@@ -2324,6 +2335,7 @@ var CtoxIndexedDbCollection = class {
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
+    const overwrittenLocalConflicts = [];
     let localWriteLwtFloor = null;
     if (!replicationOrigin?.role) {
       localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
@@ -2342,9 +2354,17 @@ var CtoxIndexedDbCollection = class {
           localWriteLwtFloor = lwt + 1;
         }
         const previous = await idbRequest(store.get([this.name, id]));
-        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name)) {
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
           continue;
         }
+        const overwriteConflict = lwwOverwriteConflict({
+          previous,
+          incomingDocument: doc,
+          collectionName: this.name,
+          conflictStrategy: this.conflictStrategy,
+          replicationOrigin
+        });
+        if (overwriteConflict) overwrittenLocalConflicts.push(overwriteConflict);
         const resolved = this.resolveIncomingWrite({
           previous,
           doc,
@@ -2390,7 +2410,7 @@ var CtoxIndexedDbCollection = class {
       });
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
-    return { success, error };
+    return { success, error, overwrittenLocalConflicts };
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -2437,6 +2457,19 @@ var CtoxIndexedDbCollection = class {
         master,
         message: "The native tombstone is authoritative; the local update remains recoverable here."
       });
+    }
+  }
+  // SYNC-11: journal unsynced local writes that lost the whole-document LWW
+  // gate to an accepted master row (`update_vs_update`, mirroring the
+  // `delete_vs_update` entries above). The losing rows are collected inside
+  // the storage transaction and journaled here AFTER it commits, so a
+  // quota-retried transaction never journals the same loss twice.
+  async persistOverwrittenLocalConflicts(result) {
+    const conflicts = result?.overwrittenLocalConflicts;
+    if (Array.isArray(result?.overwrittenLocalConflicts)) delete result.overwrittenLocalConflicts;
+    if (!Array.isArray(conflicts)) return;
+    for (const conflict of conflicts) {
+      await this.recoveryJournal?.recordConflict?.(conflict);
     }
   }
   async prepareJournalRows(rows) {
@@ -3001,7 +3034,7 @@ function normalizeStoredReplicationFlags(record) {
     pushable
   };
 }
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "") {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "", conflictStrategy = "lww") {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
@@ -3015,8 +3048,43 @@ function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigi
     }
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
+    if (conflictStrategy === "field-merge") return nextLwt >= existingLwt;
+    const localHlc = existingRecord.doc?._meta?.ctoxHlc;
+    const masterHlc = incomingDocument?._meta?.ctoxHlc;
+    if (parseHybridLogicalClock(localHlc) && parseHybridLogicalClock(masterHlc)) {
+      if (isFutureHybridLogicalClock(localHlc)) return true;
+      return compareHybridLogicalClocks(masterHlc, localHlc) >= 0;
+    }
   }
   return nextLwt >= existingLwt;
+}
+var NATIVE_AUTHORITATIVE_COLLECTIONS = /* @__PURE__ */ new Set(["business_commands", "ctox_queue_tasks"]);
+function lwwOverwriteConflict({
+  previous,
+  incomingDocument,
+  collectionName = "",
+  conflictStrategy = "lww",
+  replicationOrigin = null
+}) {
+  if (!replicationOrigin?.role || !previous?.doc || !incomingDocument) return null;
+  if (conflictStrategy === "field-merge") return null;
+  if (NATIVE_AUTHORITATIVE_COLLECTIONS.has(collectionName)) return null;
+  if (previous.replicationOriginRole || previous.doc?._meta?.ctoxReplicationOrigin) return null;
+  if (previous.doc?._deleted) return null;
+  if (incomingDocument._deleted) return null;
+  if (masterAcknowledgesLocal(incomingDocument, previous.doc, collectionName)) return null;
+  const localHlc = String(previous.doc?._meta?.ctoxHlc || "");
+  const skewed = Boolean(localHlc) && isFutureHybridLogicalClock(localHlc);
+  return {
+    code: skewed ? "clock_skew_detected" : "structured_conflict_requires_resolution",
+    conflictType: "update_vs_update",
+    collection: collectionName,
+    base: previous.base || null,
+    local: previous.doc,
+    master: incomingDocument,
+    message: skewed ? "A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here." : "The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.",
+    ...skewed ? { clock: hybridLogicalClockStatus() } : {}
+  };
 }
 function isForwardReplicatedBusinessCommandState(existingDocument, incomingDocument) {
   const rank = (document2) => {
@@ -3463,6 +3531,7 @@ var ctoxIndexedDbStorageTestInternals = {
   createQueryPerformanceStats,
   documentMatchesReplicationOrigin,
   indexValuesFor,
+  lwwOverwriteConflict,
   normalizeDocument,
   normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,
@@ -9313,11 +9382,13 @@ var CtoxWebRtcReplicationState = class {
     }
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
-  // Checkpoints are only reusable against the SAME native storage generation:
-  // the storage epoch (bumped on a wire-format/storage reset) plus the native
-  // peer session id (new on every daemon run). A daemon restart therefore
-  // still forces a conservative full resync; a transport-level reconnect
-  // within one daemon run resumes from the last acknowledged checkpoint.
+  // Checkpoints are only reusable against the SAME native storage generation.
+  // Against `ctox-checkpoint-generation-v2` peers the validity key is the
+  // PERSISTENT native storage generation + collection + schema hash, so
+  // retained checkpoints survive daemon restarts and resume incrementally;
+  // only a storage reset or schema change forces a full re-pull. Mixed-version
+  // (v1) peers keep the conservative epoch + peer-session key, where a daemon
+  // restart mints a new sessionId and the full resync is intentional (docs §8).
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);

@@ -1641,11 +1641,13 @@ class CtoxWebRtcReplicationState {
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
 
-  // Checkpoints are only reusable against the SAME native storage generation:
-  // the storage epoch (bumped on a wire-format/storage reset) plus the native
-  // peer session id (new on every daemon run). A daemon restart therefore
-  // still forces a conservative full resync; a transport-level reconnect
-  // within one daemon run resumes from the last acknowledged checkpoint.
+  // Checkpoints are only reusable against the SAME native storage generation.
+  // Against `ctox-checkpoint-generation-v2` peers the validity key is the
+  // PERSISTENT native storage generation + collection + schema hash, so
+  // retained checkpoints survive daemon restarts and resume incrementally;
+  // only a storage reset or schema change forces a full re-pull. Mixed-version
+  // (v1) peers keep the conservative epoch + peer-session key, where a daemon
+  // restart mints a new sessionId and the full resync is intentional (docs §8).
   checkpointValidityKeyForPeer(peerId) {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);

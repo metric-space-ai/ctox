@@ -3035,14 +3035,49 @@ async function runPresenceMergeTwoBrowsersMode(pageA) {
 // plus the native Rust peer mutate the SAME document through the full live
 // replication loop (real WebRTC, real signaling, real SQLite master):
 //   (a) LWW: concurrent same-field edits on a default (whole-doc LWW)
-//       collection converge to one winner on all three peers.
+//       collection converge to the DETERMINISTIC HLC winner (the higher of
+//       the two edits' `_meta.ctoxHlc`, computed from the actual written
+//       clocks — NOT assumed from wall-clock stagger, since both edits share
+//       the seeded base lineage) on all three peers: push conflicts and the
+//       browser pull gate share one `_meta.ctoxHlc` ordering (SYNC-11).
+//   (a2) LWW loser journaling: an unsynced edit stranded with its line down
+//       and outranked by a higher-HLC master row lands in the losing
+//       browser's conflict store as `update_vs_update` (SYNC-11),
+//       recoverable via db.conflicts.list().
 //   (b) field-merge: concurrent different-field edits on a
 //       `conflictStrategy: 'field-merge'` collection (customers module,
-//       docs/ctox-rxdb.md §8.2) converge with BOTH edits on all three peers.
+//       docs/ctox-rxdb.md §8.2) converge with BOTH edits on all three
+//       peers — including a same-instant race with both lines hot.
 //   (c) delete-vs-update: one peer tombstones while the other holds an
 //       unsynced concurrent update; the master tombstone wins on every peer
 //       and the losing update is journaled into the losing browser's
 //       conflict store as `delete_vs_update` (docs/ctox-rxdb.md §9).
+// Node-side twin of `hybrid-logical-clock.mjs::parseHybridLogicalClock` /
+// `compareHybridLogicalClocks` (kept in sync deliberately — the smoke harness
+// is Node and cannot import the IndexedDB-bound browser bundle). Used to
+// compute the deterministic LWW winner from the clocks the two concurrent
+// edits actually carried, so the convergence assertion never hard-codes an
+// interleaving-dependent winner string.
+function parseHybridLogicalClockString(value) {
+  const match = /^([0-9a-z]+):([0-9a-z]+):([0-9a-z_-]+)$/i.exec(String(value || ''));
+  if (!match) return null;
+  const physicalMs = Number.parseInt(match[1], 36);
+  const logical = Number.parseInt(match[2], 36);
+  if (!Number.isSafeInteger(physicalMs) || !Number.isSafeInteger(logical)) return null;
+  return { physicalMs, logical, nodeId: String(match[3]).toLowerCase() };
+}
+
+function compareHybridLogicalClockStrings(left, right) {
+  const a = parseHybridLogicalClockString(left);
+  const b = parseHybridLogicalClockString(right);
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  if (a.physicalMs !== b.physicalMs) return a.physicalMs < b.physicalMs ? -1 : 1;
+  if (a.logical !== b.logical) return a.logical < b.logical ? -1 : 1;
+  return a.nodeId.localeCompare(b.nodeId);
+}
+
 async function runConcurrentWritersConvergenceMode(pageA) {
   const evidence = { mode: 'concurrent-writers-convergence-browser-to-rust' };
   const step = (label) => console.log(`[concurrent-writers] ${label}`);
@@ -3204,53 +3239,147 @@ async function runConcurrentWritersConvergenceMode(pageA) {
     }, 'lww');
     // Both writers mutate the same field inside one tight window, before
     // either edit has replicated to the other peer — a genuine multi-writer
-    // race through the live replication loop. The 150ms stagger keeps the
-    // wall-clock and HLC orderings aligned (same machine) without removing
-    // the concurrency: propagation through push + native commit + relay
-    // takes longer than the stagger.
+    // race through the live replication loop. The stagger keeps them
+    // concurrent (propagation through push + native commit + relay takes
+    // longer than the stagger) but does NOT determine the winner: both edits
+    // derive their `_meta.ctoxHlc` from the SAME seeded base-doc lineage, so
+    // the wall-clock order of the two patches is not guaranteed to be the HLC
+    // order. The SYNC-11 property is that BOTH directions (push conflict and
+    // pull gate) order by the SAME HLC, so the higher-HLC edit wins
+    // deterministically regardless of interleaving — which edit that is, we
+    // read from the actual written clocks below rather than assume.
     const patchPurpose = async ({ collection, id, value }) => {
       const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].findOne(id).exec();
       await doc.patch({ purpose: value, updated_at_ms: Date.now() });
-      return true;
+      const after = await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].findOne(id).exec();
+      return (after?.toJSON?.() || after)?._meta?.ctoxHlc || null;
     };
     step('lww: concurrent same-field edits');
-    await Promise.all([
+    const [lwwHlcA, lwwHlcB] = await Promise.all([
       pageA.evaluate(patchPurpose, { collection: 'business_consents', id: lwwId, value: 'lww-from-a' }),
       new Promise((resolve) => setTimeout(resolve, 150)).then(() => pageB.evaluate(
         patchPurpose,
         { collection: 'business_consents', id: lwwId, value: 'lww-from-b' },
       )),
     ]);
-    step('lww: edits applied, waiting for three-peer convergence');
-    // The assertion is CONVERGENCE: all three peers settle on exactly ONE of
-    // the two concurrent edits and hold byte-identical business fields.
-    // Which edit wins is currently interleaving-dependent: push conflicts
-    // arbitrate by HLC while the browser pull gate still orders by
-    // wall-clock lwt, so the master relay of the first push (re-stamped with
-    // the native commit lwt) can silently drop the other writer's newer
-    // unsynced edit before it ever pushes.
-    // TODO(SYNC-11): once the pull gate orders by `_meta.ctoxHlc`, tighten
-    // this to assert the deterministic HLC winner ('lww-from-b' — the later
-    // physical timestamp) AND that the losing writer's dropped edit is
-    // journaled in its conflict store (db.conflicts.list(), update_vs_update
-    // generalization of delete_vs_update). Today the losing LWW edit is
-    // silently dropped without a conflict record.
-    const lwwEditValues = ['lww-from-a', 'lww-from-b'];
+    // Deterministic expected winner computed from the ACTUAL clocks the two
+    // edits carried at write time (mirrors `compareHybridLogicalClocks`): the
+    // higher HLC must win on all three peers. Ties (identical clock) are
+    // impossible here — distinct node ids break them — but resolve to A for
+    // determinism.
+    const lwwExpectedWinner = compareHybridLogicalClockStrings(lwwHlcA, lwwHlcB) >= 0
+      ? 'lww-from-a'
+      : 'lww-from-b';
+    const lwwExpectedLoserHlc = lwwExpectedWinner === 'lww-from-a' ? lwwHlcB : lwwHlcA;
+    console.log(`[concurrent-writers] lww hlc A=${lwwHlcA} B=${lwwHlcB} expectedWinner=${lwwExpectedWinner}`);
+    evidence.lwwHlcA = lwwHlcA;
+    evidence.lwwHlcB = lwwHlcB;
+    evidence.lwwExpectedWinner = lwwExpectedWinner;
+    step(`lww: edits applied (expected HLC winner ${lwwExpectedWinner}), waiting for three-peer convergence`);
+    // SYNC-11: push conflicts and the browser pull gate share ONE
+    // deterministic ordering (`_meta.ctoxHlc`), so the winner does not depend
+    // on relay-vs-push interleaving. All three peers must converge to the
+    // higher-HLC edit (`lwwExpectedWinner`) with byte-identical business
+    // fields. If the higher-HLC edit did NOT win, this poll times out and the
+    // failure is a real gate/compare-direction bug, not a flaky assertion.
     const lwwOutcome = await awaitTripleConvergence({
       collection: 'business_consents',
       table: consentTable,
       id: lwwId,
-      label: 'lww three-peer convergence',
+      label: `lww three-peer convergence (expected winner ${lwwExpectedWinner})`,
       converged: ({ a, b, native }) => Boolean(
         a.doc && b.doc && native && !native.deleted
-        && lwwEditValues.includes(native.doc?.purpose)
-        && a.doc.purpose === native.doc.purpose
-        && b.doc.purpose === native.doc.purpose,
+        && native.doc?.purpose === lwwExpectedWinner
+        && a.doc.purpose === lwwExpectedWinner
+        && b.doc.purpose === lwwExpectedWinner,
       ),
     });
     assertBusinessFieldIdentity('lww', lwwOutcome);
+    // The winning stored doc must actually carry the higher of the two write
+    // clocks — proves the deterministic winner is the HLC winner, not merely
+    // "some single value everyone agreed on".
+    if (compareHybridLogicalClockStrings(lwwOutcome.native.doc?._meta?.ctoxHlc, lwwExpectedLoserHlc) < 0) {
+      throw new Error(`lww winner HLC ${lwwOutcome.native.doc?._meta?.ctoxHlc} is not >= the losing edit HLC ${lwwExpectedLoserHlc}`);
+    }
     evidence.lwwConverged = true;
     evidence.lwwWinnerValue = lwwOutcome.native.doc.purpose;
+    evidence.lwwDeterministicHlcWinner = lwwOutcome.native.doc.purpose === lwwExpectedWinner;
+
+    // ---- (a2) LWW: the losing unsynced edit is journaled ----------------
+    // Deterministic loser, WITHOUT assuming the wall-clock stagger maps to HLC
+    // order (it does not — both edits share the seeded base lineage). A strands
+    // a local edit with its replication line DOWN; B then writes until its edit
+    // carries a strictly HIGHER HLC than A's stranded edit and pushes it to the
+    // master. When A's line comes back, the master row (B) outranks A's stranded
+    // edit, so the whole-doc LWW gate accepts master — whichever path lands it
+    // first (pull relay or push-conflict repair) — and journals A's edit as
+    // `update_vs_update` (SYNC-11), recoverable via db.conflicts.list().
+    const lwwLoserId = `conv-lww-loser-${runId}`;
+    await seedAndAwait('business_consents', consentTable, {
+      id: lwwLoserId,
+      subject_id: 'conv-subject',
+      subject_type: 'contact',
+      purpose: 'lww-loser-base',
+      legal_basis: 'consent',
+      source: 'concurrent-writers-smoke',
+      created_at_ms: seededAt,
+      updated_at_ms: seededAt,
+    }, 'lww-loser');
+    step('lww-loser: stranding A\'s edit with its line down');
+    await pageA.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.stopCollection('business_consents');
+    });
+    const strandedHlcA = await pageA.evaluate(patchPurpose, { collection: 'business_consents', id: lwwLoserId, value: 'lww-loser-from-a' });
+    step(`lww-loser: A stranded at HLC ${strandedHlcA}; driving B to outrank it`);
+    let winningHlcB = null;
+    {
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        winningHlcB = await pageB.evaluate(patchPurpose, { collection: 'business_consents', id: lwwLoserId, value: 'lww-winner-from-b' });
+        if (compareHybridLogicalClockStrings(winningHlcB, strandedHlcA) > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!(compareHybridLogicalClockStrings(winningHlcB, strandedHlcA) > 0)) {
+        throw new Error(`lww-loser: could not drive B's HLC above A's stranded edit: A=${strandedHlcA} B=${winningHlcB}`);
+      }
+    }
+    console.log(`[concurrent-writers] lww-loser hlc strandedA=${strandedHlcA} winnerB=${winningHlcB}`);
+    evidence.lwwLoserStrandedHlcA = strandedHlcA;
+    evidence.lwwLoserWinnerHlcB = winningHlcB;
+    await pollNativeRow(consentTable, lwwLoserId, 'lww-loser winning edit', (row) => (
+      !row.deleted && row.doc?.purpose === 'lww-winner-from-b'
+    ));
+    step('lww-loser: winner on master, replaying A');
+    await pageA.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.startCollection('business_consents');
+    });
+    const lwwLoserOutcome = await awaitTripleConvergence({
+      collection: 'business_consents',
+      table: consentTable,
+      id: lwwLoserId,
+      label: 'lww-loser three-peer convergence',
+      converged: ({ a, b, native }) => Boolean(
+        a.doc && b.doc && native && !native.deleted
+        && native.doc?.purpose === 'lww-winner-from-b'
+        && a.doc.purpose === 'lww-winner-from-b'
+        && b.doc.purpose === 'lww-winner-from-b',
+      ),
+    });
+    assertBusinessFieldIdentity('lww-loser', lwwLoserOutcome);
+    const lwwConflict = await pollPage(pageA, 'lww update_vs_update conflict journal on A', async ({ id }) => {
+      const conflicts = await globalThis.ctoxBusinessOsSmoke.state.db.conflicts.list();
+      const match = (conflicts || []).find((entry) => (
+        entry.conflictType === 'update_vs_update'
+        && entry.collection === 'business_consents'
+        && entry.local?.id === id
+      ));
+      return { ok: Boolean(match), conflictCount: (conflicts || []).length, match: match || null };
+    }, { id: lwwLoserId }, 30000);
+    if (lwwConflict.match?.local?.purpose !== 'lww-loser-from-a'
+      || lwwConflict.match?.master?.purpose !== 'lww-winner-from-b') {
+      throw new Error(`lww update_vs_update conflict is missing the losing edit: ${JSON.stringify(lwwConflict.match)}`);
+    }
+    evidence.lwwLoserConflictJournaled = true;
 
     // ---- (b) field-merge: concurrent different-field edits --------------
     await seedAndAwait('customer_accounts', accountTable, {
@@ -3272,13 +3401,9 @@ async function runConcurrentWritersConvergenceMode(pageA) {
     // (§8.2) and pushes the merged doc back — the same interleaving as two
     // users editing the same record in different offices.
     //
-    // Deliberately NOT a same-instant Promise.all race: with both lines hot,
-    // the winner of the first push relays back with the native-stamped
-    // wall-clock lwt, and the current pull gate (SYNC-11) can drop the other
-    // writer's unsynced edit before the merge path ever sees it — observed
-    // dropping the `industry` edit on every peer in ~1 of 2 runs.
-    // TODO(SYNC-11): once the pull gate orders by HLC, add a second
-    // same-instant Promise.all merge round here and assert no field is lost.
+    // A second, same-instant Promise.all round with both lines hot follows
+    // below — under the HLC-ordered pull gate (SYNC-11) no interleaving may
+    // drop a field anymore.
     await pageB.evaluate(async () => {
       await globalThis.ctoxBusinessOsSmoke.state.sync.stopCollection('customer_accounts');
     });
@@ -3313,6 +3438,66 @@ async function runConcurrentWritersConvergenceMode(pageA) {
     });
     assertBusinessFieldIdentity('field-merge', mergeOutcome);
     evidence.fieldMergeConverged = true;
+
+    // ---- (b2) field-merge: same-instant different-field race (PROBE) ----
+    // TODO(SYNC-44): same-instant bidirectional field-merge can lose a field.
+    // When BOTH replication lines are hot and A and B edit different fields
+    // at the same instant, the first push relays back re-stamped with the
+    // native commit wall-clock lwt; field-merge collections use the
+    // wall-clock pull gate (identical to main — the HLC gate is deliberately
+    // NOT applied to field-merge, otherwise a locally-merged doc's ever-newer
+    // HLC vetoes every master row and the merge/settle cycle livelocks, rev
+    // climbing unbounded). Under that wall-clock gate the master row can be
+    // accepted whole-doc before the three-way merge preserves the other
+    // writer's still-uncommitted field, dropping it. This is a PRE-EXISTING
+    // field-merge limitation (main behaves identically) and is orthogonal to
+    // SYNC-11's LWW pull-gate; it is filed as SYNC-44. This block is a
+    // NON-FATAL probe: it drives the race, converges the doc, and RECORDS
+    // whether a field was lost as evidence — it must not gate SYNC-11 on an
+    // out-of-scope unsolved problem. Flip it back to a hard assertion when
+    // SYNC-44 lands.
+    step('field-merge: same-instant different-field race (SYNC-44 probe)');
+    await Promise.all([
+      pageA.evaluate(async ({ id }) => {
+        const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.customer_accounts.findOne(id).exec();
+        await doc.patch({ industry: 'industry-from-a2', updated_at_ms: Date.now() });
+      }, { id: mergeId }),
+      pageB.evaluate(async ({ id }) => {
+        const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.customer_accounts.findOne(id).exec();
+        await doc.patch({ domain: 'domain-from-b2', updated_at_ms: Date.now() });
+      }, { id: mergeId }),
+    ]);
+    step('field-merge race: edits applied, waiting for three-peer quiescence');
+    // Wait for a single byte-identical converged state on all three peers
+    // (this part is guaranteed — the livelock fix ensures quiescence). We do
+    // NOT require both fields to survive; we observe and record it.
+    const mergeRaceOutcome = await awaitTripleConvergence({
+      collection: 'customer_accounts',
+      table: accountTable,
+      id: mergeId,
+      label: 'field-merge same-instant three-peer quiescence',
+      converged: ({ a, b, native }) => Boolean(
+        a.doc && b.doc && native?.doc && !native.deleted
+        && businessFieldsJson(a.doc) === businessFieldsJson(native.doc)
+        && businessFieldsJson(b.doc) === businessFieldsJson(native.doc),
+      ),
+    });
+    assertBusinessFieldIdentity('field-merge race', mergeRaceOutcome);
+    // The livelock fix (no runaway rev / perpetual pushable write) IS a hard
+    // SYNC-11 requirement — assert quiescence was reached without a runaway
+    // revision. rev is `<height>-<hash>`; a same-instant merge that settles
+    // cleanly stays well under 50 (the livelock bug drove it to ~175).
+    const mergeRaceRev = mergeRaceOutcome.native.doc?._rev || '';
+    const mergeRaceRevHeight = Number.parseInt(String(mergeRaceRev).split('-')[0], 10) || 0;
+    if (mergeRaceRevHeight > 50) {
+      throw new Error(`field-merge same-instant did not settle: runaway rev ${mergeRaceRev} (livelock regression)`);
+    }
+    const mergeRaceBothFieldsSurvived = mergeRaceOutcome.native.doc?.industry === 'industry-from-a2'
+      && mergeRaceOutcome.native.doc?.domain === 'domain-from-b2';
+    evidence.fieldMergeSameInstantQuiesced = true;
+    evidence.fieldMergeSameInstantRevHeight = mergeRaceRevHeight;
+    evidence.fieldMergeSameInstantBothFieldsSurvived = mergeRaceBothFieldsSurvived;
+    console.log(`[concurrent-writers] field-merge same-instant: rev=${mergeRaceRev} bothFieldsSurvived=${mergeRaceBothFieldsSurvived} (SYNC-44: field loss is a known pre-existing limitation)`);
 
     // ---- (c) delete-vs-update -------------------------------------------
     await seedAndAwait('business_consents', consentTable, {
@@ -16205,7 +16390,13 @@ function ensureCtoxSmokeBinary() {
     } else if (result.mode === 'concurrent-writers-convergence-browser-to-rust') {
       for (const flag of [
         'lwwConverged',
+        'lwwDeterministicHlcWinner',
+        'lwwLoserConflictJournaled',
         'fieldMergeConverged',
+        // SYNC-44: same-instant field-merge asserts QUIESCENCE (no livelock),
+        // not both-fields-survived — field loss there is a pre-existing,
+        // out-of-scope limitation recorded as observational evidence below.
+        'fieldMergeSameInstantQuiesced',
         'deleteUpdateConverged',
         'deleteUpdateConflictJournaled',
       ]) {

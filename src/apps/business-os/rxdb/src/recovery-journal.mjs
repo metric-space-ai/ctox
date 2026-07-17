@@ -457,7 +457,11 @@ function valueAtPath(value, path) {
     .reduce((current, segment) => current?.[segment], value);
 }
 
-function masterAcknowledgesLocal(master, local, collection = '') {
+// Exported for the storage layer's pull-gate overwrite journaling (SYNC-11):
+// a master row that "acknowledges" the local write (same HLC, or identical
+// content for mixed-version rows) is the local write's own round-trip, not
+// data loss.
+export function masterAcknowledgesLocal(master, local, collection = '') {
   const masterHlc = String(master?._meta?.ctoxHlc || '');
   const localHlc = String(local?._meta?.ctoxHlc || '');
   if (collection === 'business_commands' && serverAcknowledgesCommand(master, local)) return true;
