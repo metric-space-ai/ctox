@@ -3226,10 +3226,26 @@ fn handle_service_ipc_request(
             // connection — not by a sandboxed CLI subprocess that may have
             // its writes silently discarded on sandbox teardown.
             match crate::knowledge::dispatch_capturing(root, &argv) {
-                Ok(payload) => Ok(ServiceIpcResponse::Json {
-                    status: 200,
-                    payload,
-                }),
+                Ok(mut payload) => {
+                    if knowledge_data_command_mutates_tables(&argv) {
+                        attach_knowledge_projection_status(
+                            &mut payload,
+                            crate::business_os::sync_knowledge_tables(root),
+                            "knowledge_tables",
+                        );
+                    }
+                    if knowledge_skill_command_mutates_records(&argv) {
+                        attach_knowledge_projection_status(
+                            &mut payload,
+                            crate::business_os::sync_business_record_projections(root),
+                            "business_records",
+                        );
+                    }
+                    Ok(ServiceIpcResponse::Json {
+                        status: 200,
+                        payload,
+                    })
+                }
                 Err(err) => Ok(ServiceIpcResponse::Error {
                     message: err.to_string(),
                 }),
@@ -3247,6 +3263,72 @@ fn handle_service_ipc_request(
             }
         }
     }
+}
+
+fn knowledge_data_command_mutates_tables(argv: &[String]) -> bool {
+    matches!(
+        argv,
+        [form, verb, ..]
+            if form == "data"
+                && matches!(
+                    verb.as_str(),
+                    "create"
+                        | "clone"
+                        | "rename"
+                        | "archive"
+                        | "restore"
+                        | "delete"
+                        | "tag"
+                        | "untag"
+                        | "append"
+                        | "update"
+                        | "delete-rows"
+                        | "add-column"
+                        | "drop-column"
+                        | "import"
+                )
+    )
+}
+
+fn knowledge_skill_command_mutates_records(argv: &[String]) -> bool {
+    matches!(
+        argv,
+        [form, verb, ..]
+            if matches!(form.as_str(), "skill" | "skills")
+                && matches!(
+                    verb.as_str(),
+                    "set"
+                        | "import-bundle"
+                        | "new"
+                        | "add-skillbook"
+                        | "add-runbook"
+                        | "add-item"
+                        | "refresh-item-embedding"
+                )
+    )
+}
+
+fn attach_knowledge_projection_status(
+    payload: &mut serde_json::Value,
+    result: anyhow::Result<usize>,
+    projection: &str,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let status = match result {
+        Ok(updated) => serde_json::json!({
+            "ok": true,
+            "projection": projection,
+            "updated": updated,
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "projection": projection,
+            "error": error.to_string(),
+        }),
+    };
+    object.insert("business_os_projection".to_string(), status);
 }
 
 #[cfg(not(unix))]
@@ -23272,6 +23354,56 @@ mod tests {
     static TICKET_SYNC_DUE_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static DURABLE_STATUS_SNAPSHOT_CACHE_TEST_LOCK: std::sync::Mutex<()> =
         std::sync::Mutex::new(());
+
+    #[test]
+    fn knowledge_projection_classifies_mutations_without_refreshing_reads() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(knowledge_data_command_mutates_tables(&args(&[
+            "data", "import", "--domain", "verified"
+        ])));
+        assert!(knowledge_data_command_mutates_tables(&args(&[
+            "data", "tag", "--domain", "verified"
+        ])));
+        assert!(!knowledge_data_command_mutates_tables(&args(&[
+            "data", "select", "--domain", "verified"
+        ])));
+        assert!(knowledge_skill_command_mutates_records(&args(&[
+            "skill",
+            "add-runbook",
+            "--id",
+            "rb-1"
+        ])));
+        assert!(!knowledge_skill_command_mutates_records(&args(&[
+            "skill",
+            "show",
+            "--system",
+            "web-research"
+        ])));
+    }
+
+    #[test]
+    fn knowledge_projection_status_preserves_canonical_command_result() {
+        let mut payload = json!({"ok": true, "rows_imported": 4876});
+        attach_knowledge_projection_status(
+            &mut payload,
+            Err(anyhow::anyhow!("replication unavailable")),
+            "knowledge_tables",
+        );
+
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["rows_imported"], 4876);
+        assert_eq!(payload["business_os_projection"]["ok"], false);
+        assert_eq!(
+            payload["business_os_projection"]["error"],
+            "replication unavailable"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

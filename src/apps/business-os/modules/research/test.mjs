@@ -427,6 +427,52 @@ test('knowledge base grouping ignores legacy parquet docs without domain and tab
   assert.equal(grouped[0].tables.length, 1);
 });
 
+test('knowledge base grouping merges replicated table chunks in row order', () => {
+  const chunks = [
+    {
+      id: 'table:measurements:chunk:0001',
+      payload: {
+        id: 'table:measurements:chunk:0001',
+        logical_table_id: 'table:measurements',
+        domain: 'verified_research',
+        table_key: 'measured_load_points',
+        row_count: 3,
+        chunk_index: 1,
+        chunk_count: 2,
+        rows_complete: true,
+        rows: [{ source_row: 2 }],
+      },
+    },
+    {
+      id: 'table:measurements',
+      payload: {
+        id: 'table:measurements',
+        logical_table_id: 'table:measurements',
+        domain: 'verified_research',
+        table_key: 'measured_load_points',
+        row_count: 3,
+        chunk_index: 0,
+        chunk_count: 2,
+        rows_complete: true,
+        rows: [{ source_row: 0 }, { source_row: 1 }],
+      },
+    },
+  ];
+
+  const merged = hooks.mergeKnowledgeTableChunks(chunks);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 'table:measurements');
+  assert.equal(merged[0].row_count, 3);
+  assert.equal(merged[0].chunk_count, 2);
+  assert.equal(merged[0].rows_complete, true);
+  assert.deepEqual(merged[0].rows.map((row) => row.source_row), [0, 1, 2]);
+
+  const grouped = hooks.knowledgeBasesFromTables(chunks);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].tables.length, 1);
+  assert.deepEqual(grouped[0].tables[0].rows.map((row) => row.source_row), [0, 1, 2]);
+});
+
 test('empty knowledge read retries only when knowledge_tables sync is live', () => {
   const previousWindow = globalThis.window;
   try {

@@ -2245,8 +2245,7 @@ fn sync_ticket_state_if_changed(
     })
 }
 
-#[cfg(test)]
-fn sync_knowledge_tables(root: &Path) -> anyhow::Result<usize> {
+pub(crate) fn sync_knowledge_tables(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
@@ -2321,8 +2320,7 @@ fn sync_knowledge_tables_if_changed(
     })
 }
 
-#[cfg(test)]
-fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
+pub(crate) fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)

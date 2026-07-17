@@ -324,7 +324,9 @@ async function loadKnowledgeFromLocal(options = {}) {
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   const normalizedItems = Array.isArray(items) ? items.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
   const normalizedRunbooks = Array.isArray(runbooks) ? runbooks.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
-  const normalizedTables = Array.isArray(tables) ? tables.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
+  const normalizedTables = mergeStoredKnowledgeTableChunks(tables)
+    .map(normalizeStoredKnowledgeRecord)
+    .filter(isActiveKnowledgeRecord);
   state.tables = normalizedTables;
   state.items = uniqueById([
     ...normalizedItems,
@@ -368,6 +370,63 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   state.selectedId = firstContext.skill?.id || firstGroup?.primaryItemId || state.items[0]?.id || '';
   state.selectedTableId = firstContext.tables[0]?.id || firstGroup?.tableIds?.[0] || '';
   state.selectedRunbookId = normaliseRunbookId(firstContext.runbooks[0]?.id || firstContext.runbooks[0]?.runbook_id || state.runbooks[0]?.id || '');
+}
+
+function mergeStoredKnowledgeTableChunks(tables = []) {
+  const groups = new Map();
+  for (const table of Array.isArray(tables) ? tables : []) {
+    if (!table || typeof table !== 'object') continue;
+    const payload = table.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)
+      ? table.payload
+      : table;
+    const logicalId = String(
+      payload.logical_table_id
+      || table.logical_table_id
+      || payload.id
+      || table.id
+      || '',
+    ).trim();
+    if (!logicalId) continue;
+    if (!groups.has(logicalId)) groups.set(logicalId, []);
+    groups.get(logicalId).push({ table, payload });
+  }
+  return [...groups.entries()].map(([logicalId, parts]) => {
+    parts.sort((left, right) => (
+      Number(left.payload.chunk_index ?? left.table.chunk_index ?? 0)
+      - Number(right.payload.chunk_index ?? right.table.chunk_index ?? 0)
+    ));
+    const first = parts[0];
+    const rows = parts.flatMap(({ table, payload }) => firstArray(
+      payload.rows,
+      payload.records,
+      payload.data,
+      table.rows,
+      table.records,
+      table.data,
+    ));
+    const expectedChunks = Math.max(...parts.map(({ table, payload }) => (
+      Number(payload.chunk_count ?? table.chunk_count ?? 1)
+    )).filter(Number.isFinite), 1);
+    const payload = {
+      ...first.payload,
+      id: logicalId,
+      logical_table_id: logicalId,
+      chunk_index: 0,
+      chunk_count: expectedChunks,
+      chunk_row_offset: 0,
+      chunk_row_count: rows.length,
+      projected_row_count: rows.length,
+      rows_complete: parts.length === expectedChunks && parts.every(({ table, payload: partPayload }) => (
+        (partPayload.rows_complete ?? table.rows_complete ?? true) !== false
+      )),
+      rows,
+    };
+    return {
+      ...first.table,
+      ...payload,
+      payload,
+    };
+  });
 }
 
 function knowledgeGroupMatchesDomain(group, domain) {
@@ -2751,6 +2810,7 @@ export const __knowledgeTestHooks = {
   knowledgeEmptyStateMessage,
   localDataFrameRows,
   localDataFrameSchema,
+  mergeStoredKnowledgeTableChunks,
   mergeKnowledgeTableData,
   canonicalCellValue,
   columnHeaderHelp,

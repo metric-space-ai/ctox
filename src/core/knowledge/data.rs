@@ -1046,12 +1046,16 @@ fn knowledge_file_content_hash(path: &Path) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-/// Hard upper bound on rows embedded into a single `knowledge_tables` RxDB
-/// doc. Record-shape knowledge tables in CTOX are small (tens to low
-/// thousands of rows), but the cap keeps a pathological table from inflating
-/// a synced doc to an unbounded size. The browser surfaces still read whatever
-/// rows ride in the doc; the cap is purely a safety valve.
+/// Hard upper bound on rows projected for one logical knowledge table.
 const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
+
+/// Maximum rows carried by one replicated `knowledge_tables` document.
+///
+/// A single wide evidence row can contain substantial provenance metadata.
+/// Keeping chunks deliberately small prevents multi-megabyte RxDB documents
+/// from stalling WebRTC replication while still preserving the complete
+/// logical table in the browser.
+const KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS: usize = 200;
 
 /// Build the `knowledge_tables` RxDB documents that carry record-shape
 /// knowledge to the Business OS browser surfaces (Web Research + Knowledge).
@@ -1072,10 +1076,10 @@ const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
 ///      [`KNOWLEDGE_TABLE_RXDB_ROW_CAP`].
 ///   3. Add table-specific schema metadata for the browser, including
 ///      standardized metric columns and hover-help descriptions.
-///   4. Emit a doc whose `id` is `table:<table_id>` (matching the
-///      browser/HTTP id scheme), with the rows mirrored at both
-///      `payload.rows` and top-level `rows` (the browser reads either), the
-///      true `row_count`, and the resolved `parquet_path`.
+///   4. Emit deterministic row chunks. Chunk zero keeps the historical
+///      `table:<table_id>` id; later chunks use
+///      `table:<table_id>:chunk:<index>`. Browser modules merge chunks by
+///      `logical_table_id`.
 ///
 /// A missing or unreadable parquet file is not fatal: the doc is still
 /// emitted (so the table appears in the catalog UI) but with an empty `rows`
@@ -1153,56 +1157,90 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         let schema_value = json!({ "columns": columns.clone() });
         let quality_notes_value =
             Value::Array(quality_notes.into_iter().map(Value::String).collect());
-        let id = format!("table:{table_id}");
+        let logical_table_id = format!("table:{table_id}");
         let updated_at_ms =
             rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
-        let rows_value = Value::Array(rows);
         let content_hash = knowledge_file_content_hash(&resolved_path);
+        let projected_row_count = rows.len();
+        let chunk_count = projected_row_count
+            .max(1)
+            .div_ceil(KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS);
+        let rows_complete = projected_row_count as i64 == resolved_row_count;
 
-        // (4) Mirror rows at payload.rows and top-level rows; refresh
-        //     parquet_path + row_count to the resolved values.
-        let payload = json!({
-            "id": id,
-            "table_id": table_id,
-            "kind": "dataframe",
-            "domain": domain,
-            "table_key": table_key,
-            "source_system": source_system,
-            "title": title,
-            "description": description,
-            "parquet_path": resolved_path_str,
-            "row_count": resolved_row_count,
-            "bytes": bytes,
-            "content_hash": content_hash,
-            "schema_hash": live_schema_hash,
-            "updated_at": updated_at,
-            "has_table": true,
-            "columns": columns.clone(),
-            "schema": schema_value.clone(),
-            "quality_notes": quality_notes_value.clone(),
-            "rows": rows_value.clone(),
-        });
+        // (4) Mirror each row chunk at payload.rows and top-level rows. The
+        // logical row_count remains the complete parquet count on every chunk.
+        for chunk_index in 0..chunk_count {
+            let start = chunk_index * KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS;
+            let end = (start + KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS).min(projected_row_count);
+            let chunk_rows = if start < end {
+                rows[start..end].to_vec()
+            } else {
+                Vec::new()
+            };
+            let id = if chunk_index == 0 {
+                logical_table_id.clone()
+            } else {
+                format!("{logical_table_id}:chunk:{chunk_index:04}")
+            };
+            let rows_value = Value::Array(chunk_rows);
+            let payload = json!({
+                "id": id,
+                "logical_table_id": logical_table_id,
+                "table_id": table_id,
+                "kind": "dataframe",
+                "domain": domain,
+                "table_key": table_key,
+                "source_system": source_system,
+                "title": title,
+                "description": description,
+                "parquet_path": resolved_path_str,
+                "row_count": resolved_row_count,
+                "projected_row_count": projected_row_count,
+                "rows_complete": rows_complete,
+                "chunk_index": chunk_index,
+                "chunk_count": chunk_count,
+                "chunk_row_offset": start,
+                "chunk_row_count": end.saturating_sub(start),
+                "bytes": bytes,
+                "content_hash": content_hash,
+                "schema_hash": live_schema_hash,
+                "updated_at": updated_at,
+                "has_table": true,
+                "columns": columns.clone(),
+                "schema": schema_value.clone(),
+                "quality_notes": quality_notes_value.clone(),
+                "rows": rows_value.clone(),
+            });
 
-        documents.push(json!({
-            "id": id,
-            "kind": "dataframe",
-            "title": title,
-            "subtitle": format!("{domain} · {resolved_row_count} rows"),
-            "summary": description,
-            "source_path": resolved_path_str,
-            "domain": domain,
-            "table_key": table_key,
-            "row_count": resolved_row_count,
-            "content_hash": content_hash,
-            "schema_hash": live_schema_hash,
-            "updated_at": updated_at,
-            "updated_at_ms": updated_at_ms,
-            "columns": columns,
-            "schema": schema_value,
-            "quality_notes": quality_notes_value,
-            "rows": rows_value,
-            "payload": payload,
-        }));
+            documents.push(json!({
+                "id": id,
+                "logical_table_id": logical_table_id,
+                "table_id": table_id,
+                "kind": "dataframe",
+                "title": title,
+                "subtitle": format!("{domain} · {resolved_row_count} rows"),
+                "summary": description,
+                "source_path": resolved_path_str,
+                "domain": domain,
+                "table_key": table_key,
+                "row_count": resolved_row_count,
+                "projected_row_count": projected_row_count,
+                "rows_complete": rows_complete,
+                "chunk_index": chunk_index,
+                "chunk_count": chunk_count,
+                "chunk_row_offset": start,
+                "chunk_row_count": end.saturating_sub(start),
+                "content_hash": content_hash,
+                "schema_hash": live_schema_hash,
+                "updated_at": updated_at,
+                "updated_at_ms": updated_at_ms,
+                "columns": columns.clone(),
+                "schema": schema_value.clone(),
+                "quality_notes": quality_notes_value.clone(),
+                "rows": rows_value,
+                "payload": payload,
+            }));
+        }
     }
 
     Ok(documents)
@@ -1773,6 +1811,97 @@ mod tests {
             .filter_map(|row| row.get("title").and_then(Value::as_str))
             .collect();
         assert!(titles.contains(&"Bearing handbook"));
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_tables_projection_chunks_wide_tables_without_losing_rows() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "measured_load_points";
+        let table_id = "kdt-verified-measurements";
+        let row_total = KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS * 2 + 1;
+        let now = now_rfc3339();
+        let live_path = compute_parquet_path(root, domain, table_key);
+
+        let conn = open_runtime_db(root)?;
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'verified-import', 'Measurements', 'verified rows',
+                       ?4, '', ?5, 0, '{}', NULL, ?6, ?6)",
+            params![
+                table_id,
+                domain,
+                table_key,
+                live_path.to_string_lossy().into_owned(),
+                row_total as i64,
+                now
+            ],
+        )?;
+
+        let rows = (0..row_total)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index as i64,
+                    "rpm": 8_000.0 + index as f64,
+                    "evidence_eligible": true,
+                })
+            })
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        assert_eq!(docs.len(), 3);
+        assert_eq!(docs[0]["id"], json!("table:kdt-verified-measurements"));
+        assert_eq!(
+            docs[1]["id"],
+            json!("table:kdt-verified-measurements:chunk:0001")
+        );
+        assert_eq!(
+            docs[2]["id"],
+            json!("table:kdt-verified-measurements:chunk:0002")
+        );
+
+        let chunk_lengths = docs
+            .iter()
+            .map(|doc| doc["rows"].as_array().map(Vec::len).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            chunk_lengths,
+            vec![
+                KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS,
+                KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS,
+                1
+            ]
+        );
+        assert!(docs.iter().all(|doc| {
+            doc["logical_table_id"] == json!("table:kdt-verified-measurements")
+                && doc["row_count"] == json!(row_total)
+                && doc["projected_row_count"] == json!(row_total)
+                && doc["rows_complete"] == json!(true)
+                && doc["chunk_count"] == json!(3)
+                && doc["payload"]["rows"] == doc["rows"]
+        }));
+
+        let projected_source_rows = docs
+            .iter()
+            .flat_map(|doc| {
+                doc["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row["source_row"].as_i64())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projected_source_rows.len(), row_total);
+        assert_eq!(projected_source_rows[0], 0);
+        assert_eq!(projected_source_rows[row_total - 1], row_total as i64 - 1);
         Ok(())
     }
 

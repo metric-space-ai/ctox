@@ -40,6 +40,33 @@ test('documents module declares the shared Knowledge collections', async () => {
   }
 });
 
+test('document knowledge context references a chunked table only once', () => {
+  const tables = hooks.mergeKnowledgeTableReferences([
+    {
+      id: 'table:loads:chunk:0001',
+      payload: {
+        logical_table_id: 'table:loads',
+        domain: 'drone_bearing_design_verified',
+        chunk_index: 1,
+        chunk_count: 2,
+      },
+    },
+    {
+      id: 'table:loads',
+      payload: {
+        logical_table_id: 'table:loads',
+        domain: 'drone_bearing_design_verified',
+        chunk_index: 0,
+        chunk_count: 2,
+      },
+    },
+  ]);
+
+  assert.equal(tables.length, 1);
+  assert.equal(tables[0].id, 'table:loads');
+  assert.equal(tables[0].domain, 'drone_bearing_design_verified');
+});
+
 test('only superseded draft blobs are reclaimed, never the original or current blob', () => {
   // Successive autosaves: the previous draft blob is collectable.
   assert.equal(hooks.isReclaimableDraftBlob('v1_draft_100', 'v1_draft_200'), true);

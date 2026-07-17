@@ -542,7 +542,7 @@ async function refreshKnowledge(state) {
   [state.knowledgeItems, state.knowledgeRunbooks, state.knowledgeTables] = await Promise.all([
     read('knowledge_items'),
     read('knowledge_runbooks'),
-    read('knowledge_tables'),
+    read('knowledge_tables').then(mergeKnowledgeTableReferences),
   ]);
 }
 
@@ -1391,6 +1391,42 @@ function normalizeKnowledgeRecord(record = {}) {
     updated_at_ms: Number(record.updated_at_ms ?? payload.updated_at_ms ?? 0),
     payload,
   };
+}
+
+function mergeKnowledgeTableReferences(tables = []) {
+  const logical = new Map();
+  for (const table of Array.isArray(tables) ? tables : []) {
+    if (!table || typeof table !== 'object') continue;
+    const payload = table.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)
+      ? table.payload
+      : {};
+    const logicalId = String(
+      table.logical_table_id
+      || payload.logical_table_id
+      || table.id
+      || payload.id
+      || '',
+    ).trim();
+    if (!logicalId) continue;
+    const chunkIndex = Number(table.chunk_index ?? payload.chunk_index ?? 0);
+    const current = logical.get(logicalId);
+    if (current && current.chunkIndex <= chunkIndex) continue;
+    logical.set(logicalId, {
+      chunkIndex,
+      table: normalizeKnowledgeRecord({
+        ...payload,
+        ...table,
+        id: logicalId,
+        logical_table_id: logicalId,
+        payload: {
+          ...payload,
+          id: logicalId,
+          logical_table_id: logicalId,
+        },
+      }),
+    });
+  }
+  return [...logical.values()].map((entry) => entry.table);
 }
 
 function knowledgeCandidates(state) {
@@ -2775,6 +2811,7 @@ export const __documentsTestHooks = {
   isDocumentKnowledgeStale,
   isActiveDocumentRecord,
   knowledgeCandidates,
+  mergeKnowledgeTableReferences,
   normalizeDocumentRecord,
   normalizeKnowledgeRecord,
   resolveKnowledgeContext,

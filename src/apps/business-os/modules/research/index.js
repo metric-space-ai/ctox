@@ -859,7 +859,7 @@ async function loadKnowledgeBases({ retryEmpty = true } = {}) {
 
 function knowledgeBasesFromTables(tables = []) {
   const byDomain = new Map();
-  for (const rawTable of tables) {
+  for (const rawTable of mergeKnowledgeTableChunks(tables)) {
     const source = rawTable?.payload && typeof rawTable.payload === 'object' ? rawTable.payload : rawTable;
     const domain = String(source?.domain || '').trim();
     const tableKey = String(source?.table_key || '').trim();
@@ -886,6 +886,64 @@ function knowledgeBasesFromTables(tables = []) {
   return [...byDomain.values()]
     .map((base) => ({ ...base, tables: base.tables.sort((a, b) => String(a.table_key).localeCompare(String(b.table_key))) }))
     .sort((a, b) => scoreResearchBase(b) - scoreResearchBase(a) || a.title.localeCompare(b.title));
+}
+
+function mergeKnowledgeTableChunks(tables = []) {
+  const groups = new Map();
+  for (const rawTable of Array.isArray(tables) ? tables : []) {
+    if (!rawTable || typeof rawTable !== 'object') continue;
+    const source = rawTable.payload && typeof rawTable.payload === 'object' && !Array.isArray(rawTable.payload)
+      ? rawTable.payload
+      : rawTable;
+    const logicalId = String(
+      source.logical_table_id
+      || rawTable.logical_table_id
+      || source.id
+      || rawTable.id
+      || '',
+    ).trim();
+    if (!logicalId) continue;
+    if (!groups.has(logicalId)) groups.set(logicalId, []);
+    groups.get(logicalId).push({ rawTable, source });
+  }
+
+  return [...groups.entries()].map(([logicalId, parts]) => {
+    parts.sort((left, right) => (
+      Number(left.source.chunk_index ?? left.rawTable.chunk_index ?? 0)
+      - Number(right.source.chunk_index ?? right.rawTable.chunk_index ?? 0)
+    ));
+    const first = parts[0];
+    const rows = parts.flatMap(({ rawTable, source }) => firstArray(
+      source.rows,
+      source.records,
+      source.data,
+      rawTable.rows,
+      rawTable.records,
+      rawTable.data,
+    ));
+    const expectedChunks = Math.max(...parts.map(({ rawTable, source }) => (
+      Number(source.chunk_count ?? rawTable.chunk_count ?? 1)
+    )).filter(Number.isFinite), 1);
+    const payload = {
+      ...first.source,
+      id: logicalId,
+      logical_table_id: logicalId,
+      chunk_index: 0,
+      chunk_count: expectedChunks,
+      chunk_row_offset: 0,
+      chunk_row_count: rows.length,
+      projected_row_count: rows.length,
+      rows_complete: parts.length === expectedChunks && parts.every(({ rawTable, source }) => (
+        (source.rows_complete ?? rawTable.rows_complete ?? true) !== false
+      )),
+      rows,
+    };
+    return {
+      ...first.rawTable,
+      ...payload,
+      payload,
+    };
+  });
 }
 
 async function loadKnowledgeTables({ retryEmpty = true } = {}) {
@@ -5010,6 +5068,7 @@ export const __researchTestHooks = {
   aggregateMeasurements,
   hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
+  mergeKnowledgeTableChunks,
   knowledgeLineageForPayload,
   knowledgeRefreshPayload,
   graphDocumentLineage,

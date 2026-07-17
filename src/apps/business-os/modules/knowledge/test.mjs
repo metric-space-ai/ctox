@@ -29,6 +29,7 @@ const {
   knowledgeGroupMatchesDomain,
   localDataFrameRows,
   localDataFrameSchema,
+  mergeStoredKnowledgeTableChunks,
   mergeKnowledgeTableData,
   canonicalCellValue,
   columnHeaderHelp,
@@ -108,6 +109,37 @@ test('normalizes RxDB payload records without dropping table rows or schema', ()
   assert.equal(record.has_table, true);
   assert.equal(localDataFrameRows(record).length, 1);
   assert.equal(localDataFrameSchema(record).columns[0].key, 'source_id');
+});
+
+test('merges replicated dataframe chunks before rendering Knowledge', () => {
+  const merged = mergeStoredKnowledgeTableChunks([
+    {
+      id: 'table:loads:chunk:0001',
+      payload: {
+        logical_table_id: 'table:loads',
+        chunk_index: 1,
+        chunk_count: 2,
+        row_count: 3,
+        rows: [{ source_row: 2 }],
+      },
+    },
+    {
+      id: 'table:loads',
+      payload: {
+        logical_table_id: 'table:loads',
+        chunk_index: 0,
+        chunk_count: 2,
+        row_count: 3,
+        rows: [{ source_row: 0 }, { source_row: 1 }],
+      },
+    },
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 'table:loads');
+  assert.equal(merged[0].row_count, 3);
+  assert.equal(merged[0].rows_complete, true);
+  assert.deepEqual(localDataFrameRows(merged[0]).map((row) => row.source_row), [0, 1, 2]);
 });
 
 test('merges item metadata with table payload data for dataframe rendering', () => {
