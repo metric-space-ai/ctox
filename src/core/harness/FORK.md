@@ -61,6 +61,9 @@ Runtime invariants:
 - Subagents do not receive the full parent context by default. The parent must
   pass a task-specific prompt; subagents use the vanilla subagent profile plus
   local tools/skills to discover additional context.
+- Detailed subagent briefs can be passed through `spawn_agent.task_file`. The
+  file must be UTF-8, bounded, and resolve inside the active workspace; this
+  keeps Responses-shaped tool arguments short on reasoning-heavy providers.
 - Thread-spawn subagents cannot recursively use collaboration-mode escalation
   or spawn further subagents.
 - Local model providers run subagent work serially. API-backed providers may run

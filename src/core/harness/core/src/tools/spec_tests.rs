@@ -675,7 +675,7 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
-fn spawn_agent_schema_does_not_expose_context_forking() {
+fn spawn_agent_schema_uses_bounded_workspace_task_files() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let features = Features::with_defaults();
@@ -690,13 +690,25 @@ fn spawn_agent_schema_does_not_expose_context_forking() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let tool = create_spawn_agent_tool(&tools_config);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = tool
+    else {
         panic!("expected function tool");
     };
     let JsonSchema::Object { properties, .. } = parameters else {
         panic!("expected object parameters");
     };
     assert!(!properties.contains_key("fork_context"));
+    assert!(properties.contains_key("task_file"));
+    assert!(description.contains("Keep `message` under 1200 characters"));
+    assert!(
+        description.len() < 2_000,
+        "spawn description should stay bounded, got {} bytes",
+        description.len()
+    );
 }
 
 #[test]
