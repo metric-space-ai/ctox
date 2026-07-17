@@ -16,15 +16,20 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
+use url::Url;
 use uuid::Uuid;
 
 const KNOWLEDGE_DATA_ROOT: &str = "runtime/knowledge/data";
 
-type KnowledgeFileChangeStamp = (bool, u64, u128);
+type KnowledgeFileChangeStamp = (bool, u64, u128, String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeTablesProjectionSourceStamp {
@@ -40,6 +45,7 @@ struct KnowledgeTablesCatalogSourceStamp {
     title: String,
     description: String,
     schema_hash: String,
+    content_hash: String,
     row_count: i64,
     bytes: i64,
     tags_json: String,
@@ -88,6 +94,218 @@ pub fn handle_data_command(root: &Path, args: &[String]) -> Result<()> {
             bail!("unknown knowledge data subcommand: {unknown}");
         }
     }
+}
+
+/// Source and claim tables are allowed to retain discovery candidates, but
+/// their evidence flag is derived here rather than trusted from caller input.
+/// This helper is used both on write paths and immediately before projection so
+/// direct file edits or legacy rows cannot reintroduce a self-asserted claim.
+pub(super) fn normalize_evidence_rows(table_key: &str, rows: Vec<Value>) -> Result<Vec<Value>> {
+    if !is_evidence_table(table_key) {
+        return Ok(rows);
+    }
+
+    rows.into_iter()
+        .map(|row| {
+            let mut object = row
+                .as_object()
+                .cloned()
+                .context("evidence knowledge rows must be JSON objects")?;
+            let reasons = evidence_rejection_reasons(table_key, &object);
+            let eligible = reasons.is_empty();
+            object.insert("evidence_eligible".to_string(), Value::Bool(eligible));
+            if eligible {
+                object.remove("evidence_rejection_reason");
+            } else {
+                object.insert(
+                    "evidence_rejection_reason".to_string(),
+                    Value::String(reasons.join(",")),
+                );
+            }
+            Ok(Value::Object(object))
+        })
+        .collect()
+}
+
+pub(super) fn is_evidence_table(table_key: &str) -> bool {
+    let key = table_key.trim().to_ascii_lowercase().replace('-', "_");
+    matches!(
+        key.as_str(),
+        "source_catalog"
+            | "source_claims"
+            | "claims"
+            | "knowledge_claims"
+            | "evidence_points"
+            | "evidence_claims"
+            | "claim_evidence"
+    ) || key.ends_with("_claims")
+}
+
+fn evidence_rejection_reasons(table_key: &str, row: &Map<String, Value>) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let canonical_url = row
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(valid_canonical_url);
+    if !canonical_url {
+        reasons.push("invalid_canonical_url".to_string());
+    }
+
+    if row.get("verification_status").and_then(Value::as_str) != Some("verified") {
+        reasons.push("verification_not_verified".to_string());
+    }
+    if row.get("transport_verified") != Some(&Value::Bool(true)) {
+        reasons.push("transport_not_verified".to_string());
+    }
+    if row.get("content_extracted") != Some(&Value::Bool(true)) {
+        reasons.push("content_not_extracted".to_string());
+    }
+    if row.get("actual_full_text_or_data") != Some(&Value::Bool(true)) {
+        reasons.push("full_content_not_verified".to_string());
+    }
+    if !row
+        .get("evidence_relevance_score")
+        .and_then(Value::as_i64)
+        .is_some_and(|score| score >= 8)
+    {
+        reasons.push("evidence_relevance_below_threshold".to_string());
+    }
+
+    let http_status = row.get("http_status").and_then(Value::as_i64);
+    if !http_status.is_some_and(|status| (200..=299).contains(&status)) {
+        reasons.push("http_status_not_2xx".to_string());
+    } else if http_status == Some(204) {
+        reasons.push("http_status_no_content".to_string());
+    }
+    if !row
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .is_some_and(valid_snapshot_hash)
+    {
+        reasons.push("invalid_snapshot_hash".to_string());
+    }
+
+    let source_tier = row
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if source_tier.is_empty()
+        || source_tier.contains("metadata")
+        || source_tier.contains("aggregat")
+    {
+        reasons.push("metadata_or_aggregated_source_tier".to_string());
+    }
+    if row
+        .get("metadata_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        reasons.push("metadata_only".to_string());
+    }
+
+    let source_type = row
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if source_type.contains("metadata") || source_type == "aggregator" {
+        reasons.push("metadata_or_aggregated_source_type".to_string());
+    }
+    if row
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(is_metadata_canonical_url)
+    {
+        reasons.push("metadata_canonical_url".to_string());
+    }
+    if row
+        .get("evidence_rejection_reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty())
+    {
+        reasons.push("evidence_rejection_reason_present".to_string());
+    }
+    append_trace_rejection_reasons(table_key, row, &mut reasons);
+    reasons
+}
+
+fn append_trace_rejection_reasons(
+    table_key: &str,
+    row: &Map<String, Value>,
+    reasons: &mut Vec<String>,
+) {
+    let has_nonempty = |key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    let key = table_key.trim().to_ascii_lowercase().replace('-', "_");
+    if key.contains("claim") || key.contains("evidence") {
+        if !has_nonempty("source_id") {
+            reasons.push("missing_source_id".to_string());
+        }
+        if !has_nonempty("claim_id") && !has_nonempty("evidence_id") {
+            reasons.push("missing_claim_or_evidence_id".to_string());
+        }
+        if !has_nonempty("snapshot_id") {
+            reasons.push("missing_snapshot_id".to_string());
+        }
+        return;
+    }
+
+    let primary = if key == "source_catalog" || key.contains("source") {
+        has_nonempty("source_id")
+    } else {
+        has_nonempty("source_id") || has_nonempty("claim_id") || has_nonempty("evidence_id")
+    };
+    let trace = [
+        "trace_id",
+        "run_id",
+        "research_run_id",
+        "source_row_ref",
+        "provenance",
+    ]
+    .iter()
+    .any(|key| has_nonempty(key));
+    if !primary || !trace {
+        reasons.push("missing_trace_identifier".to_string());
+    }
+}
+
+fn valid_canonical_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed != value {
+        return false;
+    }
+    Url::parse(trimmed)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+}
+
+fn valid_snapshot_hash(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_metadata_canonical_url(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://api.crossref.org/",
+        "https://api.openalex.org/",
+        "https://api.semanticscholar.org/",
+        "https://www.semanticscholar.org/",
+        "https://scholar.google.",
+        "https://www.researchgate.net/",
+        "https://www.academia.edu/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
 }
 
 fn help_payload() -> Value {
@@ -768,6 +986,7 @@ pub fn knowledge_tables_projection_source_stamp(
                 updated_at,
             )| {
                 let parquet_path = compute_parquet_path(root, &domain, &table_key);
+                let content_hash = knowledge_file_content_hash(&parquet_path);
                 KnowledgeTablesCatalogSourceStamp {
                     table_id,
                     domain,
@@ -776,6 +995,7 @@ pub fn knowledge_tables_projection_source_stamp(
                     title,
                     description,
                     schema_hash,
+                    content_hash,
                     row_count,
                     bytes,
                     tags_json,
@@ -792,7 +1012,7 @@ pub fn knowledge_tables_projection_source_stamp(
 
 fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
     let Ok(metadata) = fs::metadata(path) else {
-        return (false, 0, 0);
+        return (false, 0, 0, String::new());
     };
     let modified_at = metadata
         .modified()
@@ -800,7 +1020,30 @@ fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    (metadata.is_file(), metadata.len(), modified_at)
+    (
+        metadata.is_file(),
+        metadata.len(),
+        modified_at,
+        knowledge_file_content_hash(path),
+    )
+}
+
+fn knowledge_file_content_hash(path: &Path) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        let Ok(read) = file.read(&mut buffer) else {
+            return String::new();
+        };
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 /// Hard upper bound on rows embedded into a single `knowledge_tables` RxDB
@@ -842,7 +1085,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
     let conn = open_runtime_db(root)?;
     let mut stmt = conn.prepare(
         "SELECT table_id, domain, table_key, source_system, title, description,
-                row_count, bytes, updated_at
+                schema_hash, row_count, bytes, updated_at
          FROM knowledge_data_tables
          WHERE archived_at IS NULL
          ORDER BY updated_at DESC, title",
@@ -856,9 +1099,10 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
                 row.get::<_, String>(3)?, // source_system
                 row.get::<_, String>(4)?, // title
                 row.get::<_, String>(5)?, // description
-                row.get::<_, i64>(6)?,    // row_count (catalog, may be stale)
-                row.get::<_, i64>(7)?,    // bytes
-                row.get::<_, String>(8)?, // updated_at (rfc3339)
+                row.get::<_, String>(6)?, // schema_hash (catalog fallback)
+                row.get::<_, i64>(7)?,    // row_count (catalog, may be stale)
+                row.get::<_, i64>(8)?,    // bytes
+                row.get::<_, String>(9)?, // updated_at (rfc3339)
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -871,6 +1115,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         source_system,
         title,
         description,
+        catalog_schema_hash,
         row_count,
         bytes,
         updated_at,
@@ -881,23 +1126,28 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         let resolved_path_str = resolved_path.display().to_string();
 
         // (2) Read rows (capped). Missing/unreadable parquet is non-fatal.
-        let (rows, resolved_row_count) = if resolved_path.is_file() {
+        let (rows, resolved_row_count, live_schema_hash) = if resolved_path.is_file() {
+            let live_schema_hash = super::parquet_io::scan_table(&resolved_path)
+                .and_then(|mut lf| lf.collect_schema())
+                .map(|schema| super::parquet_io::schema_hash(&schema))
+                .unwrap_or_else(|_| catalog_schema_hash.clone());
             match super::parquet_io::read_rows_capped(&resolved_path, KNOWLEDGE_TABLE_RXDB_ROW_CAP)
             {
-                Ok((rows, count)) => (rows, count),
+                Ok((rows, count)) => (rows, count, live_schema_hash),
                 Err(err) => {
                     eprintln!(
                         "[knowledge] knowledge_tables projection: failed to read parquet rows for \
                          {domain}/{table_key} ({}): {err:#}",
                         resolved_path.display()
                     );
-                    (Vec::new(), row_count)
+                    (Vec::new(), row_count, live_schema_hash)
                 }
             }
         } else {
-            (Vec::new(), row_count)
+            (Vec::new(), row_count, catalog_schema_hash.clone())
         };
 
+        let rows = normalize_evidence_rows(&table_key, rows)?;
         let (rows, quality_notes) = enrich_knowledge_table_rows(&table_key, rows);
         let columns = knowledge_table_columns(&table_key, &rows);
         let schema_value = json!({ "columns": columns.clone() });
@@ -907,6 +1157,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         let updated_at_ms =
             rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
         let rows_value = Value::Array(rows);
+        let content_hash = knowledge_file_content_hash(&resolved_path);
 
         // (4) Mirror rows at payload.rows and top-level rows; refresh
         //     parquet_path + row_count to the resolved values.
@@ -922,6 +1173,8 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             "parquet_path": resolved_path_str,
             "row_count": resolved_row_count,
             "bytes": bytes,
+            "content_hash": content_hash,
+            "schema_hash": live_schema_hash,
             "updated_at": updated_at,
             "has_table": true,
             "columns": columns.clone(),
@@ -940,6 +1193,8 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             "domain": domain,
             "table_key": table_key,
             "row_count": resolved_row_count,
+            "content_hash": content_hash,
+            "schema_hash": live_schema_hash,
             "updated_at": updated_at,
             "updated_at_ms": updated_at_ms,
             "columns": columns,
@@ -1449,6 +1704,20 @@ mod tests {
             stale_path.display().to_string(),
             "must not echo the stale catalog path"
         );
+        assert!(doc["content_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71));
+        assert_eq!(
+            doc["content_hash"], doc["payload"]["content_hash"],
+            "content hash must be present at both projection levels"
+        );
+        assert!(doc["schema_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
+        assert_eq!(
+            doc["schema_hash"], doc["payload"]["schema_hash"],
+            "schema hash must be present at both projection levels"
+        );
 
         // updated_at_ms is present (required RxDB field) and parsed from the
         // catalog rfc3339 stamp.
@@ -1530,6 +1799,172 @@ mod tests {
                 "source catalog must expose {required}"
             );
         }
+    }
+
+    #[test]
+    fn evidence_normalization_derives_eligibility_and_preserves_candidates() -> anyhow::Result<()> {
+        let valid = json!({
+            "source_id": "src-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+            "source_tier": "primary",
+            "provenance": "research-run-1",
+            "evidence_eligible": false
+        });
+        let mut forged = valid.clone();
+        forged["canonical_url"] = json!("not a url");
+        forged["snapshot_hash"] = json!("sha256:test");
+        forged["evidence_eligible"] = json!(true);
+
+        let rows = normalize_evidence_rows("source_catalog", vec![valid, forged])?;
+        assert_eq!(rows[0]["evidence_eligible"], json!(true));
+        assert_eq!(rows[1]["evidence_eligible"], json!(false));
+        assert!(rows[1]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("invalid_canonical_url")
+                && reason.contains("invalid_snapshot_hash")));
+
+        for (field, value, reason) in [
+            (
+                "verification_status",
+                json!("unverified"),
+                "verification_not_verified",
+            ),
+            ("transport_verified", json!(false), "transport_not_verified"),
+            ("content_extracted", json!(false), "content_not_extracted"),
+            (
+                "actual_full_text_or_data",
+                json!(false),
+                "full_content_not_verified",
+            ),
+            (
+                "evidence_relevance_score",
+                json!(7),
+                "evidence_relevance_below_threshold",
+            ),
+            ("http_status", json!(500), "http_status_not_2xx"),
+            ("http_status", json!(204), "http_status_no_content"),
+            ("metadata_only", json!(true), "metadata_only"),
+            (
+                "source_type",
+                json!("paper_metadata"),
+                "metadata_or_aggregated_source_type",
+            ),
+            (
+                "canonical_url",
+                json!("https://doi.org/10.1234/metadata"),
+                "metadata_canonical_url",
+            ),
+            (
+                "evidence_rejection_reason",
+                json!("operator said ok"),
+                "evidence_rejection_reason_present",
+            ),
+            (
+                "source_tier",
+                json!("metadata"),
+                "metadata_or_aggregated_source_tier",
+            ),
+            ("provenance", json!(null), "missing_trace_identifier"),
+        ] {
+            let mut candidate = rows[0].clone();
+            candidate[field] = value;
+            let normalized = normalize_evidence_rows("source_catalog", vec![candidate])?;
+            assert_eq!(normalized[0]["evidence_eligible"], json!(false));
+            assert!(
+                normalized[0]["evidence_rejection_reason"]
+                    .as_str()
+                    .is_some_and(|reasons| reasons.contains(reason)),
+                "{field}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn formatted_flags_and_hashes_do_not_qualify_without_full_gate() -> anyhow::Result<()> {
+        let row = json!({
+            "source_id": "src-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{}", "d".repeat(64)),
+            "source_tier": "primary",
+            "provenance": "research-run-1",
+            "evidence_eligible": true
+        });
+        let normalized = normalize_evidence_rows("source_catalog", vec![row])?;
+        assert_eq!(normalized[0]["evidence_eligible"], json!(false));
+        let reason = normalized[0]["evidence_rejection_reason"]
+            .as_str()
+            .expect("normalizer records why formatted flags are insufficient");
+        assert!(reason.contains("full_content_not_verified"));
+        assert!(reason.contains("evidence_relevance_below_threshold"));
+        Ok(())
+    }
+
+    #[test]
+    fn claim_normalization_requires_claim_source_and_snapshot_trace_ids() -> anyhow::Result<()> {
+        let mut row = json!({
+            "claim_id": "claim-1",
+            "source_id": "src-1",
+            "trace_id": "trace-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_id": "snapshot:run-1:source-1",
+            "snapshot_hash": format!("sha256:{}", "b".repeat(64)),
+            "source_tier": "authoritative",
+            "evidence_eligible": true
+        });
+        let eligible = normalize_evidence_rows("evidence_points", vec![row.clone()])?;
+        assert_eq!(eligible[0]["evidence_eligible"], json!(true));
+
+        row["claim_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![row])?;
+        assert_eq!(rejected[0]["evidence_eligible"], json!(false));
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_claim_or_evidence_id")));
+
+        let mut missing_source = eligible[0].clone();
+        missing_source["source_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![missing_source])?;
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_source_id")));
+
+        let mut missing_snapshot = eligible[0].clone();
+        missing_snapshot["snapshot_id"] = Value::Null;
+        let rejected = normalize_evidence_rows("evidence_points", vec![missing_snapshot])?;
+        assert!(rejected[0]["evidence_rejection_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("missing_snapshot_id")));
+        Ok(())
+    }
+
+    #[test]
+    fn non_evidence_table_rows_are_unchanged() -> anyhow::Result<()> {
+        let rows = vec![json!({"evidence_eligible": true, "value": 1})];
+        assert_eq!(normalize_evidence_rows("measurements", rows.clone())?, rows);
+        Ok(())
     }
 
     /// An archived catalog row must not be projected.
