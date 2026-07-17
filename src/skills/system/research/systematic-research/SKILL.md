@@ -198,7 +198,7 @@ catalog has its first entries.
    library construction:
 
    ```
-   ctox web deep-research --query "<topic>" --depth standard --max-sources 24
+   ctox web deep-research --query "<topic>" --depth standard --max-sources 24 --workspace "$PWD/research/deep-research-$(date +%s)"
    ```
 
    This call internally combines scholarly + agency + standards +
@@ -211,6 +211,10 @@ catalog has its first entries.
    those directly into the candidate source catalog. Do not invent URLs
    from training-data memory; only record what this call (or the follow-up
    reads) returned.
+
+   Always use a unique writable folder inside the current task workspace for
+   shell invocations. The typed `ctox_deep_research` tool supplies such a
+   call-specific workspace automatically when `workspace` is omitted.
 
 2. **`ctox web scholarly search`** — for second-pass DOI / open-access
    PDF enrichment of specific entries that `deep-research` flagged but

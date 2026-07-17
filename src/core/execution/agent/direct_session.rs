@@ -98,6 +98,18 @@ fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)
     let _ = cli_overrides;
 }
 
+fn configure_worker_tool_stack(
+    cli_overrides: &mut Vec<(String, toml::Value)>,
+    disable_active_tools: bool,
+) {
+    if disable_active_tools {
+        return;
+    }
+    const WEB_STACK_KEY: &str = "tools.ctox_web";
+    cli_overrides.retain(|(key, _)| key != WEB_STACK_KEY);
+    cli_overrides.push((WEB_STACK_KEY.to_string(), toml::Value::Boolean(true)));
+}
+
 fn persistent_worker_thread_name(root: &Path) -> String {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
@@ -1049,6 +1061,7 @@ impl PersistentSession {
         // insufficient because per-turn configs and spawned threads rebuild
         // from these overrides.
         configure_managed_linux_sandbox(&mut cli_overrides);
+        configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
         let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .harness_overrides(overrides)
@@ -1862,6 +1875,27 @@ mod tests {
                 toml::Value::Boolean(false),
             )]
         );
+    }
+
+    #[test]
+    fn worker_sessions_enable_typed_ctox_web_stack() {
+        let mut overrides = vec![("tools.ctox_web".to_string(), toml::Value::Boolean(false))];
+
+        configure_worker_tool_stack(&mut overrides, false);
+
+        assert_eq!(
+            overrides,
+            vec![("tools.ctox_web".to_string(), toml::Value::Boolean(true),)]
+        );
+    }
+
+    #[test]
+    fn tool_disabled_review_sessions_do_not_enable_ctox_web_stack() {
+        let mut overrides = Vec::new();
+
+        configure_worker_tool_stack(&mut overrides, true);
+
+        assert!(overrides.is_empty());
     }
 
     #[test]

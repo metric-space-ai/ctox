@@ -336,6 +336,15 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" | "appsec" => {
                 return true;
             }
+            // Agent-facing web-stack calls persist their evidence in the
+            // declared research workspace. Opening the global CLI ledger
+            // first is both unnecessary and forbidden from a worker sandbox.
+            "web" => return true,
+            // Knowledge commands are routed to the daemon-owned IPC handler
+            // when the service is active. The daemon owns policy, persistence,
+            // and audit evidence; the sandboxed caller must not open the
+            // runtime SQLite database for a second CLI ledger write.
+            "knowledge" => return true,
             "business-os" | "business"
                 if matches!(args.get(1).map(String::as_str), Some("serve" | "status")) =>
             {
@@ -5002,6 +5011,21 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(!super::skips_cli_turn_ledger(&inspect));
+    }
+
+    #[test]
+    fn agent_research_commands_skip_caller_side_turn_ledger() {
+        for args in [
+            vec!["web", "deep-research", "--query", "bearing loads"],
+            vec!["knowledge", "search", "--query", "bearing loads"],
+            vec!["knowledge", "data", "list"],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(
+                super::skips_cli_turn_ledger(&args),
+                "agent-facing command must not open the caller-side ledger: {args:?}"
+            );
+        }
     }
 
     #[test]

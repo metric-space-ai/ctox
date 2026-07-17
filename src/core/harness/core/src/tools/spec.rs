@@ -1338,7 +1338,7 @@ fn create_ctox_deep_research_tool() -> ToolSpec {
             "workspace".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional path for the persistent research workspace. When omitted, CTOX creates runtime/research/deep-research/<timestamp>-<slug>."
+                    "Optional path for the persistent research workspace. When omitted in a harness turn, CTOX creates a call-specific folder under the writable task workspace."
                         .to_string(),
                 ),
             },
