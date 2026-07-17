@@ -127,6 +127,17 @@ const RATE_BUCKET_REFILL_INTERVAL: Duration = Duration::from_secs(1);
 const RATE_BUCKET_MIN_BURST: u32 = 32;
 const RATE_BUCKET_BURST_MULTIPLIER: u32 = 8;
 const RATE_BUCKET_REFILL_PER_SECOND: u32 = 16;
+/// A peer's rate bucket is keyed by the signaling peer identity, which is fresh
+/// on every reconnect, so without eviction the map grows one dead bucket per
+/// peer-id ever seen (~1.4k/day/browser). Buckets whose last activity is older
+/// than this TTL are self-evicted. The TTL is far larger than any rate window
+/// (burst refills in seconds), so an active peer's bucket is never dropped
+/// mid-window; it is short enough to bound growth to at most a few minutes of
+/// churn.
+const PEER_RATE_BUCKET_TTL: Duration = Duration::from_secs(600);
+/// Sweep stale buckets once every this many `try_rate_consume` calls, keeping
+/// the O(n) sweep amortized O(1) on the hot consume path.
+const PEER_RATE_BUCKET_SWEEP_INTERVAL: u64 = 64;
 const QUERY_FETCH_MAX_WINDOW_LIMIT: u64 = CTOX_QUERY_DEFAULT_WINDOW_LIMIT as u64 * 25;
 
 /// Authorization callback. The dispatcher calls this with the peer-identity
@@ -139,6 +150,9 @@ type DocumentFilterFn = dyn Fn(&Value) -> bool + Send + Sync;
 
 struct PeerRateBucket {
     last_refill: Instant,
+    /// Updated on every consume so eviction can distinguish an actively-used
+    /// bucket from a dead one left behind by a reconnected peer identity.
+    last_access: Instant,
     tokens: u32,
     max_tokens: u32,
     refill_per_second: u32,
@@ -146,8 +160,10 @@ struct PeerRateBucket {
 
 impl PeerRateBucket {
     fn new(max_tokens: u32, refill_per_second: u32) -> Self {
+        let now = Instant::now();
         Self {
-            last_refill: Instant::now(),
+            last_refill: now,
+            last_access: now,
             tokens: max_tokens,
             max_tokens,
             refill_per_second: refill_per_second.max(1),
@@ -156,6 +172,7 @@ impl PeerRateBucket {
 
     fn try_consume(&mut self) -> bool {
         let now = Instant::now();
+        self.last_access = now;
         let elapsed = now.duration_since(self.last_refill);
         if elapsed >= RATE_BUCKET_REFILL_INTERVAL {
             let refill = (elapsed.as_secs() as u32)
@@ -173,6 +190,13 @@ impl PeerRateBucket {
     }
 }
 
+/// Drop rate buckets whose last activity is older than `ttl`. A bucket the
+/// current consumer just touched has `last_access == now` (0 elapsed) and is
+/// always retained, so active peers never lose their rate state mid-window.
+fn sweep_stale_rate_buckets(map: &mut HashMap<String, PeerRateBucket>, ttl: Duration) {
+    map.retain(|_, bucket| bucket.last_access.elapsed() < ttl);
+}
+
 /// Registry of V1.5-eligible collections. The business-os layer registers
 /// each opted-in collection; everything else is answered with
 /// `QUERY_NOT_SUPPORTED`. The default scope is `business_records`,
@@ -183,6 +207,7 @@ pub struct QueryFetchRegistry {
     inflight_count: AtomicU64,
     max_inflight: u64,
     peer_rate_buckets: Mutex<HashMap<String, PeerRateBucket>>,
+    rate_sweep_counter: AtomicU64,
     rate_burst: u32,
     rate_refill_per_second: u32,
     feature_enabled: AtomicBool,
@@ -204,6 +229,7 @@ impl QueryFetchRegistry {
             inflight_count: AtomicU64::new(0),
             max_inflight,
             peer_rate_buckets: Mutex::new(HashMap::new()),
+            rate_sweep_counter: AtomicU64::new(0),
             rate_burst: stream_based_burst.max(RATE_BUCKET_MIN_BURST),
             rate_refill_per_second: RATE_BUCKET_REFILL_PER_SECOND,
             feature_enabled: AtomicBool::new(true),
@@ -237,7 +263,18 @@ impl QueryFetchRegistry {
         let entry = map
             .entry(peer_identity.to_string())
             .or_insert_with(|| PeerRateBucket::new(self.rate_burst, self.rate_refill_per_second));
-        entry.try_consume()
+        let allowed = entry.try_consume();
+        // Counter-gated self-eviction of dead peer buckets. The bucket just
+        // consumed has `last_access == now`, so it is always retained; only
+        // buckets idle past the TTL (reconnected/departed peer identities) are
+        // dropped, bounding the map's growth without an unbounded scan per call.
+        if self.rate_sweep_counter.fetch_add(1, Ordering::Relaxed) + 1
+            >= PEER_RATE_BUCKET_SWEEP_INTERVAL
+        {
+            self.rate_sweep_counter.store(0, Ordering::Relaxed);
+            sweep_stale_rate_buckets(&mut map, PEER_RATE_BUCKET_TTL);
+        }
+        allowed
     }
 
     pub fn register(&self, collection: Arc<RxCollection>) {
@@ -1443,6 +1480,58 @@ mod tests {
         let registry = Arc::new(QueryFetchRegistry::new(max_inflight));
         registry.set_auth_check(Arc::new(|_peer, _collection| true));
         registry
+    }
+
+    #[test]
+    fn stale_peer_rate_buckets_are_evicted_while_active_survive() {
+        let registry = QueryFetchRegistry::new(4);
+
+        // "stale" peer consumes once, then goes quiet.
+        assert!(registry.try_rate_consume("stale-peer"));
+        // Let its last_access age past the (test) TTL.
+        std::thread::sleep(Duration::from_millis(25));
+        // "active" peer consumes right now -> last_access == now.
+        assert!(registry.try_rate_consume("active-peer"));
+
+        // Sweep the exact production predicate with a short TTL so the test is
+        // fast and deterministic: the stale bucket is older than the TTL, the
+        // active one is not.
+        {
+            let mut map = registry.peer_rate_buckets.lock();
+            assert_eq!(map.len(), 2, "both buckets present before sweep");
+            sweep_stale_rate_buckets(&mut map, Duration::from_millis(10));
+        }
+
+        let map = registry.peer_rate_buckets.lock();
+        assert!(
+            map.contains_key("active-peer"),
+            "an active peer must keep its bucket"
+        );
+        assert!(
+            !map.contains_key("stale-peer"),
+            "a bucket idle past the TTL must be evicted"
+        );
+    }
+
+    #[test]
+    fn active_peer_bucket_preserves_rate_state_across_sweep() {
+        let registry = QueryFetchRegistry::new(4);
+        // Drain a couple of tokens for the active peer.
+        assert!(registry.try_rate_consume("active-peer"));
+        assert!(registry.try_rate_consume("active-peer"));
+        let remaining_before = {
+            let map = registry.peer_rate_buckets.lock();
+            map.get("active-peer").unwrap().tokens
+        };
+        // A sweep with a generous TTL must not touch the active bucket, so its
+        // consumed-token state is preserved (no mid-window reset).
+        {
+            let mut map = registry.peer_rate_buckets.lock();
+            sweep_stale_rate_buckets(&mut map, Duration::from_secs(600));
+        }
+        let map = registry.peer_rate_buckets.lock();
+        let bucket = map.get("active-peer").expect("active bucket retained");
+        assert_eq!(bucket.tokens, remaining_before, "rate state preserved");
     }
 
     #[tokio::test]

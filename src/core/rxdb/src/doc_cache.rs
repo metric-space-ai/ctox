@@ -13,6 +13,7 @@
 //!   schedulers.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
@@ -33,6 +34,19 @@ struct CacheItem<T> {
     latest: RxDocumentData,
 }
 
+/// After this many `get_cached_rx_documents` calls the cache opportunistically
+/// sweeps the whole map for entries whose document handles have all been
+/// dropped and removes them (freeing each dead entry's retained `latest`
+/// clone). Upstream RxDB reclaims a `cacheItem` via `WeakRef` +
+/// `FinalizationRegistry` when the document is GC'd; this port previously only
+/// pruned dead revision handles *inside* an accessed entry and never removed
+/// the outer map entry, so the map grew one dead entry per distinct doc-id ever
+/// touched (churny ids: commands, queue tasks, rotating chunk generations),
+/// pinning historical payloads in RAM. The on-access prune only reaches the
+/// ids being accessed, so a periodic global sweep is what actually bounds
+/// growth. Gating keeps the O(n) sweep amortized O(1) on the hot cache path.
+const DOC_CACHE_SWEEP_INTERVAL: u64 = 256;
+
 // ref: rxdb/src/doc-cache.ts:61-178
 /// Cache of document handles by primary key and revision state.
 pub struct DocumentCache<T> {
@@ -40,6 +54,22 @@ pub struct DocumentCache<T> {
     document_creator: Arc<dyn Fn(RxDocumentData) -> Arc<T> + Send + Sync>,
     cache_item_by_doc_id: Mutex<HashMap<String, CacheItem<T>>>,
     subscription: Mutex<Option<JoinHandle<()>>>,
+    sweep_counter: AtomicU64,
+}
+
+/// Remove cache entries whose document handles have all been dropped, mirroring
+/// upstream's GC of a whole `cacheItem`. For each surviving entry the dead
+/// revision handles are pruned first; an entry is kept iff at least one live
+/// handle remains (`by_rev` non-empty). An entry can only reach an empty
+/// `by_rev` here by having every handle dropped: `get_cached_rx_documents`
+/// always inserts a handle before releasing the lock, and `apply_change_events`
+/// never inserts entries — so empty `by_rev` unambiguously means "no live
+/// document references this id" and the retained `latest` is safe to free.
+fn sweep_dead_cache_items<T>(items: &mut HashMap<String, CacheItem<T>>) {
+    items.retain(|_, item| {
+        item.by_rev.retain(|_, weak| weak.strong_count() > 0);
+        !item.by_rev.is_empty()
+    });
 }
 
 impl<T> DocumentCache<T>
@@ -57,6 +87,7 @@ where
             document_creator,
             cache_item_by_doc_id: Mutex::new(HashMap::new()),
             subscription: Mutex::new(None),
+            sweep_counter: AtomicU64::new(0),
         });
 
         let cache_for_task = Arc::clone(&cache);
@@ -82,6 +113,7 @@ where
             document_creator,
             cache_item_by_doc_id: Mutex::new(HashMap::new()),
             subscription: Mutex::new(None),
+            sweep_counter: AtomicU64::new(0),
         })
     }
 
@@ -134,6 +166,15 @@ where
             ret.push(created);
         }
 
+        // Opportunistic, counter-gated global GC. `ret` still holds a strong
+        // handle to every doc-id touched by this call, so their entries have a
+        // live handle and are never swept here; only entries for ids whose
+        // handles have all been dropped elsewhere are removed.
+        if self.sweep_counter.fetch_add(1, Ordering::Relaxed) + 1 >= DOC_CACHE_SWEEP_INTERVAL {
+            self.sweep_counter.store(0, Ordering::Relaxed);
+            sweep_dead_cache_items(&mut items);
+        }
+
         Ok(ret)
     }
 
@@ -175,6 +216,14 @@ where
 
     pub fn cached_document_count(&self) -> usize {
         self.cache_item_by_doc_id.lock().len()
+    }
+
+    /// Force a full GC sweep of dead cache entries. Test-only hook so tests can
+    /// drive eviction deterministically without waiting for the call-count gate.
+    #[cfg(test)]
+    fn force_sweep(&self) {
+        let mut items = self.cache_item_by_doc_id.lock();
+        sweep_dead_cache_items(&mut items);
     }
 }
 
@@ -270,6 +319,69 @@ mod tests {
             .unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn evicts_cache_entry_after_all_handles_drop() {
+        let cache =
+            DocumentCache::new_without_stream("id", Arc::new(|data| Arc::new(TestDoc { data })));
+
+        // Touch many distinct ids and drop every handle immediately. Without the
+        // GC sweep these entries (and their `latest` clones) would linger.
+        for i in 0..(DOC_CACHE_SWEEP_INTERVAL as i64 * 4) {
+            let handle = cache
+                .get_cached_rx_document(&doc(&format!("id-{i}"), "1-token", i as f64, i))
+                .unwrap();
+            drop(handle);
+        }
+
+        // The call-count-gated sweep must have bounded growth well below the
+        // total number of distinct ids ever touched.
+        assert!(
+            cache.cached_document_count() < DOC_CACHE_SWEEP_INTERVAL as usize,
+            "map should not grow unboundedly across distinct ids (got {})",
+            cache.cached_document_count()
+        );
+
+        // A forced sweep with no live handles reclaims everything.
+        cache.force_sweep();
+        assert_eq!(cache.cached_document_count(), 0);
+    }
+
+    #[test]
+    fn retains_entry_with_live_handle_and_still_resolves() {
+        let cache =
+            DocumentCache::new_without_stream("id", Arc::new(|data| Arc::new(TestDoc { data })));
+
+        let live = cache
+            .get_cached_rx_document(&doc("keep", "1-token", 1.0, 42))
+            .unwrap();
+
+        // Churn many other ids whose handles drop, then sweep.
+        for i in 0..500i64 {
+            let handle = cache
+                .get_cached_rx_document(&doc(&format!("tmp-{i}"), "1-token", i as f64, i))
+                .unwrap();
+            drop(handle);
+        }
+        cache.force_sweep();
+
+        // Only the live-handle entry survives.
+        assert_eq!(cache.cached_document_count(), 1);
+
+        // It still resolves to the same handle and its `latest` is intact.
+        let again = cache
+            .get_cached_rx_document(&doc("keep", "1-token", 1.0, 42))
+            .unwrap();
+        assert!(Arc::ptr_eq(&live, &again));
+        assert_eq!(
+            cache
+                .get_latest_document_data("keep")
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_i64),
+            Some(42)
+        );
     }
 
     #[test]
