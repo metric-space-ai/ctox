@@ -152,9 +152,17 @@ function isForbiddenBusinessOsDataResourceRequest(rawUrl, resourceType, launchOr
 function isAllowedBusinessOsStaticAssetPath(path, method = "GET") {
   const normalizedMethod = String(method || "GET").trim().toUpperCase();
   if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") return false;
-  if (BUSINESS_OS_STATIC_ASSET_PATHS.has(path)) return true;
-  if (!BUSINESS_OS_STATIC_ASSET_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
-  const filename = path.slice(path.lastIndexOf("/") + 1);
+  // The packaged shell is loaded at the loopback origin root, while its
+  // canonical <base href="/business-os/"> keeps asset URLs identical to the
+  // browser-served shell. Classify both URL forms against the same narrow
+  // static-asset allowlist; otherwise Electron cancels the packaged manifests
+  // as unknown same-host data fetches before WebRTC bootstrap can begin.
+  const assetPath = path.startsWith("/business-os/")
+    ? path.slice("/business-os".length)
+    : path;
+  if (BUSINESS_OS_STATIC_ASSET_PATHS.has(assetPath)) return true;
+  if (!BUSINESS_OS_STATIC_ASSET_PREFIXES.some((prefix) => assetPath.startsWith(prefix))) return false;
+  const filename = assetPath.slice(assetPath.lastIndexOf("/") + 1);
   const dot = filename.lastIndexOf(".");
   if (dot <= 0 || dot === filename.length - 1) return false;
   return BUSINESS_OS_STATIC_ASSET_EXTENSIONS.has(filename.slice(dot + 1));

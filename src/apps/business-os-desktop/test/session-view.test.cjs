@@ -103,6 +103,8 @@ test("data guard also default-denies unknown same-host data resources", () => {
   // Static shell manifests are fetch-loaded but remain method-scoped.
   assert.deepEqual(decide({ url: "https://tenant.example.com/system-apps.json", resourceType: "fetch", method: "GET" }), { cancel: false });
   assert.deepEqual(decide({ url: "https://tenant.example.com/system-apps.json", resourceType: "fetch", method: "POST" }), { cancel: true });
+  assert.deepEqual(decide({ url: "https://tenant.example.com/business-os/system-apps.json", resourceType: "fetch", method: "GET" }), { cancel: false });
+  assert.deepEqual(decide({ url: "https://tenant.example.com/business-os/system-apps.json", resourceType: "fetch", method: "POST" }), { cancel: true });
 });
 
 test("layout lets BrowserView own the full app viewport", () => {
