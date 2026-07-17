@@ -1,4 +1,3 @@
-import { CtoxResizer } from '../../shared/resizer.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 import {
   appLifecycleBadge,
@@ -87,30 +86,12 @@ export async function mount(ctx) {
     }) || null;
   render();
 
-  // Setup resizer
-  const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
-  const resizerEl = ctx.host.querySelector('.app-store-col-resizer');
-  const leftWidthKey = ctx.storageScope?.key?.('ctox.app-store.leftWidth', { moduleId: 'app-store' })
-    || 'ctox.app-store.leftWidth';
-  let resizerCleanup = null;
-  if (resizerEl) {
-    const resizer = new CtoxResizer({
-      resizerEl,
-      containerEl,
-      cssVar: '--app-store-left-width',
-      side: 'left',
-      minWidth: 240,
-      maxWidth: 500,
-      onResize: (width) => localStorage.setItem(leftWidthKey, width)
-    });
-    resizerCleanup = () => resizer.destroy();
-  }
-  const leftWidth = localStorage.getItem(leftWidthKey) || '320';
-  containerEl.style.setProperty('--app-store-left-width', `${leftWidth}px`);
+  // Column resizing is owned by the shell-global resizer (setupModuleResizers
+  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handle inside the `[data-resize-frame]` root — including width persistence.
 
   return () => {
     try { state.unsubscribe?.unsubscribe?.(); } catch {}
-    resizerCleanup?.();
   };
 }
 
@@ -521,7 +502,7 @@ function externalSourceBadgeHtml(item) {
   if (kind !== 'github' && kind !== 'url') return '';
   if (src.verified === true) return '';
   const where = kind === 'github' && src.repo ? ` · ${escapeHtml(String(src.repo))}` : '';
-  return `<span class="app-external-source" title="Aus externer Quelle installiert – noch nicht verifiziert. Externe Apps erhalten keine Datenrechte bis zum Data-Access-Review.">Externe Quelle · nicht verifiziert${where}</span>`;
+  return `<span class="ctox-badge is-warning" title="Aus externer Quelle installiert – noch nicht verifiziert. Externe Apps erhalten keine Datenrechte bis zum Data-Access-Review.">Externe Quelle · nicht verifiziert${where}</span>`;
 }
 
 function normalizeDesktopAppItem(item) {
@@ -710,13 +691,13 @@ function renderCard(item) {
   if (operation?.kind === 'running') {
     actionsHtml += progressButtonHtml(operation.text || `${item.title} wird installiert...`);
   } else if (item.id === 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
+    actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'marketplace') {
     if (cardStatus === 'installed') {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
+      actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     } else if (item.installable) {
       actionsHtml += canInstallAppStoreItem(state, item)
-        ? `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`
+        ? `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`
         : disabledActionButtonHtml(
           state.t('actionInstall', 'Installieren'),
           appStorePermissionDeniedReason('install'),
@@ -724,23 +705,23 @@ function renderCard(item) {
         );
     }
     if (item.homepage) {
-      actionsHtml += `<button type="button" class="card-btn secondary external" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
+      actionsHtml += `<button type="button" class="ctox-button ctox-button--sm" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
     }
   } else if (item.kind === 'template') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
+    actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'system') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
+    actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     actionsHtml += versionsButtonHtml(item);
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
-      <button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>
+      <button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>
       ${actionButtonsForManagedItem(item, state)}
     `;
   }
 
   if (item.id !== 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn link" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionDetails', 'Details'))}</button>`;
+    actionsHtml += `<button type="button" class="ctox-button ctox-button--sm ctox-button--ghost" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionDetails', 'Details'))}</button>`;
   }
 
   actionsHtml += `</div>`;
@@ -759,11 +740,11 @@ function renderCard(item) {
     </div>
     <p class="app-card-desc">${escapeHtml(item.description || item.source)}</p>
     <div class="app-card-version-row">
-      <span>${escapeHtml(item.installed_version)}</span>
-      <span>${escapeHtml(item.available_version)}</span>
-      ${item.lifecycle?.runtimeInstalled ? `<span class="app-lifecycle-badge" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
+      <span class="ctox-badge">${escapeHtml(item.installed_version)}</span>
+      <span class="ctox-badge">${escapeHtml(item.available_version)}</span>
+      ${item.lifecycle?.runtimeInstalled ? `<span class="ctox-badge ${lifecycleStateBadgeClass(item.lifecycle.state)}" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
       ${releaseProjectionBadgeHtml(item)}
-      <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
+      <span class="ctox-badge ${modStateBadgeClass(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
       ${externalSourceBadgeHtml(item)}
     </div>
     ${actionsHtml}
@@ -787,7 +768,32 @@ function releaseProjectionBadgeHtml(item) {
     projection.rollbackLine,
     projection.dataAccess?.summary,
   ].filter(Boolean).join(' · ');
-  return `<span class="app-release-state" data-release-status="${escapeHtml(projection.status || 'unknown')}" title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
+  return `<span class="ctox-badge ${releaseStatusBadgeClass(projection.status)}" data-release-status="${escapeHtml(projection.status || 'unknown')}" title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
+}
+
+// Lifecycle, release and modification states map onto the shared .ctox-badge
+// state variants (shared/base.css §10). The data-state / data-release-status
+// attributes stay as diagnostic hooks next to the visual variant class.
+function lifecycleStateBadgeClass(state) {
+  if (state === 'private') return 'is-warning';
+  if (state === 'preview') return 'is-info';
+  if (state === 'team') return 'is-success';
+  if (state === 'restricted') return 'is-danger';
+  return '';
+}
+
+function releaseStatusBadgeClass(status) {
+  if (status === 'released') return 'is-success';
+  if (status === 'rolled_back') return 'is-warning';
+  return '';
+}
+
+function modStateBadgeClass(status) {
+  if (status === 'clean') return 'is-success';
+  if (status === 'modified') return 'is-warning';
+  if (status === 'unreleased' || status === 'unknown') return 'is-danger';
+  if (status === 'catalog') return 'is-info';
+  return '';
 }
 
 function operationForItem(itemOrId) {
@@ -815,7 +821,7 @@ function statusBadgeClass(status) {
 
 function progressButtonHtml(label) {
   return `
-    <button type="button" class="card-btn primary is-progress" disabled aria-disabled="true" aria-live="polite">
+    <button type="button" class="ctox-button ctox-button--sm is-primary is-progress" disabled aria-disabled="true" aria-live="polite">
       <span class="card-btn-progress-label">${escapeHtml(label)}</span>
       <span class="card-btn-progress-track" aria-hidden="true"><span></span></span>
     </button>`;
@@ -1544,7 +1550,10 @@ function updateScopeButtons() {
   const counts = countsByScope();
   for (const button of els.scopes.querySelectorAll('[data-scope]')) {
     const scope = button.dataset.scope || 'marketplace';
+    // `active` is the legacy module hook; `is-selected` is the kit list-item
+    // selection state (shared/base.css §8). Keep both in sync.
     button.classList.toggle('active', scope === state.scope);
+    button.classList.toggle('is-selected', scope === state.scope);
     button.setAttribute('aria-pressed', scope === state.scope ? 'true' : 'false');
     const count = button.querySelector('[data-scope-count]');
     if (count) count.textContent = String(counts[scope] || 0);
@@ -1607,6 +1616,9 @@ function renderMessage() {
   els.message.hidden = false;
   els.message.textContent = state.status.text;
   els.message.dataset.kind = state.status.kind;
+  // Kit callout state (shared/base.css §15b); data-kind stays as the data hook.
+  els.message.classList.toggle('is-danger', state.status.kind === 'error');
+  els.message.classList.toggle('is-success', state.status.kind !== 'error');
 }
 
 function openModule(moduleId) {
@@ -1735,7 +1747,7 @@ function actionButtonsForManagedItem(item, permissionState = state) {
   let html = '';
   if (item.update_available) {
     html += canInstallAppStoreItem(permissionState, item)
-      ? `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`
+      ? `<button type="button" class="ctox-button ctox-button--sm" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`
       : disabledActionButtonHtml(
         state.t('actionUpdate', 'Aktualisieren'),
         appStorePermissionDeniedReason('update'),
@@ -1743,14 +1755,14 @@ function actionButtonsForManagedItem(item, permissionState = state) {
       );
   }
   if (item.app_source && item.app_source.kind === 'github' && canInstallAppStoreItem(permissionState, item)) {
-    html += `<button type="button" class="card-btn link" data-card-action="check-updates" aria-label="${escapeHtml(item.title)} nach Updates suchen">${escapeHtml(state.t('actionCheckUpdates', 'Nach Updates suchen'))}</button>`;
+    html += `<button type="button" class="ctox-button ctox-button--sm ctox-button--ghost" data-card-action="check-updates" aria-label="${escapeHtml(item.title)} nach Updates suchen">${escapeHtml(state.t('actionCheckUpdates', 'Nach Updates suchen'))}</button>`;
   }
   if (item.editable && canEditAppStoreItem(permissionState, item)) {
-    html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
+    html += `<button type="button" class="ctox-button ctox-button--sm" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
   }
   if (isReleaseCandidateItem(item)) {
     html += canReleaseAppStoreItem(permissionState, item)
-      ? `<button type="button" class="card-btn secondary" data-card-action="release" aria-label="${escapeHtml(item.title)} freigeben">${escapeHtml(state.t('actionRelease', 'Freigeben'))}</button>`
+      ? `<button type="button" class="ctox-button ctox-button--sm" data-card-action="release" aria-label="${escapeHtml(item.title)} freigeben">${escapeHtml(state.t('actionRelease', 'Freigeben'))}</button>`
       : disabledActionButtonHtml(
         state.t('actionRelease', 'Freigeben'),
         appStorePermissionDeniedReason('release'),
@@ -1760,7 +1772,7 @@ function actionButtonsForManagedItem(item, permissionState = state) {
   html += versionsButtonHtml(item);
   if (item.deletable) {
     html += canUninstallAppStoreItem(permissionState, item)
-      ? `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">${escapeHtml(state.t('actionUninstall', 'Deinstallieren'))}</button>`
+      ? `<button type="button" class="ctox-button ctox-button--sm is-danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">${escapeHtml(state.t('actionUninstall', 'Deinstallieren'))}</button>`
       : disabledActionButtonHtml(
         state.t('actionUninstall', 'Deinstallieren'),
         appStorePermissionDeniedReason('uninstall'),
@@ -1772,7 +1784,7 @@ function actionButtonsForManagedItem(item, permissionState = state) {
 
 function disabledActionButtonHtml(label, reason, itemTitle = '') {
   const aria = `${itemTitle ? `${itemTitle}: ` : ''}${label} nicht verfügbar. ${reason}`;
-  return `<button type="button" class="card-btn denied" disabled aria-disabled="true" title="${escapeAttr(reason)}" aria-label="${escapeAttr(aria)}" data-disabled-reason="${escapeAttr(reason)}">${escapeHtml(label)}</button>`;
+  return `<button type="button" class="ctox-button ctox-button--sm denied" disabled aria-disabled="true" title="${escapeAttr(reason)}" aria-label="${escapeAttr(aria)}" data-disabled-reason="${escapeAttr(reason)}">${escapeHtml(label)}</button>`;
 }
 
 function appStorePermissionDeniedReason(action) {
@@ -1882,7 +1894,7 @@ function normalizedSelectedCollections(selected, allowed) {
 function versionsButtonHtml(item) {
   const count = item.version_state?.version_count || 0;
   if (count < 1) return '';
-  return `<button type="button" class="card-btn secondary" data-card-action="versions" aria-label="Versionen von ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionVersions', 'Versionen ({count})').replace('{count}', String(count)))}</button>`;
+  return `<button type="button" class="ctox-button ctox-button--sm" data-card-action="versions" aria-label="Versionen von ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionVersions', 'Versionen ({count})').replace('{count}', String(count)))}</button>`;
 }
 
 function compareVersions(left, right) {

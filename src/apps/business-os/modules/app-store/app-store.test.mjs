@@ -564,7 +564,7 @@ test('install operations render card-local progress and terminal status', () => 
   assert.equal(hooks.statusForCard({ status: 'available' }, { kind: 'error' }), 'error');
 
   const progress = hooks.progressButtonHtml('Installing Outbound...');
-  assert.match(progress, /card-btn primary is-progress/);
+  assert.match(progress, /ctox-button ctox-button--sm is-primary is-progress/);
   assert.match(progress, /card-btn-progress-track/);
   assert.match(progress, /disabled/);
 
@@ -585,11 +585,17 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
   assert.doesNotMatch(presentationSource, /border-radius:\s*(?:10|12|14|16|18|20|24)px/);
   assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
-  assert.match(css, /grid-template-columns: var\(--app-store-left-width, 300px\) 8px minmax\(0, 1fr\)/);
-  assert.match(css, /@container business-app-window \(max-width: 820px\)/);
+  // The frame is the shared kit workspace with a declarative shell-wired
+  // column resizer (setupModuleResizers in app.js) — no module-owned grid or
+  // resizer wiring.
+  assert.match(html, /class="ctox-workspace ctox-workspace--two-pane app-store-module"[^>]*data-resize-frame/);
+  assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer="left"[^>]*data-resizer-var="--ctox-left-width"/);
+  assert.doesNotMatch(source, /CtoxResizer/);
+  assert.doesNotMatch(css, /grid-template-columns: var\(--app-store-left-width/);
+  assert.match(css, /@container business-app-window \(max-width: 760px\)/);
   assert.match(css, /@container business-app-window \(max-width: 520px\)/);
   assert.match(css, /@container business-app-window \(max-width: 640px\)/);
-  assert.match(css, /\.app-version-row[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
-  assert.match(css, /\.store-loading-overlay[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
-  assert.match(css, /\.app-release-data-row[\s\S]*border-radius: var\(--app-store-panel-radius\)/);
+  assert.match(css, /\.app-version-row[\s\S]*border-radius: var\(--panel-radius\)/);
+  assert.match(css, /\.store-loading-overlay[\s\S]*border-radius: var\(--panel-radius\)/);
+  assert.match(css, /\.app-release-data-row[\s\S]*border-radius: var\(--panel-radius\)/);
 });
