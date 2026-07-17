@@ -51,6 +51,11 @@ import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
 } from './shared/workspace-session.js?v=20260716-workspace-session-v1';
+import {
+  decodeTaskbarPinCache,
+  encodeTaskbarPinCache,
+  resolveTaskbarPinState,
+} from './shared/taskbar-pins.js?v=20260717-taskbar-pins-v2';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -65,7 +70,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-desktop-idle-cpu-v128';
+const APP_BUILD = '20260717-flow-compact-v129';
 
 ensureShellStylesheets();
 
@@ -218,6 +223,7 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
   schemaImportRetries: new Map(),
@@ -4625,16 +4631,17 @@ function draggedTaskbarPinId(event) {
 }
 
 function readTaskbarPins() {
-  try {
-    const parsed = JSON.parse(readScopedLocalStorage(TASKBAR_PINS_KEY) || 'null');
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
+  return cached.pins.length ? cached.pins : null;
 }
 
 function persistTaskbarPins() {
-  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  state.taskbarPinsUpdatedAtMs = Date.now();
+  writeScopedLocalStorage(
+    TASKBAR_PINS_KEY,
+    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+  );
   clearTimeout(taskbarPinSaveTimer);
   taskbarPinSaveTimer = window.setTimeout(() => {
     taskbarPinSaveTimer = null;
@@ -4677,12 +4684,23 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
     'desktop_layout read',
   );
   const layout = doc?.toJSON?.() || null;
-  if (Array.isArray(layout?.taskbar_pins)) {
-    state.taskbarPins = normalizeTaskbarPins(layout.taskbar_pins, state.modules, { compactLegacyAllPins: true });
-  } else {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
-  }
-  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const resolved = resolveTaskbarPinState({
+    localPins: local.pins,
+    localUpdatedAtMs: local.updatedAtMs,
+    remotePins: layout?.taskbar_pins,
+    remoteUpdatedAtMs: layout?.updated_at_ms,
+  });
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(resolved.pins, state.modules, {
+        compactLegacyAllPins: resolved.source === 'remote',
+      })
+    : resolved.pins;
+  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
+  writeScopedLocalStorage(
+    TASKBAR_PINS_KEY,
+    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+  );
   await withStartupTimeout(syncTaskbarPinsToDesktopLayout(), 1500, null, 'desktop_layout write');
 }
 
@@ -4707,9 +4725,23 @@ async function syncTaskbarPinsToDesktopLayout() {
   const collection = state.db?.collection?.('desktop_layout');
   if (!collection) return;
   const existing = await collection.findOne('layout').exec();
+  const existingLayout = existing?.toJSON?.() || null;
+  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
+  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+    state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
+      compactLegacyAllPins: true,
+    });
+    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    writeScopedLocalStorage(
+      TASKBAR_PINS_KEY,
+      encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+    );
+    renderTabs();
+    return;
+  }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: Date.now(),
+    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
   };
   if (existing) {
     await existing.incrementalPatch(patch);

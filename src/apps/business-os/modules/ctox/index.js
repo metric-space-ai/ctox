@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260706-kit-tokens1';
+const CTOX_STYLE_BUILD = '20260717-flow-compact-v128';
 
 const labels = {
   de: {
@@ -75,6 +75,9 @@ const labels = {
     finishedWork: 'Erledigt',
     liveFlow: 'CTOX Live Flow',
     doingNow: 'Was CTOX gerade tut',
+    observedPath: 'Live-Pfad',
+    diagnosticFlow: 'Diagnose',
+    pathView: 'Pfad',
     measurements: 'Messung',
     inputTokens: 'Input Tokens',
     outputTokens: 'Output Tokens',
@@ -210,6 +213,9 @@ const labels = {
     finishedWork: 'Finished work',
     liveFlow: 'CTOX live flow',
     doingNow: 'What CTOX is doing now',
+    observedPath: 'Live path',
+    diagnosticFlow: 'Diagnostics',
+    pathView: 'Path',
     measurements: 'Measurements',
     inputTokens: 'Input tokens',
     outputTokens: 'Output tokens',
@@ -400,6 +406,7 @@ export async function mount(ctx) {
     selectedTaskStepIndex: 0,
     selectedTaskId: null,
     selectedNodeId: '',
+    flowMode: 'path',
     zoom: DEFAULT_ZOOM,
     statusMessage: '',
     runtimeStatus: 'Loading status',
@@ -767,9 +774,9 @@ function formatRelativeAge(ms, lang) {
 
 function readStoredLeftColumnWidth() {
   const stored = localStorage.getItem(LEFT_COLUMN_WIDTH_KEY);
-  if (!stored) return 340;
+  if (!stored) return 280;
   const width = Number(stored);
-  return Number.isFinite(width) ? clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX) : 340;
+  return Number.isFinite(width) ? clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX) : 280;
 }
 
 function applyHarnessColumnWidth(host, width) {
@@ -1381,7 +1388,8 @@ function renderMain(state) {
   const elapsedSeconds = live ? liveElapsedSeconds(state) : metrics.seconds;
   const flowSource = flowSourceView(state);
   const main = state.ctx.host.querySelector('[data-ctox-main]');
-  const previousViewport = readFlowViewport(state);
+  const diagnosticMode = state.flowMode === 'diagnostic';
+  const previousViewport = diagnosticMode ? readFlowViewport(state) : null;
   const viewBox = flowViewBox(selectedTask, state);
   main.innerHTML = `
     <header class="ctox-flow-head">
@@ -1394,6 +1402,10 @@ function renderMain(state) {
         <span>${escapeHtml(flowSource.status)}</span>
         ${live ? liveStatusMarkup(state) : ''}
       </div>
+      <div class="ctox-view-switch" role="group" aria-label="${escapeAttr(t.liveFlow)}">
+        <button type="button" data-flow-mode="path" class="${diagnosticMode ? '' : 'is-active'}">${escapeHtml(t.pathView)}</button>
+        <button type="button" data-flow-mode="diagnostic" class="${diagnosticMode ? 'is-active' : ''}">${escapeHtml(t.diagnosticFlow)}</button>
+      </div>
     </header>
     <section class="ctox-metrics-strip" aria-label="${escapeAttr(t.measurements)}">
       ${metricCard(t.inputTokens, metrics.inputTokens, 'tokens', state.lang)}
@@ -1401,22 +1413,32 @@ function renderMain(state) {
       ${metricCard(t.toolCalls, metrics.toolCalls, 'count', state.lang)}
       ${metricCard(t.elapsed, elapsedSeconds, 'seconds', state.lang, { live })}
     </section>
-    <div class="ctox-canvas-container">
-      <div class="ctox-flow-toolbar" aria-label="Flow chart controls" data-flow-control>
-        <button type="button" data-zoom="-" aria-label="Zoom out" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}>-</button>
-        <span>${Math.round(state.zoom * 100)}%</span>
-        <button type="button" data-zoom="+" aria-label="Zoom in" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>+</button>
-        <button type="button" data-zoom="reset" aria-label="Reset zoom" ${state.zoom === DEFAULT_ZOOM ? 'disabled' : ''}>Reset</button>
-      </div>
-      <div class="ctox-flow-canvas" data-flow-canvas>
-        <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
-          ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
+    ${diagnosticMode ? `
+      <div class="ctox-canvas-container">
+        <div class="ctox-flow-toolbar" aria-label="Flow chart controls" data-flow-control>
+          <button type="button" data-zoom="-" aria-label="Zoom out" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}>-</button>
+          <span>${Math.round(state.zoom * 100)}%</span>
+          <button type="button" data-zoom="+" aria-label="Zoom in" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>+</button>
+          <button type="button" data-zoom="reset" aria-label="Reset zoom" ${state.zoom === DEFAULT_ZOOM ? 'disabled' : ''}>Reset</button>
+        </div>
+        <div class="ctox-flow-canvas" data-flow-canvas>
+          <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
+            ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
+          </div>
         </div>
       </div>
-    </div>
-    ${timelinePanel(state, selectedTask, selectedNode, metrics)}
+      ${timelinePanel(state, selectedTask, selectedNode, metrics)}
+    ` : compactFlowPanel(state, selectedTask, selectedNode)}
   `;
-  restoreFlowViewport(state, previousViewport);
+  if (diagnosticMode) restoreFlowViewport(state, previousViewport);
+  main.querySelectorAll('[data-flow-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const mode = button.dataset.flowMode;
+      if (!['path', 'diagnostic'].includes(mode) || state.flowMode === mode) return;
+      state.flowMode = mode;
+      renderMain(state);
+    });
+  });
   main.querySelectorAll('[data-zoom]').forEach((button) => {
     button.addEventListener('click', (event) => {
       event.preventDefault();
@@ -1462,6 +1484,66 @@ function renderMain(state) {
   });
   wireCanvasDrag(main.querySelector('[data-flow-canvas]'));
   updateLiveIndicators(state);
+}
+
+function compactFlowPanel(state, selectedTask, selectedNode) {
+  const t = labels[state.lang];
+  const taskPath = selectedTask ? taskSteps(selectedTask, state) : [];
+  const modelPath = (state.model?.timeline || []).map((node, index, nodes) => ({
+    id: node.id,
+    label: node.label,
+    detail: node.lines?.[0] || '',
+    timestamp: node.timestamp || '',
+    metrics: metricsLabel(node, state.lang),
+    active: index === nodes.length - 1,
+    timelineIndex: index,
+  }));
+  const steps = taskPath.length ? taskPath : modelPath;
+  const requestedIndex = selectedTask
+    ? clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0))
+    : clampIndex(state.selectedStepIndex, steps.length);
+  const activeIndex = state.userNavigatedTimeline
+    ? requestedIndex
+    : Math.max(0, steps.findIndex((step) => step.active));
+  const current = steps[activeIndex] || steps.at(-1) || {
+    label: t.noActiveWork,
+    detail: t.idleDetail,
+    metrics: '',
+  };
+  const title = selectedTask?.title || state.model?.activeTask?.title || t.noActiveWork;
+  const status = selectedTask
+    ? displayStatus(selectedTask.routeStatus || selectedTask.status, state.lang)
+    : (state.model?.liveWork ? t.live : t.notLive);
+  return `
+    <section class="ctox-live-path" aria-label="${escapeAttr(t.observedPath)}">
+      <header class="ctox-live-path-head">
+        <div>
+          <span>${escapeHtml(t.observedPath)}</span>
+          <strong title="${escapeAttr(title)}">${escapeHtml(title)}</strong>
+        </div>
+        <small class="${state.model?.liveWork ? 'is-live' : ''}">${escapeHtml(status)}</small>
+      </header>
+      <div class="ctox-live-path-steps" role="list" aria-label="${escapeAttr(t.taskSteps)}">
+        ${steps.map((step, index) => `
+          <button type="button" role="listitem"
+            class="${index < activeIndex ? 'is-done' : ''} ${index === activeIndex ? 'is-current' : ''}"
+            ${selectedTask ? `data-task-step-index="${index}"` : `data-timeline-step="${step.timelineIndex ?? index}"`}>
+            <i aria-hidden="true"></i>
+            <span>${String(index + 1).padStart(2, '0')}</span>
+            <strong title="${escapeAttr(step.label)}">${escapeHtml(step.label)}</strong>
+          </button>
+        `).join('')}
+      </div>
+      <div class="ctox-live-path-detail">
+        <div>
+          <span>${escapeHtml(t.currentStep)}</span>
+          <strong>${escapeHtml(current.label || selectedNode?.label || t.noActiveWork)}</strong>
+        </div>
+        <p>${escapeHtml(current.detail || selectedNode?.lines?.[0] || t.idleDetail)}</p>
+        <small>${escapeHtml([stepMetaLabel(current, state), current.metrics].filter(Boolean).join(' · '))}</small>
+      </div>
+    </section>
+  `;
 }
 
 function emptyMetrics() {
@@ -1941,6 +2023,12 @@ function applyHarnessFlowStatus(tasks, flowResult) {
   const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by CTOX harness' : 'CTOX harness marked this queue item failed');
   return tasks.map((task) => {
     if (!ids.has(task.id) && !ids.has(task.taskId) && !ids.has(task.commandId) && !ids.has(task.runId)) return task;
+    const authoritativeStatuses = taskHarnessStatuses(task);
+    if (authoritativeStatuses.some((candidate) => (
+      HARNESS_WAITING_STATUSES.has(candidate)
+      || HARNESS_ACTIVE_STATUSES.has(candidate)
+      || HARNESS_TERMINAL_STATUSES.has(candidate)
+    ))) return task;
     return {
       ...task,
       status,
@@ -4014,7 +4102,9 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  applyHarnessFlowStatus,
   clampMetric,
+  compactFlowPanel,
   deriveHarnessHealth,
   flowSourceView,
   formatRelativeAge,

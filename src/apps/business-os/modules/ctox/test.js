@@ -21,6 +21,7 @@ async function importBrowserBundle(relativePath) {
 const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
+  applyHarnessFlowStatus,
   clampMetric,
   deriveHarnessHealth,
   flowSourceView,
@@ -69,7 +70,35 @@ test('Presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(source, gradientPattern);
   assert.doesNotMatch(source, hardNeutralPattern);
   assert.match(css, /grid-template-columns: var\(--ctox-left-width\) 6px minmax\(0, 1fr\)/);
+  assert.match(js, /flowMode: 'path'/);
+  assert.match(js, /compactFlowPanel/);
+  assert.doesNotMatch(css, /padding:\s*12px 12px 84px/);
+  assert.doesNotMatch(css, /@container business-app-window \(max-width: 1180px\)/);
   assert.match(manifest, /currentColor/);
+});
+
+test('A stale terminal harness snapshot never hides an authoritative queued task', () => {
+  const task = {
+    id: 'queue:system::live-task',
+    taskId: 'live-task',
+    status: 'queued',
+    routeStatus: 'pending',
+  };
+  const flow = {
+    ok: true,
+    flow: {
+      source: { message_key: 'live-task' },
+      blocks: [{
+        kind: 'attempt',
+        branches: [{
+          kind: 'verification',
+          title: 'ValidatorPass',
+          lines: ['ValidatorPass'],
+        }],
+      }],
+    },
+  };
+  assert.deepEqual(applyHarnessFlowStatus([task], flow), [task]);
 });
 
 test('Task focus normalizes launch args and shell events consistently', () => {
