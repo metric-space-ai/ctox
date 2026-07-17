@@ -27921,15 +27921,28 @@ pub(super) fn ensure_legacy_collection_grants(
         {
             continue;
         }
+        let server_owned_write = super::threads::is_threads_owned_collection(collection)
+            || server_owned_collections.contains(collection);
+        if server_owned_write {
+            tx.execute(
+                "UPDATE business_permission_grants
+                 SET active=0,
+                     reason='Server-owned collection is read-only for browser sync',
+                     updated_at_ms=?1
+                 WHERE active=1
+                   AND permission=?2
+                   AND scope_type='collection'
+                   AND scope_id=?3
+                   AND created_by='business-os-policy-migration'",
+                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
+            )?;
+        }
         for role in ["founder", "user"] {
             for permission in [
                 BusinessOsPermission::DataRead,
                 BusinessOsPermission::DataWrite,
             ] {
-                if permission == BusinessOsPermission::DataWrite
-                    && (super::threads::is_threads_owned_collection(collection)
-                        || server_owned_collections.contains(collection))
-                {
+                if permission == BusinessOsPermission::DataWrite && server_owned_write {
                     continue;
                 }
                 let grant_id = format!(
