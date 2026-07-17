@@ -269,6 +269,11 @@ fn raise_open_file_limit() {
 fn raise_open_file_limit() {}
 
 fn main() -> anyhow::Result<()> {
+    // Keep the generated argv0 aliases alive for the process lifetime. On
+    // Linux, child tool executions re-enter this binary as
+    // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the
+    // regular CTOX startup path runs.
+    let _arg0_dispatch = ctox_arg0::arg0_dispatch();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = resolve_workspace_root()?;

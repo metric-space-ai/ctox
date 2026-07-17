@@ -76,6 +76,16 @@ const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
 #[cfg(test)]
 static DIRECT_SESSION_EVENT_DESERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+fn direct_session_arg0_paths() -> Arg0DispatchPaths {
+    Arg0DispatchPaths {
+        #[cfg(target_os = "linux")]
+        ctox_linux_sandbox_exe: std::env::current_exe().ok(),
+        #[cfg(not(target_os = "linux"))]
+        ctox_linux_sandbox_exe: None,
+        main_execve_wrapper_exe: None,
+    }
+}
+
 fn persistent_worker_thread_name(root: &Path) -> String {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
@@ -1044,7 +1054,7 @@ impl PersistentSession {
         ));
 
         let start_args = InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
+            arg0_paths: direct_session_arg0_paths(),
             config,
             cli_overrides: cli_overrides.clone(),
             loader_overrides: Default::default(),
@@ -1798,6 +1808,17 @@ impl PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_sessions_receive_the_managed_linux_sandbox_executable() {
+        let paths = direct_session_arg0_paths();
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(paths.ctox_linux_sandbox_exe, std::env::current_exe().ok());
+
+        #[cfg(not(target_os = "linux"))]
+        assert!(paths.ctox_linux_sandbox_exe.is_none());
+    }
 
     #[test]
     fn persistent_worker_thread_name_is_stable_and_root_scoped() {
