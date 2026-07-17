@@ -14093,11 +14093,41 @@ pub fn repair_optional_rxdb_collection_schema_drift(
 }
 
 fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.is_file() {
+        return Ok(json!({
+            "ok": true,
+            "code": "ctox_rxdb_stale_schema_versions",
+            "action": "repair-stale-schema-versions",
+            "repaired": false,
+            "repaired_tables": 0,
+            "repaired_triggers": 0,
+            "collections": []
+        }));
+    }
+    // Opening the native RxDB SQLite store reparses its complete sqlite_master
+    // schema. Mature Business OS instances can contain hundreds of collection
+    // tables and triggers, so reopening the multi-gigabyte store once per
+    // collection made every service/peer restart take many minutes. Keep one
+    // connection for the complete startup repair pass.
+    let conn = Connection::open(&database_path).with_context(|| {
+        format!(
+            "open native Business OS RxDB store {}",
+            database_path.display()
+        )
+    })?;
+    let _ = conn.busy_timeout(Duration::from_secs(10));
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
     let mut repaired_triggers = 0usize;
     for (collection, _) in business_os_collections() {
-        let result = repair_rxdb_collection_schema_version_drift(root, &collection, false, true)?;
+        let result = repair_rxdb_collection_schema_version_drift_with_connection(
+            &conn,
+            &database_path,
+            &collection,
+            false,
+            true,
+        )?;
         repaired_tables += result
             .get("repaired_tables")
             .and_then(Value::as_u64)
@@ -14157,19 +14187,35 @@ fn repair_rxdb_collection_schema_version_drift(
         )
     })?;
     let _ = conn.busy_timeout(Duration::from_secs(10));
-    let expected_version = expected_rxdb_collection_version(collection);
-    let active_version = active_rxdb_collection_version(&conn, collection)?;
-    let expected_table = rxdb_collection_version_table_name(collection, expected_version);
-    let expected_table_exists = sqlite_table_exists(&conn, &expected_table)?;
-    let stale_tables = stale_rxdb_collection_version_tables(
+    repair_rxdb_collection_schema_version_drift_with_connection(
         &conn,
+        &database_path,
+        collection,
+        dry_run,
+        force,
+    )
+}
+
+fn repair_rxdb_collection_schema_version_drift_with_connection(
+    conn: &Connection,
+    database_path: &Path,
+    collection: &str,
+    dry_run: bool,
+    force: bool,
+) -> anyhow::Result<Value> {
+    let expected_version = expected_rxdb_collection_version(collection);
+    let active_version = active_rxdb_collection_version(conn, collection)?;
+    let expected_table = rxdb_collection_version_table_name(collection, expected_version);
+    let expected_table_exists = sqlite_table_exists(conn, &expected_table)?;
+    let stale_tables = stale_rxdb_collection_version_tables(
+        conn,
         collection,
         expected_version,
         active_version,
         expected_table_exists,
     )?;
     let stale_triggers = stale_rxdb_collection_version_triggers(
-        &conn,
+        conn,
         collection,
         expected_version,
         active_version,
