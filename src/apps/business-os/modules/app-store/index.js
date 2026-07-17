@@ -1615,7 +1615,6 @@ function openModule(moduleId) {
 }
 
 function openCreatorFromStore({ mode = 'scratch', upgrade = '' } = {}) {
-  const hash = creatorHashFromStore({ mode, upgrade });
   try {
     sessionStorage.setItem('ctox.app-store.creatorReturnContext', JSON.stringify({
       source: 'app-store',
@@ -1625,7 +1624,14 @@ function openCreatorFromStore({ mode = 'scratch', upgrade = '' } = {}) {
       created_at: new Date().toISOString(),
     }));
   } catch {}
-  openModule(hash);
+  // The creator left the module catalog (the importer took its slot); the
+  // create-from-scratch surface lives on as the windowed desktop app.
+  const openApp = state.ctx?.openApp || state.ctx?.openDesktopApp;
+  if (typeof openApp === 'function') {
+    void openApp('creator', { args: { source: 'app-store', mode, upgrade } });
+    return;
+  }
+  openModule(creatorHashFromStore({ mode, upgrade }));
 }
 
 function creatorHashFromStore({ mode = 'scratch', upgrade = '' } = {}) {
