@@ -17,9 +17,152 @@ const ROOT_ID = 'fs_root';
 const CHUNK_SIZE = 16 * 1024;
 const SPREADSHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xlsx', 'json']);
 const DOCUMENT_EXTENSIONS = new Set(['docx', 'md', 'markdown', 'txt']);
+
+// UI strings resolved from ctx.locale at mount (shell remounts windows on
+// language switch, so one active locale per session is sufficient).
+const MESSAGES = {
+  de: {
+    recentCreated: 'Zuletzt erstellt',
+    recentModified: 'Zuletzt geändert',
+    recentCreatedMark: 'NEU',
+    recentModifiedMark: 'ZEIT',
+    upLevel: 'Eine Ebene höher',
+    refresh: 'Aktualisieren',
+    path: 'Pfad',
+    newFolderCreate: 'Neuen Ordner erstellen',
+    newFolder: 'Neuer Ordner',
+    uploadFiles: 'Dateien hochladen',
+    searchPlaceholder: 'Suchen',
+    places: 'Orte',
+    view: 'Ansicht',
+    sortBy: 'Sortieren',
+    sortModified: 'Geändert: neueste',
+    sortCreated: 'Erstellt: neueste',
+    sortName: 'Name',
+    sortKind: 'Art',
+    filesAria: 'Dateien',
+    infoAria: 'Informationen',
+    loadingFiles: 'Lade Dateien...',
+    errorPrefix: 'Fehler',
+    syncFailedPrefix: 'Synchronisierung fehlgeschlagen',
+    collectionUnavailable: (id) => `Collection "${id}" ist nicht verfügbar.`,
+    objectCount: (n) => `${n} Objekt${n === 1 ? '' : 'e'}`,
+    colName: 'Name',
+    colKind: 'Art',
+    colModified: 'Geändert',
+    colSize: 'Größe',
+    open: 'Öffnen',
+    previewLabel: 'Vorschau',
+    toTrash: 'In Papierkorb',
+    readyToDragOut: 'ist zum Herausziehen bereit.',
+    dragOutFailedPrefix: 'Datei konnte nicht zum Herausziehen vorbereitet werden',
+    noPreview: 'Keine integrierte Vorschau für diesen Dateityp.',
+    loadsViaCtox: 'Der Inhalt wird beim Öffnen über CTOX geladen.',
+    openInAppFailed: (app) => `Datei konnte nicht in ${app} geöffnet werden`,
+    fileFallback: 'Datei',
+    chooseFilesFor: (path) => `Wähle Dateien für ${path}.`,
+    pickFiles: 'Dateien auswählen',
+    cancel: 'Abbrechen',
+    noFileSelectedYet: 'Noch keine Datei ausgewählt.',
+    selectAtLeastOne: 'Wähle mindestens eine Datei aus.',
+    save: 'Speichern',
+    rename: 'Umbenennen',
+    moveToTrashTitle: 'In Papierkorb verschieben',
+    removedFromFolder: (label) => `"${label}" wird aus diesem Ordner entfernt.`,
+    loadedCount: (n) => `${n} geladen`,
+    noMatches: (q) => `Keine Treffer für "${q}".`,
+    dataHiddenForFolder: 'Daten vorhanden, aber für diesen Ordner nicht sichtbar.',
+    folderEmpty: 'Dieser Ordner ist leer.',
+    noEntries: (kind) => `Keine ${kind}-Einträge verfügbar.`,
+    contentNotAvailable: 'Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.',
+    folder: 'Ordner',
+    noSlashes: 'Name darf keine Schrägstriche enthalten.',
+    nameExists: 'Name existiert bereits in diesem Ordner.',
+    fileReadFailed: 'Datei konnte nicht gelesen werden.',
+    openInApp: (app) => `In ${app} öffnen`,
+    openInModule: 'Im Modul öffnen',
+    noFileSelected: 'Keine Datei ausgewählt.',
+    dropFilesHere: 'Dateien hier ablegen',
+    download: 'Herunterladen',
+    showInModule: 'Im Modul anzeigen',
+    downloadFailedPrefix: 'Download fehlgeschlagen',
+    create: 'Erstellen',
+    importLabel: 'Importieren',
+  },
+  en: {
+    recentCreated: 'Recently created',
+    recentModified: 'Recently modified',
+    recentCreatedMark: 'NEW',
+    recentModifiedMark: 'TIME',
+    upLevel: 'Up one level',
+    refresh: 'Refresh',
+    path: 'Path',
+    newFolderCreate: 'Create new folder',
+    newFolder: 'New folder',
+    uploadFiles: 'Upload files',
+    searchPlaceholder: 'Search',
+    places: 'Places',
+    view: 'View',
+    sortBy: 'Sort',
+    sortModified: 'Modified: newest',
+    sortCreated: 'Created: newest',
+    sortName: 'Name',
+    sortKind: 'Kind',
+    filesAria: 'Files',
+    infoAria: 'Info',
+    loadingFiles: 'Loading files...',
+    errorPrefix: 'Error',
+    syncFailedPrefix: 'Sync failed',
+    collectionUnavailable: (id) => `Collection "${id}" is not available.`,
+    objectCount: (n) => `${n} item${n === 1 ? '' : 's'}`,
+    colName: 'Name',
+    colKind: 'Kind',
+    colModified: 'Modified',
+    colSize: 'Size',
+    open: 'Open',
+    previewLabel: 'Preview',
+    toTrash: 'Move to trash',
+    readyToDragOut: 'is ready to drag out.',
+    dragOutFailedPrefix: 'File could not be prepared for dragging out',
+    noPreview: 'No built-in preview for this file type.',
+    loadsViaCtox: 'Content loads through CTOX when opened.',
+    openInAppFailed: (app) => `File could not be opened in ${app}`,
+    fileFallback: 'File',
+    chooseFilesFor: (path) => `Choose files for ${path}.`,
+    pickFiles: 'Choose files',
+    cancel: 'Cancel',
+    noFileSelectedYet: 'No files selected yet.',
+    selectAtLeastOne: 'Select at least one file.',
+    save: 'Save',
+    rename: 'Rename',
+    moveToTrashTitle: 'Move to trash',
+    removedFromFolder: (label) => `"${label}" will be removed from this folder.`,
+    loadedCount: (n) => `${n} loaded`,
+    noMatches: (q) => `No matches for "${q}".`,
+    dataHiddenForFolder: 'Data exists but is not visible in this folder.',
+    folderEmpty: 'This folder is empty.',
+    noEntries: (kind) => `No ${kind} entries available.`,
+    contentNotAvailable: 'File content is not yet available over the sync demand path.',
+    folder: 'Folder',
+    noSlashes: 'Name must not contain slashes.',
+    nameExists: 'Name already exists in this folder.',
+    fileReadFailed: 'File could not be read.',
+    openInApp: (app) => `Open in ${app}`,
+    openInModule: 'Open in module',
+    noFileSelected: 'No file selected.',
+    dropFilesHere: 'Drop files here',
+    download: 'Download',
+    showInModule: 'Show in module',
+    downloadFailedPrefix: 'Download failed',
+    create: 'Create',
+    importLabel: 'Import',
+  },
+};
+let T = MESSAGES.de;
+
 const FILE_SOURCE = { id: 'desktop_files', label: 'Files', section: 'On this Desktop', mark: 'FS', moduleId: null, kind: 'File System', filesystem: true, fileCollection: true };
-const RECENT_CREATED_SOURCE = { id: 'recent_created', collectionId: 'desktop_files', label: 'Zuletzt erstellt', section: 'On this Desktop', mark: 'NEU', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'created' };
-const RECENT_MODIFIED_SOURCE = { id: 'recent_modified', collectionId: 'desktop_files', label: 'Zuletzt geändert', section: 'On this Desktop', mark: 'ZEIT', moduleId: null, kind: 'File', fileCollection: true, recentSort: 'modified' };
+const RECENT_CREATED_SOURCE = { id: 'recent_created', collectionId: 'desktop_files', get label() { return T.recentCreated; }, section: 'On this Desktop', get mark() { return T.recentCreatedMark; }, moduleId: null, kind: 'File', fileCollection: true, recentSort: 'created' };
+const RECENT_MODIFIED_SOURCE = { id: 'recent_modified', collectionId: 'desktop_files', get label() { return T.recentModified; }, section: 'On this Desktop', get mark() { return T.recentModifiedMark; }, moduleId: null, kind: 'File', fileCollection: true, recentSort: 'modified' };
 const SOURCES = [
   FILE_SOURCE,
   RECENT_CREATED_SOURCE,
@@ -39,6 +182,7 @@ const SORTERS = {
 };
 
 export async function mount(container, ctx) {
+  T = MESSAGES[ctx?.locale === 'en' ? 'en' : 'de'];
   ensureStyles();
   const state = {
     activeSource: FILE_SOURCE,
@@ -57,45 +201,45 @@ export async function mount(container, ctx) {
     <div class="app-explorer" data-explorer-root>
       <header class="app-explorer-toolbar">
         <div class="app-explorer-nav" aria-label="Navigation">
-          <button type="button" data-explorer-up aria-label="Eine Ebene höher">⌃</button>
-          <button type="button" data-explorer-refresh aria-label="Aktualisieren">↻</button>
+          <button type="button" data-explorer-up aria-label="${T.upLevel}">⌃</button>
+          <button type="button" data-explorer-refresh aria-label="${T.refresh}">↻</button>
         </div>
-        <div class="app-explorer-address" aria-label="Pfad">
+        <div class="app-explorer-address" aria-label="${T.path}">
           <span>Business OS</span>
           <b data-explorer-path>Files</b>
         </div>
         <div class="app-explorer-actions">
-          <button type="button" data-explorer-new-folder aria-label="Neuen Ordner erstellen"><span aria-hidden="true">＋</span><span>Neuer Ordner</span></button>
-          <button type="button" data-explorer-upload aria-label="Dateien hochladen"><span aria-hidden="true">⇧</span><span>Upload</span></button>
+          <button type="button" data-explorer-new-folder aria-label="${T.newFolderCreate}"><span aria-hidden="true">＋</span><span>${T.newFolder}</span></button>
+          <button type="button" data-explorer-upload aria-label="${T.uploadFiles}"><span aria-hidden="true">⇧</span><span>Upload</span></button>
           <input data-explorer-file-input type="file" multiple hidden>
         </div>
         <label class="app-explorer-search">
           <span aria-hidden="true">⌕</span>
-          <input data-explorer-search placeholder="Suchen">
+          <input data-explorer-search placeholder="${T.searchPlaceholder}">
         </label>
       </header>
       <div class="app-explorer-body">
-        <aside class="app-explorer-sidebar" data-explorer-sources aria-label="Orte"></aside>
+        <aside class="app-explorer-sidebar" data-explorer-sources aria-label="${T.places}"></aside>
         <main class="app-explorer-main">
           <div class="app-explorer-heading">
             <div>
               <strong data-explorer-title>Files</strong>
               <span data-explorer-count></span>
             </div>
-            <div class="app-explorer-view-toggle" aria-label="Ansicht">
-              <select data-explorer-sort aria-label="Sortieren">
-                <option value="modified">Geändert: neueste</option>
-                <option value="created">Erstellt: neueste</option>
-                <option value="name">Name</option>
-                <option value="kind">Art</option>
+            <div class="app-explorer-view-toggle" aria-label="${T.view}">
+              <select data-explorer-sort aria-label="${T.sortBy}">
+                <option value="modified">${T.sortModified}</option>
+                <option value="created">${T.sortCreated}</option>
+                <option value="name">${T.sortName}</option>
+                <option value="kind">${T.sortKind}</option>
               </select>
               <button type="button" class="is-active">Details</button>
             </div>
           </div>
-          <section class="app-explorer-table" data-explorer-table aria-label="Dateien"></section>
+          <section class="app-explorer-table" data-explorer-table aria-label="${T.filesAria}"></section>
           <footer class="app-explorer-status" data-explorer-status></footer>
         </main>
-        <aside class="app-explorer-preview" data-explorer-preview aria-label="Informationen"></aside>
+        <aside class="app-explorer-preview" data-explorer-preview aria-label="${T.infoAria}"></aside>
       </div>
     </div>
   `;
@@ -148,7 +292,7 @@ export async function mount(container, ctx) {
   });
 
   let disposed = false;
-  refs.table.replaceChildren(message('Lade Dateien...'));
+  refs.table.replaceChildren(message(T.loadingFiles));
   refs.preview.innerHTML = emptyPreview();
   renderHeader();
   Promise.resolve()
@@ -167,7 +311,7 @@ export async function mount(container, ctx) {
         reason: 'load_error',
         total: 0,
         visible: 0,
-        message: `Fehler: ${error?.message || error}`,
+        message: `${T.errorPrefix}: ${error?.message || error}`,
       };
       renderHeader();
       renderRows();
@@ -187,7 +331,7 @@ export async function mount(container, ctx) {
   }
 
   async function loadRows() {
-    refs.table.replaceChildren(message('Lade Dateien...'));
+    refs.table.replaceChildren(message(T.loadingFiles));
     refs.preview.innerHTML = emptyPreview();
     revokePreviewUrl();
     try {
@@ -201,7 +345,7 @@ export async function mount(container, ctx) {
         reason: 'sync_error',
         total: 0,
         visible: 0,
-        message: `Synchronisierung fehlgeschlagen: ${error?.message || error}`,
+        message: `${T.syncFailedPrefix}: ${error?.message || error}`,
       };
       renderHeader();
       renderRows();
@@ -216,7 +360,7 @@ export async function mount(container, ctx) {
         reason: 'missing_collection',
         total: 0,
         visible: 0,
-        message: `Collection "${collectionId}" ist nicht verfügbar.`,
+        message: T.collectionUnavailable(collectionId),
       };
       renderHeader();
       renderRows();
@@ -253,7 +397,7 @@ export async function mount(container, ctx) {
         reason: 'load_error',
         total: 0,
         visible: 0,
-        message: `Fehler: ${error?.message || error}`,
+        message: `${T.errorPrefix}: ${error?.message || error}`,
       };
       renderHeader();
       renderRows();
@@ -296,12 +440,12 @@ export async function mount(container, ctx) {
     refs.up.disabled = !isFilesystemSource() || state.currentFolderId === ROOT_ID;
     refs.newFolder.hidden = !isFilesystemSource();
     refs.upload.hidden = !canAcceptFileDrop();
-    refs.refresh.setAttribute('aria-label', `Aktualisieren: ${state.activeSource.label}`);
+    refs.refresh.setAttribute('aria-label', `${T.refresh}: ${state.activeSource.label}`);
   }
 
   function renderRows() {
     const rows = filteredRows();
-    refs.count.textContent = `${rows.length} Objekt${rows.length === 1 ? '' : 'e'}`;
+    refs.count.textContent = T.objectCount(rows.length);
     if (state.lastLoad && !state.lastLoad.ok) {
       refs.table.replaceChildren(message(state.lastLoad.message, 'error'));
       refs.preview.innerHTML = emptyPreview(state.lastLoad.message);
@@ -320,10 +464,10 @@ export async function mount(container, ctx) {
     table.setAttribute('role', 'grid');
     table.innerHTML = `
       <div class="app-explorer-grid-header" role="row">
-        <button class="app-explorer-grid-head app-explorer-grid-name" type="button" data-sort="name" role="columnheader">Name</button>
-        <button class="app-explorer-grid-head" type="button" data-sort="kind" role="columnheader">Art</button>
-        <button class="app-explorer-grid-head" type="button" data-sort="modified" role="columnheader">Geändert</button>
-        <div class="app-explorer-grid-head" role="columnheader">Größe</div>
+        <button class="app-explorer-grid-head app-explorer-grid-name" type="button" data-sort="name" role="columnheader">${T.colName}</button>
+        <button class="app-explorer-grid-head" type="button" data-sort="kind" role="columnheader">${T.colKind}</button>
+        <button class="app-explorer-grid-head" type="button" data-sort="modified" role="columnheader">${T.colModified}</button>
+        <div class="app-explorer-grid-head" role="columnheader">${T.colSize}</div>
       </div>
     `;
     for (const row of rows) table.append(rowNode(row));
@@ -388,19 +532,19 @@ export async function mount(container, ctx) {
     item.addEventListener('contextmenu', (event) => {
       if (!ctx.contextMenu) return;
       const actions = [
-        { label: row.isFolder ? 'Öffnen' : 'Vorschau', icon: '↗', action: () => openRow(row) },
+        { label: row.isFolder ? T.open : T.previewLabel, icon: '↗', action: () => openRow(row) },
       ];
       if (row.sourceId === FILE_SOURCE.id) {
         actions.push(
           { type: 'separator' },
-          ...(!row.isFolder ? [{ label: 'Herunterladen', icon: '↓', action: () => downloadRow(row) }] : []),
-          { label: 'Umbenennen', icon: '✎', action: () => renameFileRow(row) },
-          { label: 'In Papierkorb', icon: '⌫', action: () => trashFileRow(row) }
+          ...(!row.isFolder ? [{ label: T.download, icon: '↓', action: () => downloadRow(row) }] : []),
+          { label: T.rename, icon: '✎', action: () => renameFileRow(row) },
+          { label: T.toTrash, icon: '⌫', action: () => trashFileRow(row) }
         );
       } else {
         actions.push(
           { type: 'separator' },
-          { label: 'Im Modul anzeigen', icon: '⌁', action: () => openRow(row) }
+          { label: T.showInModule, icon: '⌁', action: () => openRow(row) }
         );
       }
       ctx.contextMenu.show(event, actions);
@@ -451,7 +595,7 @@ export async function mount(container, ctx) {
     if (!prepared?.url) {
       event.preventDefault();
       void prepareDragExport(row)
-        .then(() => ctx.notifications?.info?.(`${row.label} ist zum Herausziehen bereit.`))
+        .then(() => ctx.notifications?.info?.(`${row.label} ${T.readyToDragOut}`))
         .catch((error) => renderDragError(row, error));
       return;
     }
@@ -483,7 +627,7 @@ export async function mount(container, ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">Datei konnte nicht zum Herausziehen vorbereitet werden: ${escapeHtml(error?.message || error)}</p>`;
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.dragOutFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
     }
   }
 
@@ -498,8 +642,8 @@ export async function mount(container, ctx) {
       <div data-preview-body></div>
       <dl>
         <dt>Ort</dt><dd>${escapeHtml(row.path || state.activeSource.label)}</dd>
-        <dt>Größe</dt><dd>${escapeHtml(row.sizeLabel || '-')}</dd>
-        <dt>Geändert</dt><dd>${escapeHtml(row.modified || '-')}</dd>
+        <dt>${T.colSize}</dt><dd>${escapeHtml(row.sizeLabel || '-')}</dd>
+        <dt>${T.colModified}</dt><dd>${escapeHtml(row.modified || '-')}</dd>
         <dt>ID</dt><dd>${escapeHtml(row.id)}</dd>
       </dl>
       <button type="button" data-preview-open>${escapeHtml(openLabelFor(row))}</button>
@@ -514,11 +658,11 @@ export async function mount(container, ctx) {
     const body = refs.preview.querySelector('[data-preview-body]');
     if (!body) return;
     if (!isPreviewable(row)) {
-      body.innerHTML = '<p class="app-explorer-preview-empty">Keine integrierte Vorschau für diesen Dateityp.</p>';
+      body.innerHTML = `<p class="app-explorer-preview-empty">${escapeHtml(T.noPreview)}</p>`;
       return;
     }
     if (row.contentState === 'lazy' || row.contentState === 'missing') {
-      body.innerHTML = '<p class="app-explorer-preview-empty">Der Inhalt wird beim Öffnen über CTOX geladen.</p>';
+      body.innerHTML = `<p class="app-explorer-preview-empty">${escapeHtml(T.loadsViaCtox)}</p>`;
       return;
     }
     try {
@@ -630,7 +774,7 @@ export async function mount(container, ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">Datei konnte nicht in ${escapeHtml(appTitle(appId))} geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.openInAppFailed(appTitle(appId)))}: ${escapeHtml(error?.message || error)}</p>`;
     }
   }
 
@@ -655,7 +799,7 @@ export async function mount(container, ctx) {
       });
       const body = refs.preview.querySelector('[data-preview-body]');
       if (body) {
-        body.innerHTML = `<p class="app-explorer-message is-error">Download fehlgeschlagen: ${escapeHtml(error?.message || error)}</p>`;
+        body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.downloadFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
       }
     }
   }
@@ -669,8 +813,8 @@ export async function mount(container, ctx) {
   }
 
   async function createFolder() {
-    const name = await askName(container, 'Neuer Ordner', '', {
-      submitLabel: 'Erstellen',
+    const name = await askName(container, T.newFolder, '', {
+      submitLabel: T.create,
       existingNames: state.rows.map((row) => row.label),
     });
     if (!name) return;
@@ -718,7 +862,7 @@ export async function mount(container, ctx) {
       .filter((entry) => !entry.is_deleted && entry.parent_id === targetFolderId)
       .map((entry) => entry.name);
     for (const file of [...fileList]) {
-      const name = uniqueName(file.name || 'Datei', existingNames);
+      const name = uniqueName(file.name || T.fileFallback, existingNames);
       existingNames.push(name);
       await storeFile(ctx.db, targetFolderId, targetPath, name, file);
     }
@@ -739,15 +883,15 @@ export async function mount(container, ctx) {
     const overlay = document.createElement('div');
     overlay.className = 'app-explorer-upload-dialog';
     overlay.innerHTML = `
-      <form role="dialog" aria-modal="true" aria-label="Dateien hochladen">
-        <strong>Dateien hochladen</strong>
-        <p>Wähle Dateien für ${escapeHtml(currentFolder()?.path || '/')}.</p>
-        <button type="button" class="app-explorer-dropzone" data-pick-files>Dateien auswählen</button>
+      <form role="dialog" aria-modal="true" aria-label="${T.uploadFiles}">
+        <strong>${T.uploadFiles}</strong>
+        <p>${escapeHtml(T.chooseFilesFor(currentFolder()?.path || '/'))}</p>
+        <button type="button" class="app-explorer-dropzone" data-pick-files>${T.pickFiles}</button>
         <ul data-upload-list></ul>
         <div class="app-explorer-dialog-error" data-upload-error role="alert"></div>
         <div class="app-explorer-dialog-actions">
-          <button type="button" data-cancel>Abbrechen</button>
-          <button type="submit" data-submit disabled>Importieren</button>
+          <button type="button" data-cancel>${T.cancel}</button>
+          <button type="submit" data-submit disabled>${T.importLabel}</button>
         </div>
       </form>
     `;
@@ -764,11 +908,11 @@ export async function mount(container, ctx) {
       if (!list || !submit) return;
       list.replaceChildren(...selected.map((file) => {
         const item = document.createElement('li');
-        item.textContent = `${file.name || 'Datei'} · ${formatBytes(file.size || 0)}`;
+        item.textContent = `${file.name || T.fileFallback} · ${formatBytes(file.size || 0)}`;
         return item;
       }));
       submit.disabled = selected.length === 0;
-      if (error) error.textContent = selected.length ? '' : 'Noch keine Datei ausgewählt.';
+      if (error) error.textContent = selected.length ? '' : T.noFileSelectedYet;
     };
     overlay.querySelector('[data-pick-files]')?.addEventListener('click', () => refs.fileInput.click());
     overlay.querySelector('[data-cancel]')?.addEventListener('click', close);
@@ -791,7 +935,7 @@ export async function mount(container, ctx) {
     overlay.querySelector('form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!selected.length) {
-        if (error) error.textContent = 'Wähle mindestens eine Datei aus.';
+        if (error) error.textContent = T.selectAtLeastOne;
         return;
       }
       if (submit) submit.disabled = true;
@@ -802,8 +946,8 @@ export async function mount(container, ctx) {
   }
 
   async function renameFileRow(row) {
-    const nextName = await askName(container, 'Umbenennen', row.label, {
-      submitLabel: 'Speichern',
+    const nextName = await askName(container, T.rename, row.label, {
+      submitLabel: T.save,
       existingNames: state.rows.filter((item) => item.id !== row.id).map((item) => item.label),
     });
     if (!nextName || nextName === row.label) return;
@@ -820,7 +964,7 @@ export async function mount(container, ctx) {
   }
 
   async function trashFileRow(row) {
-    const confirmed = await confirmAction(container, 'In Papierkorb verschieben', `"${row.label}" wird aus diesem Ordner entfernt.`);
+    const confirmed = await confirmAction(container, T.moveToTrashTitle, T.removedFromFolder(row.label));
     if (!confirmed) return;
     const files = ctx.db?.collection?.('desktop_files');
     const doc = await files?.findOne(row.id).exec();
@@ -854,7 +998,7 @@ export async function mount(container, ctx) {
 
   function renderFooter(rows = filteredRows()) {
     const sourceLabel = isFilesystemSource() ? (currentFolder()?.path || '/') : state.activeSource.label;
-    const sourceState = state.lastLoad?.ok === false ? 'Fehler' : `${state.lastLoad?.total ?? rows.length} geladen`;
+    const sourceState = state.lastLoad?.ok === false ? T.errorPrefix : T.loadedCount(state.lastLoad?.total ?? rows.length);
     refs.status.textContent = `${rows.length} sichtbar · ${sourceState} · ${sourceLabel}`;
   }
 
@@ -865,13 +1009,13 @@ export async function mount(container, ctx) {
   }
 
   function emptyStateText() {
-    if (state.query) return `Keine Treffer für "${state.query}".`;
+    if (state.query) return T.noMatches(state.query);
     if (state.lastLoad?.ok && state.lastLoad.total > 0 && state.lastLoad.visible === 0) {
-      return 'Daten vorhanden, aber für diesen Ordner nicht sichtbar.';
+      return T.dataHiddenForFolder;
     }
     return isFilesystemSource()
-      ? 'Dieser Ordner ist leer.'
-      : `Keine ${state.activeSource.kind}-Einträge verfügbar.`;
+      ? T.folderEmpty
+      : T.noEntries(state.activeSource.kind);
   }
 
   return () => {
@@ -980,7 +1124,7 @@ async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream'
     const chunks = await loader.fetchFile(fileId);
     return readStoredFileFromDemandChunks(chunks, mimeType, options);
   }
-  throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
+  throw new Error(T.contentNotAvailable);
 }
 
 async function fileDemandLoaderFor(ctx) {
@@ -1013,7 +1157,7 @@ function normalizeFileRow(data) {
     id: String(data.id),
     sourceId: FILE_SOURCE.id,
     label: data.name || 'Unbenannt',
-    kind: isFolder ? 'Ordner' : mimeKind(data.mime_type || mimeFromName(data.name || '')),
+    kind: isFolder ? T.folder : mimeKind(data.mime_type || mimeFromName(data.name || '')),
     mark: isFolder ? 'DIR' : markFor(data, FILE_SOURCE),
     iconKind: isFolder ? 'folder' : iconKindFor(data, FILE_SOURCE),
     status: data.source || '',
@@ -1072,8 +1216,8 @@ function askName(container, title, value, options = {}) {
         <input name="name" value="${escapeHtml(value)}" autocomplete="off" aria-describedby="app-explorer-name-error">
         <p id="app-explorer-name-error" class="app-explorer-dialog-error" data-name-error role="alert"></p>
         <div class="app-explorer-dialog-actions">
-          <button type="button" data-cancel>Abbrechen</button>
-          <button type="submit">${escapeHtml(options.submitLabel || 'Speichern')}</button>
+          <button type="button" data-cancel>${T.cancel}</button>
+          <button type="submit">${escapeHtml(options.submitLabel || T.save)}</button>
         </div>
       </form>
     `;
@@ -1119,7 +1263,7 @@ function confirmAction(container, title, messageText) {
         <strong>${escapeHtml(title)}</strong>
         <p>${escapeHtml(messageText)}</p>
         <div class="app-explorer-dialog-actions">
-          <button type="button" data-cancel>Abbrechen</button>
+          <button type="button" data-cancel>${T.cancel}</button>
           <button type="submit" class="is-danger">Verschieben</button>
         </div>
       </form>
@@ -1143,15 +1287,15 @@ function confirmAction(container, title, messageText) {
 
 function validateEntryName(name, existingNames = new Set()) {
   if (!name) return 'Name ist erforderlich.';
-  if (/[\\/]/.test(name)) return 'Name darf keine Schrägstriche enthalten.';
+  if (/[\\/]/.test(name)) return T.noSlashes;
   if (name === '.' || name === '..') return 'Dieser Name ist reserviert.';
-  if (existingNames.has(String(name).toLowerCase())) return 'Name existiert bereits in diesem Ordner.';
+  if (existingNames.has(String(name).toLowerCase())) return T.nameExists;
   return '';
 }
 
 async function fileToUint8(file) {
   if (!file || typeof file.arrayBuffer !== 'function') {
-    throw new Error('Datei konnte nicht gelesen werden.');
+    throw new Error(T.fileReadFailed);
   }
   return new Uint8Array(await file.arrayBuffer());
 }
@@ -1211,17 +1355,17 @@ function dataTransferContainsFiles(dataTransfer) {
 }
 
 function safeDownloadName(value) {
-  const name = String(value || 'Datei')
+  const name = String(value || T.fileFallback)
     .replace(/[\u0000-\u001f<>:"/\\|?*]+/g, '_')
     .replace(/^\.+/, '')
     .trim();
-  return (name || 'Datei').slice(0, 180);
+  return (name || T.fileFallback).slice(0, 180);
 }
 
 function openLabelFor(row = {}) {
   const appId = row.sourceId === FILE_SOURCE.id ? associatedAppFor(row) : '';
-  if (appId) return `In ${appTitle(appId)} öffnen`;
-  return row.sourceId === FILE_SOURCE.id ? 'Öffnen' : 'Im Modul öffnen';
+  if (appId) return T.openInApp(appTitle(appId));
+  return row.sourceId === FILE_SOURCE.id ? T.open : T.openInModule;
 }
 
 function appTitle(appId) {
@@ -1335,7 +1479,7 @@ function message(text, variant) {
 }
 
 function emptyPreview() {
-  return '<div class="app-explorer-preview-empty">Keine Datei ausgewählt.</div>';
+  return `<div class="app-explorer-preview-empty">${T.noFileSelected}</div>`;
 }
 
 function ensureStyles() {
@@ -1354,7 +1498,7 @@ function ensureStyles() {
       font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     .app-explorer.is-dragging-files::after {
-      content: "Dateien hier ablegen";
+      content: "${T.dropFilesHere}";
       position: absolute;
       inset: 54px 14px 14px;
       display: grid;
