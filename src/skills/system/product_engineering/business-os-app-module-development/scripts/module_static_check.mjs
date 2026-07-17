@@ -194,6 +194,47 @@ function collectSchemaJsParityFailures(schemaDoc, schemaJsCollections) {
   return messages;
 }
 
+// SYNC-32: per-collection sync profiles. `syncProfile` is a wrapper-level
+// sibling of `schema` (like `conflictStrategy`), so declaring it never shifts
+// the parsed schema or its advertised hash. `demand-chunks` collections must
+// carry the fields the native demand-file source reads.
+const allowedSyncProfiles = new Set(['eager', 'demand-only', 'demand-chunks']);
+
+function collectSyncProfileFailures(schemaDoc) {
+  const messages = [];
+  const collections = schemaDoc?.collections && typeof schemaDoc.collections === 'object'
+    ? schemaDoc.collections
+    : {};
+  for (const [name, definition] of Object.entries(collections)) {
+    if (!definition || typeof definition !== 'object') continue;
+    const isWrapper = Boolean(definition.schema && !definition.primaryKey);
+    const schema = isWrapper ? definition.schema : definition;
+    if (!isWrapper && Object.prototype.hasOwnProperty.call(definition, 'syncProfile')) {
+      messages.push(`collections.schema.json collection ${name} declares syncProfile inside the schema object; declare it on the wrapper ({ "syncProfile": ..., "schema": {...} }) so it stays out of the schema hash`);
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(definition, 'syncProfile')) continue;
+    const declared = definition.syncProfile;
+    if (typeof declared !== 'string' || !allowedSyncProfiles.has(declared)) {
+      messages.push(`collections.schema.json collection ${name} syncProfile must be one of ${Array.from(allowedSyncProfiles).map((value) => `"${value}"`).join(', ')}`);
+      continue;
+    }
+    if (declared === 'demand-chunks') {
+      const properties = schema?.properties && typeof schema.properties === 'object' ? schema.properties : {};
+      for (const field of ['idx', 'data']) {
+        if (!Object.prototype.hasOwnProperty.call(properties, field)) {
+          messages.push(`collections.schema.json demand-chunks collection ${name} schema is missing required chunk field ${field}`);
+        }
+      }
+      if (!Object.prototype.hasOwnProperty.call(properties, 'file_id')
+        && !Object.prototype.hasOwnProperty.call(properties, 'blob_id')) {
+        messages.push(`collections.schema.json demand-chunks collection ${name} schema is missing the owner key field (file_id or blob_id)`);
+      }
+    }
+  }
+  return messages;
+}
+
 function collectDeclarativeMigrationFailures(schemaDoc) {
   const messages = [];
   const collections = schemaDoc?.collections && typeof schemaDoc.collections === 'object'
@@ -1064,6 +1105,7 @@ if (schemaDoc) {
       }
     }
     for (const message of collectDeclarativeMigrationFailures(schemaDoc)) fail(message);
+    for (const message of collectSyncProfileFailures(schemaDoc)) fail(message);
   }
 }
 

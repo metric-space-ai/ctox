@@ -10751,32 +10751,75 @@ const DEMAND_FILE_CHUNK_COLLECTIONS: &[DemandFileChunkCollection] = &[
     },
 ];
 
+/// SYNC-32: one resolved demand-file source — either a built-in entry from
+/// `DEMAND_FILE_CHUNK_COLLECTIONS` or a runtime-module collection declared
+/// with `"syncProfile": "demand-chunks"`.
+struct DemandFileSourceConfig {
+    request_collection: String,
+    storage_collection: String,
+    key_field: String,
+}
+
+/// SYNC-32: built-in demand-file sources plus the sources runtime-installed
+/// modules declare. Built-ins come first and are unchanged; declared sources
+/// are appended, serve their own collection (request == storage), and are
+/// deduped on the request collection so a declaration can never shadow a
+/// built-in source.
+fn demand_file_source_configs(root: &Path) -> Vec<DemandFileSourceConfig> {
+    let mut configs: Vec<DemandFileSourceConfig> = DEMAND_FILE_CHUNK_COLLECTIONS
+        .iter()
+        .map(|source| DemandFileSourceConfig {
+            request_collection: source.request_collection.to_owned(),
+            storage_collection: source.storage_collection.to_owned(),
+            key_field: source.key_field.to_owned(),
+        })
+        .collect();
+    let mut seen: HashSet<String> = configs
+        .iter()
+        .map(|config| config.request_collection.clone())
+        .collect();
+    for (collection, key_field) in runtime_module_demand_chunk_sources(root) {
+        if !seen.insert(collection.clone()) {
+            continue;
+        }
+        configs.push(DemandFileSourceConfig {
+            request_collection: collection.clone(),
+            storage_collection: collection,
+            key_field,
+        });
+    }
+    configs
+}
+
 /// Phase 4: register a bounded-memory file stream source on the pool's file
 /// fetch registry for each file-bearing chunk collection that is actually
 /// registered on this database. Without this, `rxdb.file.fetch` always returns
 /// FILE_NOT_FOUND (no source). The source closure is sync and reads the local
 /// RxDB SQLite store through read-only queries; the file-fetch dispatcher runs
 /// it on a blocking worker and applies async transport backpressure.
+/// SYNC-32: the source list is the built-in set plus runtime-module
+/// `demand-chunks` declarations (`demand_file_source_configs`).
 fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>, root: &Path) {
-    for source_config in DEMAND_FILE_CHUNK_COLLECTIONS {
+    for source_config in demand_file_source_configs(root) {
         // Only register sources whose backing storage collection exists (the
         // catalog is fault-tolerant; optional chunk collections may be absent).
         if database
-            .collection(source_config.storage_collection)
+            .collection(&source_config.storage_collection)
             .is_none()
         {
             continue;
         }
         let root = root.to_path_buf();
         let request_collection = source_config.request_collection;
-        let storage_collection = source_config.storage_collection.to_string();
-        let key_field = source_config.key_field.to_string();
+        let storage_collection = source_config.storage_collection;
+        let key_field = source_config.key_field;
+        let closure_storage_collection = storage_collection.clone();
         let closure_key_field = key_field.clone();
         let source: Arc<rxdb::plugins::replication_webrtc::file_fetch_handler::FileChunkStreamFn> =
             Arc::new(move |_collection, file_id, range, emit| {
                 stream_demand_file_chunks(
                     &root,
-                    &storage_collection,
+                    &closure_storage_collection,
                     &closure_key_field,
                     file_id,
                     range,
@@ -10784,11 +10827,10 @@ fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>, r
                 )
             });
         pool.file_fetch_registry
-            .register_stream_source(request_collection, source);
+            .register_stream_source(&request_collection, source);
         eprintln!(
             "[business-os] demand-fetch file source registered for `{request_collection}` \
-             via `{}` (key `{key_field}`)",
-            source_config.storage_collection
+             via `{storage_collection}` (key `{key_field}`)"
         );
     }
 }
@@ -13435,8 +13477,40 @@ fn collection_creators() -> HashMap<String, RxCollectionCreator> {
 fn runtime_installed_module_collection_creators(
     root: &Path,
 ) -> HashMap<String, RxCollectionCreator> {
+    runtime_module_collection_entries_for_root(root)
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.name,
+                RxCollectionCreator {
+                    schema: entry.schema,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// SYNC-32: demand-file sources declared by runtime modules via
+/// `"syncProfile": "demand-chunks"` in `collections.schema.json`, as
+/// `(collection, key_field)` pairs. Only collections that passed the
+/// fail-closed chunk-schema validation in `module_dir_collection_entries`
+/// appear here.
+fn runtime_module_demand_chunk_sources(root: &Path) -> Vec<(String, String)> {
+    runtime_module_collection_entries_for_root(root)
+        .into_iter()
+        .filter_map(|entry| match entry.sync_profile {
+            RuntimeModuleSyncProfile::DemandChunks { key_field } => Some((entry.name, key_field)),
+            RuntimeModuleSyncProfile::Eager | RuntimeModuleSyncProfile::DemandOnly => None,
+        })
+        .collect()
+}
+
+fn runtime_module_collection_entries_for_root(root: &Path) -> Vec<RuntimeModuleCollectionEntry> {
     let runtime_app_root = resolve_business_os_installed_app_root_for_native_peer(root);
-    let mut creators = HashMap::new();
+    let mut collected: Vec<RuntimeModuleCollectionEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let static_collections = business_os_schema_contract();
     // installed-modules/ carries API-installed apps (gated on the runtime
     // installed manifest markers); local-modules/ carries operator-placed,
@@ -13463,31 +13537,26 @@ fn runtime_installed_module_collection_creators(
             if !module_dir.is_dir() {
                 continue;
             }
-            let schemas = if require_installed_marker {
-                runtime_installed_module_collection_schemas(&module_dir)
-            } else {
-                local_module_collection_schemas(&module_dir)
-            };
-            for (name, schema) in schemas {
-                if static_collections.contains_key(&name) || creators.contains_key(&name) {
+            for collection_entry in
+                module_dir_collection_entries(&module_dir, require_installed_marker)
+            {
+                if static_collections.contains_key(&collection_entry.name)
+                    || !seen.insert(collection_entry.name.clone())
+                {
                     continue;
                 }
-                creators.insert(
-                    name,
-                    RxCollectionCreator {
-                        schema,
-                        conflict_handler: None,
-                        options: HashMap::new(),
-                    },
-                );
+                collected.push(collection_entry);
             }
         }
     }
-    creators
+    collected
 }
 
 fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String, RxJsonSchema)> {
-    module_dir_collection_schemas(module_dir, true)
+    module_dir_collection_entries(module_dir, true)
+        .into_iter()
+        .map(|entry| (entry.name, entry.schema))
+        .collect()
 }
 
 /// Local modules (`runtime/business-os/local-modules/`, operator-placed and
@@ -13495,13 +13564,101 @@ fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String
 /// but carry no runtime-installed marker — dropping the directory IS the
 /// install. Completes the local-modules discovery from commit 8741c150.
 fn local_module_collection_schemas(module_dir: &Path) -> Vec<(String, RxJsonSchema)> {
-    module_dir_collection_schemas(module_dir, false)
+    module_dir_collection_entries(module_dir, false)
+        .into_iter()
+        .map(|entry| (entry.name, entry.schema))
+        .collect()
 }
 
-fn module_dir_collection_schemas(
+/// SYNC-32: one runtime-module collection parsed from `collections.schema.json`
+/// together with the sync profile the module declared for it.
+struct RuntimeModuleCollectionEntry {
+    name: String,
+    schema: RxJsonSchema,
+    sync_profile: RuntimeModuleSyncProfile,
+}
+
+/// SYNC-32: per-collection sync profile a runtime-installed module declares in
+/// `collections.schema.json` via the wrapper form
+/// `{ "syncProfile": "demand-chunks", "schema": {...} }` — the same sibling
+/// convention as `conflictStrategy`, so the key is stripped before schema
+/// parsing/hashing and can never shift the advertised schema hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeModuleSyncProfile {
+    /// Default: normal background replication (today's behavior).
+    Eager,
+    /// Browser pulls only through an explicit lease; nothing to wire natively.
+    DemandOnly,
+    /// Chunk store served through `rxdb.file.fetch`: the native peer registers
+    /// a demand-file stream source keyed by `key_field`; browsers must not
+    /// background-pull the collection.
+    DemandChunks { key_field: String },
+}
+
+const RUNTIME_MODULE_SYNC_PROFILE_KEY: &str = "syncProfile";
+
+fn runtime_module_sync_profile_for_entry(
+    name: &str,
+    wrapper: Option<&Value>,
+    schema_value: &Value,
+) -> anyhow::Result<RuntimeModuleSyncProfile> {
+    let declared = wrapper.and_then(|wrapper| wrapper.get(RUNTIME_MODULE_SYNC_PROFILE_KEY));
+    let profile = match declared {
+        None => return Ok(RuntimeModuleSyncProfile::Eager),
+        Some(Value::String(text)) => text.as_str(),
+        Some(other) => anyhow::bail!(
+            "collection `{name}` syncProfile must be a string \
+             (\"eager\", \"demand-only\" or \"demand-chunks\"), got {other}"
+        ),
+    };
+    match profile {
+        "eager" => Ok(RuntimeModuleSyncProfile::Eager),
+        "demand-only" => Ok(RuntimeModuleSyncProfile::DemandOnly),
+        "demand-chunks" => Ok(RuntimeModuleSyncProfile::DemandChunks {
+            key_field: demand_chunk_key_field_for_schema(name, schema_value)?,
+        }),
+        other => anyhow::bail!(
+            "collection `{name}` syncProfile `{other}` is not supported; \
+             use \"eager\", \"demand-only\" or \"demand-chunks\""
+        ),
+    }
+}
+
+/// SYNC-32 fail-closed validation: a `demand-chunks` collection must carry the
+/// fields the generic chunk source (`stream_demand_file_chunks`) reads — the
+/// owner key (`file_id` or `blob_id`), the chunk order `idx`, and the base64
+/// `data` payload. (The chunk id convention `{key}_{generation}_{idx}` that
+/// the id-range query relies on is a data contract, documented in
+/// docs/ctox-rxdb.md.) Schema gaps are reported here, at registration time,
+/// instead of surfacing as FILE_NOT_FOUND on the first `rxdb.file.fetch`.
+fn demand_chunk_key_field_for_schema(name: &str, schema_value: &Value) -> anyhow::Result<String> {
+    let properties = schema_value
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            anyhow::anyhow!("demand-chunks collection `{name}` schema must define properties")
+        })?;
+    for field in ["idx", "data"] {
+        anyhow::ensure!(
+            properties.contains_key(field),
+            "demand-chunks collection `{name}` schema is missing required chunk field `{field}`"
+        );
+    }
+    for key_field in ["file_id", "blob_id"] {
+        if properties.contains_key(key_field) {
+            return Ok(key_field.to_owned());
+        }
+    }
+    anyhow::bail!(
+        "demand-chunks collection `{name}` schema is missing the owner key field \
+         (`file_id` or `blob_id`)"
+    )
+}
+
+fn module_dir_collection_entries(
     module_dir: &Path,
     require_installed_marker: bool,
-) -> Vec<(String, RxJsonSchema)> {
+) -> Vec<RuntimeModuleCollectionEntry> {
     let manifest_path = module_dir.join("module.json");
     let schema_path = module_dir.join("collections.schema.json");
     if !manifest_path.is_file() || !schema_path.is_file() {
@@ -13572,14 +13729,49 @@ fn module_dir_collection_schemas(
             // keeps the native schema hash identical to the browser's hash of
             // the unwrapped schema.js schema. Only unwrap when the entry is
             // unambiguously a wrapper (has `schema`, lacks `primaryKey`).
-            let schema_value = match schema.get("schema") {
+            let wrapper = match schema.get("schema") {
                 Some(inner) if inner.is_object() && schema.get("primaryKey").is_none() => {
-                    inner.clone()
+                    Some(schema)
                 }
-                _ => schema.clone(),
+                _ => None,
             };
+            let schema_value = match wrapper {
+                Some(wrapper) => wrapper
+                    .get("schema")
+                    .cloned()
+                    .unwrap_or_else(|| schema.clone()),
+                None => schema.clone(),
+            };
+            // SYNC-32: `syncProfile` is a wrapper-only sibling (like
+            // `conflictStrategy`). Inside a bare schema object it would leak
+            // into the parsed schema and drift the advertised hash, so that
+            // form is rejected fail-closed instead of silently hashed.
+            if wrapper.is_none() && schema.get(RUNTIME_MODULE_SYNC_PROFILE_KEY).is_some() {
+                eprintln!(
+                    "[business-os] skipping installed module collection `{name}` from {}: \
+                     syncProfile must be declared on the wrapper \
+                     (`{{ \"syncProfile\": ..., \"schema\": {{...}} }}`), not inside the schema",
+                    schema_path.display()
+                );
+                return None;
+            }
+            let sync_profile =
+                match runtime_module_sync_profile_for_entry(name, wrapper, &schema_value) {
+                    Ok(profile) => profile,
+                    Err(err) => {
+                        eprintln!(
+                            "[business-os] skipping installed module collection `{name}` from {}: {err:#}",
+                            schema_path.display()
+                        );
+                        return None;
+                    }
+                };
             match rx_schema_from_runtime_module_schema(name, schema_value) {
-                Ok(schema) => Some((name.clone(), schema)),
+                Ok(schema) => Some(RuntimeModuleCollectionEntry {
+                    name: name.clone(),
+                    schema,
+                    sync_profile,
+                }),
                 Err(err) => {
                     eprintln!(
                         "[business-os] skipping installed module collection `{name}` from {}: {err:#}",
@@ -14880,6 +15072,214 @@ mod tests {
         assert!(schema.properties.contains_key("title"));
         assert!(!schema.properties.contains_key("schema"));
         assert!(!schema.properties.contains_key("conflictStrategy"));
+        Ok(())
+    }
+
+    // SYNC-32 test helper: a runtime-installed module `camscan` declaring one
+    // chunk collection whose wrapper carries the given extra sibling keys.
+    fn write_sync_profile_chunk_module(
+        root: &Path,
+        wrapper_extras: &serde_json::Map<String, Value>,
+        properties: Value,
+    ) -> anyhow::Result<()> {
+        let module_dir = root.join("runtime/business-os/installed-modules/camscan");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "camscan",
+                "entry": "installed-modules/camscan/index.html",
+                "install_scope": "installed",
+                "collections": ["camscan_blob_chunks"]
+            }))?,
+        )?;
+        let mut wrapper = wrapper_extras.clone();
+        wrapper.insert(
+            "schema".to_owned(),
+            json!({
+                "primaryKey": "id",
+                "properties": properties,
+                "required": ["id"]
+            }),
+        );
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": { "camscan_blob_chunks": Value::Object(wrapper) }
+            }))?,
+        )?;
+        Ok(())
+    }
+
+    fn demand_chunk_schema_properties() -> Value {
+        json!({
+            "id": { "type": "string", "maxLength": 200 },
+            "blob_id": { "type": "string", "maxLength": 120 },
+            "idx": { "type": "number" },
+            "data": { "type": "string" }
+        })
+    }
+
+    // SYNC-32: a runtime module may declare `"syncProfile": "demand-chunks"`
+    // on a chunk collection; the native peer then registers the collection AND
+    // appends a demand-file source for it (self-served, keyed by the owner
+    // field found in the schema) after the unchanged built-in list.
+    #[test]
+    fn runtime_module_demand_chunks_declaration_registers_source() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "syncProfile".to_owned(),
+            Value::String("demand-chunks".to_owned()),
+        );
+        write_sync_profile_chunk_module(temp.path(), &extras, demand_chunk_schema_properties())?;
+
+        let creators = collection_creators_for_root(temp.path());
+        assert!(
+            creators.contains_key("camscan_blob_chunks"),
+            "declared demand-chunks collection must still register"
+        );
+        assert_eq!(
+            runtime_module_demand_chunk_sources(temp.path()),
+            vec![("camscan_blob_chunks".to_owned(), "blob_id".to_owned())]
+        );
+
+        let configs = demand_file_source_configs(temp.path());
+        assert_eq!(configs.len(), DEMAND_FILE_CHUNK_COLLECTIONS.len() + 1);
+        // Built-ins first and unchanged.
+        for (config, builtin) in configs.iter().zip(DEMAND_FILE_CHUNK_COLLECTIONS) {
+            assert_eq!(config.request_collection, builtin.request_collection);
+            assert_eq!(config.storage_collection, builtin.storage_collection);
+            assert_eq!(config.key_field, builtin.key_field);
+        }
+        let declared = configs.last().context("declared source appended")?;
+        assert_eq!(declared.request_collection, "camscan_blob_chunks");
+        assert_eq!(declared.storage_collection, "camscan_blob_chunks");
+        assert_eq!(declared.key_field, "blob_id");
+        Ok(())
+    }
+
+    // SYNC-32: without any module declarations the source list is EXACTLY the
+    // built-in 4 — declarations only ever add.
+    #[test]
+    fn demand_file_source_configs_default_to_builtins() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let configs = demand_file_source_configs(temp.path());
+        assert_eq!(configs.len(), 4);
+        assert_eq!(DEMAND_FILE_CHUNK_COLLECTIONS.len(), 4);
+        assert!(runtime_module_demand_chunk_sources(temp.path()).is_empty());
+        Ok(())
+    }
+
+    // SYNC-32: the wrapper-level `syncProfile` key must be hash-neutral — the
+    // parsed RxJsonSchema (and therefore the advertised schema hash) is
+    // byte-identical with and without the declaration.
+    #[test]
+    fn runtime_module_sync_profile_is_schema_hash_neutral() -> anyhow::Result<()> {
+        let with_profile = tempfile::tempdir()?;
+        let without_profile = tempfile::tempdir()?;
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "syncProfile".to_owned(),
+            Value::String("demand-only".to_owned()),
+        );
+        write_sync_profile_chunk_module(
+            with_profile.path(),
+            &extras,
+            demand_chunk_schema_properties(),
+        )?;
+        write_sync_profile_chunk_module(
+            without_profile.path(),
+            &serde_json::Map::new(),
+            demand_chunk_schema_properties(),
+        )?;
+
+        let schema_with = serde_json::to_value(
+            &collection_creators_for_root(with_profile.path())
+                .get("camscan_blob_chunks")
+                .context("collection with syncProfile registers")?
+                .schema,
+        )?;
+        let schema_without = serde_json::to_value(
+            &collection_creators_for_root(without_profile.path())
+                .get("camscan_blob_chunks")
+                .context("collection without syncProfile registers")?
+                .schema,
+        )?;
+        assert_eq!(schema_with, schema_without);
+        Ok(())
+    }
+
+    // SYNC-32: an unsupported syncProfile value fails closed at parse — the
+    // collection does not register at all (no source, no schema).
+    #[test]
+    fn runtime_module_sync_profile_invalid_value_fails_closed() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "syncProfile".to_owned(),
+            Value::String("sometimes".to_owned()),
+        );
+        write_sync_profile_chunk_module(temp.path(), &extras, demand_chunk_schema_properties())?;
+
+        assert!(!collection_creators_for_root(temp.path()).contains_key("camscan_blob_chunks"));
+        assert!(runtime_module_demand_chunk_sources(temp.path()).is_empty());
+        Ok(())
+    }
+
+    // SYNC-32: a demand-chunks declaration whose schema lacks a field the
+    // generic chunk source needs fails closed at registration with an error
+    // naming the missing field — never as FILE_NOT_FOUND on first fetch.
+    #[test]
+    fn runtime_module_demand_chunks_missing_fields_fails_closed() -> anyhow::Result<()> {
+        // Direct validation errors name the missing field.
+        let missing_idx = json!({
+            "primaryKey": "id",
+            "properties": {
+                "id": { "type": "string", "maxLength": 200 },
+                "blob_id": { "type": "string", "maxLength": 120 },
+                "data": { "type": "string" }
+            }
+        });
+        let err = demand_chunk_key_field_for_schema("camscan_blob_chunks", &missing_idx)
+            .expect_err("missing idx must fail");
+        assert!(err.to_string().contains("`idx`"), "error names idx: {err}");
+
+        let missing_key = json!({
+            "primaryKey": "id",
+            "properties": {
+                "id": { "type": "string", "maxLength": 200 },
+                "idx": { "type": "number" },
+                "data": { "type": "string" }
+            }
+        });
+        let err = demand_chunk_key_field_for_schema("camscan_blob_chunks", &missing_key)
+            .expect_err("missing owner key must fail");
+        assert!(
+            err.to_string().contains("file_id") && err.to_string().contains("blob_id"),
+            "error names the owner key candidates: {err}"
+        );
+
+        // End to end: the collection does not register and no source appears.
+        let temp = tempfile::tempdir()?;
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "syncProfile".to_owned(),
+            Value::String("demand-chunks".to_owned()),
+        );
+        write_sync_profile_chunk_module(
+            temp.path(),
+            &extras,
+            json!({
+                "id": { "type": "string", "maxLength": 200 },
+                "blob_id": { "type": "string", "maxLength": 120 },
+                "data": { "type": "string" }
+            }),
+        )?;
+        assert!(!collection_creators_for_root(temp.path()).contains_key("camscan_blob_chunks"));
+        assert!(runtime_module_demand_chunk_sources(temp.path()).is_empty());
+        assert_eq!(demand_file_source_configs(temp.path()).len(), 4);
         Ok(())
     }
 
