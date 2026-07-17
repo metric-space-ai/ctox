@@ -33,6 +33,43 @@ test('create dialog validation requires title, local domain, and task prompt', (
   assert.equal(hooks.validateResearchTaskInput({ title: 'Vendor Research', domain: bases[0].domain, prompt: 'Analyse vendors' }, bases).valid, true);
 });
 
+test('measurement semantics never fall back to legacy radial load and retain zeroes', () => {
+  assert.equal(hooks.tangentialEquivalentForce({ radial_load_N: 4 }), '');
+  assert.equal(hooks.tangentialEquivalentForce({ radial_load_N: 4, tangential_equivalent_force_N: 0 }), 0);
+  assert.equal(hooks.metricPropellerLength({ prop_diameter_mm: 0, prop_diameter_in: 9 }, 'prop_diameter'), 0);
+
+  const measurements = hooks.aggregateMeasurements([
+    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', radial_load_N: 4, rpm: 0 },
+    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', tangential_equivalent_force_N: 0, force_N: 0 },
+  ]);
+  assert.equal(measurements.get('source-1').maxTangentialEquivalent, 0);
+  assert.equal(measurements.get('source-1').maxRpm, 0);
+});
+
+test('measurement rows require individually matching source snapshot lineage', () => {
+  const source = {
+    id: 'source-1',
+    evidenceEligible: true,
+    row: {
+      source_id: 'source-1',
+      canonical_url: 'https://example.test/source-1',
+      snapshot_id: 'snap-1',
+      snapshot_hash: `sha256:${'1'.repeat(64)}`,
+    },
+  };
+  const rows = [
+    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 10 },
+    { source_id: 'source-1', snapshot_id: '', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 20 },
+    { source_id: 'source-1', snapshot_id: 'snap-other', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 30 },
+    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'2'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 40 },
+    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/other', force_N: 50 },
+    { source_id: 'source-2', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 60 },
+  ];
+
+  assert.equal(hooks.filterMeasurementRowsForEvidence(rows, [source]).length, 1);
+  assert.equal(hooks.aggregateMeasurements(rows, [source]).get('source-1').count, 1);
+});
+
 test('create task preserves selected local knowledge domain ids', () => {
   const knowledgeBases = [{ domain: 'drone_bearing_design', title: 'Drone Bearing Design' }];
 
@@ -55,18 +92,56 @@ test('run button validation requires a selected task with a loaded knowledge dom
 
 test('knowledge refresh contract preserves living research lineage and source provenance', () => {
   const task = { id: 'task-1', title: 'Bearing loads', knowledge_domain: 'drone_bearing_design' };
+  const snapshotHash = `sha256:${'a'.repeat(64)}`;
   const base = { tables: [
-    { id: 'table:sources', table_key: 'source_catalog' },
-    { id: 'table:evidence', table_key: 'evidence_points' },
+    {
+      id: 'table:sources', table_key: 'source_catalog', knowledge_version_id: 'knowledge-v7',
+      knowledge_version: { version_id: 'knowledge-v7', status: 'current' },
+      rows: [{ source_id: 'source-1', canonical_url: 'https://example.test/source-1', source_receipt_url: 'https://receipt.test/source-1', snapshot_id: 'snap-1', snapshot_hash: snapshotHash, verification_status: 'verified', transport_verified: true, content_extracted: true, actual_full_text_or_data: true, evidence_relevance_score: 9, http_status: 200, evidence_eligible: true, source_tier: 'primary' }],
+    },
+    { id: 'table:evidence', table_key: 'evidence_points', rows: [{ evidence_id: 'evidence-1', source_id: 'source-1', canonical_url: 'https://example.test/source-1', snapshot_id: 'snap-1', snapshot_hash: snapshotHash }] },
   ] };
-  const payload = hooks.knowledgeRefreshPayload(task, base, { id: 'run-7' });
+  const payload = hooks.knowledgeRefreshPayload(task, base, { id: 'run-7', knowledge_version_id: 'knowledge-v7' });
 
   assert.equal(payload.update_mode, 'upsert');
   assert.equal(payload.research_run_id, 'run-7');
   assert.equal(payload.knowledge_contract.provenance_required, true);
+  assert.equal(payload.knowledge_version_id, 'knowledge-v7');
+  assert.equal(payload.knowledge_version.status, 'current');
   assert.equal(payload.knowledge_contract.source_of_truth, 'original_sources');
   assert.deepEqual(payload.writeback_contract.lineage.table_ids, ['table:sources', 'table:evidence']);
+  assert.deepEqual(payload.requested_snapshot_hashes, [snapshotHash]);
+  assert.equal(payload.source_lineage[0].source_id, 'source-1');
+  assert.equal(payload.evidence_lineage[0].evidence_id, 'evidence-1');
   assert.match(payload.instruction, /source_id\/source_url/);
+});
+
+test('graph document lineage is native-contract-shaped and fail-closed', () => {
+  const snapshotHash = `sha256:${'b'.repeat(64)}`;
+  const source = {
+    id: 'source-1',
+    evidenceEligible: true,
+    row: {
+      source_id: 'source-1',
+      canonical_url: 'https://example.test/source-1',
+      source_receipt_url: 'https://receipt.test/source-1',
+      snapshot_id: 'snap-1',
+      snapshot_hash: snapshotHash,
+    },
+  };
+  const base = {
+    knowledge_version_id: 'knowledge-v9',
+    knowledge_version: { version_id: 'knowledge-v9', status: 'current' },
+    tables: [],
+  };
+  const lineage = hooks.graphDocumentLineage({ id: 'task-1' }, base, { id: 'run-9', knowledge_version_id: 'knowledge-v9' }, [source], ['source-1']);
+
+  assert.equal(lineage.ok, true);
+  assert.equal(lineage.knowledge_version_id, 'knowledge-v9');
+  assert.deepEqual(lineage.requested_snapshot_hashes, [snapshotHash]);
+  assert.deepEqual(lineage.source_receipts.map((receipt) => receipt.source_id), ['source-1']);
+  assert.equal(lineage.evidence_lineage.source_receipts[0].receipt_url, 'https://receipt.test/source-1');
+  assert.equal(hooks.graphDocumentLineage({ id: 'task-1' }, { tables: [] }, null, [source]).ok, false);
 });
 
 test('systematic research scoring contract pins all source gates and independent audits', () => {

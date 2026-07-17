@@ -6,9 +6,14 @@
 //! it extracts from the bundle. The Wave-4 `public_research` tool decides
 //! whether to feed those identifiers back into [`super::ResolverStack`].
 
+use anyhow::bail;
+use anyhow::Context;
 use anyhow::Result;
 use regex::Regex;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -82,6 +87,8 @@ impl WebResearchAdapter {
     }
 
     pub fn execute(&self, query: &WebResearchQuery) -> Result<WebResearchOutcome> {
+        let workspace_path =
+            evidence_workspace_path(&self.root, &self.run_id, query.workspace_path.as_deref());
         let request = DeepResearchRequest {
             query: query.question.clone(),
             focus: query.focus.clone(),
@@ -89,10 +96,19 @@ impl WebResearchAdapter {
             max_sources: query.max_sources,
             include_annas_archive: false,
             include_papers: true,
-            workspace: query.workspace_path.clone(),
-            persist_workspace: query.workspace_path.is_some(),
+            workspace: Some(workspace_path.clone()),
+            persist_workspace: true,
         };
-        let bundle = run_ctox_deep_research_tool(&self.root, &request)?;
+        let mut bundle = run_ctox_deep_research_tool(&self.root, &request)?;
+        let persisted_workspace = persisted_workspace_path(&bundle)?;
+        if persisted_workspace != workspace_path {
+            bail!(
+                "deep research returned an unexpected workspace path: expected {}, got {}",
+                workspace_path.display(),
+                persisted_workspace.display()
+            );
+        }
+        bind_persisted_snapshots(&mut bundle, &persisted_workspace)?;
         let sources_found = bundle
             .get("sources")
             .and_then(Value::as_array)
@@ -110,6 +126,133 @@ impl WebResearchAdapter {
             raw_bundle: bundle,
         })
     }
+}
+
+fn evidence_workspace_path(root: &Path, run_id: &str, requested: Option<&Path>) -> PathBuf {
+    requested.map(Path::to_path_buf).unwrap_or_else(|| {
+        root.join("runtime")
+            .join("research")
+            .join("report")
+            .join(run_id)
+            .join(format!("query-{}", uuid::Uuid::new_v4().simple()))
+    })
+}
+
+fn persisted_workspace_path(bundle: &Value) -> Result<PathBuf> {
+    if let Some(error) = bundle
+        .get("research_workspace_error")
+        .and_then(Value::as_str)
+    {
+        bail!("deep research workspace persistence failed: {error}");
+    }
+    let path = bundle
+        .pointer("/research_workspace/path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .context("evidence-bearing research did not return a persisted workspace path")?;
+    let workspace = PathBuf::from(path);
+    if !workspace.is_dir() || !workspace.join("manifest.json").is_file() {
+        bail!(
+            "deep research workspace is not persisted at {}",
+            workspace.display()
+        );
+    }
+    Ok(workspace)
+}
+
+fn bind_persisted_snapshots(bundle: &mut Value, workspace: &Path) -> Result<()> {
+    let Some(sources) = bundle.get_mut("sources").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let snapshot_dir = workspace.join("snapshots");
+    for (index, source) in sources.iter_mut().enumerate() {
+        if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let prefix = format!("source-{index:04}.");
+        let snapshot = fs::read_dir(&snapshot_dir)
+            .with_context(|| {
+                format!(
+                    "read persisted snapshot directory {}",
+                    snapshot_dir.display()
+                )
+            })?
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with(&prefix) && !name.ends_with(".metadata.json")
+                        })
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("evidence-bearing source {index} has no persisted snapshot")
+            })?;
+        let receipt = source
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("evidence-bearing source {index} has no snapshot receipt")
+            })?;
+        if !snapshot_receipt_matches_path(&snapshot, receipt)? {
+            bail!("persisted snapshot for evidence-bearing source {index} does not match receipt");
+        }
+        let snapshot_id = snapshot
+            .strip_prefix(workspace)
+            .ok()
+            .and_then(|path| path.to_str())
+            .unwrap_or_else(|| {
+                snapshot
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+            });
+        source["snapshot_path"] = Value::String(snapshot.to_string_lossy().into_owned());
+        source["snapshot_id"] = Value::String(snapshot_id.to_string());
+    }
+    Ok(())
+}
+
+fn snapshot_receipt_matches_path(path: &Path, receipt: &str) -> Result<bool> {
+    if !is_sha256_receipt(receipt) {
+        return Ok(false);
+    }
+    let bytes =
+        fs::read(path).with_context(|| format!("read persisted snapshot {}", path.display()))?;
+    let digest = Sha256::digest(&bytes);
+    let recomputed = format!("sha256:{digest:x}");
+    Ok(recomputed.eq_ignore_ascii_case(receipt))
+}
+
+pub(crate) fn is_content_bound_snapshot(source: &Value) -> bool {
+    let Some(receipt) = source.get("snapshot_hash").and_then(Value::as_str) else {
+        return false;
+    };
+    persisted_snapshot_path(source)
+        .and_then(|path| snapshot_receipt_matches_path(Path::new(path), receipt).ok())
+        == Some(true)
+}
+
+fn persisted_snapshot_path(source: &Value) -> Option<&str> {
+    source
+        .get("snapshot_path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| {
+            source
+                .get("snapshot_id")
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+        })
+        .or_else(|| {
+            source
+                .pointer("/read/snapshot_path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+        })
 }
 
 /// Return true only for a source that has passed the complete evidence gate.
@@ -142,10 +285,7 @@ pub(crate) fn is_evidence_eligible_source(source: &Value) -> bool {
         .get("http_status")
         .and_then(Value::as_i64)
         .is_some_and(|status| (200..=299).contains(&status));
-    let snapshotted = source
-        .get("snapshot_hash")
-        .and_then(Value::as_str)
-        .is_some_and(is_sha256_receipt);
+    let snapshotted = is_content_bound_snapshot(source);
     let has_rejection_reason = source
         .get("evidence_rejection_reason")
         .and_then(Value::as_str)
@@ -180,7 +320,7 @@ fn is_canonical_http_url(raw: &str) -> bool {
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
 }
 
-fn is_sha256_receipt(raw: &str) -> bool {
+pub(crate) fn is_sha256_receipt(raw: &str) -> bool {
     raw.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
     })
@@ -325,6 +465,17 @@ fn build_summary(bundle: &Value, sources_found: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn snapshot_fixture() -> (TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let bytes = b"persisted evidence snapshot";
+        let path = dir.path().join("source-0000.txt");
+        fs::write(&path, bytes).unwrap();
+        let digest = Sha256::digest(bytes);
+        (dir, format!("sha256:{digest:x}"))
+    }
 
     #[test]
     fn extract_dois_deduplicates_and_lowercases() {
@@ -343,6 +494,12 @@ mod tests {
 
     #[test]
     fn collect_text_corpus_excludes_rejected_and_metadata_sources() {
+        let (snapshot_dir, snapshot_hash) = snapshot_fixture();
+        let snapshot_path = snapshot_dir
+            .path()
+            .join("source-0000.txt")
+            .to_string_lossy()
+            .into_owned();
         let bundle = json!({
             "sources": [
                 {
@@ -356,7 +513,8 @@ mod tests {
                     "actual_full_text_or_data": true,
                     "evidence_relevance_score": 32,
                     "http_status": 200,
-                    "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+                    "snapshot_hash": snapshot_hash,
+                    "snapshot_path": snapshot_path,
                     "evidence_eligible": true,
                     "title": "Accepted source",
                     "read": {
@@ -399,10 +557,17 @@ mod tests {
         assert!(!blob.contains("10.9999/metadata"));
         assert!(!blob.contains("10.8888/dead"));
         assert_eq!(extract_dois(&blob), vec!["10.5678/xyz.qq"]);
+        drop(snapshot_dir);
     }
 
     #[test]
     fn eligibility_requires_canonical_snapshot_and_verified_transport() {
+        let (snapshot_dir, snapshot_hash) = snapshot_fixture();
+        let snapshot_path = snapshot_dir
+            .path()
+            .join("source-0000.txt")
+            .to_string_lossy()
+            .into_owned();
         let mut source = json!({
             "canonical_url": "https://publisher.example/source",
             "source_type": "web",
@@ -413,10 +578,18 @@ mod tests {
             "actual_full_text_or_data": true,
             "evidence_relevance_score": 32,
             "http_status": 200,
-            "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+            "snapshot_hash": snapshot_hash.clone(),
+            "snapshot_path": snapshot_path,
             "evidence_eligible": true
         });
         assert!(is_evidence_eligible_source(&source));
+
+        let mut without_snapshot = source.clone();
+        without_snapshot
+            .as_object_mut()
+            .unwrap()
+            .remove("snapshot_path");
+        assert!(!is_evidence_eligible_source(&without_snapshot));
 
         for field in ["canonical_url", "snapshot_hash"] {
             let mut invalid = source.clone();
@@ -425,7 +598,7 @@ mod tests {
         }
         source["snapshot_hash"] = json!("sha256:not-a-content-hash");
         assert!(!is_evidence_eligible_source(&source));
-        source["snapshot_hash"] = json!(format!("sha256:{}", "a".repeat(64)));
+        source["snapshot_hash"] = json!(snapshot_hash);
         source["http_status"] = json!(500);
         assert!(!is_evidence_eligible_source(&source));
         source["http_status"] = json!(200);
@@ -434,6 +607,7 @@ mod tests {
         source["canonical_url"] = json!("https://publisher.example/source");
         source["actual_full_text_or_data"] = json!(false);
         assert!(!is_evidence_eligible_source(&source));
+        drop(snapshot_dir);
     }
 
     #[test]
@@ -441,5 +615,26 @@ mod tests {
         for label in ["quick", "standard", "exhaustive"] {
             assert!(WebResearchDepth::from_label(label).is_some());
         }
+    }
+
+    #[test]
+    fn evidence_research_always_gets_an_explicit_workspace() {
+        let requested = Path::new("runtime/research/requested");
+        assert_eq!(
+            evidence_workspace_path(Path::new("/tmp/ctox"), "run-1", Some(requested)),
+            requested
+        );
+        let derived = evidence_workspace_path(Path::new("/tmp/ctox"), "run-1", None);
+        assert!(derived.starts_with("/tmp/ctox/runtime/research/report/run-1"));
+        assert!(derived.to_string_lossy().contains("query-"));
+    }
+
+    #[test]
+    fn missing_workspace_persistence_is_rejected() {
+        assert!(persisted_workspace_path(&json!({
+            "research_workspace_error": "disk full"
+        }))
+        .is_err());
+        assert!(persisted_workspace_path(&json!({"sources": []})).is_err());
     }
 }

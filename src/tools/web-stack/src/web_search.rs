@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(test)]
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(test)]
@@ -341,6 +343,30 @@ struct EvidenceDoc {
     /// extractors see the real DOM, not the LLM-summary plaintext.
     #[serde(default)]
     raw_html: Option<String>,
+    /// The exact bytes that passed the response admission gate. Keeping these
+    /// bytes with the evidence envelope prevents later workspace persistence
+    /// from fetching a different representation of the same URL.
+    #[serde(default)]
+    response_body: Option<Vec<u8>>,
+    #[serde(default)]
+    response_receipt: Option<ResponseReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResponseReceipt {
+    requested_url: String,
+    final_url: String,
+    status: u16,
+    content_type: Option<String>,
+    byte_count: usize,
+    sha256: Option<String>,
+    #[serde(default)]
+    content_kind: String,
+    redirected: bool,
+    redirect_chain: Vec<String>,
+    lineage: String,
+    #[serde(default)]
+    admission_rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -865,10 +891,45 @@ fn render_direct_web_read_payload(
         "page_sections": doc.page_sections,
         "page_text_excerpt": trim_text(&doc.page_text, 4000),
         "canonical_url": doc.canonical_url,
+        "final_url": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.final_url.clone()),
+        "redirected": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.redirected),
+        "redirect_chain": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.redirect_chain.clone())
+            .unwrap_or_default(),
+        "lineage": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.lineage.clone()),
         "verification_status": doc.verification_status,
         "checked_at": doc.checked_at,
         "http_status": doc.http_status,
         "snapshot_hash": doc.snapshot_hash,
+        "response_metadata": doc.response_receipt.clone(),
+        "response_content_kind": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.content_kind.clone()),
+        "content_type": doc
+            .response_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.content_type.clone()),
+        "byte_count": doc
+            .response_receipt
+            .as_ref()
+            .map(|receipt| receipt.byte_count),
+        "admission_rejection_reason": doc
+            .response_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.admission_rejection_reason.clone()),
+        "response_body": doc.response_body,
         "source_tier": doc.source_tier,
         "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
         "evidence_content_kind": evidence_content_kind(&doc),
@@ -2624,7 +2685,11 @@ fn build_evidence_doc(
     };
     let mut doc = build_query_evidence_doc(config, query, hit, canonical_url, opened_page);
     doc.raw_html = raw_html;
+    doc.response_receipt = Some(response_receipt(hit, &fetched, None));
     apply_evidence_gate(&mut doc, hit, &fetched);
+    if doc.evidence_eligible {
+        doc.response_body = Some(fetched.body.clone());
+    }
     Ok((doc, fetched.content_type))
 }
 
@@ -2635,6 +2700,8 @@ fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &Fetched
     doc.http_status = Some(fetched.http_status);
     doc.snapshot_hash = content_hash;
     doc.source_tier = source_tier_for_hit(hit);
+    let rejection = response_admission_rejection(hit, doc, fetched);
+    doc.response_receipt = Some(response_receipt(hit, fetched, rejection.clone()));
     let metadata_receipt = is_zenodo_record_api_url(&doc.url);
     let metadata_fallback = !metadata_receipt
         && (is_metadata_source(&hit.source)
@@ -2650,12 +2717,221 @@ fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &Fetched
         && doc.snapshot_hash.is_some()
         && evidence_doc_has_meaningful_content(doc)
         && normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet)
-        && !metadata_fallback;
+        && !metadata_fallback
+        && rejection.is_none();
+    if let Some(reason) = rejection {
+        if let Some(receipt) = doc.response_receipt.as_mut() {
+            receipt.admission_rejection_reason = Some(reason);
+        }
+    }
     doc.verification_status = if doc.evidence_eligible {
         "verified".to_string()
     } else {
         "unverified".to_string()
     };
+}
+
+fn response_receipt(
+    hit: &SearchHit,
+    fetched: &FetchedPageContent,
+    admission_rejection_reason: Option<String>,
+) -> ResponseReceipt {
+    let final_url = if fetched.final_url.trim().is_empty() {
+        hit.url.clone()
+    } else {
+        fetched.final_url.clone()
+    };
+    let redirected = final_url != hit.url;
+    ResponseReceipt {
+        requested_url: hit.url.clone(),
+        final_url: final_url.clone(),
+        status: fetched.http_status,
+        content_type: fetched.content_type.clone(),
+        byte_count: fetched.body.len(),
+        sha256: (!fetched.body.is_empty()).then(|| snapshot_hash(&fetched.body)),
+        content_kind: response_content_kind(hit, fetched),
+        redirected,
+        redirect_chain: if redirected {
+            vec![hit.url.clone(), final_url]
+        } else {
+            vec![hit.url.clone()]
+        },
+        lineage: "web_search.evidence_fetch".to_string(),
+        admission_rejection_reason,
+    }
+}
+
+fn response_content_kind(hit: &SearchHit, fetched: &FetchedPageContent) -> String {
+    let content_type = fetched
+        .content_type
+        .as_deref()
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let body = &fetched.body;
+    let trimmed = body.iter().position(|byte| !byte.is_ascii_whitespace());
+    let starts_with =
+        |prefix: &[u8]| trimmed.is_some_and(|index| body[index..].starts_with(prefix));
+    if body.starts_with(b"%PDF-") || content_type == "application/pdf" {
+        return "pdf".to_string();
+    }
+    if starts_with(b"<!doctype html") || starts_with(b"<html") || content_type.contains("html") {
+        return "html".to_string();
+    }
+    let data_hint = is_data_url_suffix(&hit.url) || is_data_url_suffix(&fetched.final_url);
+    let json_hint = content_type == "application/json"
+        || content_type.ends_with("+json")
+        || hit.url.to_ascii_lowercase().ends_with(".json")
+        || fetched.final_url.to_ascii_lowercase().ends_with(".json");
+    if json_hint {
+        return if serde_json::from_slice::<Value>(body)
+            .ok()
+            .is_some_and(|value| value.is_object() || value.is_array())
+        {
+            "data_json".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if content_type == "text/csv"
+        || content_type == "text/tab-separated-values"
+        || content_type == "application/vnd.ms-excel"
+        || (data_hint && looks_like_delimited_data(body))
+    {
+        return if looks_like_delimited_data(body) {
+            "data_delimited".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if hit.url.to_ascii_lowercase().ends_with(".xlsx")
+        || fetched.final_url.to_ascii_lowercase().ends_with(".xlsx")
+    {
+        return if body.starts_with(b"PK\x03\x04") {
+            "data_xlsx".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if hit.url.to_ascii_lowercase().ends_with(".parquet")
+        || fetched.final_url.to_ascii_lowercase().ends_with(".parquet")
+    {
+        return if body.starts_with(b"PAR1") {
+            "data_parquet".to_string()
+        } else {
+            "malformed_data".to_string()
+        };
+    }
+    if content_type.starts_with("text/") {
+        "page_content".to_string()
+    } else {
+        "binary".to_string()
+    }
+}
+
+fn is_data_url_suffix(raw: &str) -> bool {
+    let path = Url::parse(raw)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_default();
+    [
+        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+}
+
+fn looks_like_delimited_data(body: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return false;
+    }
+    let delimiter = if lines[0].matches('\t').count() >= lines[0].matches(',').count() {
+        '\t'
+    } else {
+        ','
+    };
+    let width = lines[0].matches(delimiter).count();
+    width > 0
+        && lines
+            .iter()
+            .all(|line| line.matches(delimiter).count() == width)
+}
+
+fn response_admission_rejection(
+    hit: &SearchHit,
+    doc: &EvidenceDoc,
+    fetched: &FetchedPageContent,
+) -> Option<String> {
+    let body = String::from_utf8_lossy(&fetched.body).to_ascii_lowercase();
+    let extracted = format!("{} {} {}", doc.title, doc.summary, doc.page_text).to_ascii_lowercase();
+    let url = fetched.final_url.to_ascii_lowercase();
+    let content_kind = response_content_kind(hit, fetched);
+    if content_kind == "malformed_data"
+        || (is_data_url_suffix(&hit.url)
+            && matches!(content_kind.as_str(), "html" | "binary" | "page_content"))
+    {
+        return Some("invalid_data_response".to_string());
+    }
+
+    let login_url = ["/login", "/signin", "/sign-in", "/authenticate", "/auth/"]
+        .iter()
+        .any(|marker| url.contains(marker));
+    let login_markers = [
+        "sign in to continue",
+        "log in to continue",
+        "login required",
+        "authentication required",
+        "please sign in",
+        "please log in",
+        "input type=\"password\"",
+        "name=\"password\"",
+        "verify your identity",
+        "create an account or sign in",
+    ];
+    let login_signal_count = login_markers
+        .iter()
+        .filter(|marker| body.contains(**marker) || extracted.contains(**marker))
+        .count();
+    if login_url || login_signal_count >= 1 {
+        return Some("login_or_authentication_wall".to_string());
+    }
+
+    let not_found_markers = [
+        "page not found",
+        "404 not found",
+        "the requested page could not be found",
+        "this page does not exist",
+        "content not found",
+        "no longer available",
+        "page you requested was not found",
+        "error 404",
+    ];
+    let not_found_signal_count = not_found_markers
+        .iter()
+        .filter(|marker| body.contains(**marker) || extracted.contains(**marker))
+        .count();
+    let title_or_url_not_found = doc.title.to_ascii_lowercase().contains("404")
+        || url.contains("/404")
+        || url.contains("not-found");
+    if fetched.http_status == 200 && (not_found_signal_count >= 1 || title_or_url_not_found) {
+        return Some("soft_404".to_string());
+    }
+
+    // A redirect to a login/404 page can retain a plausible original title.
+    if hit.url != fetched.final_url && (body.contains("sign in") || body.contains("not found")) {
+        return Some("redirected_to_non_content_page".to_string());
+    }
+    None
 }
 
 fn failed_http_evidence_doc(
@@ -2687,6 +2963,20 @@ fn failed_evidence_doc(hit: &SearchHit, status: u16) -> (EvidenceDoc, Option<Str
             page_text: String::new(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_receipt: Some(ResponseReceipt {
+                requested_url: hit.url.clone(),
+                final_url: hit.url.clone(),
+                status,
+                content_type: None,
+                byte_count: 0,
+                sha256: None,
+                content_kind: "none".to_string(),
+                redirected: false,
+                redirect_chain: vec![hit.url.clone()],
+                lineage: "web_search.evidence_fetch".to_string(),
+                admission_rejection_reason: Some("http_fetch_failed".to_string()),
+            }),
         },
         None,
     )
@@ -2732,6 +3022,8 @@ fn build_query_evidence_doc(
             page_text: opened_page.page_text,
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_receipt: None,
         },
     )
 }
@@ -2805,6 +3097,8 @@ fn rebuild_cached_evidence_doc(
         page_text,
         find_results,
         raw_html: cached.raw_html.clone(),
+        response_body: cached.response_body.clone(),
+        response_receipt: cached.response_receipt.clone(),
     }
 }
 
@@ -2941,63 +3235,134 @@ fn fetch_page_content(
 ) -> Result<FetchedPageContent> {
     if config.provider == ProviderKind::Mock && hit.source == "mock" {
         if hit.url.to_ascii_lowercase().ends_with(".pdf") {
-            return Ok(FetchedPageContent {
-                body: mock_pdf_bytes(query, hit),
-                content_type: Some("application/pdf".to_string()),
+            return enforce_response_limits(
+                config,
+                hit,
+                FetchedPageContent {
+                    body: mock_pdf_bytes(query, hit),
+                    content_type: Some("application/pdf".to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+        }
+        return enforce_response_limits(
+            config,
+            hit,
+            FetchedPageContent {
+                body: mock_open_page_html(query, hit).into_bytes(),
+                content_type: Some("text/html".to_string()),
                 final_url: hit.url.clone(),
                 http_status: 200,
-            });
-        }
-        return Ok(FetchedPageContent {
-            body: mock_open_page_html(query, hit).into_bytes(),
-            content_type: Some("text/html".to_string()),
-            final_url: hit.url.clone(),
-            http_status: 200,
-        });
+            },
+        );
     }
 
     if let Some(optimized) = fetch_platform_optimized_content(config, query, hit)? {
-        return Ok(optimized);
+        return enforce_response_limits(config, hit, optimized);
     }
 
-    let mut request = build_agent(config)?
-        .get(&hit.url)
-        .set("accept", evidence_accept_header(&hit.url));
-    if is_json_api_url(&hit.url) {
-        request = request.set("user-agent", "ctox-research/0.3 (+https://ctox.dev)");
-    }
-    let response = request
-        .call()
-        .with_context(|| format!("failed to fetch evidence page {}", hit.url))?;
-    let http_status = response.status();
-    let content_type = response.header("content-type").map(ToString::to_string);
-    if content_type_is_disallowed(content_type.as_deref()) {
+    fetch_http_page_content(config, hit)
+}
+
+fn enforce_response_limits(
+    config: &SearchConfig,
+    hit: &SearchHit,
+    fetched: FetchedPageContent,
+) -> Result<FetchedPageContent> {
+    if fetched.body.len() > config.max_page_bytes {
         return Err(anyhow!(
-            "evidence page {} returned unsupported content type {:?}",
-            hit.url,
-            content_type
-        ));
-    }
-    let final_url = response.get_url().to_string();
-    let mut body = Vec::new();
-    response
-        .into_reader()
-        .take(config.max_page_bytes.max(4096) as u64 + 1)
-        .read_to_end(&mut body)
-        .with_context(|| format!("failed to read evidence page {}", hit.url))?;
-    if body.len() > config.max_page_bytes.max(4096) {
-        return Err(anyhow!(
-            "evidence page {} exceeded {} bytes",
+            "evidence page {} exceeded {} bytes; response rejected without truncation",
             hit.url,
             config.max_page_bytes
         ));
     }
-    Ok(FetchedPageContent {
-        body,
-        content_type,
-        final_url,
-        http_status,
-    })
+    if content_type_is_disallowed(fetched.content_type.as_deref()) {
+        return Err(anyhow!(
+            "evidence page {} returned unsupported content type {:?}",
+            hit.url,
+            fetched.content_type
+        ));
+    }
+    Ok(fetched)
+}
+
+fn fetch_http_page_content(config: &SearchConfig, hit: &SearchHit) -> Result<FetchedPageContent> {
+    const MAX_ATTEMPTS: usize = 3;
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut request = build_agent(config)?
+            .get(&hit.url)
+            .set("accept", evidence_accept_header(&hit.url));
+        if is_json_api_url(&hit.url) {
+            request = request.set("user-agent", "ctox-research/0.3 (+https://ctox.dev)");
+        }
+        // A malformed or prematurely closed response must not be able to take
+        // down the CTOX daemon. ureq 2.x contains an internal expect while it
+        // buffers short Content-Length responses, so contain that dependency
+        // panic at the network boundary and treat it like a transient fetch.
+        let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.call()));
+        match response {
+            Ok(Ok(response)) => {
+                let http_status = response.status();
+                let content_type = response.header("content-type").map(ToString::to_string);
+                if content_type_is_disallowed(content_type.as_deref()) {
+                    return Err(anyhow!(
+                        "evidence page {} returned unsupported content type {:?}",
+                        hit.url,
+                        content_type
+                    ));
+                }
+                let final_url = response.get_url().to_string();
+                let mut body = Vec::new();
+                response
+                    .into_reader()
+                    .take(config.max_page_bytes.saturating_add(1) as u64)
+                    .read_to_end(&mut body)
+                    .with_context(|| format!("failed to read evidence page {}", hit.url))?;
+                if body.len() > config.max_page_bytes {
+                    return Err(anyhow!(
+                        "evidence page {} exceeded {} bytes; response rejected without truncation",
+                        hit.url,
+                        config.max_page_bytes
+                    ));
+                }
+                return Ok(FetchedPageContent {
+                    body,
+                    content_type,
+                    final_url,
+                    http_status,
+                });
+            }
+            Ok(Err(error)) => {
+                let retryable = is_transient_fetch_error(&error);
+                last_error = Some(anyhow::Error::new(error));
+                if !retryable || attempt + 1 == MAX_ATTEMPTS {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
+            }
+            Err(_) => {
+                last_error = Some(anyhow!(
+                    "HTTP client panicked while reading the response from {}",
+                    hit.url
+                ));
+                if attempt + 1 == MAX_ATTEMPTS {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20 * (attempt as u64 + 1)));
+            }
+        }
+    }
+    let error = last_error.expect("fetch loop always records its terminal error");
+    Err(error).with_context(|| format!("failed to fetch evidence page {}", hit.url))
+}
+
+fn is_transient_fetch_error(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::Status(status, _) => matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504),
+        ureq::Error::Transport(_) => true,
+    }
 }
 
 fn evidence_accept_header(url: &str) -> &'static str {
@@ -3120,13 +3485,20 @@ fn fetch_arxiv_abstract(
         .call()
         .with_context(|| format!("failed to fetch arXiv metadata for {}", hit.url))?;
     let xml = {
-        let mut raw = String::new();
-        let reader = response.into_reader();
-        reader
-            .take(config.max_page_bytes.max(4096) as u64)
-            .read_to_string(&mut raw)
+        let mut raw = Vec::new();
+        response
+            .into_reader()
+            .take(config.max_page_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut raw)
             .context("failed to read arXiv metadata response")?;
-        raw
+        if raw.len() > config.max_page_bytes {
+            return Err(anyhow!(
+                "evidence page {} exceeded {} bytes; response rejected without truncation",
+                hit.url,
+                config.max_page_bytes
+            ));
+        }
+        String::from_utf8(raw).context("arXiv metadata response was not UTF-8")?
     };
     let title = extract_first_xml_tag_text(&xml, "title")
         .filter(|value| !value.eq_ignore_ascii_case("arxiv query results"))
@@ -3994,13 +4366,12 @@ fn pdf_escape_text(input: &str) -> String {
 }
 
 fn is_pdf_content(hit: &SearchHit, fetched: &FetchedPageContent) -> bool {
-    hit.url.to_ascii_lowercase().ends_with(".pdf")
-        || fetched.final_url.to_ascii_lowercase().ends_with(".pdf")
-        || fetched
-            .content_type
-            .as_deref()
-            .map(|value| value.to_ascii_lowercase().contains("application/pdf"))
-            .unwrap_or(false)
+    let _ = hit;
+    fetched
+        .content_type
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("application/pdf"))
+        .unwrap_or(false)
         || fetched.body.starts_with(b"%PDF-")
 }
 
@@ -7954,6 +8325,8 @@ mod tests {
             page_text: "body".to_string(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_receipt: None,
         };
 
         // Direct read: page-derived title/summary/excerpts sit inside the fence;
@@ -8028,6 +8401,8 @@ mod tests {
                 page_text: "Measured propeller torque and thrust data.".to_string(),
                 find_results: Vec::new(),
                 raw_html: None,
+                response_body: None,
+                response_receipt: None,
             }],
             executed_queries: vec!["propeller torque thrust".to_string()],
             source_failures: Vec::new(),
@@ -8080,6 +8455,8 @@ mod tests {
                 page_text: String::new(),
                 find_results: Vec::new(),
                 raw_html: None,
+                response_body: None,
+                response_receipt: None,
             }],
             executed_queries: vec!["shell source".to_string()],
             source_failures: Vec::new(),
@@ -8135,6 +8512,8 @@ mod tests {
                     matches: vec!["CTOX_REMOTE_WEB_OK".to_string()],
                 }],
                 raw_html: None,
+                response_body: None,
+                response_receipt: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
             source_failures: Vec::new(),
@@ -9081,6 +9460,8 @@ mod tests {
             page_text: String::new(),
             find_results: Vec::new(),
             raw_html: None,
+            response_body: None,
+            response_receipt: None,
         };
 
         let mut verified = base_doc();
@@ -9286,6 +9667,8 @@ mod tests {
                 "<html><body><h1>Example GmbH</h1><p>Sign in to continue</p></body></html>"
                     .to_string(),
             ),
+            response_body: None,
+            response_receipt: None,
         };
         let url = doc.url.clone();
         let payload = render_direct_web_read_payload(
@@ -10246,6 +10629,264 @@ mod tests {
                 .any(|section| section.page_number == Some(8)),
             "expected page-hinted PDF extraction to include page 8"
         );
+    }
+
+    #[test]
+    fn local_fixture_preserves_admitted_body_without_a_second_fetch() {
+        let body_a = b"The first admitted response is the only evidence body.".to_vec();
+        let body_b = b"A second fetch would return a mismatched body.".to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::ok("text/plain", body_a.clone()),
+                FixtureReply::ok("text/plain", body_b),
+            ],
+            1,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&url);
+        let (doc, _) =
+            build_evidence_doc(&config, "first admitted response", &hit).expect("fixture evidence");
+        assert_eq!(doc.response_body, Some(body_a));
+        assert_eq!(
+            doc.response_receipt
+                .as_ref()
+                .map(|receipt| receipt.byte_count),
+            Some(54)
+        );
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_soft_404_and_login_pages() {
+        for (path, body, expected_reason) in [
+            (
+                "/missing",
+                b"<html><head><title>Page not found</title></head><body><h1>Page not found</h1><p>The requested page could not be found.</p></body></html>".to_vec(),
+                "soft_404",
+            ),
+            (
+                "/login",
+                b"<html><head><title>Sign in</title></head><body><form><input type=\"password\" name=\"password\"><p>Please sign in to continue.</p></form></body></html>".to_vec(),
+                "login_or_authentication_wall",
+            ),
+        ] {
+            let (url, server) = spawn_http_fixture(
+                vec![FixtureReply::ok("text/html", body)],
+                1,
+            );
+            let mut config = test_config(ProviderKind::Brave);
+            config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+            let hit = fixture_hit(&format!("{url}{path}"));
+            let (doc, _) = build_evidence_doc(&config, "source facts", &hit)
+                .expect("fixture evidence");
+            assert!(!doc.evidence_eligible);
+            assert_eq!(
+                doc.response_receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.admission_rejection_reason.as_deref()),
+                Some(expected_reason)
+            );
+            assert_eq!(server.join().expect("fixture server"), 1);
+        }
+    }
+
+    #[test]
+    fn local_fixture_retries_503_then_admits_200() {
+        let body =
+            b"This stable response contains enough source content to be admitted after retry."
+                .to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::status(503, "text/plain", b"temporary outage".to_vec()),
+                FixtureReply::ok("text/plain", body),
+            ],
+            2,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "stable response", &fixture_hit(&url))
+            .expect("retry evidence");
+        assert!(doc.evidence_eligible);
+        assert_eq!(doc.http_status, Some(200));
+        assert_eq!(server.join().expect("fixture server"), 2);
+    }
+
+    #[test]
+    fn local_fixture_records_redirect_receipt_metadata() {
+        let body =
+            b"The redirected final response contains stable source content for audit.".to_vec();
+        let (url, server) = spawn_http_fixture(
+            vec![
+                FixtureReply::redirect("/final"),
+                FixtureReply::ok("text/plain", body),
+            ],
+            2,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let (doc, _) = build_evidence_doc(&config, "redirected source", &fixture_hit(&url))
+            .expect("redirect evidence");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert!(receipt.redirected);
+        assert_eq!(receipt.final_url, format!("{url}/final"));
+        assert_eq!(
+            receipt.redirect_chain,
+            vec![url.clone(), format!("{url}/final")]
+        );
+        assert_eq!(receipt.status, 200);
+        assert_eq!(server.join().expect("fixture server"), 2);
+    }
+
+    #[test]
+    fn local_fixture_rejects_over_limit_body_without_truncation() {
+        let (url, server) = spawn_http_fixture(
+            vec![FixtureReply::ok(
+                "text/plain",
+                b"this body is intentionally over the configured limit".to_vec(),
+            )],
+            1,
+        );
+        let mut config = test_config(ProviderKind::Brave);
+        config.max_page_bytes = 8;
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let error = build_evidence_doc(&config, "over limit", &fixture_hit(&url))
+            .expect_err("over-limit response must be rejected");
+        assert!(error.to_string().contains("rejected without truncation"));
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[test]
+    fn local_fixture_rejects_malformed_data_by_response_content() {
+        let malformed = b"{ this is not valid JSON data, despite the .json URL suffix }".to_vec();
+        let (url, server) =
+            spawn_http_fixture(vec![FixtureReply::ok("application/json", malformed)], 1);
+        let mut config = test_config(ProviderKind::Brave);
+        config.egress_allow_hosts = vec!["127.0.0.1".to_string()];
+        let hit = fixture_hit(&format!("{url}/data.json"));
+        let (doc, _) = build_evidence_doc(&config, "data", &hit).expect("data evidence");
+        let receipt = doc.response_receipt.expect("response receipt");
+        assert_eq!(receipt.content_kind, "malformed_data");
+        assert_eq!(
+            receipt.admission_rejection_reason.as_deref(),
+            Some("invalid_data_response")
+        );
+        assert!(!doc.evidence_eligible);
+        assert_eq!(server.join().expect("fixture server"), 1);
+    }
+
+    #[derive(Clone)]
+    struct FixtureReply {
+        status: u16,
+        content_type: &'static str,
+        location: Option<String>,
+        body: Vec<u8>,
+    }
+
+    impl FixtureReply {
+        fn ok(content_type: &'static str, body: Vec<u8>) -> Self {
+            Self::status(200, content_type, body)
+        }
+
+        fn status(status: u16, content_type: &'static str, body: Vec<u8>) -> Self {
+            Self {
+                status,
+                content_type,
+                location: None,
+                body,
+            }
+        }
+
+        fn redirect(location: &str) -> Self {
+            Self {
+                status: 302,
+                content_type: "text/plain",
+                location: Some(location.to_string()),
+                body: Vec::new(),
+            }
+        }
+    }
+
+    fn fixture_hit(url: &str) -> SearchHit {
+        SearchHit {
+            title: "Fixture source".to_string(),
+            url: url.to_string(),
+            snippet: String::new(),
+            source: "direct".to_string(),
+            rank: 1,
+        }
+    }
+
+    fn spawn_http_fixture(
+        replies: Vec<FixtureReply>,
+        expected_requests: usize,
+    ) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking fixture listener");
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut requests = 0;
+            while requests < expected_requests && std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        read_fixture_request(&mut stream);
+                        write_fixture_reply(&mut stream, &replies[requests]);
+                        requests += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            }
+            let observe_deadline = std::time::Instant::now() + Duration::from_millis(100);
+            while std::time::Instant::now() < observe_deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        read_fixture_request(&mut stream);
+                        requests += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("fixture observe failed: {error}"),
+                }
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn read_fixture_request(stream: &mut TcpStream) {
+        let mut buffer = [0_u8; 2048];
+        let _ = stream.read(&mut buffer);
+    }
+
+    fn write_fixture_reply(stream: &mut TcpStream, reply: &FixtureReply) {
+        let reason = match reply.status {
+            200 => "OK",
+            302 => "Found",
+            503 => "Service Unavailable",
+            _ => "Fixture",
+        };
+        let location = reply
+            .location
+            .as_deref()
+            .map(|value| format!("Location: {value}\r\n"))
+            .unwrap_or_default();
+        let headers = format!(
+            "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",
+            reply.status,
+            reply.content_type,
+            reply.body.len()
+        );
+        stream
+            .write_all(headers.as_bytes())
+            .expect("fixture headers");
+        stream.write_all(&reply.body).expect("fixture body");
     }
 
     fn test_config(provider: ProviderKind) -> SearchConfig {

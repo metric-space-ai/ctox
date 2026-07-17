@@ -43,6 +43,8 @@ const html = `<!doctype html>
     <script type="module">
       import { mount } from '/modules/research/index.js';
 
+      const lineageReady = !location.search.includes('missing-lineage');
+
       const clusters = [
         ['Data Visualization', 'semantic graph', 'network analysis', 'knowledge mapping', 'visual analytics', 'interactive canvas', 'graph rendering', 'spatial layout', 'node centrality', 'cluster exploration', 'visual hierarchy', 'information design'],
         ['Insight Generation', 'pattern discovery', 'research synthesis', 'decision intelligence', 'hypothesis testing', 'gap analysis', 'strategic signals', 'market evidence', 'competitive insight', 'trend detection', 'sensemaking', 'recommendation'],
@@ -76,13 +78,20 @@ const html = `<!doctype html>
         title: ['Research benchmark', 'Product analysis', 'Enterprise field study', 'Technical architecture', 'Market evidence', 'Scholarly review', 'Customer proof'][index % 7] + ' ' + String(index + 1).padStart(2, '0'),
         source_type: index % 3 === 0 ? 'scholarly' : 'web',
         source_url: 'https://example.com/research/' + index,
+        canonical_url: 'https://example.com/research/' + index,
+        source_receipt_url: lineageReady ? 'https://receipt.example.com/research/' + index : '',
+        snapshot_id: 'snapshot:competitive-ai:' + index,
         summary: clusters[index % clusters.length].join(' ') + ' evidence governance research insight',
         contribution_note: 'Verified evidence for ' + clusters[index % clusters.length][0] + ' and ' + clusters[(index + 2) % clusters.length][1],
         evidence_relevance: 92 - index,
         confidence: 0.93 - index * 0.008,
         verification_status: index === 25 ? 'verified' : index === 26 ? 'verified' : index === 27 ? 'rejected' : 'verified',
         http_status: index === 25 ? 404 : 200,
-        snapshot_hash: 'sha256:research-' + index,
+        transport_verified: true,
+        content_extracted: true,
+        actual_full_text_or_data: true,
+        evidence_relevance_score: 10,
+        snapshot_hash: 'sha256:' + index.toString(16).padStart(2, '0').repeat(32),
         evidence_eligible: index < 25,
         source_tier: 'primary',
         metadata_only: index === 26,
@@ -91,13 +100,16 @@ const html = `<!doctype html>
       const evidenceRows = sourceRows.flatMap((source, index) => [0, 1].map((fact) => ({
         evidence_id: 'evidence_' + index + '_' + fact,
         source_id: source.source_id,
+        canonical_url: source.canonical_url,
+        snapshot_id: source.snapshot_id,
+        snapshot_hash: source.snapshot_hash,
         criterion_id: clusters[index % clusters.length][fact + 1],
         fact_label: clusters[index % clusters.length][fact + 2],
         fact_value: 82 - index + fact,
         quote: 'Verified research finding about ' + clusters[index % clusters.length][fact + 1],
         confidence: 0.91,
       })));
-      const table = (key, rows) => ({ id: 'table_' + key, domain: 'competitive_ai_research', table_key: key, title: key, description: 'Research evidence table', rows, row_count: rows.length });
+      const table = (key, rows) => ({ id: 'table_' + key, domain: 'competitive_ai_research', table_key: key, title: key, description: 'Research evidence table', rows, row_count: rows.length, ...(lineageReady ? { knowledge_version_id: 'knowledge-v-qa', knowledge_version: { version_id: 'knowledge-v-qa', status: 'current' } } : {}) });
       const store = {
         research_tasks: [{
           id: 'research_semantic_graph',
@@ -235,6 +247,10 @@ try {
     `document action did not dispatch: ${JSON.stringify(failures)}`,
   );
   assert.equal(await page.evaluate(() => window.__researchQa.commands[0].command_type), 'research.systematic.report.create');
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].payload.knowledge_version_id), 'knowledge-v-qa');
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].payload.source_receipts.length), 25);
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].payload.source_receipts.every((receipt) => receipt.source_id.startsWith('source_') && receipt.receipt_url.startsWith('https://receipt.example.com/') && receipt.snapshot_hash.startsWith('sha256:'))), true);
+  assert.equal(await page.evaluate(() => window.__researchQa.commands[0].payload.requested_snapshot_hashes.length), 25);
   await page.locator('[data-action="graph-ai"][data-graph-ai="research"]').click();
   await page.waitForTimeout(1500);
   assert.equal(
@@ -262,6 +278,16 @@ try {
   await page.waitForTimeout(1200);
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.deepEqual(failures, []);
+
+  const missingPage = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 });
+  missingPage.setDefaultTimeout(60000);
+  await missingPage.goto(`http://127.0.0.1:${port}/qa?missing-lineage`, { waitUntil: 'networkidle' });
+  await missingPage.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 180000 });
+  await missingPage.locator('[data-action="graph-ai"][data-graph-ai="document"]').click();
+  await missingPage.waitForTimeout(500);
+  assert.equal(await missingPage.evaluate(() => window.__researchQa.commands.length), 0);
+  assert.match(await missingPage.locator('.research-status-line').textContent(), /Knowledge|Provenienz|version/i);
+  await missingPage.close();
   process.stdout.write(JSON.stringify({ ok: true, url: `http://127.0.0.1:${port}/qa`, screenshots: ['desktop-3d.png', 'desktop-2d-analytics.png', 'compact.png'], failures }, null, 2) + '\n');
 } finally {
   await browser.close();

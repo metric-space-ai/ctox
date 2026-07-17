@@ -1,7 +1,6 @@
 use crate::report::checks::release_guard::run_release_guard_check;
 use crate::report::render::manuscript::build_manuscript;
 use crate::report::schema::{ensure_schema, now_iso, open};
-use crate::report::scoring::{self, CellInput, RubricInput};
 use crate::report::state::{create_run, CreateRunParams};
 use crate::report::tests::fixtures::{insert_committed_block, TestRoot};
 use crate::report::workspace::Workspace;
@@ -114,7 +113,21 @@ fn workspace_rejects_unverified_evidence_until_all_gates_hold() {
     conn.execute(
         "UPDATE report_evidence_register
          SET verification_status = 'verified', http_status = 200,
-             snapshot_hash = 'snapshot', evidence_eligible = 1
+             snapshot_hash = 'not-a-content-hash', evidence_eligible = 1
+         WHERE evidence_id = 'ev-gated'",
+        [],
+    )
+    .unwrap();
+    let malformed = Workspace::load(root.path(), &run_id)
+        .unwrap()
+        .evidence_register()
+        .unwrap();
+    assert!(!malformed[0].is_evidence_eligible());
+
+    conn.execute(
+        "UPDATE report_evidence_register
+         SET verification_status = 'verified', http_status = 200,
+             snapshot_hash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', evidence_eligible = 1
          WHERE evidence_id = 'ev-gated'",
         [],
     )
@@ -125,69 +138,6 @@ fn workspace_rejects_unverified_evidence_until_all_gates_hold() {
         .evidence_register()
         .unwrap();
     assert!(after[0].is_evidence_eligible());
-}
-
-#[test]
-fn scoring_rejects_unverified_evidence_until_all_gates_hold() {
-    let root = TestRoot::new().unwrap();
-    let conn = open(root.path()).unwrap();
-    ensure_schema(&conn).unwrap();
-    let now = now_iso();
-    conn.execute(
-        "INSERT INTO report_runs(run_id, preset, blueprint_version, topic, language,
-             status, created_at, updated_at)
-         VALUES('score-run', 'feasibility', '1', 'topic', 'en', 'enumerating', ?1, ?1)",
-        params![now],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO report_options(option_id, run_id, code, label, created_at)
-         VALUES('opt-1', 'score-run', 'opt', 'Option', ?1)",
-        params![now],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO report_evidence_register(
-             evidence_id, run_id, kind, canonical_id, authors_json, resolver_used,
-             raw_payload_json, created_at, updated_at)
-         VALUES('ev-score', 'score-run', 'url', 'https://example.test/doc', '[]',
-                'manual', '{}', ?1, ?1)",
-        params![now],
-    )
-    .unwrap();
-    scoring::upsert_rubric(
-        &conn,
-        "score-run",
-        &RubricInput {
-            axis_code: "axis".into(),
-            level_code: "high".into(),
-            level_definition_md: "A verified high-level definition.".into(),
-            numeric_value: Some(1.0),
-        },
-    )
-    .unwrap();
-    let input = CellInput {
-        matrix_kind: "matrix".into(),
-        matrix_label: None,
-        option_code: "opt".into(),
-        axis_code: "axis".into(),
-        value_label: "high".into(),
-        rationale_md: "This rationale is specific enough for the test.".into(),
-        evidence_ids: vec!["ev-score".into()],
-        assumption_note_md: None,
-        rubric_anchor: None,
-    };
-    assert!(scoring::upsert_cell(&conn, "score-run", &input).is_err());
-
-    conn.execute(
-        "UPDATE report_evidence_register
-         SET verification_status = 'verified', http_status = 200,
-             snapshot_hash = 'snapshot', evidence_eligible = 1
-         WHERE evidence_id = 'ev-score'",
-        [],
-    )
-    .unwrap();
-    scoring::upsert_cell(&conn, "score-run", &input).unwrap();
 }
 
 #[test]

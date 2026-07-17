@@ -31,7 +31,10 @@ use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
 use ctox_core::config::{
     find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
+    ManagedFeatures,
 };
+#[cfg(target_os = "linux")]
+use ctox_core::features::Feature;
 use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_core::AuthManager;
 use ctox_core::ThreadManager;
@@ -84,6 +87,18 @@ fn direct_session_arg0_paths() -> Arg0DispatchPaths {
         ctox_linux_sandbox_exe: None,
         main_execve_wrapper_exe: None,
     }
+}
+
+fn configure_managed_linux_sandbox(features: &mut ManagedFeatures) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    features
+        .enable(Feature::UseLegacyLandlock)
+        .map_err(|err| anyhow::anyhow!("managed Linux sandbox configuration: {err}"))?;
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = features;
+
+    Ok(())
 }
 
 fn persistent_worker_thread_name(root: &Path) -> String {
@@ -1032,15 +1047,18 @@ impl PersistentSession {
                 provider.provider_id, provider.base_url, provider.wire_api
             );
         }
-        let config = Arc::new(
-            ConfigBuilder::default()
-                .cli_overrides(cli_overrides.clone())
-                .harness_overrides(overrides)
-                .cloud_requirements(cloud_requirements.clone())
-                .build()
-                .await
-                .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
-        );
+        let mut config = ConfigBuilder::default()
+            .cli_overrides(cli_overrides.clone())
+            .harness_overrides(overrides)
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+            .await
+            .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
+        // Managed CTOX hosts can run inside containers where user namespaces
+        // are unavailable. The stable Landlock path preserves filesystem and
+        // seccomp enforcement without depending on a host bwrap package.
+        configure_managed_linux_sandbox(&mut config.features)?;
+        let config = Arc::new(config);
         let session_source = if read_only_sandbox {
             SessionSource::SubAgent(SubAgentSource::Review)
         } else {

@@ -79,6 +79,10 @@ Runtime invariants:
   tools unavailable even though that scratch CWD is writable.
 - CTOX shell calls from subagents must carry thread/agent/turn identifiers so
   forensics can attribute nested CLI activity.
+- CTOX-managed Linux direct sessions select the stable Landlock backend before
+  thread creation. Root workers, thread-spawn leaves, and reviewers therefore
+  inherit one host-independent sandbox contract even when a managed container
+  has no system bubblewrap package or usable user namespace.
 
 State and forensic fields:
 

@@ -997,8 +997,12 @@ function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
     if (id) curatedBySource.set(id, row);
   }
   const raw = sourceRows.length ? sourceRows : curatedRows;
-  const verifiedIds = new Set(raw.filter((row) => evidenceGate(row).eligible).map(sourceId).filter(Boolean));
-  const measurementAgg = aggregateMeasurements((measurementRows || []).filter((row) => verifiedIds.has(sourceId(row))));
+  const initialModels = raw.map((row, index) => {
+    const id = sourceId(row) || `source_${index + 1}`;
+    const gate = evidenceGate(row);
+    return { id, row, evidenceEligible: gate.eligible };
+  });
+  const measurementAgg = aggregateMeasurements(measurementRows || [], initialModels);
   return raw.map((row, index) => {
     const id = sourceId(row) || `source_${index + 1}`;
     const title = firstString(row, ['title', 'source_title', 'name']) || `Source ${index + 1}`;
@@ -1053,8 +1057,12 @@ function evidenceSourceIds(sourceModels = state.sourceModels) {
 }
 
 function filterMeasurementRowsForEvidence(rows, sourceModels = state.sourceModels) {
-  const eligibleIds = evidenceSourceIds(sourceModels);
-  return (rows || []).filter((row) => eligibleIds.has(sourceId(row)));
+  const modelsById = new Map((sourceModels || []).map((model) => [String(model.id), model]));
+  return (rows || []).filter((row) => {
+    const model = modelsById.get(firstString(row, ['source_id']));
+    if (sourceModels?.length && (!model || !model.evidenceEligible)) return false;
+    return measurementEvidenceBinding(row, model).eligible;
+  });
 }
 
 function filterGraphRowsForEvidence(nodeRows, edgeRows, eligibleIds) {
@@ -1088,6 +1096,80 @@ function graphSourceIds(row) {
     if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
   } catch {}
   return raw.split(/[,;|]/).map((value) => value.trim()).filter(Boolean);
+}
+
+function measurementEvidenceBinding(row, sourceModel = null) {
+  const sourceIdValue = firstString(row, ['source_id']);
+  const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']);
+  const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']);
+  const canonicalUrl = firstString(row, ['canonical_url']);
+  const validHash = /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  const expectedRow = sourceModel?.row || {};
+  const expectedSnapshotId = firstString(expectedRow, ['snapshot_id', 'source_snapshot_id']);
+  const expectedHash = firstString(expectedRow, ['snapshot_hash', 'snapshot_sha256']);
+  const expectedCanonicalUrl = firstString(expectedRow, ['canonical_url']);
+  const eligible = Boolean(sourceIdValue)
+    && Boolean(snapshotId)
+    && validHash
+    && Boolean(canonicalUrl)
+    && (!sourceModel || (
+      sourceModel.evidenceEligible === true
+      && snapshotId === expectedSnapshotId
+      && snapshotHash === expectedHash
+      && canonicalUrl === expectedCanonicalUrl
+    ));
+  if (eligible) return { eligible: true, sourceId: sourceIdValue, snapshotId, snapshotHash, canonicalUrl };
+  return {
+    eligible: false,
+    sourceId: sourceIdValue,
+    reason: !sourceIdValue
+      ? 'missing_source_id'
+      : !snapshotId
+        ? 'missing_snapshot_id'
+        : !validHash
+          ? 'invalid_snapshot_hash'
+          : !canonicalUrl
+            ? 'missing_canonical_url'
+            : 'source_snapshot_lineage_mismatch',
+  };
+}
+
+function sourceReceiptLineage(source) {
+  const row = source?.row || {};
+  const sourceIdValue = firstString(row, ['source_id']) || String(source?.id || '').trim();
+  const sourceUrl = firstString(row, ['source_url', 'url', 'direct_url', 'doi']);
+  const canonicalUrl = firstString(row, ['canonical_url']) || String(source?.canonicalUrl || '').trim();
+  const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']);
+  const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']);
+  const receiptUrl = firstString(row, [
+    'source_receipt_url',
+    'source_receipt_link',
+    'evidence_receipt_url',
+    'receipt_url',
+    'receipt_link',
+    'snapshot_url',
+  ]) || canonicalUrl;
+  const receiptId = firstString(row, ['source_receipt_id', 'evidence_receipt_id', 'receipt_id']);
+  const evidenceId = firstString(row, ['evidence_id']);
+  const valid = Boolean(sourceIdValue)
+    && Boolean(canonicalUrl)
+    && Boolean(receiptUrl)
+    && Boolean(snapshotId)
+    && /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  return {
+    valid,
+    source_id: sourceIdValue,
+    source_url: sourceUrl,
+    url: receiptUrl,
+    receipt_url: receiptUrl,
+    source_receipt_url: receiptUrl,
+    receipt_id: receiptId,
+    evidence_id: evidenceId,
+    snapshot_id: snapshotId,
+    snapshot_hash: snapshotHash,
+    snapshot_sha256: snapshotHash,
+    canonical_url: canonicalUrl,
+  };
 }
 
 function evidenceGate(row) {
@@ -1175,10 +1257,13 @@ function emptyScoreDimensions(axisDefs = BASE_AXES) {
   ].map((axis) => axis.id))].map((id) => [id, null]));
 }
 
-function aggregateMeasurements(rows) {
+function aggregateMeasurements(rows, sourceModels = null) {
   const bySource = new Map();
-  for (const row of rows || []) {
-    const id = sourceId(row);
+  const eligibleRows = sourceModels
+    ? filterMeasurementRowsForEvidence(rows, sourceModels)
+    : (rows || []).filter((row) => measurementEvidenceBinding(row).eligible);
+  for (const row of eligibleRows) {
+    const id = firstString(row, ['source_id']);
     if (!id) continue;
     const current = bySource.get(id) || {
       count: 0,
@@ -1427,13 +1512,14 @@ function renderCenter() {
         </div>
       </div>
     </header>
+    ${state.status ? `<div class="research-status-line" role="status" aria-live="polite">${escapeHtml(state.status)}</div>` : ''}
     <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
       ${renderSemanticGraph(task, projection)}
       <section class="research-workbench">
         <div class="research-tabs-container">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
             ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
-            ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
+            ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length})`)}
             ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
             ${tabButton('reports', `${state.t('reports', 'Fachberichte')} (${researchReportsForTask(task).length})`)}
           </div>
@@ -1685,6 +1771,18 @@ async function dispatchGraphAiAction(action) {
     renderCenter();
     return;
   }
+  if (action === 'document') {
+    const base = knowledgeBaseForTask(task);
+    const latestRun = latestEvidenceRunForTask(task.id, state.runs);
+    const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
+    const selectedIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
+    const lineage = graphDocumentLineage(task, base, latestRun, state.sourceModels, selectedIds);
+    if (!lineage.ok) {
+      setStatus(`${state.t('graphDocumentUnavailable', 'Dokument nicht erstellt: belastbare Knowledge-/Quellen-Provenienz fehlt')}. ${lineage.reason}`);
+      renderCenter();
+      return;
+    }
+  }
   if (!canWriteResearchState()) {
     setStatus(researchWriteDeniedMessage());
     return;
@@ -1796,9 +1894,12 @@ function eligibleGraphFocusSourceIds(selectedNode, sourceModels = state.sourceMo
 }
 
 async function dispatchGraphDocumentTask(task) {
-  if (!evidenceRankedSources().length) return;
+  const base = knowledgeBaseForTask(task);
+  const latestRun = latestEvidenceRunForTask(task.id, state.runs);
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
   const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
+  const lineage = graphDocumentLineage(task, base, latestRun, state.sourceModels, graphFocusSourceIds);
+  if (!lineage.ok) throw new Error(lineage.reason);
   const focus = selectedNode?.label || task.title;
   const title = `${task.title} · ${focus}`.slice(0, 120);
   const filename = `${slugId(title).slice(0, 82) || 'research-graph-report'}.docx`;
@@ -1808,6 +1909,7 @@ async function dispatchGraphDocumentTask(task) {
     `Erstelle ein belastbares Word-Dokument aus dem Research-Graph "${task.title}".`,
     `Fokus: ${focus}`,
     `Knowledge domain: ${task.knowledge_domain}`,
+    `Knowledge version: ${lineage.knowledge_version_id}`,
     graphFocusSourceIds.length ? `Bevorzugte Source-IDs: ${graphFocusSourceIds.join(', ')}` : '',
     '',
     'Nutze systematic-research für die Knowledge-Lookup-Pflicht und den doc-Skill für Produktion, Rendering und visuelle Qualitätsprüfung.',
@@ -1834,10 +1936,18 @@ async function dispatchGraphDocumentTask(task) {
       required_artifacts: [outputPath],
       thread_key: `business-os/research/${task.id}`,
       knowledge_domain: task.knowledge_domain,
+      knowledge_version_id: lineage.knowledge_version_id,
+      knowledge_version: lineage.knowledge_version,
+      source_receipts: lineage.source_receipts,
+      requested_snapshot_hashes: lineage.requested_snapshot_hashes,
+      evidence_lineage: lineage.evidence_lineage,
       graph_focus: {
         node_id: selectedNode?.id || '',
         label: focus,
         source_ids: graphFocusSourceIds,
+        snapshot_hashes: lineage.source_receipts
+          .filter((receipt) => !graphFocusSourceIds.length || graphFocusSourceIds.includes(receipt.source_id))
+          .map((receipt) => receipt.snapshot_hash),
       },
       document_quality_contract: {
         use_documents_skill: true,
@@ -1857,7 +1967,11 @@ async function dispatchGraphDocumentTask(task) {
         linked_records: [
           { kind: 'research_task', id: task.id },
           { kind: 'knowledge_domain', id: task.knowledge_domain },
+          { kind: 'knowledge_version', id: lineage.knowledge_version_id },
         ],
+        knowledge_version_id: lineage.knowledge_version_id,
+        source_receipts: lineage.source_receipts,
+        requested_snapshot_hashes: lineage.requested_snapshot_hashes,
       },
     },
     client_context: {
@@ -2415,6 +2529,7 @@ function formatDimensionScore(value) {
 }
 
 function renderMeasurementsTable() {
+  const rows = filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels);
   return `
     <table class="ctox-table" style="table-layout: fixed; width: 100%;">
       <colgroup>
@@ -2442,7 +2557,7 @@ function renderMeasurementsTable() {
         </tr>
       </thead>
       <tbody>
-        ${state.measurementRows.slice(0, 120).map((row) => `
+        ${rows.slice(0, 120).map((row) => `
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
             <td>${escapeHtml(propellerSize(row))}</td>
@@ -2454,7 +2569,7 @@ function renderMeasurementsTable() {
             <td class="is-num">${formatMeasurementNumber(row.torque_Nm)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
-        `).join('') || `<tr><td colspan="9">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
+        `).join('') || `<tr><td colspan="9">${escapeHtml(state.t('noMeasurements', 'Keine verifizierten Messpunkte vorhanden.'))}</td></tr>`}
       </tbody>
     </table>
   `;
@@ -2477,17 +2592,15 @@ function propellerSize(row) {
 }
 
 function metricPropellerLength(row, stem) {
-  const metric = numberValue(row[`${stem}_mm`]);
-  if (metric) return metric;
-  const inches = numberValue(row[`${stem}_in`]);
-  return inches ? inches * 25.4 : '';
+  const metric = optionalNumberValue(row[`${stem}_mm`]);
+  if (metric !== null) return metric;
+  const inches = optionalNumberValue(row[`${stem}_in`]);
+  return inches === null ? '' : inches * 25.4;
 }
 
 function tangentialEquivalentForce(row) {
-  const explicit = numberValue(row.tangential_equivalent_force_N);
-  if (explicit) return explicit;
-  const legacy = numberValue(row.radial_load_N);
-  return legacy ? Math.abs(legacy) : '';
+  const explicit = optionalNumberValue(row.tangential_equivalent_force_N);
+  return explicit === null ? '' : explicit;
 }
 
 function renderKnowledgeTables(task) {
@@ -2537,7 +2650,7 @@ function renderRight() {
       <section class="research-metric-grid">
         <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
         <div><strong>${evidenceRankedSources().length}</strong><span>${escapeHtml(state.t('verified', 'Verified'))}</span></div>
-        <div><strong>${state.measurementRows.length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
+        <div><strong>${filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
         <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
         <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>${escapeHtml(state.t('status', 'Status'))}</span></div>
       </section>
@@ -2660,8 +2773,9 @@ function computedDecisionNotes(source) {
   if (top) {
     notes.push({ kind: 'opportunity', title: state.t('decisionNoteEv1', 'Use strongest evidence first'), body: state.t('decisionNoteEv1Body', `${top.title} ist aktuell der stärkste Dashboard-Anker.`, top.title) });
   }
-  if (state.measurementRows.length) {
-    notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${state.measurementRows.length} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, state.measurementRows.length) });
+  const verifiedMeasurementCount = filterMeasurementRowsForEvidence(state.measurementRows, state.sourceModels).length;
+  if (verifiedMeasurementCount) {
+    notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${verifiedMeasurementCount} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, verifiedMeasurementCount) });
   }
   if (!top) {
     notes.push({ kind: 'risk', title: state.t('decisionNoteGate', 'Evidence gate active'), body: state.t('decisionNoteGateBody', 'Discovery-Kandidaten bleiben sichtbar, bis Verifizierung, Snapshot und HTTP-Erfolg vollständig vorliegen.') });
@@ -2699,11 +2813,19 @@ function canRunResearchTask(task) {
 }
 
 function canBuildKnowledgeFromResearch(task = selectedTask()) {
-  return Boolean(task?.id && evidenceRankedSources().length && canWriteResearchState());
+  const base = task ? knowledgeBaseForTask(task) : null;
+  const latestRun = task ? latestEvidenceRunForTask(task.id, state.runs) : null;
+  return Boolean(task?.id
+    && evidenceRankedSources().length
+    && knowledgeVersionContext(base, latestRun).available
+    && canWriteResearchState());
 }
 
 function knowledgeUnavailableReason() {
   if (!evidenceRankedSources().length) return state.t('knowledgeRequiresVerifiedSources', 'Knowledge ist ohne verifizierte Quellen nicht verfügbar.');
+  const task = selectedTask();
+  const version = knowledgeVersionContext(task ? knowledgeBaseForTask(task) : null, task ? latestEvidenceRunForTask(task.id, state.runs) : null);
+  if (!version.available) return `${state.t('knowledgeVersionUnavailable', 'Knowledge ist ohne eine immutable Version nicht verfügbar')}: ${version.reason}`;
   if (!canWriteResearchState()) return researchWriteDeniedMessage();
   return '';
 }
@@ -3098,7 +3220,189 @@ function researchScoringContract(scoringDimensions) {
   };
 }
 
+function knowledgeVersionContext(base, latestRun = null) {
+  const candidates = [];
+  const addCandidate = (value, origin) => {
+    if (value === null || value === undefined) return;
+    if (typeof value === 'string') {
+      const id = value.trim();
+      if (id) candidates.push({ id, origin, record: null });
+      return;
+    }
+    if (typeof value !== 'object' || Array.isArray(value)) return;
+    const id = firstString(value, ['current_version_id', 'knowledge_version_id', 'version_id', 'id']);
+    if (id) candidates.push({ id, origin, record: value });
+  };
+  const visit = (value, origin, table = false) => {
+    if (!value || typeof value !== 'object') return;
+    const keys = table
+      ? ['knowledge_version_id', 'current_version_id', 'knowledge_version']
+      : ['knowledge_version_id', 'current_version_id', 'knowledge_version'];
+    for (const key of keys) addCandidate(value[key], `${origin}.${key}`);
+    if (value.knowledge && typeof value.knowledge === 'object') visit(value.knowledge, `${origin}.knowledge`);
+    if (value.knowledge?.version && typeof value.knowledge.version === 'object') addCandidate(value.knowledge.version, `${origin}.knowledge.version`);
+    if (value.versions && Array.isArray(value.versions)) {
+      const current = value.versions.find((item) => item?.status === 'current');
+      if (current) addCandidate(current, `${origin}.versions[current]`);
+    }
+  };
+  visit(base, 'knowledge_base');
+  for (const table of base?.tables || []) visit(table, `knowledge_table:${table.table_key || table.id || 'unknown'}`, true);
+  visit(latestRun, 'research_run');
+  visit(latestRun?.payload, 'research_run.payload');
+  visit(latestRun?.payload?.result, 'research_run.payload.result');
+
+  const ids = [...new Set(candidates.map((candidate) => candidate.id))];
+  if (!ids.length) return { available: false, reason: 'authoritative Knowledge version is missing' };
+  if (ids.length > 1) return { available: false, reason: `authoritative Knowledge version is inconsistent (${ids.join(', ')})` };
+  const record = candidates.find((candidate) => candidate.record && candidate.id === ids[0])?.record || null;
+  if (record?.status && String(record.status).toLowerCase() !== 'current') {
+    return { available: false, reason: `Knowledge version ${ids[0]} is not current` };
+  }
+  return {
+    available: true,
+    id: ids[0],
+    record,
+    origin: candidates.filter((candidate) => candidate.id === ids[0]).map((candidate) => candidate.origin),
+  };
+}
+
+function tableRowsForLineage(table) {
+  return firstArray(
+    table?.rows,
+    table?.records,
+    table?.data,
+    table?.payload?.rows,
+    table?.payload?.records,
+    table?.payload?.data,
+    table?.dataframe?.rows,
+    table?.payload?.dataframe?.rows,
+  ).filter((row) => row && typeof row === 'object');
+}
+
+function knowledgeLineageForPayload(base, latestRun = null, sourceModels = []) {
+  const version = knowledgeVersionContext(base, latestRun);
+  const models = sourceModels.length
+    ? sourceModels
+    : (tableForKey(base, 'source_catalog') ? tableRowsForLineage(tableForKey(base, 'source_catalog')).map((row) => ({ id: sourceId(row), row, evidenceEligible: evidenceGate(row).eligible })) : []);
+  let sourceReceipts = models
+    .filter((source) => source?.evidenceEligible)
+    .map(sourceReceiptLineage)
+    .filter((receipt) => receipt.valid)
+    .map(({ valid, ...receipt }) => receipt);
+  let sourceById = new Map(sourceReceipts.map((receipt) => [receipt.source_id, receipt]));
+  const evidenceLineage = [];
+  const claimLineage = [];
+  for (const table of base?.tables || []) {
+    for (const row of tableRowsForLineage(table)) {
+      const source = sourceById.get(firstString(row, ['source_id']));
+      if (!source) continue;
+      const snapshotId = firstString(row, ['snapshot_id', 'source_snapshot_id']) || source.snapshot_id;
+      const snapshotHash = firstString(row, ['snapshot_hash', 'snapshot_sha256']) || source.snapshot_hash;
+      const canonicalUrl = firstString(row, ['canonical_url']) || source.canonical_url;
+      if (!snapshotId || snapshotHash !== source.snapshot_hash || canonicalUrl !== source.canonical_url) continue;
+      const evidenceId = firstString(row, ['evidence_id']);
+      const claimId = firstString(row, ['claim_id']);
+      const lineage = {
+        source_id: source.source_id,
+        canonical_url: source.canonical_url,
+        snapshot_id: snapshotId,
+        snapshot_hash: snapshotHash,
+        evidence_id: evidenceId,
+        claim_id: claimId,
+        claim_text: firstString(row, ['claim_text', 'fact_label', 'fact_value']),
+        lineage_sha256: firstString(row, ['lineage_sha256']),
+        table_key: table.table_key || '',
+        row_id: firstString(row, ['row_id', 'id', 'record_id']),
+      };
+      if (evidenceId) evidenceLineage.push(lineage);
+      if (claimId) claimLineage.push(lineage);
+    }
+  }
+  if (!sourceModels.length) {
+    const runLineage = [
+      latestRun?.payload?.evidence_lineage,
+      latestRun?.payload?.lineage,
+      latestRun?.evidence_lineage,
+      latestRun?.lineage,
+    ].filter((value) => value && typeof value === 'object');
+    const runReceipts = runLineage.flatMap((lineage) => firstArray(lineage.source_receipts, lineage.source_lineage, lineage.sources))
+      .map((receipt) => ({
+        ...receipt,
+        receipt_url: firstString(receipt, ['receipt_url', 'source_receipt_url', 'receipt_link', 'url', 'canonical_url']),
+        canonical_url: firstString(receipt, ['canonical_url', 'source_url']),
+        snapshot_id: firstString(receipt, ['snapshot_id', 'source_snapshot_id']),
+        snapshot_hash: firstString(receipt, ['snapshot_hash', 'snapshot_sha256']),
+      }))
+      .filter((receipt) => receipt.source_id && receipt.receipt_url && receipt.canonical_url && receipt.snapshot_id && /^sha256:[0-9a-f]{64}$/i.test(receipt.snapshot_hash));
+    sourceReceipts = [...sourceReceipts, ...runReceipts].filter((receipt, index, all) => all.findIndex((candidate) => candidate.source_id === receipt.source_id && candidate.snapshot_hash === receipt.snapshot_hash) === index);
+    sourceById = new Map(sourceReceipts.map((receipt) => [receipt.source_id, receipt]));
+    for (const lineage of runLineage) {
+      for (const row of firstArray(lineage.evidence, lineage.evidence_lineage, lineage.items)) {
+        if (row?.evidence_id) evidenceLineage.push(row);
+      }
+      for (const row of firstArray(lineage.claims, lineage.claim_lineage)) {
+        if (row?.claim_id) claimLineage.push(row);
+      }
+    }
+  }
+  const dedupe = (rows) => {
+    const seen = new Set();
+    return rows.filter((row) => {
+      const key = JSON.stringify(row);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const snapshots = dedupe(sourceReceipts.map((receipt) => ({
+    source_id: receipt.source_id,
+    canonical_url: receipt.canonical_url,
+    snapshot_id: receipt.snapshot_id,
+    snapshot_hash: receipt.snapshot_hash,
+  })));
+  return {
+    available: version.available,
+    reason: version.reason || '',
+    knowledge_version_id: version.id || '',
+    knowledge_version: version.record,
+    source_receipts: sourceReceipts,
+    snapshots,
+    evidence: dedupe(evidenceLineage),
+    claims: dedupe(claimLineage),
+    requested_snapshot_hashes: [...new Set(sourceReceipts.map((receipt) => receipt.snapshot_hash))],
+  };
+}
+
+function graphDocumentLineage(task, base, latestRun, sourceModels, selectedSourceIds = []) {
+  const lineage = knowledgeLineageForPayload(base, latestRun, sourceModels);
+  const eligibleSources = (sourceModels || []).filter((source) => source?.evidenceEligible);
+  if (!lineage.available) return { ok: false, reason: lineage.reason || 'authoritative Knowledge version is missing' };
+  if (!eligibleSources.length) return { ok: false, reason: 'no eligible source receipts are loaded' };
+  if (lineage.source_receipts.length !== eligibleSources.length) {
+    return { ok: false, reason: 'a verified source is missing its immutable receipt lineage' };
+  }
+  const selected = new Set((selectedSourceIds || []).map(String));
+  const requested = lineage.source_receipts.filter((receipt) => !selected.size || selected.has(receipt.source_id));
+  return {
+    ok: true,
+    task_id: task?.id || '',
+    knowledge_version_id: lineage.knowledge_version_id,
+    knowledge_version: lineage.knowledge_version,
+    source_receipts: lineage.source_receipts,
+    requested_snapshot_hashes: [...new Set(requested.map((receipt) => receipt.snapshot_hash))],
+    evidence_lineage: {
+      knowledge_version_id: lineage.knowledge_version_id,
+      source_receipts: lineage.source_receipts,
+      snapshots: lineage.snapshots,
+      evidence: lineage.evidence,
+      claims: lineage.claims,
+    },
+  };
+}
+
 function knowledgeRefreshPayload(task, base, latestRun) {
+  const lineage = knowledgeLineageForPayload(base, latestRun);
   const tables = base?.tables || [];
   const tableRefs = Object.fromEntries(tables
     .filter((table) => table.table_key)
@@ -3127,14 +3431,25 @@ function knowledgeRefreshPayload(task, base, latestRun) {
     research_task_id: task.id,
     research_run_id: latestRun?.id || '',
     knowledge_domain: task.knowledge_domain,
+    knowledge_version_id: lineage.knowledge_version_id,
+    knowledge_version: lineage.knowledge_version,
+    immutable_knowledge_version: true,
     source_tables: tableRefs,
+    source_lineage: lineage.source_receipts,
+    snapshot_lineage: lineage.snapshots,
+    evidence_lineage: lineage.evidence,
+    claim_lineage: lineage.claims,
+    requested_snapshot_hashes: lineage.requested_snapshot_hashes,
+    lineage_status: lineage.available ? 'complete' : 'incomplete',
     knowledge_contract: {
       domain: task.knowledge_domain,
+      knowledge_version_id: lineage.knowledge_version_id,
+      immutable_version_required: true,
       create_or_update: ['skillbook', 'skills', 'runbooks', 'resources'],
       stable_identity: true,
       provenance_required: true,
       source_of_truth: 'original_sources',
-      citations: ['source_id', 'source_url'],
+      citations: ['claim_id', 'evidence_id', 'snapshot_id', 'source_id', 'canonical_url', 'lineage_sha256'],
       refresh_policy: 'update_existing_elements_from_latest_research_run',
     },
     writeback_contract: {
@@ -3145,6 +3460,11 @@ function knowledgeRefreshPayload(task, base, latestRun) {
         research_task_id: task.id,
         research_run_id: latestRun?.id || '',
         knowledge_domain: task.knowledge_domain,
+        knowledge_version_id: lineage.knowledge_version_id,
+        source_lineage: lineage.source_receipts,
+        snapshot_lineage: lineage.snapshots,
+        evidence_lineage: lineage.evidence,
+        claim_lineage: lineage.claims,
         table_ids: Object.values(tableRefs),
       },
     },
@@ -3917,8 +4237,13 @@ function normalizeScoreScale(value) {
 }
 
 function numberValue(value) {
+  return optionalNumberValue(value) ?? 0;
+}
+
+function optionalNumberValue(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
   const next = Number(value);
-  return Number.isFinite(next) ? next : 0;
+  return Number.isFinite(next) ? next : null;
 }
 
 function weightedAverage(pairs) {
@@ -4400,16 +4725,21 @@ export const __researchTestHooks = {
   filterMeasurementRowsForEvidence,
   formatDimensionScore,
   formatPortfolioScore,
+  aggregateMeasurements,
   hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
+  knowledgeLineageForPayload,
   knowledgeRefreshPayload,
+  graphDocumentLineage,
   latestEvidenceRunForTask,
   researchScoringContract,
   researchReportsForTask,
   renderSourcesTable,
   renderNoTaskCenter,
   researchDomainFromFormValue,
+  metricPropellerLength,
   shouldRetryEmptyKnowledgeTables,
+  tangentialEquivalentForce,
   validateResearchTaskInput,
   validateSelectedResearchTask,
 };

@@ -6,7 +6,6 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -284,6 +283,28 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .get("snapshot_hash")
                             .cloned()
                             .unwrap_or(Value::Null);
+                        source["response_metadata"] = read_payload
+                            .get("response_metadata")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        source["response_content_kind"] = read_payload
+                            .get("response_content_kind")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        if read_payload
+                            .get("response_content_kind")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| kind.starts_with("data_"))
+                        {
+                            source["source_type"] = Value::String("data_file".to_string());
+                            source["data_validation_status"] =
+                                Value::String("validated_from_response_content".to_string());
+                        } else if source.get("source_type").and_then(Value::as_str)
+                            == Some("data_file")
+                        {
+                            source["data_validation_status"] =
+                                Value::String("rejected_response_content_mismatch".to_string());
+                        }
                         source["read"] = json!({
                             "ok": read_payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
                             "url": url,
@@ -300,6 +321,9 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "checked_at": read_payload.get("checked_at").cloned().unwrap_or(Value::Null),
                             "http_status": read_payload.get("http_status").cloned().unwrap_or(Value::Null),
                             "snapshot_hash": read_payload.get("snapshot_hash").cloned().unwrap_or(Value::Null),
+                            "response_metadata": read_payload.get("response_metadata").cloned().unwrap_or(Value::Null),
+                            "response_content_kind": read_payload.get("response_content_kind").cloned().unwrap_or(Value::Null),
+                            "response_body": read_payload.get("response_body").cloned().unwrap_or(Value::Null),
                             "source_tier": read_payload.get("source_tier").cloned().unwrap_or(Value::Null),
                             "evidence_eligible": read_payload.get("evidence_eligible").cloned().unwrap_or(Value::Bool(false)),
                         });
@@ -1243,8 +1267,17 @@ fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
     {
         return true;
     }
-    if is_data_file_url(read_url) || is_data_file_url(canonical_url) {
+    if read
+        .get("response_content_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("data_"))
+    {
         return true;
+    }
+    if is_data_file_url(read_url) || is_data_file_url(canonical_url) {
+        // A filename is only a discovery hint. The response must be classified
+        // and validated by its bytes before it can become data evidence.
+        return false;
     }
     if is_metadata_landing_source(source, read_url, canonical_url) {
         return false;
@@ -2022,20 +2055,51 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
         if source.get("evidence_eligible").and_then(Value::as_bool) != Some(true) {
             continue;
         }
-        let Some(url) = source_read_url(source) else {
+        let Some(read) = source.get("read") else {
             continue;
         };
-        let Ok(snapshot) = fetch_limited_snapshot(&url, 5_000_000) else {
+        let Some(url) = read
+            .get("url")
+            .and_then(Value::as_str)
+            .or_else(|| source.get("url").and_then(Value::as_str))
+        else {
             continue;
         };
-        let extension = snapshot_extension(&url, snapshot.content_type.as_deref());
+        let Some(bytes) = response_body_bytes(read) else {
+            continue;
+        };
+        if !response_receipt_matches_bytes(read, &bytes) {
+            continue;
+        }
+        let content_type = read
+            .pointer("/response_metadata/content_type")
+            .and_then(Value::as_str);
+        let content_kind = read
+            .pointer("/response_metadata/content_kind")
+            .and_then(Value::as_str);
+        if content_kind.is_some_and(|kind| kind == "malformed_data" || kind == "html") {
+            continue;
+        }
+        let extension = snapshot_extension(content_kind, content_type, &bytes);
         let target = snapshot_dir.join(format!("source-{index:04}.{extension}"));
-        if fs::write(&target, &snapshot.bytes).is_ok() {
+        if fs::write(&target, &bytes).is_ok() {
+            let receipt = read
+                .get("response_metadata")
+                .cloned()
+                .unwrap_or(Value::Null);
             let meta = json!({
                 "source_index": index,
                 "url": url,
-                "content_type": snapshot.content_type,
-                "bytes": snapshot.bytes.len(),
+                "requested_url": receipt.get("requested_url").cloned().unwrap_or(Value::Null),
+                "final_url": receipt.get("final_url").cloned().unwrap_or(Value::Null),
+                "status": receipt.get("status").cloned().unwrap_or(Value::Null),
+                "redirected": receipt.get("redirected").cloned().unwrap_or(Value::Bool(false)),
+                "redirect_chain": receipt.get("redirect_chain").cloned().unwrap_or_else(|| json!([])),
+                "content_type": content_type,
+                "content_kind": content_kind,
+                "sha256": receipt.get("sha256").cloned().unwrap_or(Value::Null),
+                "bytes": bytes.len(),
+                "lineage": receipt.get("lineage").cloned().unwrap_or(Value::Null),
                 "file": target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
             });
             let _ = write_json_pretty(
@@ -2048,52 +2112,41 @@ fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize
     saved
 }
 
-struct Snapshot {
-    content_type: Option<String>,
-    bytes: Vec<u8>,
+fn response_body_bytes(read: &Value) -> Option<Vec<u8>> {
+    read.get("response_body")?
+        .as_array()?
+        .iter()
+        .map(|byte| byte.as_u64().and_then(|value| u8::try_from(value).ok()))
+        .collect()
 }
 
-fn fetch_limited_snapshot(url: &str, max_bytes: usize) -> Result<Snapshot> {
-    // SSRF guard: snapshot/text fetchers pull caller- and third-party-supplied
-    // source URLs (incl. open-access PDF URLs resolved from external APIs).
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(8))
-        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
-        .build();
-    let response = agent
-        .get(url)
-        .set("User-Agent", "ctox-deep-research/0.1")
-        .call()
-        .map_err(anyhow::Error::from)?;
-    let content_type = response.header("content-type").map(|value| {
-        value
-            .split(';')
-            .next()
-            .unwrap_or(value)
-            .trim()
-            .to_ascii_lowercase()
-    });
-    let mut reader = response.into_reader().take(max_bytes as u64 + 1);
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes)?;
-    if bytes.len() > max_bytes {
-        bytes.truncate(max_bytes);
-    }
-    Ok(Snapshot {
-        content_type,
-        bytes,
-    })
+fn response_receipt_matches_bytes(read: &Value, bytes: &[u8]) -> bool {
+    let receipt = read.get("response_metadata");
+    receipt
+        .and_then(|value| value.get("byte_count"))
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count == bytes.len() as u64)
+        && receipt
+            .and_then(|value| value.get("sha256"))
+            .and_then(Value::as_str)
+            .is_some_and(|hash| read.get("snapshot_hash").and_then(Value::as_str) == Some(hash))
 }
 
-fn snapshot_extension(url: &str, content_type: Option<&str>) -> &'static str {
-    if content_type.is_some_and(|value| value.contains("pdf"))
-        || url.to_ascii_lowercase().contains(".pdf")
-    {
+fn snapshot_extension(
+    content_kind: Option<&str>,
+    content_type: Option<&str>,
+    _bytes: &[u8],
+) -> &'static str {
+    if content_kind == Some("pdf") || content_type.is_some_and(|value| value.contains("pdf")) {
         "pdf"
-    } else if content_type.is_some_and(|value| value.contains("html")) {
-        "html"
-    } else if content_type.is_some_and(|value| value.contains("json")) {
+    } else if content_kind == Some("data_json")
+        || content_type.is_some_and(|value| value.contains("json"))
+    {
         "json"
+    } else if content_kind == Some("data_delimited")
+        || content_type.is_some_and(|value| value.contains("csv") || value.contains("tab"))
+    {
+        "csv"
     } else if content_type.is_some_and(|value| value.starts_with("text/")) {
         "txt"
     } else {
@@ -3271,6 +3324,74 @@ mod tests {
         assert!(links
             .iter()
             .any(|link| link.get("kind").and_then(Value::as_str) == Some("dataset")));
+    }
+
+    #[test]
+    fn persists_the_admitted_response_body_and_receipt_without_refetching() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox_snapshot_receipt_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let snapshot_dir = root.join("snapshots");
+        fs::create_dir_all(&snapshot_dir).expect("snapshot directory");
+        let body = b"name,value\nalpha,42\n".to_vec();
+        let body_json = Value::Array(
+            body.iter()
+                .map(|byte| Value::Number((*byte).into()))
+                .collect(),
+        );
+        let source = json!({
+            "source_type": "data_file",
+            "evidence_eligible": true,
+            "read": {
+                "url": "http://127.0.0.1:1/data.csv",
+                "snapshot_hash": "sha256:admitted-body",
+                "response_body": body_json,
+                "response_metadata": {
+                    "requested_url": "http://127.0.0.1:1/data.csv",
+                    "final_url": "http://127.0.0.1:1/data.csv",
+                    "status": 200,
+                    "content_type": "text/csv",
+                    "content_kind": "data_delimited",
+                    "byte_count": body.len(),
+                    "sha256": "sha256:admitted-body",
+                    "lineage": "web_search.evidence_fetch",
+                    "redirected": false,
+                    "redirect_chain": ["http://127.0.0.1:1/data.csv"]
+                }
+            }
+        });
+        assert_eq!(persist_source_snapshots(&snapshot_dir, &[source], 1), 1);
+        assert_eq!(
+            fs::read(snapshot_dir.join("source-0000.csv")).expect("snapshot"),
+            body
+        );
+        let metadata: Value = serde_json::from_slice(
+            &fs::read(snapshot_dir.join("source-0000.metadata.json")).expect("metadata"),
+        )
+        .expect("metadata JSON");
+        assert_eq!(metadata["content_kind"], "data_delimited");
+        assert_eq!(metadata["bytes"], 20);
+        assert_eq!(metadata["lineage"], "web_search.evidence_fetch");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn data_file_hint_does_not_admit_html_response_content() {
+        let source = json!({
+            "source_type": "data_file",
+            "url": "https://example.test/data.csv",
+        });
+        let read = json!({
+            "url": "https://example.test/data.csv",
+            "canonical_url": "https://example.test/data.csv",
+            "response_content_kind": "html",
+            "page_text_excerpt": "The login page returned instead of the requested data file.",
+        });
+        assert!(!read_has_actual_full_text_or_data(&source, &read));
     }
 
     #[test]

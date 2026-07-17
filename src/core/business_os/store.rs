@@ -20190,8 +20190,8 @@ fn business_command_core_claim(
 ) -> anyhow::Result<channels::BusinessCommandClaimRequest> {
     let intent = serde_json::json!({
         "command_id": command_id,
-        "module": command.module,
-        "command_type": command.command_type,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
         "record_id": command.record_id,
         "payload": command.payload,
         "client_context": policy_audit_client_context(command),
@@ -30387,11 +30387,11 @@ fn process_documents_report_command(
     queue_task: Option<&channels::QueueTaskView>,
     reply_text: Option<&str>,
 ) -> anyhow::Result<CommandAccepted> {
-    // Validate research lineage before creating a fallback DOCX. A generated
-    // placeholder must never make an evidence-gated report appear complete.
-    let lineage = document_report_lineage(root, command)?;
-    ensure_generated_docx_exists(root, command)?;
-    match writeback_generated_docx(root, conn, command_id, command, reply_text, &lineage) {
+    let writeback = (|| {
+        let lineage = document_report_lineage(root, command)?;
+        writeback_generated_docx(root, conn, command_id, command, reply_text, &lineage)
+    })();
+    match writeback {
         Ok(result) => {
             let completed_at_ms = now_ms() as i64;
             conn.execute(
@@ -30440,7 +30440,7 @@ fn process_documents_report_command(
         Err(err) => {
             let failed_at_ms = now_ms() as i64;
             conn.execute(
-                "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
+                "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
                 params![command_id, failed_at_ms],
             )?;
             upsert_business_record(
@@ -30454,10 +30454,10 @@ fn process_documents_report_command(
                     "module": command.module.clone(),
                     "command_type": command.command_type.clone(),
                     "record_id": command.record_id.clone().unwrap_or_default(),
-                    "status": "accepted",
+                    "status": "failed",
                     "inbound_channel": command_inbound_channel(command),
                     "task_id": queue_task.map(|task| task.message_key.clone()),
-                    "task_status": queue_task.map(|task| normalize_queue_status(&task.route_status)),
+                    "task_status": "failed",
                     "error": err.to_string(),
                     "payload": command.payload.clone(),
                     "client_context": command.client_context.clone(),
@@ -30487,6 +30487,21 @@ fn process_systematic_research_command(
     reply_text: &str,
 ) -> anyhow::Result<CommandAccepted> {
     let completed_at_ms = now_ms() as i64;
+    let evidence = match systematic_research_evidence_snapshot(root, command) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            persist_systematic_research_failure(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                &error,
+                completed_at_ms,
+            )?;
+            return Err(error);
+        }
+    };
     conn.execute(
         "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
         params![command_id, completed_at_ms],
@@ -30521,6 +30536,12 @@ fn process_systematic_research_command(
         "knowledge_domain": knowledge_domain.clone(),
         "task_id": task_id.clone(),
         "task_queue_id": task_queue_id.clone(),
+        "identified_count": evidence.identified_count,
+        "accepted_count": evidence.accepted_count,
+        "used_count": evidence.used_count,
+        "source_receipt_links": evidence.source_receipt_links,
+        "source_receipt_snapshot_hashes": evidence.source_receipt_snapshot_hashes,
+        "knowledge_version": evidence.knowledge_version,
         "completed_at_ms": completed_at_ms
     });
     let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
@@ -30606,6 +30627,15 @@ fn process_systematic_research_command(
             );
         }
         object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+        object.insert(
+            "identified_count".to_string(),
+            Value::from(evidence.identified_count),
+        );
+        object.insert(
+            "accepted_count".to_string(),
+            Value::from(evidence.accepted_count),
+        );
+        object.insert("used_count".to_string(), Value::from(evidence.used_count));
         let payload = object
             .entry("payload".to_string())
             .or_insert_with(|| serde_json::json!({}));
@@ -31698,7 +31728,7 @@ fn commit_office_spreadsheet_version(
     );
     spreadsheet_object.insert("updated_at_ms".into(), Value::from(now));
     let diagnostics = [prepared.diagnostics.clone(), package.diagnostics.clone()].concat();
-    let version_payload = serde_json::json!({
+    let mut version_payload = serde_json::json!({
         "id": version_id, "version_id": version_id, "spreadsheet_id": spreadsheet_id,
         "version": version_number, "source_kind": "office_edited_xlsx", "blob_id": blob_id,
         "base_version_id": base_version_id, "editor_blob_id": staged_editor_blob_id,
@@ -31714,6 +31744,19 @@ fn commit_office_spreadsheet_version(
         },
         "business_command_id": command.id, "created_at_ms": now, "updated_at_ms": now
     });
+    if let Some(version_object) = version_payload.as_object_mut() {
+        for key in [
+            "ingestion_kind",
+            "linked_records",
+            "source_receipt_snapshot_hashes",
+            "knowledge_version",
+            "knowledge_lineage",
+        ] {
+            if let Some(value) = base_version.get(key).or_else(|| record.get(key)) {
+                version_object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
 
     let tx = conn.unchecked_transaction()?;
     let stored: Option<String> = tx
@@ -31851,6 +31894,175 @@ struct DocumentsReportLineage {
     linked_records: Vec<Value>,
     source_receipt_snapshot_hashes: Vec<String>,
     knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SystematicResearchEvidence {
+    identified_count: i64,
+    accepted_count: i64,
+    used_count: i64,
+    source_receipt_links: Vec<Value>,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
+}
+
+fn systematic_research_evidence_snapshot(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<SystematicResearchEvidence> {
+    let domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .context("systematic research completion requires a Knowledge domain")?;
+    let path = rxdb_store_path(root);
+    anyhow::ensure!(
+        path.is_file(),
+        "systematic research completion requires the RxDB store"
+    );
+    let conn = Connection::open(&path)?;
+    let table = rxdb_collection_table_name(&path, &conn, "knowledge_tables")
+        .context("systematic research completion requires Knowledge tables")?;
+    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut domain_tables = Vec::new();
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        let source = document
+            .get("payload")
+            .filter(|value| value.is_object())
+            .unwrap_or(&document);
+        if first_string_field(source, &["domain", "knowledge_domain"]).as_deref()
+            == Some(domain.as_str())
+        {
+            domain_tables.push(document);
+        }
+    }
+    anyhow::ensure!(
+        !domain_tables.is_empty(),
+        "systematic research completion requires authoritative Knowledge tables for {domain}"
+    );
+    domain_tables.sort_by_key(|document| {
+        first_string_field(document, &["id", "table_id"]).unwrap_or_default()
+    });
+
+    let mut identified_count = 0_i64;
+    let mut source_receipt_links = Vec::new();
+    let mut snapshot_hashes = Vec::new();
+    for document in &domain_tables {
+        let source = document
+            .get("payload")
+            .filter(|value| value.is_object())
+            .unwrap_or(document);
+        if first_string_field(source, &["table_key"]).as_deref() != Some("source_catalog") {
+            continue;
+        }
+        let table_id = first_string_field(source, &["id", "table_id"])
+            .or_else(|| first_string_field(document, &["id", "table_id"]))
+            .unwrap_or_default();
+        for receipt in document_knowledge_table_rows(document) {
+            identified_count += 1;
+            if !document_source_receipt_is_eligible(&receipt)
+                || !document_source_receipt_snapshot_matches(root, &receipt)?
+            {
+                continue;
+            }
+            let source_id = first_string_field(&receipt, &["source_id"])
+                .context("eligible source receipt is missing source_id")?;
+            let snapshot_hash = first_string_field(&receipt, &["snapshot_hash"])
+                .context("eligible source receipt is missing snapshot_hash")?;
+            source_receipt_links.push(serde_json::json!({
+                "kind": "source_receipt",
+                "id": source_id,
+                "source_id": source_id,
+                "evidence_id": first_string_field(&receipt, &["evidence_id"]),
+                "claim_id": first_string_field(&receipt, &["claim_id"]),
+                "snapshot_id": first_string_field(&receipt, &["snapshot_id"]),
+                "snapshot_hash": snapshot_hash,
+                "table_id": table_id,
+            }));
+            if !snapshot_hashes.contains(&snapshot_hash) {
+                snapshot_hashes.push(snapshot_hash);
+            }
+        }
+    }
+    anyhow::ensure!(
+        !source_receipt_links.is_empty(),
+        "systematic research completion requires at least one persisted, eligible source receipt"
+    );
+    let table_ids = domain_tables
+        .iter()
+        .filter_map(|document| first_string_field(document, &["id", "table_id"]))
+        .collect::<Vec<_>>();
+    let version_bytes = serde_json::to_vec(&domain_tables)?;
+    let content_hash = format!("sha256:{}", hex_sha256(&version_bytes));
+    let knowledge_version = serde_json::json!({
+        "version_id": content_hash,
+        "content_hash": content_hash,
+        "domain": domain,
+        "table_ids": table_ids,
+    });
+    let accepted_count = source_receipt_links.len() as i64;
+    Ok(SystematicResearchEvidence {
+        identified_count,
+        accepted_count,
+        used_count: accepted_count,
+        source_receipt_links,
+        source_receipt_snapshot_hashes: snapshot_hashes,
+        knowledge_version,
+    })
+}
+
+fn persist_systematic_research_failure(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    error: &anyhow::Error,
+    failed_at_ms: i64,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, failed_at_ms],
+    )?;
+    let payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module,
+        "command_type": command.command_type,
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "failed",
+        "task_id": queue_task.map(|task| task.message_key.clone()),
+        "task_status": "failed",
+        "error": error.to_string(),
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "updated_at_ms": failed_at_ms,
+    });
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        failed_at_ms,
+        payload.clone(),
+    )?;
+    let mut writers = RxdbProjectionWriterCache::new(root);
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut writers),
+        "business_commands",
+        command_id,
+        failed_at_ms,
+        payload,
+    )?;
+    refresh_queue_task_projection(
+        root,
+        conn,
+        Some(&mut writers),
+        command_id,
+        command,
+        queue_task,
+        failed_at_ms,
+    )
 }
 
 fn document_knowledge_context(command: &BusinessCommand) -> Value {
@@ -32228,6 +32440,22 @@ fn document_source_receipt_is_eligible(value: &Value) -> bool {
     .filter_map(|key| value.get(*key).and_then(Value::as_str))
     .map(|status| status.trim().to_ascii_lowercase())
     .collect::<Vec<_>>();
+    let has_identifier = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    };
+    let url_role = value
+        .get("url_role")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let content_scope = value
+        .get("content_scope")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
     snapshot_hash
         && value.get("evidence_eligible") == Some(&Value::Bool(true))
         && value.get("verification_status").and_then(Value::as_str) == Some("verified")
@@ -32260,27 +32488,45 @@ fn document_source_receipt_is_eligible(value: &Value) -> bool {
             .get("evidence_rejection_reason")
             .and_then(Value::as_str)
             .is_some_and(|reason| !reason.trim().is_empty())
-        && [
-            "source_id",
-            "trace_id",
-            "run_id",
-            "research_run_id",
-            "source_row_ref",
-            "provenance",
-        ]
-        .iter()
-        .any(|key| {
-            value
-                .get(*key)
-                .and_then(Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty())
-        })
+        && has_identifier("source_id")
+        && (has_identifier("claim_id") || has_identifier("evidence_id"))
+        && has_identifier("snapshot_id")
+        && has_identifier("retrieved_at")
+        && matches!(
+            url_role.as_str(),
+            "original_content" | "original_data" | "publisher_full_text" | "dataset_archive"
+        )
+        && matches!(
+            content_scope.as_str(),
+            "full_text" | "original_data" | "full_dataset" | "dataset_archive"
+        )
         && !status.iter().any(|status| {
             matches!(
                 status.as_str(),
                 "rejected" | "off_topic" | "off-topic" | "irrelevant" | "fachfremd"
             )
         })
+}
+
+fn document_source_receipt_snapshot_matches(root: &Path, value: &Value) -> anyhow::Result<bool> {
+    let Some(raw_path) = first_string_field(
+        value,
+        &["snapshot_path", "archive_path", "local_snapshot_path"],
+    ) else {
+        return Ok(false);
+    };
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let candidate = path_from_output_value(&root, &raw_path);
+    let candidate = match candidate.canonicalize() {
+        Ok(path) if path.starts_with(&root) => path,
+        _ => return Ok(false),
+    };
+    let bytes = fs::read(candidate)?;
+    let expected = value
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(expected == format!("sha256:{}", hex_sha256(&bytes)))
 }
 
 fn document_metadata_canonical_url(value: &str) -> bool {
@@ -32327,6 +32573,10 @@ fn document_report_lineage(
         anyhow::ensure!(
             document_source_receipt_is_eligible(&candidate),
             "research DOCX writeback requires an eligible source receipt with a verified snapshot hash"
+        );
+        anyhow::ensure!(
+            document_source_receipt_snapshot_matches(root, &candidate)?,
+            "research DOCX writeback requires persisted snapshot bytes matching the receipt hash"
         );
         let snapshot_hash = candidate
             .get("snapshot_hash")
@@ -40626,7 +40876,10 @@ mod tests {
     fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
     {
         let root = tempdir()?;
-        let receipt_hash = format!("sha256:{}", "b".repeat(64));
+        let snapshot_path = root.path().join("runtime/research/snapshots/source-7.html");
+        fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
+        fs::write(&snapshot_path, b"authoritative publisher content")?;
+        let receipt_hash = format!("sha256:{}", hex_sha256(b"authoritative publisher content"));
         let rxdb_path = rxdb_store_path(root.path());
         fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
         let rxdb_conn = Connection::open(&rxdb_path)?;
@@ -40658,8 +40911,14 @@ mod tests {
                 "rows": [{
                     "id": "source-7",
                     "source_id": "source-7",
+                    "evidence_id": "evidence-7",
+                    "snapshot_id": "snapshot-7",
                     "trace_id": "trace-7",
+                    "snapshot_path": "runtime/research/snapshots/source-7.html",
                     "snapshot_hash": receipt_hash.clone(),
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "url_role": "publisher_full_text",
+                    "content_scope": "full_text",
                     "verification_status": "verified",
                     "transport_verified": true,
                     "content_extracted": true,
@@ -40704,10 +40963,7 @@ mod tests {
         };
 
         let lineage = document_report_lineage(root.path(), &command)?;
-        assert_eq!(
-            lineage.source_receipt_snapshot_hashes,
-            vec![format!("sha256:{}", "b".repeat(64))]
-        );
+        assert_eq!(lineage.source_receipt_snapshot_hashes, vec![receipt_hash]);
         assert_eq!(
             lineage.knowledge_version,
             serde_json::json!({ "version_id": "knowledge-v7" })
@@ -40777,8 +41033,13 @@ mod tests {
         let base = serde_json::json!({
             "id": "source-7",
             "source_id": "source-7",
+            "evidence_id": "evidence-7",
+            "snapshot_id": "snapshot-7",
             "trace_id": "trace-7",
             "snapshot_hash": format!("sha256:{}", "d".repeat(64)),
+            "retrieved_at": "2026-07-17T00:00:00Z",
+            "url_role": "publisher_full_text",
+            "content_scope": "full_text",
             "verification_status": "verified",
             "transport_verified": true,
             "content_extracted": true,
@@ -51824,6 +52085,41 @@ mod tests {
                 "updated_at_ms": 1
             }),
         )?;
+        let snapshot_path = root.join("runtime/research/snapshots/source-1.html");
+        fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
+        fs::write(&snapshot_path, b"verified source bytes")?;
+        let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__knowledge_tables__v0",
+            "knowledge_source_catalog",
+            serde_json::json!({
+                "id": "knowledge_source_catalog",
+                "domain": "drone_bearing_design",
+                "table_key": "source_catalog",
+                "rows": [{
+                    "source_id": "source-1",
+                    "evidence_id": "evidence-1",
+                    "snapshot_id": "snapshot-1",
+                    "snapshot_path": "runtime/research/snapshots/source-1.html",
+                    "snapshot_hash": snapshot_hash,
+                    "canonical_url": "https://publisher.example/source-1",
+                    "url_role": "original_content",
+                    "content_scope": "full_text",
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "source_type": "publisher",
+                    "source_tier": "primary",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "evidence_eligible": true
+                }],
+                "updated_at_ms": 2
+            }),
+        )?;
         drop(rxdb_conn);
 
         channels::transition_business_command_for_task(
@@ -51955,6 +52251,16 @@ mod tests {
         )?;
         conn.execute(
             "CREATE TABLE ctox_business_os__research_runs__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__knowledge_tables__v0 (
                 id TEXT PRIMARY KEY NOT NULL,
                 revision TEXT,
                 deleted INTEGER NOT NULL DEFAULT 0,
@@ -60152,7 +60458,13 @@ mod tests {
         let base_version = serde_json::json!({
             "id": "sheet_restart_v1", "spreadsheet_id": "sheet_restart", "version": 1,
             "blob_id": "sheet_restart_blob", "editor_blob_id": "sheet_restart_editor",
-            "editor_sha256": prepared.editor_sha256, "created_at_ms": 1, "updated_at_ms": 1
+            "editor_sha256": prepared.editor_sha256,
+            "ingestion_kind": "research_generated",
+            "linked_records": [{"kind": "source_receipt", "id": "source-7"}],
+            "source_receipt_snapshot_hashes": [format!("sha256:{}", "e".repeat(64))],
+            "knowledge_version": {"version_id": "knowledge-v7"},
+            "knowledge_lineage": {"domain": "bearing_design"},
+            "created_at_ms": 1, "updated_at_ms": 1
         });
         {
             let conn = open_store(root.path())?;
@@ -60213,6 +60525,31 @@ mod tests {
         )?;
         assert_eq!(spreadsheet_versions, 1);
         assert_eq!(leaked_document_versions, 0);
+        let committed_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'spreadsheet_versions' AND record_id = ?1",
+            params![committed_version],
+            |row| row.get(0),
+        )?;
+        let committed_payload: Value = serde_json::from_str(&committed_payload)?;
+        assert_eq!(
+            committed_payload
+                .get("ingestion_kind")
+                .and_then(Value::as_str),
+            Some("research_generated")
+        );
+        assert_eq!(
+            committed_payload
+                .pointer("/knowledge_version/version_id")
+                .and_then(Value::as_str),
+            Some("knowledge-v7")
+        );
+        assert_eq!(
+            committed_payload
+                .get("source_receipt_snapshot_hashes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
         drop(conn);
 
         let replay = commit_office_spreadsheet_version(

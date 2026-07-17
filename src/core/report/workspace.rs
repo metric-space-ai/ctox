@@ -106,7 +106,7 @@ impl EvidenceEntry {
             && self
                 .snapshot_hash
                 .as_deref()
-                .is_some_and(|hash| !hash.trim().is_empty())
+                .is_some_and(crate::report::sources::web_research::is_sha256_receipt)
             && self.evidence_eligible
     }
 }

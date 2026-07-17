@@ -8,6 +8,8 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
+const USER_IMPORT_KIND = 'user_import';
+const RESEARCH_GENERATED_KIND = 'research_generated';
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -168,6 +170,7 @@ async function openSpreadsheetFile(state, input) {
   const file = input?.file;
   const validation = validateImportInput({ file });
   if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
+  const ingestion = await resolveSpreadsheetIngestion(state, input);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
   await refreshSpreadsheets(state);
@@ -181,7 +184,8 @@ async function openSpreadsheetFile(state, input) {
     renderCenter(state);
     return existing;
   }
-  await importSpreadsheetFile(state, file);
+  assertSpreadsheetIngestionAllowed(ingestion);
+  await importSpreadsheetFile(state, file, [], ingestion);
   return selectedRecord(state);
 }
 
@@ -376,8 +380,10 @@ async function createNewSpreadsheet(state, input = {}) {
   renderCenter(state);
 }
 
-async function importSpreadsheetFile(state, file, tags = []) {
+async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}) {
   requireSpreadsheetPersistence(state.ctx);
+  const ingestion = normalizeSpreadsheetIngestion(ingestionInput.file ? ingestionInput : { ...ingestionInput, file });
+  assertSpreadsheetIngestionAllowed(ingestion);
   const validation = validateImportInput({ file });
   if (!validation.valid) {
     throw new Error(state.t(validation.key, validation.message));
@@ -435,10 +441,17 @@ async function importSpreadsheetFile(state, file, tags = []) {
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
-    source_kind: isXlsx ? 'imported_xlsx' : isTsv ? 'imported_tsv' : 'imported_csv',
+    source_kind: ingestion.kind === RESEARCH_GENERATED_KIND
+      ? RESEARCH_GENERATED_KIND
+      : isXlsx ? 'imported_xlsx' : isTsv ? 'imported_tsv' : 'imported_csv',
+    ingestion_kind: ingestion.kind,
     blob_id: blobId,
     model_json: modelJson,
     diagnostics: [],
+    linked_records: ingestion.linkedRecords,
+    source_receipt_snapshot_hashes: ingestion.sourceReceiptSnapshotHashes,
+    knowledge_version: ingestion.knowledgeVersion,
+    knowledge_lineage: ingestion.knowledgeLineage,
     created_at_ms: now,
     updated_at_ms: now,
   });
@@ -449,6 +462,8 @@ async function importSpreadsheetFile(state, file, tags = []) {
     filename: file.name,
     mime_type: isXlsx ? XLSX_MIME : isTsv ? TSV_MIME : CSV_MIME,
     status: 'Imported',
+    source_kind: ingestion.kind,
+    ingestion_kind: ingestion.kind,
     spreadsheet_type: isXlsx ? 'xlsx' : isTsv ? 'tsv' : 'csv',
     owner_id: '',
     current_version_id: versionId,
@@ -456,7 +471,10 @@ async function importSpreadsheetFile(state, file, tags = []) {
     row_count: isXlsx ? 0 : modelJson.data.length,
     col_count: isXlsx ? 0 : modelJson.columns.length,
     diagnostics_count: 0,
-    linked_records: [],
+    linked_records: ingestion.linkedRecords,
+    source_receipt_snapshot_hashes: ingestion.sourceReceiptSnapshotHashes,
+    knowledge_version: ingestion.knowledgeVersion,
+    knowledge_lineage: ingestion.knowledgeLineage,
     tags: normalizeTags(tags),
     display_cache: {},
     index_text: titleFromFilename(file.name) + (isXlsx ? '' : '\n' + modelJson.data.slice(0, 10).map(r => r.join(' ')).join('\n')),
@@ -472,6 +490,216 @@ async function importSpreadsheetFile(state, file, tags = []) {
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
+}
+
+async function resolveSpreadsheetIngestion(state, input = {}) {
+  const candidates = [input];
+  const sourceFileId = String(input.sourceFileId || input.source_file_id || '').trim();
+  if (sourceFileId) {
+    const sourceFile = await readSpreadsheetSourceRecord(state.ctx, 'desktop_files', sourceFileId);
+    if (sourceFile) {
+      candidates.push(sourceFile);
+      const linkedCollection = String(sourceFile.linked_collection || '').trim();
+      const linkedRecordId = String(sourceFile.linked_record_id || '').trim();
+      if (linkedCollection && linkedRecordId && linkedCollection !== 'desktop_files') {
+        const linkedRecord = await readSpreadsheetSourceRecord(state.ctx, linkedCollection, linkedRecordId);
+        if (linkedRecord) candidates.push(linkedRecord);
+      }
+    }
+  }
+  return normalizeSpreadsheetIngestion({ candidates });
+}
+
+async function readSpreadsheetSourceRecord(ctx, collectionName, recordId) {
+  const collection = ctx?.db?.collection?.(collectionName);
+  if (!collection?.findOne) return null;
+  const document = await collection.findOne(recordId).exec();
+  return document?.toJSON?.() || document || null;
+}
+
+function normalizeSpreadsheetIngestion(input = {}) {
+  const candidates = Array.isArray(input.candidates)
+    ? input.candidates.filter((candidate) => candidate && typeof candidate === 'object')
+    : [input];
+  const objects = candidates.flatMap((candidate) => nestedLineageObjects(candidate));
+  const linkedRecords = uniqueJsonRecords(objects.flatMap((object) => [
+    ...arrayValue(object.linked_records),
+    ...arrayValue(object.linkedRecords),
+    ...lineageRecords(object.source_receipt_links, 'source_receipt'),
+    ...lineageRecords(object.source_receipts, 'source_receipt'),
+    ...lineageRecords(object.sourceReferences, 'source_receipt'),
+    ...lineageRecords(object.source_references, 'source_receipt'),
+    ...stringArrayValue(object.source_ids).map((id) => ({ kind: 'source_receipt', id })),
+    ...jsonStringArrayValue(object.source_ids_json).map((id) => ({ kind: 'source_receipt', id })),
+  ]));
+  const sourceReceiptSnapshotHashes = uniqueStrings([
+    ...objects.flatMap((object) => stringArrayValue(object.source_receipt_snapshot_hashes)),
+    ...objects.flatMap((object) => stringArrayValue(object.snapshot_hashes)),
+    ...linkedRecords.flatMap((record) => [
+      record.snapshot_hash,
+      record.source_receipt_snapshot_hash,
+      record.receipt_snapshot_hash,
+    ]),
+  ]);
+  const claimIds = uniqueStrings(objects.flatMap((object) => [
+    ...stringArrayValue(object.claim_ids),
+    ...stringArrayValue(object.claimIds),
+  ]));
+  const evidenceIds = uniqueStrings(objects.flatMap((object) => [
+    ...stringArrayValue(object.evidence_ids),
+    ...stringArrayValue(object.evidenceIds),
+  ]));
+  const normalizedLinkedRecords = uniqueJsonRecords([
+    ...linkedRecords,
+    ...claimIds.map((id) => ({ kind: 'claim', id })),
+    ...evidenceIds.map((id) => ({ kind: 'evidence', id })),
+  ]);
+  const kind = isResearchDerivedSpreadsheet(objects, normalizedLinkedRecords)
+    ? RESEARCH_GENERATED_KIND
+    : USER_IMPORT_KIND;
+  const knowledgeVersion = firstKnowledgeVersion(objects, normalizedLinkedRecords);
+  const lineage = {
+    kind,
+    linkedRecords: normalizedLinkedRecords,
+    sourceReceiptSnapshotHashes,
+    knowledgeVersion,
+    knowledgeLineage: {
+      source_receipt_snapshot_hashes: sourceReceiptSnapshotHashes,
+      knowledge_version: knowledgeVersion,
+    },
+  };
+  const validation = validateSpreadsheetLineage(lineage);
+  return { ...lineage, ...validation };
+}
+
+function assertSpreadsheetIngestionAllowed(ingestion) {
+  if (ingestion?.valid) return;
+  const error = new Error(ingestion?.message || 'Spreadsheet ingestion lineage is incomplete.');
+  error.code = 'SPREADSHEET_LINEAGE_REQUIRED';
+  throw error;
+}
+
+function validateSpreadsheetLineage(ingestion = {}) {
+  if (ingestion.kind !== RESEARCH_GENERATED_KIND) return { valid: true, message: '' };
+  return {
+    valid: false,
+    message: 'Research-derived spreadsheets must be admitted by the native Business OS command path before they can be opened as evidence.',
+  };
+}
+
+function nestedLineageObjects(value) {
+  const objects = [value];
+  for (const key of ['lineage', 'knowledge_lineage', 'knowledgeLineage', 'provenance', 'metadata', 'payload', 'source_record', 'sourceRecord']) {
+    if (value?.[key] && typeof value[key] === 'object' && !Array.isArray(value[key])) objects.push(value[key]);
+  }
+  return objects;
+}
+
+function lineageRecords(value, defaultKind) {
+  if (!Array.isArray(value)) return [];
+  return value.map((record) => {
+    if (record && typeof record === 'object' && !Array.isArray(record)) {
+      return record.kind || record.type || record.record_type ? record : { kind: defaultKind, ...record };
+    }
+    const id = String(record || '').trim();
+    return id ? { kind: defaultKind, id } : null;
+  }).filter(Boolean);
+}
+
+function isResearchDerivedSpreadsheet(objects, linkedRecords) {
+  const values = objects.flatMap((object) => [
+    object.source_kind,
+    object.sourceKind,
+    object.ingestion_kind,
+    object.ingestionKind,
+    object.source,
+    object.source_module,
+    object.sourceModule,
+  ]).map((value) => String(value || '').trim().toLowerCase());
+  return objects.some((object) => object.research_derived === true || object.researchDerived === true || object.is_research_derived === true)
+    || values.some((value) => value === RESEARCH_GENERATED_KIND || value === 'research' || value === 'business-os-research' || value.includes('research-derived'))
+    || linkedRecords.some((record) => {
+      const kind = recordKind(record);
+      return kind === 'research_task' || kind === 'knowledge_domain' || isResearchSourceReference(record);
+    });
+}
+
+function isResearchSourceReference(record = {}) {
+  const kind = recordKind(record);
+  if (!kind && [record.source_id, record.receipt_id, record.claim_id, record.evidence_id].some((value) => String(value || '').trim())) return true;
+  return kind === 'source'
+    || kind.includes('source_receipt')
+    || kind.includes('source-receipt')
+    || kind === 'claim'
+    || kind.includes('claim')
+    || kind === 'evidence'
+    || kind.includes('evidence');
+}
+
+function hasResearchReferenceId(record = {}) {
+  return [record.id, record.record_id, record.source_id, record.receipt_id, record.claim_id, record.evidence_id]
+    .some((value) => String(value || '').trim());
+}
+
+function recordKind(record = {}) {
+  return String(record.kind || record.type || record.record_type || record.role || '').trim().toLowerCase();
+}
+
+function firstKnowledgeVersion(objects, linkedRecords) {
+  for (const object of objects) {
+    for (const key of ['knowledge_version', 'knowledgeVersion']) {
+      if (hasKnowledgeVersion(object[key])) return object[key];
+    }
+    const versionId = String(object.knowledge_version_id || object.knowledgeVersionId || '').trim();
+    if (versionId) return { version_id: versionId };
+  }
+  const linked = linkedRecords.find((record) => hasKnowledgeVersion(record.knowledge_version || record.knowledgeVersion));
+  return linked?.knowledge_version || linked?.knowledgeVersion || null;
+}
+
+function hasKnowledgeVersion(value) {
+  if (typeof value === 'string') return value.trim().length > 0;
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && Object.values(value).some((item) => String(item || '').trim()));
+}
+
+function isSnapshotHash(value) {
+  return /^sha256:[0-9a-f]{64}$/i.test(String(value || '').trim());
+}
+
+function arrayValue(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === 'object') : [];
+}
+
+function stringArrayValue(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
+}
+
+function jsonStringArrayValue(value) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? stringArrayValue(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function uniqueJsonRecords(records) {
+  const seen = new Set();
+  return records.filter((record) => {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+    const key = JSON.stringify(record);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function parseCSVContent(text, delimiter = ',') {
@@ -1797,6 +2025,10 @@ export const __spreadsheetsTestHooks = {
   normalizeSpreadsheetModel,
   isOfficeSpreadsheetRecord,
   spreadsheetBySourceSha,
+  normalizeSpreadsheetIngestion,
+  validateSpreadsheetLineage,
+  assertSpreadsheetIngestionAllowed,
+  resolveSpreadsheetIngestion,
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,

@@ -446,10 +446,11 @@ search next, which early pages to read, which source families are emerging,
 which candidates are useful, and when to move from web discovery into citation
 and reference-graph expansion. Do not move these decisions into deterministic
 word parsing, regex rules, or a sidecar LLM call outside the agent loop.
-When the discovery runner is called with `--business-writeback`, it may update
-live Business OS progress only. It must not publish visible Business OS
-sources, counts or scores. The final visible catalog is written only after
-you, the harness agent, have read, selected and scored the sources.
+Do not use the discovery runner's legacy `--business-writeback` option. The
+legacy HTTP/PostgreSQL bridge is outside the supported workflow and must not be
+used for progress, sources, counts, scores, or reports. Business OS state is
+changed only through the native `ctx.commandBus.dispatch(...)` path and its
+server-owned RxDB projection.
 
 The query plan must be natural search language, not a compressed prompt and not
 a keyword salad. Each query should look like something a careful human
@@ -654,20 +655,26 @@ generated tables are too small, the answer is more discovery and more
 persisted evidence, not hand-written count inflation.
 
 For Business OS research runs, persist the final app-facing result only after
-agent review and agent scoring. Prepare a JSON object with the complete
-ResearchRun fields the app renders: `sources`, counts, `graph`, `summary` and
-criteria. Every source must have a direct original-content/data URL, `score`,
-`scoreValue`, `contribution`, `use`, and `missing` based on what you actually
-read. Do not write metadata-only records, raw search hits, or mechanically
-scored rows. Run `evidence_guard.py` before the writeback.
+agent review and agent scoring. The former
+`business_research_writeback.py` PostgreSQL bridge is retired and always fails
+closed; it must not be called with a database URL or payload file.
 
-```bash
-python3 skills/system/research/systematic-research/scripts/business_research_writeback.py \
-  --database-url "$DATABASE_URL" \
-  --store-key marketing/research/runs \
-  --run-id BUSINESS_RESEARCH_RUN_ID \
-  --payload-json /tmp/BUSINESS_RESEARCH_RUN_ID_agent_curated_payload.json
-```
+Before promotion, run `evidence_guard.py` on the complete manifest. The
+validated receipt lineage must include `source_id`, the matching canonical
+original-content URL, a current 2xx/full-content or original-data check, and
+the immutable `snapshot_id` plus SHA-256. Every factual claim must also carry
+its `claim_id`, `evidence_id`, `snapshot_id`, `source_id`, canonical URL, and
+lineage hash. A failed or incomplete manifest is not a writeable result.
+
+Submit the reviewed work through the Business OS module's native command bus,
+using the registered `research.systematic.run` command. The command payload
+may carry the research/knowledge contract and the validated receipt references,
+but the browser must never insert or patch `business_commands`,
+`research_runs`, or `knowledge_tables` directly. The native daemon validates the
+request and owns the RxDB projections. For a Word report, use the native
+`research.systematic.report.create` Documents command with linked source
+receipt records and the exact Knowledge version; missing or changed receipt
+lineage must make the command fail closed.
 
 Mandatory source-review discovery passes:
 

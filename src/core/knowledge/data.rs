@@ -1232,7 +1232,7 @@ fn enrich_knowledge_table_rows(table_key: &str, rows: Vec<Value>) -> (Vec<Value>
         rows,
         vec![
             "propeller_size is split into metric prop_diameter_mm and prop_pitch_mm for Excel-ready analysis.".to_string(),
-            "legacy radial_load_N is preserved in raw rows, but exposed as tangential_equivalent_force_N because it was derived from torque/radius rather than measured bearing radial load.".to_string(),
+            "legacy radial_load_N is preserved in raw rows and is only exposed as tangential_equivalent_force_N when explicit metadata proves a torque/radius derivation; bearing radial load remains blank unless the source establishes it.".to_string(),
             "load_case separates steady propeller tests, vibration, shock/blast, and mixed derived rows; aggregate these cases separately.".to_string(),
         ],
     )
@@ -1252,6 +1252,8 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
     normalize_number_field(map, "axial_load_N");
     normalize_number_field(map, "torque_Nm");
     normalize_number_field(map, "radial_load_N");
+    normalize_optional_number_field(map, "tangential_equivalent_force_N");
+    normalize_optional_number_field(map, "bearing_radial_load_N");
 
     if !map.contains_key("row_id") {
         map.insert(
@@ -1297,10 +1299,11 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
         insert_number(map, "moment_Nm", torque);
         insert_number(map, "torque_signed_Nm", torque);
     }
-    if let Some(legacy_radial) = number_from_map(map, "radial_load_N") {
-        insert_number(map, "tangential_equivalent_force_N", legacy_radial.abs());
-        insert_number(map, "tangential_equivalent_force_signed_N", legacy_radial);
-    }
+    // `radial_load_N` is never reinterpreted here. A bearing radial load and a
+    // torque/radius tangential equivalent are different physical quantities.
+    // Derived values must be supplied explicitly with their own provenance.
+    map.entry("tangential_equivalent_force_N".to_string())
+        .or_insert(Value::Null);
     map.entry("bearing_radial_load_N".to_string())
         .or_insert(Value::Null);
 
@@ -1315,19 +1318,30 @@ fn enrich_measured_load_point_row(index: usize, mut row: Value) -> Value {
     map.entry("original_unit_system".to_string())
         .or_insert(Value::String("mixed_source_metric_projection".to_string()));
 
-    if !map.contains_key("source_row_ref") {
-        let source_id =
-            string_from_map(map, "source_id").unwrap_or_else(|| "unknown-source".to_string());
-        let source_file =
-            string_from_map(map, "source_file").unwrap_or_else(|| "unknown-file".to_string());
-        map.insert(
-            "source_row_ref".to_string(),
-            Value::String(format!("{source_id}:{source_file}:{}", index + 1)),
-        );
+    if let Some(source_row_ref) = explicit_source_row_ref(map) {
+        map.insert("source_row_ref".to_string(), Value::String(source_row_ref));
+    } else {
+        map.entry("source_row_ref".to_string())
+            .or_insert(Value::Null);
     }
     normalize_derivation_method(map);
 
     row
+}
+
+fn explicit_source_row_ref(map: &Map<String, Value>) -> Option<String> {
+    [
+        "source_row_ref",
+        "original_row_ref",
+        "source_row",
+        "original_row",
+        "source_row_number",
+        "original_row_number",
+        "source_row_index",
+        "original_row_index",
+    ]
+    .iter()
+    .find_map(|key| string_from_map(map, key))
 }
 
 fn normalize_derivation_method(map: &mut serde_json::Map<String, Value>) {
@@ -1348,7 +1362,7 @@ fn knowledge_table_columns(table_key: &str, rows: &[Value]) -> Vec<Value> {
         "measured_load_points" => vec![
             column_def("row_id", "Row ID", "", "string", "Stable row identifier for audit, export, and report references.", ""),
             column_def("source_id", "Source ID", "", "string", "Source catalog identifier used to trace this measurement back to the evidence source.", ""),
-            column_def("source_row_ref", "Source row reference", "", "string", "Stable reference combining source, source file, and projected row number.", ""),
+            column_def("source_row_ref", "Source row reference", "", "string", "Original source-row reference supplied by the source data; blank when the source provides no row reference.", ""),
             column_def("propeller_size", "Propeller size", "in", "string", "Propeller shorthand such as 9x5 means 9 inch diameter and 5 inch pitch. It is shown and exported as metric diameter x pitch in millimetres.", "propeller_size"),
             column_def("prop_diameter_mm", "Diameter", "mm", "number", "Propeller diameter split from propeller_size or prop_diameter_in and normalized to millimetres.", "numeric"),
             column_def("prop_pitch_mm", "Pitch", "mm", "number", "Propeller pitch split from propeller_size or prop_pitch_in and normalized to millimetres.", "numeric"),
@@ -1449,6 +1463,19 @@ fn normalize_number_field(map: &mut Map<String, Value>, key: &str) {
     }
 }
 
+fn normalize_optional_number_field(map: &mut Map<String, Value>, key: &str) {
+    if !map.contains_key(key) {
+        return;
+    }
+    let value = map.get(key).and_then(json_number);
+    match value {
+        Some(number) => insert_number(map, key, number),
+        None => {
+            map.insert(key.to_string(), Value::Null);
+        }
+    }
+}
+
 fn number_from_map(map: &Map<String, Value>, key: &str) -> Option<f64> {
     map.get(key).and_then(json_number)
 }
@@ -1518,6 +1545,23 @@ fn infer_load_case(map: &Map<String, Value>) -> &'static str {
 
 fn infer_measurement_kind(map: &Map<String, Value>) -> (&'static str, bool) {
     let text = row_text(map);
+    let has_derived_fields = map
+        .get("is_derived")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || [
+            "derivation_formula",
+            "derivation_metadata",
+            "calculation_method",
+            "calculation_formula",
+        ]
+        .iter()
+        .any(|key| map.get(*key).is_some_and(|value| !value.is_null()))
+        || (map.contains_key("tangential_equivalent_force_N")
+            && (text.contains("torque") && text.contains("radius")));
+    if has_derived_fields {
+        return ("measured_with_derived_fields", true);
+    }
     if text.contains("direct experimental") || text.contains("measured") || text.contains(".csv") {
         ("measured", false)
     } else {
@@ -1743,7 +1787,9 @@ mod tests {
             "thrust_N": 12.5,
             "torque_Nm": -0.2,
             "radial_load_N": "-1.75",
+            "tangential_equivalent_force_N": 1.75,
             "vibration_g_rms": "1.500000",
+            "derivation_formula": "abs(torque_Nm) / (prop_diameter_mm / 2000)",
             "derivation_method": "direct experimental CSV row; radial_load_N=TORQUE_Nm/(prop_diameter_m/2) when torque present"
         })];
 
@@ -1756,7 +1802,12 @@ mod tests {
         assert_eq!(row["force_N"].as_f64(), Some(12.5));
         assert_eq!(row["moment_Nm"].as_f64(), Some(-0.2));
         assert_eq!(row["tangential_equivalent_force_N"].as_f64(), Some(1.75));
-        assert_eq!(row["measurement_kind"].as_str(), Some("measured"));
+        assert_eq!(row["source_row_ref"], Value::Null);
+        assert_eq!(
+            row["measurement_kind"].as_str(),
+            Some("measured_with_derived_fields")
+        );
+        assert_eq!(row["is_derived"].as_bool(), Some(true));
         assert_eq!(row["load_case"].as_str(), Some("vibration_test"));
         let method = row["derivation_method"]
             .as_str()
@@ -1772,6 +1823,39 @@ mod tests {
         assert!(labels.contains(&"Pitch".to_string()));
         assert!(labels.contains(&"Torque".to_string()));
         assert!(labels.contains(&"Tangential equivalent force".to_string()));
+    }
+
+    #[test]
+    fn measured_load_projection_keeps_unproven_legacy_radial_values_noncanonical() {
+        let rows = vec![
+            json!({
+                "source_id": "SRC-legacy",
+                "source_file": "legacy.csv",
+                "radial_load_N": "0",
+                "torque_Nm": 0,
+                "prop_diameter_in": 0,
+                "derivation_method": "radial_load_N=torque_Nm/radius",
+            }),
+            json!({
+                "source_id": "SRC-zero",
+                "radial_load_N": -4.5,
+                "tangential_equivalent_force_N": 0,
+                "bearing_radial_load_N": "0",
+                "original_row_number": 0,
+            }),
+        ];
+
+        let (rows, _) = enrich_knowledge_table_rows("measured_load_points", rows);
+        let legacy = rows[0].as_object().expect("legacy projected row");
+        assert_eq!(legacy["radial_load_N"].as_f64(), Some(0.0));
+        assert_eq!(legacy["tangential_equivalent_force_N"], Value::Null);
+        assert_eq!(legacy["bearing_radial_load_N"], Value::Null);
+        assert_eq!(legacy["source_row_ref"], Value::Null);
+
+        let zero = rows[1].as_object().expect("zero projected row");
+        assert_eq!(zero["tangential_equivalent_force_N"].as_f64(), Some(0.0));
+        assert_eq!(zero["bearing_radial_load_N"].as_f64(), Some(0.0));
+        assert_eq!(zero["source_row_ref"].as_str(), Some("0"));
     }
 
     #[test]

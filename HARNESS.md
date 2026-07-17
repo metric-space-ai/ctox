@@ -173,6 +173,13 @@ Direct-session model events write token and timing forensics to
 `runtime/context-log.jsonl`. Worker failures are persisted as structured
 `messages.agent_outcome` values rather than by scraping assistant text.
 
+On Linux, CTOX-managed in-process sessions select the stable Landlock backend
+for root workers, thread-spawn leaves, and reviewers. This avoids a runtime
+dependency on system `bwrap` and user namespaces, which are commonly absent on
+managed container hosts, while retaining the helper-enforced filesystem and
+seccomp policy. Standalone harness clients keep their configured Linux sandbox
+backend.
+
 ## Context Protection
 
 There are three context-protection mechanisms in the current code:
