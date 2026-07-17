@@ -502,6 +502,22 @@ and loaded by deterministic chunk ids, so opening a file does not scan or
 replicate the full chunk store into IndexedDB. Browser-side chunk writes (for
 uploads/attachments) may still use the chunk collection push path.
 
+Runtime-installed modules can declare the same treatment for their own
+collections (SYNC-32): in `collections.schema.json` a collection entry's
+wrapper form may carry `"syncProfile": "eager" | "demand-only" |
+"demand-chunks"` as a sibling of `schema` — exactly like `conflictStrategy`,
+so the key is stripped before parsing/hashing and never shifts the advertised
+schema hash. `demand-chunks` makes the native peer append a demand-file stream
+source for the collection (self-served, after the unchanged built-in
+`desktop_files`/`desktop_file_chunks`/`document_blob_chunks`/`spreadsheet_blob_chunks`
+sources); the schema must then declare the owner key (`file_id` or `blob_id`),
+`idx`, and base64 `data`, with chunk ids `{key}_{generation}_{idx}` — a
+declaration missing those fields fails closed at collection registration
+(`rxdb_peer.rs::module_dir_collection_entries`), not on the first
+`rxdb.file.fetch`. `demand-only`/`eager` are parsed and validated natively for
+the browser to consume later; browser-side derivation of the demand-only and
+chunk-batch lists from the declaration is a separate step.
+
 ---
 
 ## 7. Contracts pipeline
@@ -562,7 +578,7 @@ by `checkpoint-contract-smoke.mjs`, which drives the real
 | Failure | Mechanism | Where |
 |---|---|---|
 | Signaling socket drops (browser) | Self-reconnect with exponential backoff 1 s → 30 s; re-join re-broadcasts the peer list. Backoff resets on the `joined` broadcast, **not** on socket open — open-then-rejected sockets must keep backing off. | `webrtc-native.mjs::scheduleSignalingReconnect`, `handleSignalingMessage` |
-| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file. | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
+| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file (the extra test-only `TcpListener` binds raised the data-plane-guard ratchet for `signaling_client.rs` from 2 to 7 — an architecture-decision record for that allowlist change). | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
 | Control-plane rejection | `ctoxError` frames are parsed and surfaced on both sides (the server closes the socket right after); otherwise a rejected join is indistinguishable from a blip and reconnects hammer silently. The browser shell additionally observes them via a WebSocket wrapper and treats them as fatal, non-retryable. | `signaling_client.rs`, `webrtc-native.mjs`, `sync.js::installSignalingErrorObserver` |
 | Request vs disconnect race | `send_message_and_await_answer` subscribes to response **and** disconnect streams before sending and races them against a 60 s deadline; a peer dying mid-request fails the request instead of hanging the handshake/fork forever. Browser requests default to 15 s; a timed-out `ctoxProtocol`/`token` recycles the connection with `forceInitiator`. | `webrtc_helper.rs`, `webrtc-native.mjs::request` |
 | Send-queue wedge | Exactly one drainer per peer queue (`draining` flag); `DrainResetGuard` re-opens the drain slot if the draining task is aborted mid-send; `remove_peer` drops the whole queue so parked senders fail fast instead of waiting on a drainer that no longer exists. | `connection_handler_rs.rs` |
