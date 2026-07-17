@@ -7,10 +7,10 @@ const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
 
 if (!moduleId || moduleId.includes('/') || moduleId.includes('\\') || moduleId === '.' || moduleId === '..') {
-  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed|--local]');
+  console.error('Usage: node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> [--installed|--catalog-installed|--local]');
   process.exit(2);
 }
-if (modeArg && modeArg !== '--installed' && modeArg !== '--local') {
+if (modeArg && modeArg !== '--installed' && modeArg !== '--catalog-installed' && modeArg !== '--local') {
   console.error(`Unknown option: ${modeArg}`);
   process.exit(2);
 }
@@ -26,7 +26,9 @@ function installedAppRootFor(workspace) {
 
 const installedDir = join(installedAppRootFor(root), 'installed-modules', moduleId);
 const localDir = join(installedAppRootFor(root), 'local-modules', moduleId);
+const catalogInstalledMode = modeArg === '--catalog-installed';
 const installedMode = modeArg === '--installed'
+  || catalogInstalledMode
   || (!modeArg && !existsSync(sourceDir) && existsSync(installedDir));
 // Local mode: git-ignored, operator-placed dev/customer modules under
 // runtime/business-os/local-modules/. Structural, data-boundary, and design
@@ -930,14 +932,14 @@ const requiredFiles = [
   'icon.svg',
   'locales/de.json',
   'locales/en.json',
-  ...(installedMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
+  ...(installedMode && !catalogInstalledMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
 ];
 
 for (const file of requiredFiles) {
   if (!existsSync(join(moduleDir, file))) fail(`missing ${rel(join(moduleDir, file))}`);
 }
 
-if (runtimeModuleMode && existsSync(moduleDir)) {
+if (runtimeModuleMode && !catalogInstalledMode && existsSync(moduleDir)) {
   for (const name of readdirSync(moduleDir)) {
     const path = join(moduleDir, name);
     const stats = statSync(path);
@@ -953,8 +955,8 @@ const schemaDoc = existsSync(join(moduleDir, 'collections.schema.json'))
   ? readJson(join(moduleDir, 'collections.schema.json'))
   : null;
 const sourceInstallScope = String(manifest?.install_scope || '').trim().toLowerCase();
-const sourceShellModuleMode = !runtimeModuleMode
-  && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope);
+const sourceShellModuleMode = catalogInstalledMode || (!runtimeModuleMode
+  && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope));
 
 if (manifest) {
   if (manifest.id !== moduleId) fail(`module.json id must be ${moduleId}`);
@@ -963,7 +965,7 @@ if (manifest) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
   }
   if (!Array.isArray(manifest.collections)) fail('module.json collections must be an array');
-  if (runtimeModuleMode && Array.isArray(manifest.collections)) {
+  if (runtimeModuleMode && !catalogInstalledMode && Array.isArray(manifest.collections)) {
     for (const name of manifest.collections) {
       if (shellCollections.has(name)) continue;
       if (!isModuleScopedCollectionName(name, moduleId)) {
@@ -1057,7 +1059,7 @@ if (schemaDoc) {
   if (!schemaDoc.collections || typeof schemaDoc.collections !== 'object' || Array.isArray(schemaDoc.collections)) {
     fail('collections.schema.json collections must be an object');
   }
-  if (runtimeModuleMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
+  if (runtimeModuleMode && !catalogInstalledMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
     for (const name of Object.keys(schemaDoc.collections)) {
       if (!isModuleScopedCollectionName(name, moduleId)) {
         fail(`collections.schema.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
@@ -1086,7 +1088,7 @@ if (existsSync(schemaJsPath)) {
     const pattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:['"]${collection}['"]|${collection})\s*:`, 'm');
     if (!sourceShellModuleMode && pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
   }
-  if (runtimeModuleMode && schemaDoc?.collections) {
+  if (runtimeModuleMode && !catalogInstalledMode && schemaDoc?.collections) {
     schemaJsCollections = await loadSchemaJsCollections(schemaJsPath);
     if (schemaJsCollections) {
       for (const message of collectSchemaJsParityFailures(schemaDoc, schemaJsCollections)) fail(message);
@@ -1094,7 +1096,7 @@ if (existsSync(schemaJsPath)) {
   }
 }
 
-if (runtimeModuleMode && schemaDoc?.collections) {
+if (runtimeModuleMode && !catalogInstalledMode && schemaDoc?.collections) {
   for (const message of await collectRecordHelperSchemaFailures(moduleDir, schemaDoc)) fail(message);
 }
 
@@ -1145,7 +1147,7 @@ for (const path of files) {
 for (const path of jsFiles) {
   const text = readText(path);
   for (const specifier of extractStaticImportSpecs(text)) {
-    if (!relativeImportExists(path, specifier)) {
+    if (!relativeImportExists(path, specifier) && !catalogInstalledMode) {
       fail(`${rel(path)} relative import ${specifier} does not exist`);
     }
     if (!specifier.startsWith('.') && !isTestFile(path)) {
@@ -1175,13 +1177,13 @@ if (!/\bctx\.host\b|\bhost\.innerHTML\b|\bhost\.append/.test(indexJs)) {
   fail('index.js must render into ctx.host');
 }
 
-if (runtimeModuleMode) {
+if (runtimeModuleMode && !catalogInstalledMode) {
   for (const message of collectThemeTokenFailures(indexCss)) fail(message);
   for (const message of collectHardcodedColorFailures(indexCss)) fail(message);
   for (const message of collectKitUsageFailures(runtimeText)) fail(message);
 }
 
-if (installedMode) {
+if (installedMode && !catalogInstalledMode) {
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }
@@ -1232,7 +1234,7 @@ for (const path of runtimeFiles) {
       if (matched) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
     }
   }
-  if (runtimeModuleMode && /\.(?:js|mjs)$/.test(path)) {
+  if (runtimeModuleMode && !catalogInstalledMode && /\.(?:js|mjs)$/.test(path)) {
     for (const message of collectLegacyDbFacadeFailures(path, text)) fail(message);
   }
   if (/\.(?:js|mjs)$/.test(path)) {
@@ -1256,7 +1258,7 @@ for (const action of htmlDataActions(indexHtml)) {
   }
 }
 
-if (manifest && runtimeModuleMode) {
+if (manifest && runtimeModuleMode && !catalogInstalledMode) {
   const declaredCollections = new Set(Array.isArray(manifest.collections) ? manifest.collections : []);
   const schemaCollections = new Set(Object.keys(schemaDoc?.collections || {}));
   for (const path of runtimeFiles.filter((file) => /\.(?:js|mjs)$/.test(file))) {
@@ -1286,4 +1288,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`Business OS module static check OK: ${moduleId} (${localMode ? 'local' : installedMode ? 'installed' : 'source'} mode)`);
+console.log(`Business OS module static check OK: ${moduleId} (${localMode ? 'local' : catalogInstalledMode ? 'catalog-installed' : installedMode ? 'installed' : 'source'} mode)`);

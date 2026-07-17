@@ -7277,6 +7277,7 @@ pub fn update_module_to_catalog(
         source_dir.join("module.json").is_file(),
         "catalog source `{source_module}` is missing"
     );
+    validate_catalog_source_module(root, &source_module)?;
 
     // Both roots were resolved above from the installed manifest. Hash those
     // exact directories; resolving again from an app root can select a
@@ -7356,9 +7357,19 @@ pub fn update_module_to_catalog(
         staged["template_id"] = template_id.clone();
     }
     staged["source_module_id"] = Value::String(source_module.clone());
+    staged["store"]["source_path"] = Value::String(format!("installed-modules/{module_id}"));
+    staged["store"]["distribution"] = Value::String("ctox-runtime-installed-module".to_owned());
+    staged["store"]["installable"] = Value::Bool(false);
+    if let Some(layout) = staged.get_mut("layout").and_then(Value::as_object_mut) {
+        layout.remove("icon_svg");
+    }
+    if let Some(object) = staged.as_object_mut() {
+        object.remove("icon_svg");
+        object.remove("iconSvg");
+    }
     ensure_local_icon_manifest_value(&mut staged, &staging);
     fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
-    validate_staged_installed_module(root, &module_id, &staging)?;
+    validate_staged_catalog_module(root, &module_id, &staging)?;
 
     let backup = installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
     activate_staged_module_directory(&staging, &installed_dir, &backup)?;
@@ -12985,6 +12996,73 @@ fn validate_staged_installed_module(
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         anyhow::bail!(
             "staged module validation failed: {}",
+            if stderr.is_empty() { stdout } else { stderr }
+        )
+    })();
+    let _ = fs::remove_dir_all(&validation_root);
+    result
+}
+
+fn validate_catalog_source_module(root: &Path, module_id: &str) -> anyhow::Result<()> {
+    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    anyhow::ensure!(script.is_file(), "Business OS app validator is unavailable");
+    let output = std::process::Command::new(
+        crate::service::business_os::resolve_business_os_validator_node(root),
+    )
+    .current_dir(root)
+    .arg(&script)
+    .arg(module_id)
+    .arg("--source")
+    .arg("--workspace")
+    .arg(root)
+    .output()
+    .context("failed to validate Business OS catalog source")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    anyhow::bail!(
+        "catalog source validation failed: {}",
+        if stderr.is_empty() { stdout } else { stderr }
+    )
+}
+
+fn validate_staged_catalog_module(
+    root: &Path,
+    module_id: &str,
+    staged_module_dir: &Path,
+) -> anyhow::Result<()> {
+    let validation_root = std::env::temp_dir().join(format!(
+        "ctox-catalog-app-validation-{module_id}-{}",
+        Uuid::new_v4()
+    ));
+    let validation_module = validation_root
+        .join("runtime/business-os/installed-modules")
+        .join(module_id);
+    let result = (|| -> anyhow::Result<()> {
+        copy_dir_recursive(staged_module_dir, &validation_module)?;
+        let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+        anyhow::ensure!(script.is_file(), "Business OS app validator is unavailable");
+        let output = std::process::Command::new(
+            crate::service::business_os::resolve_business_os_validator_node(root),
+        )
+        .current_dir(root)
+        .arg(&script)
+        .arg(module_id)
+        .arg("--catalog-installed")
+        .arg("--skip-tests")
+        .arg("--workspace")
+        .arg(&validation_root)
+        .output()
+        .context("failed to run staged Business OS catalog app validation")?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        anyhow::bail!(
+            "staged catalog module validation failed: {}",
             if stderr.is_empty() { stdout } else { stderr }
         )
     })();
@@ -42004,7 +42082,7 @@ mod tests {
     fn module_update_legacy_manifest_uses_explicit_separate_module_roots() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        let source_app_root = root.join("catalog-app");
+        let source_app_root = root.join("src/apps/business-os");
         let installed_app_root = root.join("installed-app");
         let source_dir = source_app_root.join("modules/research");
         let installed_dir = installed_app_root.join("installed-modules/research");
@@ -42040,9 +42118,24 @@ mod tests {
             "export function mount(ctx) { ctx.host.textContent = 'Research'; }\n",
         )?;
         fs::write(
+            source_dir.join("collections.schema.json"),
+            r#"{"schema_format":"ctox-business-os-module-collections-v1","collections":{}}"#,
+        )?;
+        fs::write(
+            source_dir.join("schema.js"),
+            "export const collections = {};\n",
+        )?;
+        fs::write(
+            source_dir.join("index.css"),
+            ".research { color: var(--text); background: var(--surface); }\n",
+        )?;
+        fs::write(
             source_dir.join("icon.svg"),
             "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
         )?;
+        fs::create_dir_all(source_dir.join("locales"))?;
+        fs::write(source_dir.join("locales/de.json"), "{}\n")?;
+        fs::write(source_dir.join("locales/en.json"), "{}\n")?;
         fs::create_dir_all(source_dir.join("tests"))?;
         fs::write(
             source_dir.join("tests/research.test.mjs"),
@@ -42114,6 +42207,25 @@ mod tests {
             updated.get("source_module_id").and_then(Value::as_str),
             Some("research")
         );
+        assert_eq!(
+            updated
+                .pointer("/store/source_path")
+                .and_then(Value::as_str),
+            Some("installed-modules/research")
+        );
+        assert_eq!(
+            updated
+                .pointer("/store/distribution")
+                .and_then(Value::as_str),
+            Some("ctox-runtime-installed-module")
+        );
+        assert_eq!(
+            updated
+                .pointer("/store/installable")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(updated.pointer("/layout/icon_svg"), None);
         Ok(())
     }
 
