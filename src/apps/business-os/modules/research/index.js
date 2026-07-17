@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { buildResearchGraphProjection } from './research-graph-data.mjs';
+import { buildResearchGraphProjection, GRAPH_DETAIL_LEVELS } from './research-graph-data.mjs';
 
-const BUILD = '20260713-semantic-graph-v1';
+const BUILD = '20260717-semantic-graph-v2';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
@@ -116,9 +116,14 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'node_id',
       'label',
       'kind',
+      'description',
+      'aliases_json',
       'cluster_id',
+      'cluster_label',
       'occurrences',
+      'evidence_count',
       'betweenness_centrality',
+      'confidence',
       'source_ids_json',
       'provenance_json',
       'updated_at',
@@ -130,7 +135,10 @@ const RESEARCH_TABLE_CONTRACT = Object.freeze({
       'edge_id',
       'source_id',
       'target_id',
+      'relation_type',
+      'label',
       'weight',
+      'confidence',
       'source_ids_json',
       'provenance_json',
       'updated_at',
@@ -320,11 +328,12 @@ const state = {
   selectedGraphNodeId: '',
   graph: {
     dimensions: 3,
-    visibleLimit: 120,
+    detailLevel: 'standard',
+    visibleLimit: GRAPH_DETAIL_LEVELS.standard,
     layer: 'concepts',
     panel: 'topics',
     query: '',
-    autoRotate: true,
+    autoRotate: false,
     busyAction: '',
     status: 'loading',
   },
@@ -527,7 +536,11 @@ function bindEvents(root) {
       handleGraphCommand(target.dataset.graphCommand || '');
     } else if (action === 'graph-layer') {
       state.graph.layer = target.dataset.graphLayer || 'concepts';
-      renderCenter();
+      refreshGraphProjectionInPlace();
+    } else if (action === 'graph-detail') {
+      state.graph.detailLevel = target.dataset.graphDetail || 'standard';
+      state.graph.visibleLimit = GRAPH_DETAIL_LEVELS[state.graph.detailLevel] || GRAPH_DETAIL_LEVELS.standard;
+      refreshGraphProjectionInPlace();
     } else if (action === 'graph-panel') {
       state.graph.panel = target.dataset.graphPanel || 'topics';
       updateGraphInsights();
@@ -576,12 +589,6 @@ function bindEvents(root) {
     }
   });
   root.addEventListener('change', (event) => {
-    const graphLimit = event.target.closest('[data-action="graph-limit"]');
-    if (graphLimit) {
-      state.graph.visibleLimit = clampNumber(Number(graphLimit.value) || 120, 20, 500);
-      renderCenter();
-      return;
-    }
     const axis = event.target.closest('[data-axis-select]');
     if (!axis) return;
     updateTaskAxis(axis.dataset.axisSelect, axis.value).catch((error) => {
@@ -593,12 +600,6 @@ function bindEvents(root) {
     if (graphSearch) {
       state.graph.query = graphSearch.value;
       state.graphSurface?.search?.(graphSearch.value);
-      return;
-    }
-    const graphLimit = event.target.closest('[data-action="graph-limit"]');
-    if (graphLimit) {
-      const label = graphLimit.closest('.research-graph-limit')?.querySelector('span');
-      if (label) label.textContent = graphLimit.value;
       return;
     }
     const searchInput = event.target.closest('[data-action="source-search"]');
@@ -957,6 +958,7 @@ async function loadDashboardData() {
     graphNodeRows: evidenceGraphRows.nodes,
     graphEdgeRows: evidenceGraphRows.edges,
     graphLayer: state.graph.layer,
+    detailLevel: state.graph.detailLevel,
     visibleLimit: state.graph.visibleLimit,
   });
   if (!state.selectedSourceId || !state.sourceModels.some((item) => item.id === state.selectedSourceId)) {
@@ -1556,7 +1558,6 @@ function renderCenter() {
 
 function renderSemanticGraph(task, projection) {
   const metrics = projection.metrics || {};
-  const maximum = Math.max(20, Math.min(500, projection.availableNodeCount || state.graph.visibleLimit));
   const runInfo = researchRunInfo(task);
   const live = ['queued', 'running'].includes(runInfo.statusKind);
   return `
@@ -1570,7 +1571,7 @@ function renderSemanticGraph(task, projection) {
         <div class="research-graph-meta">
           <div>
             <strong>${escapeHtml(state.t('semanticResearchGraph', 'Semantic Research Graph'))}</strong>
-            <span>${metrics.nodeCount || 0} ${escapeHtml(state.t('concepts', 'Begriffe'))} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Beziehungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Cluster'))}</span>
+            <span data-graph-summary>${graphSummary(metrics)}</span>
           </div>
           <span class="research-graph-live${live ? ' is-live' : ''}">${live ? escapeHtml(state.t('liveRun', 'LIVE · CTOX aktualisiert')) : escapeHtml(projection.origin === 'persisted' ? state.t('persistedGraph', 'Knowledge Graph') : state.t('derivedGraph', 'Live projection'))}</span>
         </div>
@@ -1582,10 +1583,11 @@ function renderSemanticGraph(task, projection) {
         <div class="research-graph-rail" aria-label="${escapeHtml(state.t('graphControls', 'Graph-Steuerung'))}">
           <button type="button" data-action="graph-command" data-graph-command="panel" class="research-graph-tool${state.graph.panel !== 'hidden' ? ' is-active' : ''}" aria-label="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}" title="${escapeHtml(state.t('toggleInsights', 'Insights ein-/ausblenden'))}">${iconSvg('layers')}</button>
           <button type="button" data-action="graph-command" data-graph-command="reset" class="research-graph-tool" aria-label="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}" title="${escapeHtml(state.t('resetGraph', 'Ansicht zurücksetzen'))}">${iconSvg('refresh')}</button>
-          <label class="research-graph-limit" title="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}">
-            <span>${state.graph.visibleLimit}</span>
-            <input type="range" data-action="graph-limit" min="20" max="${maximum}" step="10" value="${Math.min(maximum, state.graph.visibleLimit)}" aria-label="${escapeHtml(state.t('topWordsShown', 'Angezeigte Top-Begriffe'))}" />
-          </label>
+          <div class="research-graph-detail" role="group" aria-label="${escapeHtml(state.t('graphDetail', 'Detailstufe'))}">
+            ${graphDetailButton('overview', state.t('detailOverview', 'Übersicht'))}
+            ${graphDetailButton('standard', state.t('detailStandard', 'Standard'))}
+            ${graphDetailButton('deep', state.t('detailDeep', 'Tief'))}
+          </div>
           <button type="button" data-action="graph-dimension" class="research-graph-tool research-graph-dimension" aria-label="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}" title="${state.graph.dimensions === 3 ? escapeHtml(state.t('switch2d', 'Zu 2D wechseln')) : escapeHtml(state.t('switch3d', 'Zu 3D wechseln'))}">${state.graph.dimensions}D</button>
           <button type="button" data-action="graph-command" data-graph-command="rotate" class="research-graph-tool${state.graph.autoRotate ? ' is-active' : ''}" aria-pressed="${state.graph.autoRotate}" aria-label="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}" title="${escapeHtml(state.t('autoRotate', 'Automatische Rotation'))}">${iconSvg('refresh')}</button>
           <button type="button" data-action="graph-command" data-graph-command="zoom-in" class="research-graph-tool" aria-label="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}" title="${escapeHtml(state.t('zoomIn', 'Vergrößern'))}">+</button>
@@ -1593,7 +1595,7 @@ function renderSemanticGraph(task, projection) {
           <button type="button" data-action="graph-command" data-graph-command="fit" class="research-graph-tool" aria-label="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}" title="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}">${iconSvg('focus')}</button>
         </div>
         <div class="research-graph-layer-switch" role="group" aria-label="${escapeHtml(state.t('graphLayer', 'Graph-Ebene'))}">
-          ${graphLayerButton('concepts', state.t('concepts', 'Begriffe'))}
+          ${graphLayerButton('concepts', state.t('concepts', 'Themen'))}
           ${graphLayerButton('sources', state.t('sources', 'Quellen'))}
           ${graphLayerButton('evidence', state.t('evidence', 'Belege'))}
         </div>
@@ -1611,17 +1613,25 @@ function graphLayerButton(id, label) {
   return `<button type="button" data-action="graph-layer" data-graph-layer="${id}" class="${state.graph.layer === id ? 'is-active' : ''}" aria-pressed="${state.graph.layer === id}">${escapeHtml(label)}</button>`;
 }
 
+function graphDetailButton(id, label) {
+  return `<button type="button" data-action="graph-detail" data-graph-detail="${id}" class="${state.graph.detailLevel === id ? 'is-active' : ''}" aria-pressed="${state.graph.detailLevel === id}" title="${escapeHtml(label)}"><span>${escapeHtml(label)}</span></button>`;
+}
+
+function graphSummary(metrics = {}) {
+  return `${metrics.nodeCount || 0} ${escapeHtml(state.t('concepts', 'Themen'))} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Verknüpfungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Themenfelder'))}`;
+}
+
 function renderGraphInsights(projection) {
   const metrics = projection.metrics || {};
   const body = state.graph.panel === 'analytics'
     ? `
       <dl class="research-graph-metrics">
-        <div><dt>${escapeHtml(state.t('nodes', 'Knoten'))}</dt><dd>${metrics.nodeCount || 0}</dd></div>
-        <div><dt>${escapeHtml(state.t('relations', 'Beziehungen'))}</dt><dd>${metrics.linkCount || 0}</dd></div>
-        <div><dt>${escapeHtml(state.t('clusters', 'Cluster'))}</dt><dd>${metrics.clusterCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('nodes', 'Elemente'))}</dt><dd>${metrics.nodeCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('relations', 'Verknüpfungen'))}</dt><dd>${metrics.linkCount || 0}</dd></div>
+        <div><dt>${escapeHtml(state.t('clusters', 'Themenfelder'))}</dt><dd>${metrics.clusterCount || 0}</dd></div>
         <div><dt>${escapeHtml(state.t('sources', 'Quellen'))}</dt><dd>${metrics.sourceCount || 0}</dd></div>
       </dl>
-      <p>${escapeHtml(state.t('graphMethod', 'Größe: Betweenness-Zentralität · Farbe: automatische Community · Kante: gemeinsame Nennung'))}</p>
+      <p>${escapeHtml(state.t('graphMethod', 'Größe zeigt die fachliche Vernetzung, Farben gruppieren verwandte Themen, Linien zeigen belegte Zusammenhänge.'))}</p>
     `
     : `<ol class="research-graph-topics">${(projection.topics || []).slice(0, 6).map((topic, index) => `
         <li>
@@ -1633,8 +1643,8 @@ function renderGraphInsights(projection) {
   return `
     <aside class="research-graph-insights">
       <div class="research-graph-insights-tabs" role="tablist" aria-label="Graph insights">
-        <button type="button" data-action="graph-panel" data-graph-panel="topics" class="${state.graph.panel === 'topics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'topics'}">${escapeHtml(state.t('topics', 'Topics'))}</button>
-        <button type="button" data-action="graph-panel" data-graph-panel="analytics" class="${state.graph.panel === 'analytics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'analytics'}">${escapeHtml(state.t('analytics', 'Analytics'))}</button>
+        <button type="button" data-action="graph-panel" data-graph-panel="topics" class="${state.graph.panel === 'topics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'topics'}">${escapeHtml(state.t('topics', 'Themenfelder'))}</button>
+        <button type="button" data-action="graph-panel" data-graph-panel="analytics" class="${state.graph.panel === 'analytics' ? 'is-active' : ''}" role="tab" aria-selected="${state.graph.panel === 'analytics'}">${escapeHtml(state.t('analytics', 'Qualität'))}</button>
       </div>
       ${body}
     </aside>
@@ -1654,6 +1664,29 @@ function currentGraphProjection(task = selectedTask()) {
   });
   state.graphProjection = projection;
   return projection;
+}
+
+function refreshGraphProjectionInPlace() {
+  if (!state.graphSurface) {
+    renderCenter();
+    return;
+  }
+  const projection = currentGraphProjection();
+  const center = pane('center');
+  center?.querySelectorAll('[data-action="graph-layer"]').forEach((button) => {
+    const active = button.dataset.graphLayer === state.graph.layer;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  center?.querySelectorAll('[data-action="graph-detail"]').forEach((button) => {
+    const active = button.dataset.graphDetail === state.graph.detailLevel;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  const summary = center?.querySelector('[data-graph-summary]');
+  if (summary) summary.innerHTML = graphSummary(projection.metrics);
+  updateGraphInsights();
+  state.graphSurface.setData(projection);
 }
 
 async function scheduleResearchGraphMount(task, projection) {
@@ -1676,6 +1709,7 @@ async function scheduleResearchGraphMount(task, projection) {
       projection,
       dimensions: state.graph.dimensions,
       autoRotate: state.graph.autoRotate,
+      sourceCountLabel: state.t('sources', 'Quellen'),
       onNodeClick(node) {
         selectGraphNode(node);
       },
@@ -1830,7 +1864,7 @@ async function dispatchTargetedGraphResearch(task) {
     '',
     'Nutze systematic-research und die CTOX Web-Research-Tools. Prüfe die vorhandenen Belege, schließe erkennbare Lücken und schreibe neue Quellen und Belege sofort in die bestehenden Knowledge-Tabellen.',
     `Schreibe auf jede erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}.`,
-    'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell. Erzeuge Kanten aus gemeinsamer Nennung in einem 4-Token-Fenster, behalte Provenienz und Source-IDs und überschreibe keine belegten Daten ohne neuen Nachweis.',
+    'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell aus verifizierten Evidenzzeilen. Verwende kanonische fachliche Mehrwort-Begriffe, klare Clusterbezeichnungen und typisierte Relationen. Technische Feldnamen, IDs, Hashes, URLs und generische Metadaten dürfen keine Konzepte werden. Jeder Knoten und jede Kante braucht Source-IDs, Konfidenz und Provenienz; überschreibe keine belegten Daten ohne neuen Nachweis.',
   ].filter(Boolean).join('\n');
   const now = Date.now();
   const result = await state.ctx.commandBus.dispatch({
@@ -2004,8 +2038,13 @@ function semanticGraphContract() {
   return {
     nodes_table_key: 'semantic_graph_nodes',
     edges_table_key: 'semantic_graph_edges',
-    extraction: 'concept_cooccurrence',
-    cooccurrence_window_tokens: 4,
+    extraction: 'evidence_grounded_domain_concepts',
+    node_kinds: ['topic', 'concept', 'source', 'evidence', 'measurement'],
+    node_fields: ['node_id', 'label', 'kind', 'description', 'aliases_json', 'cluster_id', 'cluster_label', 'occurrences', 'evidence_count', 'betweenness_centrality', 'confidence', 'source_ids_json', 'provenance_json'],
+    edge_fields: ['edge_id', 'source_id', 'target_id', 'relation_type', 'label', 'weight', 'confidence', 'source_ids_json', 'provenance_json'],
+    allowed_relation_types: ['supports', 'measures', 'derived_from', 'part_of', 'contradicts', 'correlates_with', 'co_occurs'],
+    semantic_labels_required: true,
+    technical_metadata_keys_forbidden_as_concepts: true,
     community_detection: 'automatic_modularity',
     node_importance: 'betweenness_centrality',
     incremental_writeback: true,
@@ -3132,7 +3171,7 @@ async function runSelectedResearch() {
     'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
     `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
-    'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
+    'Pflege parallel semantic_graph_nodes und semantic_graph_edges: kanonische fachliche Themen und Konzepte ausschließlich aus verifizierten Titeln, Zusammenfassungen und Evidenz; klare Definitionen, Aliase und Themenfeld-Bezeichnungen; typisierte belegte Relationen; Source-IDs, Konfidenz und Provenienz an jedem Datensatz. Technische Schlüssel, IDs, Hashes, URLs und generische Metadaten sind keine Konzepte. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
   const title = `Research · ${task.title}`;
   const threadKey = `business-os/research/${task.id}`;

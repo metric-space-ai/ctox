@@ -15,11 +15,14 @@ const outputDir = resolve(outputArgument || 'runtime/qa/research-semantic-graph'
 
 function chromiumExecutable() {
   const cache = resolve('runtime/browser/interactive-reference/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  for (const entry of readdirSync(cache).filter((name) => name.startsWith('chromium-')).sort().reverse()) {
-    const candidate = resolve(cache, entry, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-    if (existsSync(candidate)) return candidate;
+  if (existsSync(cache)) {
+    for (const entry of readdirSync(cache).filter((name) => name.startsWith('chromium-')).sort().reverse()) {
+      const candidate = resolve(cache, entry, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
+      if (existsSync(candidate)) return candidate;
+    }
   }
+  const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (existsSync(systemChrome)) return systemChrome;
   return undefined;
 }
 
@@ -226,6 +229,20 @@ try {
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.ok(await page.locator('.research-graph-topics li').count() >= 5);
   assert.ok(await page.locator('[data-research-graph-host] canvas').boundingBox());
+  const initialNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
+  const detailStartedAt = Date.now();
+  await page.locator('[data-action="graph-detail"][data-graph-detail="overview"]').click();
+  await page.waitForTimeout(500);
+  const overviewNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
+  assert.ok(overviewNodeCount > 0 && overviewNodeCount < initialNodeCount);
+  await page.locator('[data-action="graph-detail"][data-graph-detail="deep"]').click();
+  await page.waitForTimeout(500);
+  const deepNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
+  assert.ok(deepNodeCount >= initialNodeCount);
+  assert.ok(Date.now() - detailStartedAt < 4000, 'detail changes exceeded the interactive budget');
+  assert.equal(await page.locator('[data-action="graph-detail"].is-active').getAttribute('data-graph-detail'), 'deep');
+  await page.locator('[data-action="graph-detail"][data-graph-detail="standard"]').click();
+  await page.waitForTimeout(500);
   await page.screenshot({ path: resolve(outputDir, 'desktop-3d.png'), fullPage: true, timeout: 90000 });
 
   await page.locator('[data-action="graph-dimension"]').click();

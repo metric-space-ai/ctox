@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import { buildResearchGraphProjection } from '../research-graph-data.mjs';
@@ -63,6 +64,7 @@ test('prefers persisted graph rows and preserves source provenance', () => {
   assert.equal(projection.links.length, 2);
   assert.deepEqual(projection.nodes.find((node) => node.id === 'concept:research').sourceIds, ['source_a', 'source_b']);
   assert.equal(projection.metrics.clusterCount, 2);
+  assert.equal(projection.nodes[0].kind, 'concept');
 });
 
 test('adds source and evidence layers without exceeding graph limits', () => {
@@ -92,4 +94,101 @@ test('adds source and evidence layers without exceeding graph limits', () => {
   assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
   const nodeIds = new Set(projection.nodes.map((node) => node.id));
   assert.ok(projection.links.every((link) => nodeIds.has(link.source) && nodeIds.has(link.target)));
+});
+
+test('does not turn technical metadata keys into research concepts', () => {
+  const projection = buildResearchGraphProjection({
+    task: { id: 'bearing', title: 'UAV propeller bearing loads', prompt: 'Evaluate measured thrust and torque.' },
+    sourceModels: [{
+      id: 'source_a',
+      title: 'Measured propeller thrust and torque',
+      score: 96,
+      row: {
+        summary: 'Wind tunnel measurements connect propeller thrust, torque and rotational speed.',
+        tags: ['propeller performance', 'bearing load'],
+        source_id: 'source_a',
+        snapshot_hash: 'sha256:deadbeef',
+        canonical_url: 'https://example.test/data',
+        verification_status: 'verified',
+      },
+    }],
+    measurementRows: [{
+      source_id: 'source_a',
+      fact_label: 'Measured torque',
+      quote: 'Torque was measured across the complete rotational speed range.',
+      snapshot_path: '/runtime/snapshots/source_a.html',
+      extracted_at: '2026-07-17T00:00:00Z',
+    }],
+    detailLevel: 'standard',
+  });
+  const labels = projection.nodes.map((node) => node.label.toLocaleLowerCase()).join(' ');
+  assert.match(labels, /propeller|torque|bearing/);
+  assert.doesNotMatch(labels, /snapshot|canonical|verification|extracted|sha256|source id/);
+  assert.ok(projection.nodes.some((node) => node.label === 'Propeller Performance'));
+});
+
+test('detail levels are nested and preserve the requested source and evidence layers', () => {
+  const sourceModels = Array.from({ length: 80 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `Propeller measurement study ${index}`,
+    score: 100 - index / 2,
+    row: { summary: 'Measured thrust torque rotational speed vibration bearing load.', tags: ['propeller load', 'bearing design'] },
+  }));
+  const measurementRows = sourceModels.flatMap((source, index) => Array.from({ length: 3 }, (_, fact) => ({
+    source_id: source.id,
+    fact_label: `Torque point ${index}-${fact}`,
+    quote: 'Measured torque and thrust.',
+    confidence: 0.95,
+  })));
+  const build = (detailLevel) => buildResearchGraphProjection({
+    task: { id: 'bearing', title: 'Drone bearing loads', prompt: 'Measured propeller loads.' },
+    sourceModels,
+    measurementRows,
+    graphLayer: 'evidence',
+    detailLevel,
+  });
+  const overview = build('overview');
+  const standard = build('standard');
+  const deep = build('deep');
+  assert.ok(overview.nodes.length <= 36);
+  assert.ok(standard.nodes.length <= 64);
+  assert.ok(deep.nodes.length <= 120);
+  for (const projection of [overview, standard, deep]) {
+    assert.ok(projection.nodes.some((node) => node.kind === 'source'));
+    assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
+  }
+  const standardIds = new Set(standard.nodes.map((node) => node.id));
+  const deepIds = new Set(deep.nodes.map((node) => node.id));
+  assert.ok(overview.nodes.every((node) => standardIds.has(node.id)));
+  assert.ok(standard.nodes.every((node) => deepIds.has(node.id)));
+});
+
+test('projects SKF-sized research data within an interactive budget', () => {
+  const sourceModels = Array.from({ length: 322 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `UAV propeller dataset ${index}`,
+    score: 95 - index / 20,
+    row: {
+      summary: 'Measured propeller thrust torque rpm vibration and bearing loads under test conditions.',
+      tags: ['propeller performance', 'rotor dynamics', 'bearing load'],
+    },
+  }));
+  const measurementRows = Array.from({ length: 816 }, (_, index) => ({
+    source_id: `source_${index % sourceModels.length}`,
+    fact_label: `Measured load point ${index}`,
+    quote: 'Direct experimental thrust and torque measurement.',
+    confidence: 0.94,
+  }));
+  const startedAt = performance.now();
+  const projection = buildResearchGraphProjection({
+    task: { id: 'skf', title: 'SKF UAV bearing design', prompt: 'Evaluate measured rotor loads.' },
+    sourceModels,
+    measurementRows,
+    graphLayer: 'evidence',
+    detailLevel: 'deep',
+  });
+  const elapsedMs = performance.now() - startedAt;
+  assert.ok(projection.nodes.length <= 120);
+  assert.ok(projection.links.length <= 1800);
+  assert.ok(elapsedMs < 1200, `projection took ${elapsedMs.toFixed(1)} ms`);
 });

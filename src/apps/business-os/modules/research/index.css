@@ -344,28 +344,38 @@
   letter-spacing: 0;
 }
 
-.research-graph-limit {
+.research-graph-detail {
   display: grid;
-  justify-items: center;
-  gap: 5px;
-  width: 32px;
-  height: 120px;
+  gap: 2px;
+  width: 58px;
   border: 1px solid #2b3540;
-  border-radius: 3px;
-  padding: 6px 0;
+  border-radius: 5px;
+  padding: 2px;
   background: #171b25;
-  color: #aeb9bf;
-  font-size: 9px;
-  font-weight: 760;
 }
 
-.research-graph-limit input {
-  width: 14px;
-  height: 86px;
-  margin: 0;
-  accent-color: #8cb8d5;
-  direction: rtl;
-  writing-mode: vertical-lr;
+.research-graph-detail button {
+  min-width: 0;
+  height: 25px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #8f9ca4;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.research-graph-detail button:hover,
+.research-graph-detail button.is-active {
+  background: #263746;
+  color: #eef8fb;
 }
 
 .research-graph-layer-switch {
@@ -1352,13 +1362,8 @@
     height: 38px;
   }
 
-  .research-graph-limit {
-    width: 40px;
-    height: 122px;
-  }
-
-  .research-graph-limit input {
-    height: 82px;
+  .research-graph-detail {
+    width: 62px;
   }
 
   .research-graph-tool[data-graph-command="zoom-in"],
@@ -1391,8 +1396,8 @@
     height: 44px;
   }
 
-  .research-graph-limit {
-    width: 44px;
+  .research-graph-detail {
+    width: 64px;
   }
 }
 

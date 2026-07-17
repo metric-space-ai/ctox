@@ -1,5 +1,17 @@
-const MAX_GRAPH_NODES = 500;
-const MAX_GRAPH_LINKS = 6000;
+const MAX_GRAPH_NODES = 240;
+const MAX_GRAPH_LINKS = 1800;
+export const GRAPH_DETAIL_LEVELS = Object.freeze({
+  overview: 36,
+  standard: 64,
+  deep: 120,
+});
+const SEMANTIC_TEXT_FIELDS = new Set([
+  'title', 'subtitle', 'summary', 'description', 'abstract', 'note', 'contribution_note',
+  'fact_label', 'quote', 'content', 'finding', 'conclusion', 'method', 'material',
+]);
+const SEMANTIC_PHRASE_FIELDS = new Set([
+  'tags', 'keywords', 'topics', 'entities', 'subject_terms', 'controlled_terms',
+]);
 const CLUSTER_PALETTE = Object.freeze([
   '#58a9d8',
   '#79b85a',
@@ -25,12 +37,19 @@ const STOP_WORDS = new Set([
 ]);
 
 export function buildResearchGraphProjection(input = {}) {
+  const detailLevel = normalizeDetailLevel(input.detailLevel);
+  const visibleLimit = clamp(
+    Number(input.visibleLimit) || GRAPH_DETAIL_LEVELS[detailLevel],
+    12,
+    MAX_GRAPH_NODES,
+  );
   const persisted = projectionFromPersisted(input);
-  const base = persisted || projectionFromResearchRows(input);
-  const enriched = enrichGraph(base.nodes, base.links);
-  const visibleLimit = clamp(Number(input.visibleLimit) || 120, 12, MAX_GRAPH_NODES);
-  const visibleNodeIds = new Set(enriched.nodes.slice(0, visibleLimit).map((node) => node.id));
-  const nodes = enriched.nodes.filter((node) => visibleNodeIds.has(node.id));
+  const documents = buildDocuments(input);
+  const base = persisted || projectionFromResearchRows(input, documents);
+  const layered = addRequestedLayers(base.nodes, base.links, documents, input.graphLayer, visibleLimit);
+  const enriched = enrichGraph(layered.nodes, layered.links);
+  const nodes = selectVisibleNodes(enriched.nodes, input.graphLayer, visibleLimit);
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
   const links = enriched.links
     .filter((link) => visibleNodeIds.has(link.source) && visibleNodeIds.has(link.target))
     .slice(0, MAX_GRAPH_LINKS);
@@ -40,6 +59,7 @@ export function buildResearchGraphProjection(input = {}) {
     links,
     topics,
     origin: persisted ? 'persisted' : 'derived',
+    detailLevel,
     availableNodeCount: enriched.nodes.length,
     availableLinkCount: enriched.links.length,
     metrics: {
@@ -47,6 +67,7 @@ export function buildResearchGraphProjection(input = {}) {
       linkCount: links.length,
       clusterCount: new Set(nodes.map((node) => node.cluster)).size,
       sourceCount: new Set(nodes.flatMap((node) => node.sourceIds || [])).size,
+      evidenceCount: nodes.filter((node) => node.kind === 'evidence' || node.kind === 'measurement').length,
     },
   };
 }
@@ -61,9 +82,14 @@ function projectionFromPersisted(input) {
       id,
       label: firstString(row, ['label', 'title', 'concept', 'term']) || formatConceptLabel(id),
       kind: firstString(row, ['kind', 'node_type', 'type']) || 'concept',
+      description: firstString(row, ['description', 'definition', 'summary']),
+      clusterLabel: firstString(row, ['cluster_label', 'topic_label', 'community_label']),
       clusterHint: firstString(row, ['cluster_id', 'cluster', 'community']) || '',
       occurrences: positiveNumber(row.occurrences ?? row.frequency ?? row.count, 1),
       centralityHint: normalizedUnit(row.betweenness_centrality ?? row.centrality ?? row.importance),
+      confidence: normalizedUnit(row.confidence),
+      evidenceCount: positiveNumber(row.evidence_count, 0),
+      aliases: parseStringList(row.aliases_json ?? row.aliases),
       sourceIds: parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources),
       provenance: row.provenance_json ?? row.provenance ?? null,
     };
@@ -73,15 +99,17 @@ function projectionFromPersisted(input) {
     id: firstString(row, ['edge_id', 'id']) || `edge_${index + 1}`,
     source: firstString(row, ['source_id', 'source', 'from']),
     target: firstString(row, ['target_id', 'target', 'to']),
+    relationType: firstString(row, ['relation_type', 'relation', 'type']) || 'related_to',
+    label: firstString(row, ['label', 'relation_label']),
     weight: positiveNumber(row.weight ?? row.occurrences ?? row.count, 1),
+    confidence: normalizedUnit(row.confidence),
     sourceIds: parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources),
     provenance: row.provenance_json ?? row.provenance ?? null,
   })).filter((link) => link.source !== link.target && nodeIds.has(link.source) && nodeIds.has(link.target));
   return links.length ? { nodes, links } : null;
 }
 
-function projectionFromResearchRows(input) {
-  const documents = buildDocuments(input);
+function projectionFromResearchRows(input, documents = buildDocuments(input)) {
   const nodeStats = new Map();
   const edgeStats = new Map();
   for (const document of documents) {
@@ -141,7 +169,6 @@ function projectionFromResearchRows(input) {
     .sort((left, right) => right.weight - left.weight || left.id.localeCompare(right.id))
     .slice(0, MAX_GRAPH_LINKS);
 
-  ({ nodes, links } = addRequestedLayers(nodes, links, documents, input.graphLayer));
   return { nodes, links };
 }
 
@@ -161,14 +188,8 @@ function buildDocuments(input) {
     score: Number(source.score || 0),
     source,
     evidence: evidenceBySource.get(String(source.id || '')) || [],
-    text: collectText([
-      source.title,
-      source.subtitle,
-      source.note,
-      source.row,
-      source.curated,
-      evidenceBySource.get(String(source.id || '')) || [],
-    ]),
+    text: collectSemanticText([source, source.row, source.curated, evidenceBySource.get(String(source.id || '')) || []]),
+    phrases: collectSemanticPhrases([source, source.row, source.curated]),
   }));
   if (input.task) {
     documents.unshift({
@@ -178,7 +199,13 @@ function buildDocuments(input) {
       score: 100,
       source: null,
       evidence: [],
-      text: collectText([input.task.title, input.task.prompt, input.task.criteria, input.task.knowledge_domain]),
+      text: collectSemanticText({
+        title: input.task.title,
+        description: input.task.prompt,
+        summary: input.task.criteria,
+        topics: input.task.topics,
+      }),
+      phrases: collectSemanticPhrases({ topics: input.task.topics }),
     });
   }
   return documents;
@@ -198,6 +225,17 @@ function documentConcepts(document) {
       weight: 4 + Math.min(4, document.score / 25),
     });
   }
+  for (const phrase of document.phrases || []) {
+    const phraseTokens = tokenize(phrase).slice(0, 6);
+    if (!phraseTokens.length) continue;
+    const normalized = phraseTokens.map((token) => token.normalized).join(' ');
+    result.push({
+      id: `topic:${normalized}`,
+      label: phraseTokens.map((token) => token.label).join(' '),
+      kind: 'topic',
+      weight: 5,
+    });
+  }
   for (const token of tokens) {
     result.push({
       id: `concept:${token.normalized}`,
@@ -209,7 +247,7 @@ function documentConcepts(document) {
   return result.slice(0, 160);
 }
 
-function addRequestedLayers(nodes, links, documents, layer = 'concepts') {
+function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibleLimit = GRAPH_DETAIL_LEVELS.standard) {
   if (layer !== 'sources' && layer !== 'evidence') return { nodes, links };
   const bySource = new Map();
   for (const node of nodes) {
@@ -220,7 +258,18 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts') {
   }
   const extraNodes = [];
   const extraLinks = [];
-  for (const document of documents.filter((item) => item.sourceId)) {
+  // Build one stable deep projection, then take nested slices for each detail
+  // level. Otherwise changing detail also changes the force topology.
+  const sourceBudget = layer === 'evidence'
+    ? Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.2)
+    : Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.34);
+  const evidenceBudget = layer === 'evidence' ? Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.3) : 0;
+  const rankedDocuments = documents
+    .filter((item) => item.sourceId)
+    .sort((left, right) => right.score - left.score || left.sourceId.localeCompare(right.sourceId))
+    .slice(0, sourceBudget);
+  let remainingEvidence = evidenceBudget;
+  for (const document of rankedDocuments) {
     const sourceNodeId = `source:${document.sourceId}`;
     extraNodes.push({
       id: sourceNodeId,
@@ -241,16 +290,19 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts') {
       });
     }
     if (layer === 'evidence') {
-      for (const [index, evidence] of document.evidence.slice(0, 4).entries()) {
+      const evidenceForSource = document.evidence.slice(0, Math.min(3, remainingEvidence));
+      for (const [index, evidence] of evidenceForSource.entries()) {
         const evidenceId = `evidence:${document.sourceId}:${index}`;
         extraNodes.push({
           id: evidenceId,
-          label: shortLabel(firstString(evidence, ['fact_label', 'criterion_id', 'title', 'name']) || `Evidence ${index + 1}`, 36),
+          label: shortLabel(firstString(evidence, ['fact_label', 'title', 'name']) || `Beleg ${index + 1}`, 48),
           kind: 'evidence',
+          description: firstString(evidence, ['quote', 'summary', 'description']),
           occurrences: 1,
           documentCount: 1,
           rawScore: 2,
           sourceIds: [document.sourceId],
+          confidence: normalizedUnit(evidence.confidence),
         });
         extraLinks.push({
           id: `edge:${stableHash(`${sourceNodeId}\u0000${evidenceId}`).toString(36)}`,
@@ -260,12 +312,36 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts') {
           sourceIds: [document.sourceId],
         });
       }
+      remainingEvidence -= evidenceForSource.length;
     }
   }
   return {
-    nodes: [...nodes, ...extraNodes].slice(0, MAX_GRAPH_NODES),
+    nodes: [...nodes.slice(0, Math.max(12, MAX_GRAPH_NODES - extraNodes.length)), ...extraNodes].slice(0, MAX_GRAPH_NODES),
     links: [...links, ...extraLinks].slice(0, MAX_GRAPH_LINKS),
   };
+}
+
+function selectVisibleNodes(nodes, layer, visibleLimit) {
+  const take = (values, count) => values.slice(0, Math.max(0, count));
+  const sources = nodes.filter((node) => node.kind === 'source');
+  const evidence = nodes.filter((node) => node.kind === 'evidence' || node.kind === 'measurement');
+  const concepts = nodes.filter((node) => !sources.includes(node) && !evidence.includes(node));
+  let selected;
+  if (layer === 'sources') {
+    const sourceCount = Math.min(sources.length, Math.max(8, Math.floor(visibleLimit * 0.34)));
+    selected = [...take(sources, sourceCount), ...take(concepts, visibleLimit - sourceCount)];
+  } else if (layer === 'evidence') {
+    const evidenceCount = Math.min(evidence.length, Math.max(10, Math.floor(visibleLimit * 0.3)));
+    const sourceCount = Math.min(sources.length, Math.max(6, Math.floor(visibleLimit * 0.2)));
+    selected = [
+      ...take(evidence, evidenceCount),
+      ...take(sources, sourceCount),
+      ...take(concepts, visibleLimit - evidenceCount - sourceCount),
+    ];
+  } else {
+    selected = take(concepts, visibleLimit);
+  }
+  return selected.sort((left, right) => left.rank - right.rank || left.id.localeCompare(right.id));
 }
 
 function enrichGraph(rawNodes, rawLinks) {
@@ -306,10 +382,10 @@ function enrichGraph(rawNodes, rawLinks) {
   nodes.forEach((node, rank) => {
     node.rank = rank + 1;
     node.primary = node.kind === 'topic' || rank < Math.min(12, Math.ceil(nodes.length * 0.12));
-    node.visualSize = 2.2 + Math.pow(Math.max(0.015, node.importance), 0.72) * 8.4;
-    node.labelSize = node.primary
+    node.visualSize = Math.min(10.6, 2.2 + Math.pow(Math.max(0.015, node.importance), 0.72) * 8.4);
+    node.labelSize = Math.min(9, node.primary
       ? 4.6 + Math.pow(Math.max(0.02, node.importance), 0.7) * 4.4
-      : 3.2 + Math.pow(Math.max(0.02, node.importance), 0.8) * 2.4;
+      : 3.2 + Math.pow(Math.max(0.02, node.importance), 0.8) * 2.4);
   });
 
   const maxWeight = Math.max(1, ...links.map((link) => link.weight));
@@ -333,7 +409,7 @@ function louvainFirstPhase(nodes, adjacency) {
   const totals = new Map(degree);
   const twiceWeight = Math.max(1, [...degree.values()].reduce((sum, value) => sum + value, 0));
   const ordered = [...nodes].sort((left, right) => (degree.get(right.id) - degree.get(left.id)) || left.id.localeCompare(right.id));
-  for (let pass = 0; pass < 20; pass += 1) {
+  for (let pass = 0; pass < 8; pass += 1) {
     let moved = false;
     for (const node of ordered) {
       const nodeId = node.id;
@@ -382,7 +458,7 @@ function compactCommunities(community, degree) {
 function approximateBetweenness(nodes, adjacency) {
   const centrality = new Map(nodes.map((node) => [node.id, 0]));
   const ordered = [...nodes].sort((left, right) => adjacency.get(right.id).size - adjacency.get(left.id).size || left.id.localeCompare(right.id));
-  const sampleCount = Math.min(32, ordered.length);
+  const sampleCount = Math.min(nodes.length > 140 ? 12 : 20, ordered.length);
   const sources = sampleCount === ordered.length
     ? ordered
     : Array.from({ length: sampleCount }, (_, index) => ordered[Math.floor(index * ordered.length / sampleCount)]);
@@ -432,7 +508,10 @@ function summarizeTopics(nodes) {
     .map(([cluster, clusterNodes]) => ({
       id: cluster,
       color: CLUSTER_PALETTE[cluster % CLUSTER_PALETTE.length],
-      label: clusterNodes.sort((left, right) => right.importance - left.importance)[0]?.label || `Cluster ${cluster + 1}`,
+      label: clusterNodes.find((node) => node.clusterLabel)?.clusterLabel
+        || clusterNodes.find((node) => node.kind === 'topic')?.label
+        || clusterNodes.sort((left, right) => right.importance - left.importance)[0]?.label
+        || `Themenfeld ${cluster + 1}`,
       nodeId: clusterNodes[0]?.id || '',
       nodeCount: clusterNodes.length,
       importance: clusterNodes.reduce((sum, node) => sum + node.importance, 0),
@@ -452,9 +531,43 @@ function collectText(value, depth = 0) {
   if (typeof value === 'string' || typeof value === 'number') return String(value);
   if (Array.isArray(value)) return value.slice(0, 80).map((item) => collectText(item, depth + 1)).join(' ');
   if (typeof value === 'object') {
-    return Object.entries(value).slice(0, 80).flatMap(([key, item]) => [key, collectText(item, depth + 1)]).join(' ');
+    return Object.values(value).slice(0, 80).map((item) => collectText(item, depth + 1)).join(' ');
   }
   return '';
+}
+
+function collectSemanticText(value, depth = 0, field = '') {
+  if (depth > 5 || value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return !field || SEMANTIC_TEXT_FIELDS.has(field) ? String(value) : '';
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 80).map((item) => collectSemanticText(item, depth + 1, field)).join(' ');
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => SEMANTIC_TEXT_FIELDS.has(key) || SEMANTIC_PHRASE_FIELDS.has(key))
+      .map(([key, item]) => collectSemanticText(item, depth + 1, key))
+      .join(' ');
+  }
+  return '';
+}
+
+function collectSemanticPhrases(value, depth = 0, field = '') {
+  if (depth > 5 || value === null || value === undefined) return [];
+  if (typeof value === 'string') {
+    if (!SEMANTIC_PHRASE_FIELDS.has(field)) return [];
+    return value.split(/[,;|]/).map((item) => item.trim()).filter(Boolean);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 80).flatMap((item) => collectSemanticPhrases(item, depth + 1, field));
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => SEMANTIC_PHRASE_FIELDS.has(key))
+      .flatMap(([key, item]) => collectSemanticPhrases(item, depth + 1, key));
+  }
+  return [];
 }
 
 function normalizeDisplayLabel(value) {
@@ -531,9 +644,15 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeDetailLevel(value) {
+  return Object.hasOwn(GRAPH_DETAIL_LEVELS, value) ? value : 'standard';
+}
+
 export const __researchGraphDataTestHooks = {
   approximateBetweenness,
   collectText,
+  collectSemanticPhrases,
+  collectSemanticText,
   louvainFirstPhase,
   projectionFromPersisted,
   projectionFromResearchRows,
