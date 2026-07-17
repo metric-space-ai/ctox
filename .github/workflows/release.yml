@@ -90,6 +90,13 @@ jobs:
       - name: Install Business OS browser test runtime
         run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
 
+      - name: Build rxdb wire daemon (cross-process smokes)
+        # Required so run-all.mjs --require-wire-daemon below actually runs
+        # the cross-process JS<->Rust wire smokes instead of skipping them.
+        run: |
+          CARGO_TARGET_DIR="$PWD/runtime/build/cargo-target" \
+            cargo build --locked --manifest-path src/core/rxdb/Cargo.toml --example v15_wire_daemon
+
       - name: Business OS production contract checks
         run: |
           node --check src/apps/business-os/scripts/assert-rxdb-only.mjs
@@ -129,7 +136,7 @@ jobs:
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
-          node src/apps/business-os/rxdb/tests/run-all.mjs
+          node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
           cargo test --locked --bin ctox business_os --quiet
           cargo test --locked --manifest-path src/core/rxdb/Cargo.toml --quiet
 

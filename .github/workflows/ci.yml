@@ -199,6 +199,17 @@ jobs:
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_bundle_exports_authz_replay_issue_and_fix_check_script --quiet
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_verify_bundle_executes_proof_script_and_records_fix_status --quiet
 
+      - name: Build rxdb wire daemon (cross-process smokes)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # The cross-process-* smokes in the ctox-rxdb suite are the only
+        # proof that the JS demand loaders and the Rust dispatchers agree on
+        # real wire bytes. Without this binary they SKIP; run-all.mjs is
+        # invoked with --require-wire-daemon below so a missing build fails
+        # the job instead of silently dropping that coverage.
+        run: |
+          CARGO_TARGET_DIR="$PWD/runtime/build/cargo-target" \
+            cargo build --locked --manifest-path src/core/rxdb/Cargo.toml --example v15_wire_daemon
+
       - name: Business OS RxDB-only contract
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -270,7 +281,7 @@ jobs:
           # *-smoke.mjs, incl. contract-drift, bundle-reproducibility and the
           # data-plane ratchet guards). The three explicit smoke invocations
           # above stay for the release-evidence contract.
-          COMMAND_PLANE_BASELINE_PATH=runtime/build/command-plane/ci-baseline.json node src/apps/business-os/rxdb/tests/run-all.mjs
+          COMMAND_PLANE_BASELINE_PATH=runtime/build/command-plane/ci-baseline.json node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
 
       - name: Upload command-plane baseline
         if: matrix.target == 'x86_64-unknown-linux-gnu'

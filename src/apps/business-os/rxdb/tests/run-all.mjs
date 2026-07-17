@@ -14,7 +14,10 @@
 //     (cd src/core/rxdb && CARGO_TARGET_DIR=<repo>/runtime/build/cargo-target \
 //        cargo build --release --example v15_wire_daemon)
 //   They SKIP (loudly) when the binary is missing so the JS-only suite stays
-//   runnable, but CI must build the daemon so they actually run.
+//   runnable. CI builds the daemon and passes --require-wire-daemon, which
+//   turns a missing binary into a hard failure instead of a skip — the
+//   cross-process smokes are the only proof that the JS and Rust sides agree
+//   on real wire bytes, so a silent skip there is missing coverage.
 // - A red test is a finding, not noise. Never delete or weaken a test to make
 //   this suite pass; fix the code or update the pinned contract on purpose.
 
@@ -34,6 +37,15 @@ const daemonCandidates = [
   join(repoRoot, 'src/core/rxdb/runtime/build/cargo-target/debug/examples/v15_wire_daemon'),
 ];
 const daemonAvailable = daemonCandidates.some((path) => existsSync(path));
+const requireWireDaemon = process.argv.includes('--require-wire-daemon');
+
+if (requireWireDaemon && !daemonAvailable) {
+  console.error('--require-wire-daemon: v15_wire_daemon binary not found, cross-process smokes cannot run.');
+  console.error('Build it with:');
+  console.error('  (cd src/core/rxdb && CARGO_TARGET_DIR=<repo>/runtime/build/cargo-target \\');
+  console.error('     cargo build --release --example v15_wire_daemon)');
+  process.exit(1);
+}
 
 const tests = readdirSync(testDir)
   .filter((name) => name.endsWith('-smoke.mjs'))

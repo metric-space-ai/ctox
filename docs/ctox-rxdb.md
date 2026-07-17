@@ -815,7 +815,10 @@ need the release wire daemon:
    cargo build --release --example v15_wire_daemon)
 ```
 
-(They skip loudly when it is missing.)
+(They skip loudly when it is missing. CI builds the daemon and runs
+`run-all.mjs --require-wire-daemon`, which turns a missing binary into a hard
+failure — the cross-process smokes are the only proof that both sides agree on
+real wire bytes.)
 
 ### 10.3 Soak
 
