@@ -5,11 +5,11 @@
   color-scheme: light;
   --bg: oklch(0.965 0.006 235);
   --surface: oklch(0.987 0.005 235);
-  --surface-2: oklch(0.944 0.008 235);
-  --line: oklch(0.82 0.012 235);
+  --surface-2: oklch(0.94 0.009 238);
+  --line: oklch(0.8 0.014 235);
   --text: oklch(0.22 0.015 235);
   --text-strong: oklch(0.14 0.018 235);
-  --muted: oklch(0.45 0.015 235);
+  --muted: oklch(0.435 0.017 235);
   --accent: oklch(0.48 0.115 215);
   --accent-foreground: #ffffff;
   --accent-soft: oklch(0.9 0.04 215);
@@ -31,16 +31,19 @@
   /* CTOX shell-style elevation ladder: desktop sits one tonal step below
      window surfaces so stacked windows read as physical layers. Consumed
      only by the :root[data-shell-style="ctox"] chrome layer at file end. */
-  --shell-desktop-bg: oklch(0.916 0.012 235);
+  --shell-desktop-bg: oklch(0.9 0.017 243);
   --win-radius: 12px;
-  --win-border: color-mix(in srgb, var(--line) 88%, transparent);
+  --win-border: color-mix(in srgb, var(--line) 92%, transparent);
   --win-border-focus: color-mix(in srgb, var(--accent) 52%, var(--line));
   --win-elev:
-    0 1px 2px oklch(0.22 0.015 235 / 0.1),
-    0 12px 32px oklch(0.22 0.015 235 / 0.16);
+    0 1px 0 oklch(1 0 0 / 0.5) inset,
+    0 1px 2px oklch(0.22 0.015 235 / 0.12),
+    0 12px 32px oklch(0.22 0.015 235 / 0.18);
   --win-elev-focus:
-    0 2px 6px oklch(0.22 0.015 235 / 0.14),
-    0 24px 56px oklch(0.22 0.015 235 / 0.24);
+    0 1px 0 oklch(1 0 0 / 0.6) inset,
+    0 2px 6px oklch(0.22 0.015 235 / 0.16),
+    0 24px 56px oklch(0.22 0.015 235 / 0.26),
+    0 48px 96px oklch(0.22 0.015 235 / 0.12);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-family: var(--font-sans);
@@ -48,13 +51,13 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111315;
-  --surface: #171a1d;
-  --surface-2: #1d2125;
-  --line: #30363b;
+  --bg: #0f1216;
+  --surface: #151920;
+  --surface-2: #1b2029;
+  --line: #2d343e;
   --text: #e6e9eb;
   --text-strong: #ffffff;
-  --muted: #9ba4aa;
+  --muted: #a0a9b1;
   --accent: #72b8aa;
   --accent-foreground: #08110f;
   --accent-soft: rgba(108, 184, 170, 0.16);
@@ -63,7 +66,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.42);
-  --hairline: #2a3035;
+  --hairline: #262d35;
   --panel-radius: 4px;
   --control-radius: 3px;
   --panel-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
@@ -73,18 +76,18 @@
   --shell-app-bg: var(--bg);
   --shell-control-bg: var(--surface-2);
   --shell-topbar-shadow: none;
-  --shell-desktop-bg: #0a0d10;
+  --shell-desktop-bg: #080b10;
   --win-radius: 12px;
-  --win-border: #3a4149;
-  --win-border-focus: color-mix(in srgb, var(--accent) 55%, #3a4149);
+  --win-border: #363d47;
+  --win-border-focus: color-mix(in srgb, var(--accent) 55%, #363d47);
   --win-elev:
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 16px 44px rgba(0, 0, 0, 0.55);
+    0 0 0 1px rgba(255, 255, 255, 0.045) inset,
+    0 1px 2px rgba(0, 0, 0, 0.55),
+    0 16px 44px rgba(0, 0, 0, 0.6);
   --win-elev-focus:
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-    0 2px 8px rgba(0, 0, 0, 0.55),
-    0 28px 72px rgba(0, 0, 0, 0.66);
+    0 0 0 1px rgba(255, 255, 255, 0.07) inset,
+    0 2px 8px rgba(0, 0, 0, 0.6),
+    0 28px 72px rgba(0, 0, 0, 0.7);
 }
 
 * {
@@ -7680,7 +7683,15 @@ button.shell-window-header-meta:focus-visible,
 
 :root[data-shell-style="ctox"] .shell-window.is-focused {
   border-color: var(--win-border-focus) !important;
-  box-shadow: var(--win-elev-focus) !important;
+  box-shadow:
+    var(--win-elev-focus),
+    0 0 40px color-mix(in srgb, var(--accent) 7%, transparent) !important;
+}
+
+/* Unfocused windows lose edge definition along with elevation, so the
+   focused window is the only one with a crisp, accent-kissed border. */
+:root[data-shell-style="ctox"] .shell-window:not(.is-focused) {
+  border-color: color-mix(in srgb, var(--win-border) 62%, transparent) !important;
 }
 
 :root[data-shell-style="ctox"] .shell-window.is-maximized,
@@ -7699,10 +7710,10 @@ button.shell-window-header-meta:focus-visible,
   inset: 0;
   z-index: 40;
   pointer-events: none;
-  background: color-mix(in srgb, var(--shell-desktop-bg) 22%, transparent);
+  background: color-mix(in srgb, var(--shell-desktop-bg) 24%, transparent);
   border-radius: inherit;
   opacity: 1;
-  transition: opacity 180ms ease;
+  transition: opacity 220ms ease-out;
 }
 
 :root[data-shell-style="ctox"] .shell-window.is-focused::before {
@@ -7713,12 +7724,37 @@ button.shell-window-header-meta:focus-visible,
   color: var(--muted);
 }
 
+/* Header: a soft top-lit vertical gradient plus an inner light edge gives
+   the title bar the same "light from above" modelling as the chat dock,
+   instead of a flat fill. The focused window gets a whisper of accent in
+   the gradient so focus reads in the header, not only in the border. */
 :root[data-shell-style="ctox"] .shell-window-header {
   height: 34px !important;
   min-height: 34px;
   padding: 0 8px !important;
-  background: color-mix(in srgb, var(--surface-2) 66%, var(--surface)) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-2) 92%, var(--surface)) 0%,
+    color-mix(in srgb, var(--surface-2) 58%, var(--surface)) 100%
+  ) !important;
   border-bottom: 1px solid var(--hairline, var(--line)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-window.is-focused .shell-window-header {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface-2)) 0%,
+    color-mix(in srgb, var(--surface-2) 62%, var(--surface)) 100%
+  ) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-window.is-focused .shell-window-title {
+  color: var(--text-strong);
+}
+
+:root[data-shell-style="ctox"] .shell-window-title {
+  transition: color 180ms ease;
 }
 
 :root[data-shell-style="ctox"] .shell-window-title-text {
@@ -7730,14 +7766,23 @@ button.shell-window-header-meta:focus-visible,
   width: 30px;
   height: 24px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 :root[data-shell-style="ctox"] .shell-window-control:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
+}
+
+:root[data-shell-style="ctox"] .shell-window-control:active {
+  transform: scale(0.92);
 }
 
 :root[data-shell-style="ctox"] .shell-window-control--close:hover {
@@ -7751,27 +7796,32 @@ button.shell-window-header-meta:focus-visible,
   border-color: var(--hairline, var(--line));
 }
 
-/* Shell chrome surfaces adopt the chat-dock glass language. */
+/* Shell chrome surfaces adopt the chat-dock glass language: the same blur,
+   the same saturate, the same layered shadow with an inner top light edge. */
 :root[data-shell-style="ctox"] .topbar {
   background: color-mix(in srgb, var(--shell-topbar-bg) 80%, transparent) !important;
-  backdrop-filter: blur(18px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
   border-bottom: 1px solid var(--hairline) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset,
+    0 8px 24px rgba(0, 0, 0, 0.05) !important;
 }
 
 :root[data-shell-style="ctox"] .shell-taskbar {
-  border: 1px solid color-mix(in srgb, var(--line) 55%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent) !important;
   border-radius: 14px !important;
-  background: color-mix(in srgb, var(--surface) 72%, transparent) !important;
-  backdrop-filter: blur(18px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(160%) !important;
+  background: color-mix(in srgb, var(--surface) 68%, transparent) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.16),
-    0 1px 0 rgba(255, 255, 255, 0.06) inset !important;
+    0 16px 40px rgba(0, 0, 0, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.4) inset !important;
 }
 
 :root[data-shell-style="ctox"] .shell-taskbar-item {
   border-radius: 9px !important;
+  transition: background-color 140ms ease, color 140ms ease !important;
 }
 
 :root[data-shell-style="ctox"] .shell-taskbar-item:hover {
@@ -7782,16 +7832,20 @@ button.shell-window-header-meta:focus-visible,
 :root[data-shell-style="ctox"] .shell-taskbar-item[data-state="focused"] {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)) !important;
   color: var(--accent) !important;
-  box-shadow: none !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
 }
 
 :root[data-shell-style="ctox"] .shell-taskbar-popover {
   border-radius: 12px !important;
-  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent) !important;
   background: color-mix(in srgb, var(--surface) 82%, transparent) !important;
-  backdrop-filter: blur(16px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
-  box-shadow: var(--shadow-lg) !important;
+  backdrop-filter: blur(18px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%) !important;
+  box-shadow:
+    var(--shadow-lg),
+    0 1px 0 rgba(255, 255, 255, 0.3) inset !important;
 }
 
 :root[data-shell-style="ctox"] .shell-taskbar-popover-item {
@@ -7800,16 +7854,69 @@ button.shell-window-header-meta:focus-visible,
 
 :root[data-shell-style="ctox"] .shell-start-menu-panel {
   border-radius: 14px !important;
-  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
   background: color-mix(in srgb, var(--surface) 84%, transparent);
-  backdrop-filter: blur(20px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(150%) !important;
-  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.35) inset;
+}
+
+/* Dark theme: the white inner light edges above are calibrated for light
+   surfaces; on dark chrome they drop to a whisper, the scrim deepens, and
+   the focused window's accent aura gains presence. */
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-window::before {
+  background: color-mix(in srgb, var(--shell-desktop-bg) 32%, transparent);
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-window.is-focused {
+  box-shadow:
+    var(--win-elev-focus),
+    0 0 44px color-mix(in srgb, var(--accent) 11%, transparent) !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-window-header {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .topbar {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 10px 28px rgba(0, 0, 0, 0.28) !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-taskbar {
+  background: color-mix(in srgb, var(--surface) 62%, transparent) !important;
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.07) inset !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-taskbar-item[data-state="focused"] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-taskbar-popover {
+  box-shadow:
+    var(--shadow-lg),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .shell-start-menu-panel {
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root[data-shell-style="ctox"] .shell-window,
-  :root[data-shell-style="ctox"] .shell-window::before {
+  :root[data-shell-style="ctox"] .shell-window::before,
+  :root[data-shell-style="ctox"] .shell-window-title,
+  :root[data-shell-style="ctox"] .shell-window-control,
+  :root[data-shell-style="ctox"] .shell-taskbar-item {
     transition: none !important;
   }
 }

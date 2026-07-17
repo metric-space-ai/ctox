@@ -513,13 +513,16 @@ body[data-active-module="desktop"] .topbar {
 
 /* CTOX shell style: the desktop drops one tonal step below window surfaces
    (--shell-desktop-bg from the shell token block) so open windows read as
-   physically elevated layers instead of blending into the wallpaper. */
+   physically elevated layers instead of blending into the wallpaper. A soft
+   corner vignette grounds the composition and keeps the accent glows from
+   washing the edges out. */
 :root[data-shell-style="ctox"] .desktop-module {
   background:
-    radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent-soft) 22%, var(--shell-desktop-bg)) 0px, transparent 55%),
-    radial-gradient(at 50% 0%, color-mix(in srgb, var(--accent) 10%, var(--shell-desktop-bg)) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, color-mix(in srgb, var(--accent-soft) 26%, var(--shell-desktop-bg)) 0px, transparent 55%),
-    radial-gradient(at 0% 100%, color-mix(in srgb, var(--accent) 7%, var(--shell-desktop-bg)) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, color-mix(in srgb, var(--accent-soft) 18%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent-soft) 26%, var(--shell-desktop-bg)) 0px, transparent 55%),
+    radial-gradient(at 50% 0%, color-mix(in srgb, var(--accent) 12%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, color-mix(in srgb, var(--accent-soft) 30%, var(--shell-desktop-bg)) 0px, transparent 55%),
+    radial-gradient(at 0% 100%, color-mix(in srgb, var(--accent) 8%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, color-mix(in srgb, var(--accent-soft) 20%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(135% 105% at 50% 42%, transparent 62%, color-mix(in srgb, var(--shell-desktop-bg) 84%, #000) 100%),
     var(--shell-desktop-bg);
 }
