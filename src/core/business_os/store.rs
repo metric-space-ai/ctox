@@ -7354,9 +7354,6 @@ pub fn update_module_to_catalog(
     {
         staged["title"] = title.clone();
     }
-    staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-    staged["install_scope"] = Value::String("installed".to_owned());
-    staged["default_installed"] = Value::Bool(false);
     if let Some(template_id) = installed_manifest
         .get("template_id")
         .filter(|value| value.is_string())
@@ -7364,17 +7361,7 @@ pub fn update_module_to_catalog(
         staged["template_id"] = template_id.clone();
     }
     staged["source_module_id"] = Value::String(source_module.clone());
-    staged["store"]["source_path"] = Value::String(format!("installed-modules/{module_id}"));
-    staged["store"]["distribution"] = Value::String("ctox-runtime-installed-module".to_owned());
-    staged["store"]["installable"] = Value::Bool(false);
-    if let Some(layout) = staged.get_mut("layout").and_then(Value::as_object_mut) {
-        layout.remove("icon_svg");
-    }
-    if let Some(object) = staged.as_object_mut() {
-        object.remove("icon_svg");
-        object.remove("iconSvg");
-    }
-    ensure_local_icon_manifest_value(&mut staged, &staging);
+    normalize_catalog_installed_manifest(&mut staged, &module_id, &staging)?;
     fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
     validate_staged_catalog_module(root, &module_id, &staging)?;
 
@@ -9958,6 +9945,74 @@ fn ensure_local_icon_manifest_value(manifest: &mut Value, module_dir: &Path) {
     }
 }
 
+fn normalize_catalog_installed_manifest(
+    manifest: &mut Value,
+    module_id: &str,
+    module_dir: &Path,
+) -> anyhow::Result<()> {
+    let raw_version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('v');
+    let mut parts = raw_version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let minor = parts
+        .next()
+        .map(|part| part.parse::<u64>().ok())
+        .unwrap_or(Some(0));
+    let patch = parts
+        .next()
+        .map(|part| part.parse::<u64>().ok())
+        .unwrap_or(Some(0));
+    anyhow::ensure!(
+        parts.next().is_none() && major.is_some() && minor.is_some() && patch.is_some(),
+        "catalog module `{module_id}` has invalid version `{raw_version}`"
+    );
+    let version = format!(
+        "{}.{}.{}",
+        major.unwrap_or(0),
+        minor.unwrap_or(0),
+        patch.unwrap_or(0)
+    );
+    anyhow::ensure!(
+        version != "0.0.0",
+        "catalog module `{module_id}` must not use version 0.0.0"
+    );
+
+    manifest["version"] = Value::String(version);
+    manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest["install_scope"] = Value::String("installed".to_owned());
+    manifest["default_installed"] = Value::Bool(false);
+    if !manifest.get("store").is_some_and(Value::is_object) {
+        manifest["store"] = serde_json::json!({});
+    }
+    manifest["store"]["source_path"] = Value::String(format!("installed-modules/{module_id}"));
+    manifest["store"]["distribution"] = Value::String("ctox-runtime-installed-module".to_owned());
+    manifest["store"]["installable"] = Value::Bool(false);
+    ensure_local_icon_manifest_value(manifest, module_dir);
+    if let Some(layout) = manifest.get_mut("layout").and_then(Value::as_object_mut) {
+        layout.remove("icon_svg");
+    }
+    if let Some(object) = manifest.as_object_mut() {
+        for key in [
+            "icon_svg",
+            "iconSvg",
+            "icon_path",
+            "iconPath",
+            "icon_url",
+            "iconUrl",
+        ] {
+            object.remove(key);
+        }
+        if object.get("source").and_then(Value::as_str) == Some("local") {
+            object.remove("source");
+        }
+    }
+    Ok(())
+}
+
 fn load_marketplace_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Value>> {
     let modules_root = app_root.join("modules");
     let mut marketplace = Vec::new();
@@ -10117,19 +10172,20 @@ fn install_template_module(
     )?;
     manifest_value["id"] = Value::String(module_id.clone());
     manifest_value["title"] = Value::String(module_title);
-    manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-    manifest_value["install_scope"] = Value::String("installed".to_owned());
-    manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
     // Link the installed instance back to the catalog module it was copied from
     // so the catalog/update diff can detect a newer upstream bundle later.
     manifest_value["source_module_id"] = Value::String(source_module.clone());
-    ensure_local_icon_manifest_value(&mut manifest_value, &staging);
+    normalize_catalog_installed_manifest(&mut manifest_value, &module_id, &staging)?;
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
     let activation = (|| -> anyhow::Result<()> {
-        validate_staged_installed_module(root, &module_id, &staging)?;
+        // CTOX Marketplace apps are authored against the catalog contract and
+        // then rewritten to an installed runtime path. Validate them with the
+        // dedicated catalog-installed profile; the stricter generated-app
+        // profile intentionally rejects shared first-party app structures.
+        validate_staged_catalog_module(root, &module_id, &staging)?;
         let backup =
             installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
         activate_staged_module_directory(&staging, &target, &backup)
@@ -11802,9 +11858,6 @@ pub fn install_app_module(
         copy_dir_recursive(&found_dir, &staging)
             .context("Failed to stage extracted module files")?;
 
-        manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-        manifest["install_scope"] = Value::String("installed".to_owned());
-        manifest["default_installed"] = Value::Bool(false);
         // Stamp source provenance. Same-origin runtime modules are executable
         // code, so untrusted third-party archives remain blocked until an
         // isolated sandbox exists. The first-party repository is an explicit
@@ -11820,14 +11873,14 @@ pub fn install_app_module(
             "untrusted third-party apps cannot run same-origin; install a CTOX first-party source or wait for the sandbox runtime"
         );
         manifest["app_source"] = app_source;
-        ensure_local_icon_manifest_value(&mut manifest, &staging);
+        normalize_catalog_installed_manifest(&mut manifest, &module_id, &staging)?;
         fs::write(
             staging.join("module.json"),
             serde_json::to_vec_pretty(&manifest)?,
         )
         .with_context(|| format!("Failed to rewrite staged manifest for {module_id}"))?;
 
-        validate_staged_installed_module(root, &module_id, &staging)?;
+        validate_staged_catalog_module(root, &module_id, &staging)?;
 
         activate_staged_module_directory(&staging, &dest_dir, &backup)
     })();
@@ -40834,6 +40887,28 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn marketplace_buchhaltung_uses_catalog_installed_validation() -> anyhow::Result<()> {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = repo_root.join("src/apps/business-os/modules/buchhaltung");
+        let temp = tempdir()?;
+        let staging = temp.path().join("buchhaltung");
+        copy_dir_recursive(&source, &staging)?;
+
+        let manifest_path = staging.join("module.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+        manifest["app_source"] = serde_json::json!({
+            "kind": "github",
+            "repo": "metric-space-ai/ctox",
+            "verified": true,
+            "trust_model": "ctox-first-party-source"
+        });
+        normalize_catalog_installed_manifest(&mut manifest, "buchhaltung", &staging)?;
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+        validate_staged_catalog_module(repo_root, "buchhaltung", &staging)
+    }
 
     #[test]
     fn control_command_outcome_updates_outbox_intake_projection() -> anyhow::Result<()> {
