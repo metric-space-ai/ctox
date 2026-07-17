@@ -326,7 +326,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260718-conflict-quarantine-v71');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260718-final-delete-v72');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -1025,7 +1025,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260718-conflict-quarantine-v71');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260718-final-delete-v72');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -2556,8 +2556,20 @@ function isReadOnlyProjectionCollection(collection) {
     || collection === 'ctox_runtime_settings';
 }
 
+// SYNC-13: a runtime-installed module can declare `syncProfile` in its
+// schema.js; rx-database.mjs captures it into the globalThis-mirrored registry
+// at collection registration (before sync starts). Read it WITHOUT importing
+// the bundle (which would risk a duplicate module graph). Returns null for an
+// undeclared collection, so the built-in static lists below stay authoritative.
+function declaredCollectionSyncProfile(collection) {
+  const registry = globalThis.__ctoxCollectionSyncProfiles;
+  if (!(registry instanceof Map)) return null;
+  return registry.get(normalizeCollectionName(collection)) || null;
+}
+
 function isDemandOnlyPullCollection(collection) {
-  return collection === 'desktop_file_chunks'
+  if (
+    collection === 'desktop_file_chunks'
     || collection === 'document_blob_chunks'
     || collection === 'spreadsheet_blob_chunks'
     // Threads projections are append-heavy and can contain years of command
@@ -2575,13 +2587,28 @@ function isDemandOnlyPullCollection(collection) {
     // full pull of the historical command/task ledger is unnecessary and can
     // delay a new command behind thousands of old records.
     || collection === 'business_commands'
-    || collection === 'ctox_queue_tasks';
+    || collection === 'ctox_queue_tasks'
+  ) {
+    return true;
+  }
+  // SYNC-13 fallback: a runtime module declaring demand-only OR demand-chunks
+  // disables background pull (chunks hydrate on demand, so they are pull-only).
+  const profile = declaredCollectionSyncProfile(collection);
+  return profile === 'demand-only' || profile === 'demand-chunks';
 }
 
 function isModuleDemandOnlyCollection(collection) {
-  return collection === 'desktop_file_chunks'
+  if (
+    collection === 'desktop_file_chunks'
     || collection === 'document_blob_chunks'
-    || collection === 'spreadsheet_blob_chunks';
+    || collection === 'spreadsheet_blob_chunks'
+  ) {
+    return true;
+  }
+  // SYNC-13 fallback: only demand-CHUNK collections are skipped at module sync
+  // startup and leased on demand; a plain demand-only collection stays
+  // module-startable for its bounded demand queries (mirrors user_threads).
+  return declaredCollectionSyncProfile(collection) === 'demand-chunks';
 }
 
 function moduleSyncCollections(collections = []) {

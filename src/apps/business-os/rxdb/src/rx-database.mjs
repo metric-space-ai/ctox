@@ -18,6 +18,7 @@ import {
   getConnectionHandlerSimplePeer,
   replicateWebRTC,
 } from './replication-webrtc.mjs';
+import { registerCollectionSyncProfile } from './sync-profile-registry.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
@@ -124,14 +125,23 @@ class CtoxRxDatabase {
     for (const [name, definition] of Object.entries(collections || {})) {
       if (this.collections[name]) continue;
       const schema = definition?.schema || definition;
-      // `conflictStrategy` is a SIBLING of `schema` in the collection
-      // definition ('lww' default, 'field-merge' opt-in) — outside the schema
-      // object on purpose, so schema hashes are unaffected.
+      // `conflictStrategy` and `deleteStrategy` are SIBLINGS of `schema` in the
+      // collection definition ('lww'/'field-merge' updates; 'default'/'final'
+      // deletes — SYNC-41) — outside the schema object on purpose, so schema
+      // hashes are unaffected. They are independent: a collection may combine
+      // field-merge updates with final deletes.
       const conflictStrategy = definition?.conflictStrategy;
+      const deleteStrategy = definition?.deleteStrategy;
+      // SYNC-13: capture the declared `syncProfile` sibling (SYNC-32's native
+      // key) into the browser registry so shared/sync.js's demand classifiers
+      // can consult it. Population happens here at registration, before
+      // startWebRtcReplication, so a runtime-installed module's demand-only /
+      // demand-chunks collections are classified correctly browser-side too.
+      registerCollectionSyncProfile(name, definition?.syncProfile);
       const collection = new CtoxRxCollection({
         name,
         schema,
-        storageCollection: this.storage.collection(name, { schema, conflictStrategy }),
+        storageCollection: this.storage.collection(name, { schema, conflictStrategy, deleteStrategy }),
       });
       this.collections[name] = collection;
       this[name] = collection;

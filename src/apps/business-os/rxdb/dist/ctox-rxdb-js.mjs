@@ -695,6 +695,9 @@ function isStructuredValue(value) {
 function normalizeConflictStrategy(value) {
   return value === "field-merge" ? "field-merge" : "lww";
 }
+function normalizeDeleteStrategy(value) {
+  return value === "final" ? "final" : "default";
+}
 
 // src/apps/business-os/rxdb/src/hybrid-logical-clock.mjs
 var HLC_NODE_STORAGE_KEY = "ctox.businessOs.hlcNodeId.v1";
@@ -2153,13 +2156,14 @@ var CtoxIndexedDbStorage = class {
     this.recoveryJournal = recoveryJournal;
     this.quotaCoordinator = quotaCoordinator;
   }
-  collection(name, { schema = null, conflictStrategy = "lww" } = {}) {
+  collection(name, { schema = null, conflictStrategy = "lww", deleteStrategy = "default" } = {}) {
     if (!name || typeof name !== "string") {
       throw new TypeError("collection name must be a non-empty string");
     }
     return new CtoxIndexedDbCollection(this.db, name, {
       schema,
       conflictStrategy,
+      deleteStrategy,
       recoveryJournal: this.recoveryJournal,
       quotaCoordinator: this.quotaCoordinator
     });
@@ -2176,6 +2180,7 @@ var CtoxIndexedDbCollection = class {
   constructor(db, name, {
     schema = null,
     conflictStrategy = "lww",
+    deleteStrategy = "default",
     recoveryJournal = null,
     quotaCoordinator = null
   } = {}) {
@@ -2183,6 +2188,7 @@ var CtoxIndexedDbCollection = class {
     this.name = name;
     this.schema = schema || {};
     this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
+    this.deleteStrategy = normalizeDeleteStrategy(deleteStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -2395,7 +2401,15 @@ var CtoxIndexedDbCollection = class {
           lwt = Math.max(lwt, localWriteLwtFloor);
           localWriteLwtFloor = lwt + 1;
         }
-        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy)) {
+        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy, this.deleteStrategy)) {
+          const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+            previous,
+            incomingDocument: nextDocument,
+            collectionName: this.name,
+            deleteStrategy: this.deleteStrategy,
+            replicationOrigin
+          });
+          if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
           if (previous?.doc) success[id] = previous.doc;
           continue;
         }
@@ -2529,7 +2543,15 @@ var CtoxIndexedDbCollection = class {
           localWriteLwtFloor = lwt + 1;
         }
         const previous = await idbRequest(store.get([this.name, id]));
-        if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+        if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy, this.deleteStrategy)) {
+          const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+            previous,
+            incomingDocument: doc,
+            collectionName: this.name,
+            deleteStrategy: this.deleteStrategy,
+            replicationOrigin
+          });
+          if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
           continue;
         }
         const overwriteConflict = force ? null : lwwOverwriteConflict({
@@ -3292,7 +3314,7 @@ function normalizeStoredReplicationFlags(record) {
     pushable
   };
 }
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "", conflictStrategy = "lww") {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null, incomingDocument = null, collectionName = "", conflictStrategy = "lww", deleteStrategy = "default") {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
@@ -3306,6 +3328,12 @@ function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigi
     }
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
+    if (deleteStrategy === "final") {
+      const incomingIsTombstone = Boolean(incomingDocument?._deleted);
+      const existingIsTombstone = Boolean(existingRecord.doc?._deleted);
+      if (incomingIsTombstone && !existingIsTombstone) return true;
+      if (existingIsTombstone && !incomingIsTombstone) return false;
+    }
     if (conflictStrategy === "field-merge") return nextLwt >= existingLwt;
     const localHlc = existingRecord.doc?._meta?.ctoxHlc;
     const masterHlc = incomingDocument?._meta?.ctoxHlc;
@@ -3342,6 +3370,29 @@ function lwwOverwriteConflict({
     master: incomingDocument,
     message: skewed ? "A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here." : "The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.",
     ...skewed ? { clock: hybridLogicalClockStatus() } : {}
+  };
+}
+function finalDeleteRejectedUpdateConflict({
+  previous,
+  incomingDocument,
+  collectionName = "",
+  deleteStrategy = "default",
+  replicationOrigin = null
+}) {
+  if (deleteStrategy !== "final") return null;
+  if (!replicationOrigin?.role || !previous?.doc || !incomingDocument) return null;
+  if (NATIVE_AUTHORITATIVE_COLLECTIONS.has(collectionName)) return null;
+  if (previous.replicationOriginRole || previous.doc?._meta?.ctoxReplicationOrigin) return null;
+  if (!previous.doc?._deleted) return null;
+  if (incomingDocument._deleted) return null;
+  return {
+    code: "structured_conflict_requires_resolution",
+    conflictType: "delete_vs_update",
+    collection: collectionName,
+    base: previous.base || null,
+    local: previous.doc,
+    master: incomingDocument,
+    message: "The local delete is authoritative (finalDelete); the concurrent master update remains recoverable here."
   };
 }
 function quarantineConflictRecord(error, collection, id, primaryPath = "id") {
@@ -3804,6 +3855,7 @@ var ctoxIndexedDbStorageTestInternals = {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   lwwOverwriteConflict,
+  finalDeleteRejectedUpdateConflict,
   normalizeDocument,
   normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,
@@ -9426,10 +9478,23 @@ var CtoxWebRtcReplicationState = class {
   async resolveWholeDocumentLwwConflicts(rows, peerId) {
     const retryRows = [];
     const acceptedMaster = [];
+    const finalDelete = this.collection.storageCollection?.deleteStrategy === "final";
     for (const row of rows) {
       const local = row?.newDocumentState;
       const master = row?.assumedMasterState;
       const nativeAuthoritative = ["business_commands", "ctox_queue_tasks"].includes(this.collection.name);
+      if (finalDelete && !nativeAuthoritative) {
+        const localDeleted = Boolean(local?._deleted);
+        const masterDeleted = Boolean(master?._deleted);
+        if (localDeleted && !masterDeleted) {
+          retryRows.push(row);
+          continue;
+        }
+        if (masterDeleted && !localDeleted) {
+          if (master) acceptedMaster.push(master);
+          continue;
+        }
+      }
       if (isFutureHybridLogicalClock(local?._meta?.ctoxHlc)) {
         await this.collection.storageCollection?.recoveryJournal?.recordConflict?.({
           code: "clock_skew_detected",
@@ -10555,6 +10620,37 @@ var multiTabSyncCoordinatorTestInternals = Object.freeze({
   stableHash
 });
 
+// src/apps/business-os/rxdb/src/sync-profile-registry.mjs
+var REGISTRY_KEY = "__ctoxCollectionSyncProfiles";
+var VALID_PROFILES = /* @__PURE__ */ new Set(["demand-only", "demand-chunks"]);
+function registryMap() {
+  const existing = globalThis[REGISTRY_KEY];
+  if (existing instanceof Map) return existing;
+  const created = /* @__PURE__ */ new Map();
+  try {
+    globalThis[REGISTRY_KEY] = created;
+  } catch {
+  }
+  return created;
+}
+function registerCollectionSyncProfile(name, profile) {
+  const key = String(name || "").trim();
+  if (!key) return;
+  if (!VALID_PROFILES.has(profile)) {
+    registryMap().delete(key);
+    return;
+  }
+  registryMap().set(key, profile);
+}
+function getCollectionSyncProfile(name) {
+  const key = String(name || "").trim();
+  if (!key) return null;
+  return registryMap().get(key) || null;
+}
+function clearCollectionSyncProfiles() {
+  registryMap().clear();
+}
+
 // src/apps/business-os/rxdb/src/rx-database.mjs
 function getCtoxIndexedDbStorage() {
   return { name: "ctox-indexeddb-native" };
@@ -10652,10 +10748,12 @@ var CtoxRxDatabase = class {
       if (this.collections[name]) continue;
       const schema = definition?.schema || definition;
       const conflictStrategy = definition?.conflictStrategy;
+      const deleteStrategy = definition?.deleteStrategy;
+      registerCollectionSyncProfile(name, definition?.syncProfile);
       const collection = new CtoxRxCollection({
         name,
         schema,
-        storageCollection: this.storage.collection(name, { schema, conflictStrategy })
+        storageCollection: this.storage.collection(name, { schema, conflictStrategy, deleteStrategy })
       });
       this.collections[name] = collection;
       this[name] = collection;
@@ -11611,6 +11709,7 @@ export {
   canonicalJson,
   canonicalQueryJson,
   canonicalizeQueryInput,
+  clearCollectionSyncProfiles,
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
   createActiveCollectionRegistry,
@@ -11635,6 +11734,7 @@ export {
   encryptRecoveryArtifact,
   formatHybridLogicalClock,
   getActiveCollectionRegistry,
+  getCollectionSyncProfile,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
   getMultiTabSyncCoordinator,
@@ -11654,6 +11754,7 @@ export {
   recoverQueryMetaQuota,
   recoveryCryptoTestInternals,
   recoveryJournalTestInternals,
+  registerCollectionSyncProfile,
   remoteSupportsQueryFetch,
   removeRxDatabase,
   replicateWebRTC,

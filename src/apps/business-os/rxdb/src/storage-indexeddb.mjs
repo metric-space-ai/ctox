@@ -1,6 +1,6 @@
 import { CtoxEventEmitter } from './event-target.mjs';
 import { schemaHash, sha256Hex } from './schema.mjs';
-import { normalizeConflictStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
+import { normalizeConflictStrategy, normalizeDeleteStrategy, threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
   compareHybridLogicalClocks,
   formatHybridLogicalClock,
@@ -46,13 +46,14 @@ export class CtoxIndexedDbStorage {
     this.quotaCoordinator = quotaCoordinator;
   }
 
-  collection(name, { schema = null, conflictStrategy = 'lww' } = {}) {
+  collection(name, { schema = null, conflictStrategy = 'lww', deleteStrategy = 'default' } = {}) {
     if (!name || typeof name !== 'string') {
       throw new TypeError('collection name must be a non-empty string');
     }
     return new CtoxIndexedDbCollection(this.db, name, {
       schema,
       conflictStrategy,
+      deleteStrategy,
       recoveryJournal: this.recoveryJournal,
       quotaCoordinator: this.quotaCoordinator,
     });
@@ -72,6 +73,7 @@ export class CtoxIndexedDbCollection {
   constructor(db, name, {
     schema = null,
     conflictStrategy = 'lww',
+    deleteStrategy = 'default',
     recoveryJournal = null,
     quotaCoordinator = null,
   } = {}) {
@@ -82,6 +84,11 @@ export class CtoxIndexedDbCollection {
     // a sibling of `schema` in the collection definition so schema hashes
     // stay untouched.
     this.conflictStrategy = normalizeConflictStrategy(conflictStrategy);
+    // SYNC-41: 'default' (whole-doc LWW deletes) or 'final' (a tombstone
+    // always wins over a concurrent non-tombstone update, regardless of
+    // HLC/lwt). An INDEPENDENT sibling of `conflictStrategy` — a collection may
+    // combine 'field-merge' updates with 'final' deletes.
+    this.deleteStrategy = normalizeDeleteStrategy(deleteStrategy);
     this.primaryPath = primaryPathFromSchema(schema);
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
@@ -330,7 +337,18 @@ export class CtoxIndexedDbCollection {
         lwt = Math.max(lwt, localWriteLwtFloor);
         localWriteLwtFloor = lwt + 1;
       }
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy)) {
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, nextDocument, this.name, this.conflictStrategy, this.deleteStrategy)) {
+        // SYNC-41 case (b): a local tombstone kept the row against a concurrent
+        // master update — journal the losing master update so it stays
+        // recoverable (delete_vs_update), never silently dropped.
+        const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+          previous,
+          incomingDocument: nextDocument,
+          collectionName: this.name,
+          deleteStrategy: this.deleteStrategy,
+          replicationOrigin,
+        });
+        if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
         if (previous?.doc) success[id] = previous.doc;
         continue;
       }
@@ -474,7 +492,16 @@ export class CtoxIndexedDbCollection {
       // OLDER than the rejected local edit, so the normal origin-write gate
       // would veto the rollback; the conflict is journaled separately by the
       // reconcile path, so no overwrite-conflict record is minted here.
-      if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+      if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy, this.deleteStrategy)) {
+        // SYNC-41 case (b): journal the master update the local tombstone beat.
+        const rejectedUpdate = finalDeleteRejectedUpdateConflict({
+          previous,
+          incomingDocument: doc,
+          collectionName: this.name,
+          deleteStrategy: this.deleteStrategy,
+          replicationOrigin,
+        });
+        if (rejectedUpdate) overwrittenLocalConflicts.push(rejectedUpdate);
         continue;
       }
       const overwriteConflict = force ? null : lwwOverwriteConflict({
@@ -1318,6 +1345,7 @@ function shouldAcceptDocumentWrite(
   incomingDocument = null,
   collectionName = '',
   conflictStrategy = 'lww',
+  deleteStrategy = 'default',
 ) {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
@@ -1358,6 +1386,23 @@ function shouldAcceptDocumentWrite(
     // may win, until its own push round-trips through the master.
     const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
     if (!existingIsLocalWrite) return true;
+    // SYNC-41 finalDelete: a tombstone on EITHER side beats a concurrent
+    // non-tombstone regardless of HLC/lwt (and regardless of conflictStrategy).
+    // This is the pull-gate half of the delete-vs-update decision; the losing
+    // update stays recoverable (case a is journaled by
+    // `persistDeleteUpdateConflicts`, case b by `finalDeleteRejectedUpdateConflict`
+    // in the bulk-write callers). Two tombstones or two updates fall through to
+    // the normal LWW/HLC / field-merge ordering below.
+    if (deleteStrategy === 'final') {
+      const incomingIsTombstone = Boolean(incomingDocument?._deleted);
+      const existingIsTombstone = Boolean(existingRecord.doc?._deleted);
+      // Master tombstone wins over the concurrent local update (accept it,
+      // even if the local update carries a higher HLC — no resurrection).
+      if (incomingIsTombstone && !existingIsTombstone) return true;
+      // Local (unsynced) tombstone wins over the concurrent master update
+      // (reject it — the local delete is authoritative and will push).
+      if (existingIsTombstone && !incomingIsTombstone) return false;
+    }
     // Field-merge collections resolve concurrency in `resolveIncomingWrite`
     // (three-way merge), which runs AFTER this gate accepts the master row —
     // the incoming master must reach the merge/settle branch so the base can
@@ -1431,6 +1476,41 @@ function lwwOverwriteConflict({
       ? 'A local HLC is more than five minutes ahead of the native time reference; the master row won and the local update remains recoverable here.'
       : 'The master row won the whole-document LWW gate; the concurrent local update remains recoverable here.',
     ...(skewed ? { clock: hybridLogicalClockStatus() } : {}),
+  };
+}
+
+// SYNC-41: a finalDelete collection's unsynced LOCAL tombstone beat a
+// concurrent MASTER update at the pull gate (the delete is authoritative and
+// will push). The master update would otherwise be silently dropped, so journal
+// it as `delete_vs_update` — the same recoverable-loss record the master-wins
+// direction produces in `persistDeleteUpdateConflicts`, just inverted (the
+// winning side is the local tombstone, the recoverable losing side is the
+// master update). Returns the conflict-store payload or null when this is not a
+// finalDelete local-tombstone-vs-master-update rejection.
+function finalDeleteRejectedUpdateConflict({
+  previous,
+  incomingDocument,
+  collectionName = '',
+  deleteStrategy = 'default',
+  replicationOrigin = null,
+}) {
+  if (deleteStrategy !== 'final') return null;
+  if (!replicationOrigin?.role || !previous?.doc || !incomingDocument) return null;
+  if (NATIVE_AUTHORITATIVE_COLLECTIONS.has(collectionName)) return null;
+  // The kept row must be an UNSYNCED LOCAL tombstone; the rejected master row
+  // must be a non-tombstone (a concurrent update). Two tombstones or a
+  // master tombstone never reach this branch (the gate accepts those).
+  if (previous.replicationOriginRole || previous.doc?._meta?.ctoxReplicationOrigin) return null;
+  if (!previous.doc?._deleted) return null;
+  if (incomingDocument._deleted) return null;
+  return {
+    code: 'structured_conflict_requires_resolution',
+    conflictType: 'delete_vs_update',
+    collection: collectionName,
+    base: previous.base || null,
+    local: previous.doc,
+    master: incomingDocument,
+    message: 'The local delete is authoritative (finalDelete); the concurrent master update remains recoverable here.',
   };
 }
 
@@ -1963,6 +2043,7 @@ export const ctoxIndexedDbStorageTestInternals = {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   lwwOverwriteConflict,
+  finalDeleteRejectedUpdateConflict,
   normalizeDocument,
   normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,

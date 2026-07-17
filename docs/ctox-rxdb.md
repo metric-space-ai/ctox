@@ -667,6 +667,21 @@ wall-clock-only LWW while preserving mixed-version behavior.
   collection in the sync diagnostics alongside the checkpoint ages.
 - Deletions stay whole-doc: a master tombstone wins outright; an unsynced
   local tombstone survives until it pushes.
+- **Final deletes (opt-in).** By default a delete is whole-doc LWW, so a
+  concurrent higher-HLC local update can win over — and resurrect — a
+  tombstoned document. A collection that declares `deleteStrategy: 'final'`
+  (an **independent sibling of `schema`**, orthogonal to `conflictStrategy` so
+  a collection may combine `field-merge` updates with final deletes; outside
+  the schema object, so schema hashes are unaffected and the native peer
+  tolerates the wrapper unchanged) makes a tombstone on EITHER side beat a
+  concurrent non-tombstone update regardless of HLC/lwt — on the pull gate
+  (`shouldAcceptDocumentWrite`), the push-conflict path
+  (`resolveWholeDocumentLwwConflicts`) and the field-merge path. Once deleted,
+  a concurrent update can never resurrect the row; the losing update is still
+  journaled as `delete_vs_update` (recoverable, not silently dropped).
+  Two tombstones or two updates fall through to normal LWW/field-merge. Pinned
+  by `final-delete-conflict-smoke` (which also proves default collections keep
+  today's resurrect-on-higher-HLC behavior).
 - Merge logic lives in `src/conflict-merge.mjs`
   (`threeWayMergeDocuments`), storage integration in
   `storage-indexeddb.mjs::resolveIncomingWrite`. Pinned by
@@ -809,6 +824,8 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `eviction-scheduler-smoke` | Sidecar eviction over budget. |
 | `feature-flag-handshake-smoke` | Query-fetch capability lights only with capability + flag. |
 | `field-merge-conflict-smoke` | Opt-in field-merge strategy (§8.2): three-way merge semantics, merge-base tracking, merged docs stored as local pushable writes, and untouched LWW pass-through for default collections. |
+| `final-delete-conflict-smoke` | Opt-in `deleteStrategy: 'final'` (§8.2): a tombstone beats a concurrent higher-HLC update on all paths (no resurrection, loser journaled); default collections keep resurrect-on-higher-HLC LWW. |
+| `sync-profile-registry-smoke` | Browser consumes the per-collection `syncProfile` declaration (name→profile registry populated in `addCollections`, read by `sync.js` demand classifiers) so runtime modules get demand-only/demand-chunks classification; built-in lists stay authoritative. |
 | `file-demand-loader-smoke` | File chunk fetch, resume, concurrent dedup. |
 | `frame-chunking-smoke` | **Regression:** byte-correct (JSON-escaped) chunk budgeting vs the chars-vs-bytes channel-killer. |
 | `hlc-conflict-smoke` | Hybrid Logical Clock formatting, ordering and deterministic whole-document conflict decisions, incl. the HLC-ordered pull-gate veto both ways (SYNC-11). |
