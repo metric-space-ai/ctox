@@ -16,6 +16,11 @@ const CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LI
 export const CLIENT_QUERY_QUEUE_LIMIT = 128;
 export const CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 export const CLIENT_FILE_COLLECTOR_LIMIT = 8;
+// M7: per-query-stream byte cap mirroring the file collector. A query window is
+// bounded (defaultWindowLimit docs, maxBytesPerChunk per chunk), so a single
+// legit stream stays far under this; the cap only bites a hostile/buggy peer
+// that keeps pushing chunks to grow slot.chunks unbounded before the timeout.
+export const DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 const QUERY_STREAM_LIMIT_RETRY_MS = 160;
 const QUERY_STREAM_LIMIT_RETRIES = 6;
 const QUERY_RATE_LIMIT_RETRY_MS = 100;
@@ -40,6 +45,7 @@ export function createDemandLoadingTransport({
   getPeerId,
   collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
   fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
+  queryCollectorBudgetBytes = DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES,
 } = {}) {
   if (typeof getPeerId !== 'function') {
     throw new TypeError('createDemandLoadingTransport requires getPeerId');
@@ -55,6 +61,10 @@ export function createDemandLoadingTransport({
     Number(CTOX_FILE_RPC.maxBytesPerChunk) || 1,
     Number(fileCollectorBudgetBytes) || DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
   );
+  const acceptedQueryBudgetBytes = Math.max(
+    Number(CTOX_QUERY_RPC.maxBytesPerChunk) || 1,
+    Number(queryCollectorBudgetBytes) || DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES,
+  );
   const metrics = {
     queryFetchRequests: 0,
     fileFetchRequests: 0,
@@ -69,11 +79,13 @@ export function createDemandLoadingTransport({
     maxQueuedQueryRequests: 0,
     maxQueuedQueryBytes: 0,
     maxBufferedQueryChunks: 0,
+    maxBufferedQueryChunkBytes: 0,
     maxBufferedFileChunks: 0,
     maxBufferedFileChunkBytes: 0,
     queryCollectorTimeouts: 0,
     fileCollectorTimeouts: 0,
     fileCollectorBudgetExceeded: 0,
+    queryCollectorBudgetExceeded: 0,
   };
 
   function updatePeaks() {
@@ -82,6 +94,7 @@ export function createDemandLoadingTransport({
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
     metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
+    metrics.maxBufferedQueryChunkBytes = Math.max(metrics.maxBufferedQueryChunkBytes, bufferedQueryChunkBytes(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
   }
@@ -90,6 +103,27 @@ export function createDemandLoadingTransport({
     if (!chunk || !chunk.requestId) return;
     const slot = queryCollectors.get(chunk.requestId);
     if (!slot) return;
+    // M7: cap the per-stream buffer. Without this a hostile/buggy peer can push
+    // chunks into slot.chunks unbounded until the collector timeout fires; mirror
+    // the file collector — reject the stream and cancel it upstream on overflow.
+    slot.bufferedBytes = (slot.bufferedBytes || 0) + queryChunkBytes(chunk);
+    if (slot.bufferedBytes > acceptedQueryBudgetBytes) {
+      queryCollectors.delete(chunk.requestId);
+      clearCollectorTimer(slot);
+      metrics.queryCollectorsRejected += 1;
+      metrics.queryCollectorBudgetExceeded += 1;
+      const error = new Error(`QUERY_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedQueryBudgetBytes}`);
+      error.code = 'QUERY_COLLECTOR_BUDGET_EXCEEDED';
+      error.retryable = false;
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(slot.peerId, CTOX_QUERY_RPC.cancel, [{
+          requestId: chunk.requestId,
+          reason: error.code,
+        }], 2000),
+      ).catch(() => {});
+      return;
+    }
     slot.chunks.push(chunk);
     metrics.queryChunksReceived += 1;
     updatePeaks();
@@ -253,7 +287,7 @@ export function createDemandLoadingTransport({
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
     const promise = new Promise((resolve, reject) => {
-      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId });
+      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
@@ -435,9 +469,11 @@ export function createDemandLoadingTransport({
       queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
+      bufferedQueryChunkBytes: bufferedQueryChunkBytes(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
       fileCollectorBudgetBytes: acceptedFileBudgetBytes,
+      queryCollectorBudgetBytes: acceptedQueryBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics,
     };
@@ -656,6 +692,26 @@ function bufferedChunkCount(collectors) {
   let total = 0;
   for (const slot of collectors.values()) {
     total += Array.isArray(slot?.chunks) ? slot.chunks.length : 0;
+  }
+  return total;
+}
+
+// M7: byte weight of a retained query chunk. Compressed chunks carry a base64
+// payload; plain chunks carry an inline documents array whose serialized size
+// is the memory it holds. Mirrors the file collector's bytesBase64.length probe.
+function queryChunkBytes(chunk) {
+  if (!chunk || typeof chunk !== 'object') return 0;
+  if (typeof chunk.compressedBase64 === 'string') return chunk.compressedBase64.length;
+  if (chunk.documents != null) {
+    try { return JSON.stringify(chunk.documents).length; } catch { return 0; }
+  }
+  return 0;
+}
+
+function bufferedQueryChunkBytes(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) {
+    total += Number(slot?.bufferedBytes) || 0;
   }
   return total;
 }

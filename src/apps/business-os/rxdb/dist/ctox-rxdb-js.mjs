@@ -3887,6 +3887,7 @@ var MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
 var FAIR_SEND_SCHEDULE = ["high", "high", "high", "high", "normal", "normal", "low"];
 var MAX_SERIALIZED_FRAME_BYTES = 16384;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
+var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
@@ -4483,6 +4484,7 @@ var CtoxWebRtcNativePeer = class {
         }
         this.ensureConnection(remotePeerId);
       }
+      this.prunePeerMetadata(descriptors);
       this.events.emit("joined", message);
       return;
     }
@@ -4966,12 +4968,17 @@ var CtoxWebRtcNativePeer = class {
         totalBytes,
         received: /* @__PURE__ */ new Map(),
         createdAt: Date.now(),
+        // M3: advanced on every genuinely-new frame (see recordReceivedFrame);
+        // the stall sweep ages a transfer by time-since-progress, not birth, so
+        // a slow-but-live transfer is never discarded.
+        lastProgressAt: Date.now(),
         attempt: Number(payload.attempt || 0),
         contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1)
       });
       this.completedFrameAcks.delete(transferId2);
       this.cleanupCompletedFrameAcks();
+      this.sweepStalledIncomingTransfers();
       this.recordTransportStatus({
         incomingTransfers: this.incomingFrames.size,
         completedAckCacheSize: this.completedFrameAcks.size
@@ -5085,6 +5092,7 @@ var CtoxWebRtcNativePeer = class {
       expiresAt: Date.now() + COMPLETED_FRAME_ACK_TTL_MS
     });
     this.cleanupCompletedFrameAcks();
+    this.sweepStalledIncomingTransfers();
     this.recordTransportStatus({
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size
@@ -5209,6 +5217,25 @@ var CtoxWebRtcNativePeer = class {
       ...this.peerMetadata.get(normalized.peerId) || {},
       ...normalized
     });
+  }
+  // M2: bound peerMetadata to the live room. Drop entries whose peer id is not
+  // in the latest room descriptor set AND has no live connection. Self is never
+  // stored (rememberPeerMetadata skips it). A no-op when `descriptors` is empty,
+  // so a delta/edge broadcast that omits the peer list never wipes the map.
+  prunePeerMetadata(descriptors = []) {
+    const present = /* @__PURE__ */ new Set();
+    for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+      if (descriptor?.peerId) present.add(String(descriptor.peerId));
+    }
+    if (present.size === 0) return 0;
+    let removed = 0;
+    for (const peerId of [...this.peerMetadata.keys()]) {
+      if (present.has(peerId)) continue;
+      if (this.connections.has(peerId)) continue;
+      this.peerMetadata.delete(peerId);
+      removed += 1;
+    }
+    return removed;
   }
   shouldConnectToRemotePeer(remotePeerId) {
     const peerId = String(remotePeerId || "");
@@ -5462,6 +5489,34 @@ var CtoxWebRtcNativePeer = class {
         this.completedFrameAcks.delete(transferId);
       }
     }
+  }
+  // M3: drop incoming transfers that have made no progress within the stall
+  // window, freeing their buffered chunks (up to MAX_TRANSFER_BYTES each).
+  // Runs opportunistically from the same frame-activity path as the completed-
+  // ack cleanup, so a stalled transfer is reclaimed while other traffic flows
+  // rather than lingering until the peer is finally dropped. An actively-
+  // progressing transfer resets `lastProgressAt` and is never discarded.
+  sweepStalledIncomingTransfers(now = Date.now(), timeoutMs = STALLED_INCOMING_TRANSFER_TIMEOUT_MS) {
+    if (this.incomingFrames.size === 0) return 0;
+    let swept = 0;
+    for (const [transferId, entry] of [...this.incomingFrames.entries()]) {
+      const lastProgressAt = Number(entry.lastProgressAt ?? entry.createdAt ?? now);
+      if (now - lastProgressAt < timeoutMs) continue;
+      this.incomingFrames.delete(transferId);
+      swept += 1;
+      this.events.emit("error", {
+        code: "ctox_webrtc_incoming_transfer_stalled",
+        peerId: entry.peerId,
+        transferId,
+        receivedFrames: entry.received?.size || 0,
+        totalFrames: entry.totalFrames,
+        ageMs: now - lastProgressAt
+      });
+    }
+    if (swept > 0) {
+      this.recordTransportStatus({ incomingTransfers: this.incomingFrames.size });
+    }
+    return swept;
   }
 };
 function normalizeSignalingControlPlaneError(payload = {}) {
@@ -6070,6 +6125,7 @@ function jsonEscapedCharLen(ch) {
 function recordReceivedFrame(entry, seq, data) {
   const hadFrame = entry.received.has(seq);
   entry.received.set(seq, data);
+  if (!hadFrame) entry.lastProgressAt = Date.now();
   if (!hadFrame && seq === Number(entry.contiguousSeq ?? -1) + 1) {
     while (entry.contiguousSeq + 1 < entry.totalFrames && entry.received.has(entry.contiguousSeq + 1)) {
       entry.contiguousSeq += 1;
@@ -6210,6 +6266,7 @@ var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMI
 var CLIENT_QUERY_QUEUE_LIMIT = 128;
 var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 var CLIENT_FILE_COLLECTOR_LIMIT = 8;
+var DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
 var QUERY_RATE_LIMIT_RETRY_MS = 100;
@@ -6229,7 +6286,8 @@ var DEFAULT_FILE_COLLECTOR_BUDGET_BYTES = 512 * 1024;
 function createDemandLoadingTransport({
   getPeerId,
   collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
-  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+  fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
+  queryCollectorBudgetBytes = DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
 } = {}) {
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
@@ -6243,6 +6301,10 @@ function createDemandLoadingTransport({
   const acceptedFileBudgetBytes = Math.max(
     Number(CTOX_FILE_RPC.maxBytesPerChunk) || 1,
     Number(fileCollectorBudgetBytes) || DEFAULT_FILE_COLLECTOR_BUDGET_BYTES
+  );
+  const acceptedQueryBudgetBytes = Math.max(
+    Number(CTOX_QUERY_RPC.maxBytesPerChunk) || 1,
+    Number(queryCollectorBudgetBytes) || DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
   );
   const metrics = {
     queryFetchRequests: 0,
@@ -6258,11 +6320,13 @@ function createDemandLoadingTransport({
     maxQueuedQueryRequests: 0,
     maxQueuedQueryBytes: 0,
     maxBufferedQueryChunks: 0,
+    maxBufferedQueryChunkBytes: 0,
     maxBufferedFileChunks: 0,
     maxBufferedFileChunkBytes: 0,
     queryCollectorTimeouts: 0,
     fileCollectorTimeouts: 0,
-    fileCollectorBudgetExceeded: 0
+    fileCollectorBudgetExceeded: 0,
+    queryCollectorBudgetExceeded: 0
   };
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
@@ -6270,6 +6334,7 @@ function createDemandLoadingTransport({
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
     metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
+    metrics.maxBufferedQueryChunkBytes = Math.max(metrics.maxBufferedQueryChunkBytes, bufferedQueryChunkBytes(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
   }
@@ -6277,6 +6342,25 @@ function createDemandLoadingTransport({
     if (!chunk || !chunk.requestId) return;
     const slot = queryCollectors.get(chunk.requestId);
     if (!slot) return;
+    slot.bufferedBytes = (slot.bufferedBytes || 0) + queryChunkBytes(chunk);
+    if (slot.bufferedBytes > acceptedQueryBudgetBytes) {
+      queryCollectors.delete(chunk.requestId);
+      clearCollectorTimer(slot);
+      metrics.queryCollectorsRejected += 1;
+      metrics.queryCollectorBudgetExceeded += 1;
+      const error = new Error(`QUERY_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedQueryBudgetBytes}`);
+      error.code = "QUERY_COLLECTOR_BUDGET_EXCEEDED";
+      error.retryable = false;
+      slot.reject(error);
+      Promise.resolve(
+        peer?.request?.(slot.peerId, CTOX_QUERY_RPC.cancel, [{
+          requestId: chunk.requestId,
+          reason: error.code
+        }], 2e3)
+      ).catch(() => {
+      });
+      return;
+    }
     slot.chunks.push(chunk);
     metrics.queryChunksReceived += 1;
     updatePeaks();
@@ -6435,7 +6519,7 @@ function createDemandLoadingTransport({
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
-      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId });
+      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
@@ -6600,9 +6684,11 @@ function createDemandLoadingTransport({
       queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
+      bufferedQueryChunkBytes: bufferedQueryChunkBytes(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
       fileCollectorBudgetBytes: acceptedFileBudgetBytes,
+      queryCollectorBudgetBytes: acceptedQueryBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics
     };
@@ -6803,6 +6889,25 @@ function bufferedChunkCount(collectors) {
   let total = 0;
   for (const slot of collectors.values()) {
     total += Array.isArray(slot?.chunks) ? slot.chunks.length : 0;
+  }
+  return total;
+}
+function queryChunkBytes(chunk) {
+  if (!chunk || typeof chunk !== "object") return 0;
+  if (typeof chunk.compressedBase64 === "string") return chunk.compressedBase64.length;
+  if (chunk.documents != null) {
+    try {
+      return JSON.stringify(chunk.documents).length;
+    } catch {
+      return 0;
+    }
+  }
+  return 0;
+}
+function bufferedQueryChunkBytes(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) {
+    total += Number(slot?.bufferedBytes) || 0;
   }
   return total;
 }
@@ -7387,7 +7492,15 @@ function createFileDemandLoader({
   let requestSequence = 0;
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   return {
-    async fetchFile(fileId, { range = null } = {}) {
+    // `materialize` (default true) keeps the legacy contract: the returned array
+    // carries every chunk's base64 inline, which inline consumers (the Business
+    // OS importer, which assembles a Blob) require. Callers that persist and then
+    // read back from storage can pass `materialize: false` (M6): chunks are
+    // written to storage and released as they arrive instead of accumulating the
+    // whole file in RAM; the returned array then carries only `{ sequence, hash }`
+    // metadata. `readPersistedChunk` lets such a caller pull bytes back per row.
+    async fetchFile(fileId, { range = null, materialize = true } = {}) {
+      const inlineReturn = materialize !== false;
       const inflightKey = fileInflightKey(fileId, range);
       if (inflight.has(inflightKey)) {
         bump(status, "fileStreamDedupHits");
@@ -7399,6 +7512,7 @@ function createFileDemandLoader({
         bump(status, "activeFileStreams", 1);
         try {
           const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
+          const knownSequences = persistChunks ? await reconcilePresentSequences(sidecarBackend, collectionName, fileId, presence?.presentSequences || []) : [];
           const validChunks = [];
           const consumedSequences = /* @__PURE__ */ new Set();
           let returnedBytes = 0;
@@ -7407,21 +7521,8 @@ function createFileDemandLoader({
             const sequence = Number(chunk.sequence);
             if (!Number.isFinite(sequence) || consumedSequences.has(sequence)) return;
             const bytesBase64 = String(chunk.bytesBase64 || "");
-            const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
-            returnedBytes += decodedBytes;
-            if (returnedBytes > returnBudgetBytes) {
-              const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
-              error.code = "FILE_RETURN_BUDGET_EXCEEDED";
-              error.retryable = false;
-              throw error;
-            }
+            const hash = chunk.hash || null;
             consumedSequences.add(sequence);
-            const normalized = {
-              sequence,
-              bytesBase64,
-              hash: chunk.hash || null
-            };
-            validChunks.push(normalized);
             bump(status, "fileBytesReceived", bytesBase64.length);
             if (persistChunks) {
               await storageCollection.bulkWrite([{
@@ -7429,8 +7530,29 @@ function createFileDemandLoader({
                 file_id: fileId,
                 sequence,
                 bytes_base64: bytesBase64,
-                hash: normalized.hash
+                hash
               }], { replicationOrigin: resolveReplicationOrigin() });
+              await sidecarBackend.putDocumentAccess({
+                collection: collectionName,
+                id: `${fileId}-${sequence}`,
+                lastAccessedAt: clock(),
+                pinReason: "file-chunk",
+                dirty: false,
+                estimatedBytes: bytesBase64.length
+              });
+            }
+            if (inlineReturn) {
+              const decodedBytes = Math.floor(bytesBase64.length * 3 / 4);
+              returnedBytes += decodedBytes;
+              if (returnedBytes > returnBudgetBytes) {
+                const error = new Error(`FILE_RETURN_BUDGET_EXCEEDED: ${returnedBytes} > ${returnBudgetBytes}; request a byte range`);
+                error.code = "FILE_RETURN_BUDGET_EXCEEDED";
+                error.retryable = false;
+                throw error;
+              }
+              validChunks.push({ sequence, bytesBase64, hash });
+            } else {
+              validChunks.push({ sequence, hash });
             }
           };
           const chunks = await requestFileFetch({
@@ -7438,7 +7560,7 @@ function createFileDemandLoader({
             collectionName,
             fileId,
             range,
-            knownSequences: presence?.presentSequences || [],
+            knownSequences,
             onChunk: consumeChunk
           });
           if (!Array.isArray(chunks)) {
@@ -7466,8 +7588,11 @@ function createFileDemandLoader({
               collection: collectionName,
               fileId,
               expectedChunkCount: expectedTotal,
+              // Union the RECONCILED prior set (evicted sequences already dropped)
+              // with the freshly-persisted ones, so the blob names exactly the
+              // rows actually on disk and never re-accretes phantom sequences.
               presentSequences: dedupeSorted([
-                ...presence?.presentSequences || [],
+                ...knownSequences,
                 ...sequences
               ]),
               lastVerifiedAt: clock()
@@ -7513,8 +7638,36 @@ function createFileDemandLoader({
         }
       }
       return slots.length;
+    },
+    // M6 companion: read a persisted chunk's base64 back from storage. Callers
+    // that fetched with `materialize: false` use this to stream bytes without the
+    // loader ever holding the whole file in RAM. Returns null if the row is gone
+    // (e.g. evicted) — the caller can re-fetch that sequence.
+    async readPersistedChunk(fileId, sequence) {
+      if (typeof storageCollection.getStoredRecord !== "function") return null;
+      const row = await storageCollection.getStoredRecord(`${fileId}-${sequence}`);
+      if (!row) return null;
+      return {
+        sequence: Number(row.sequence),
+        bytesBase64: String(row.bytes_base64 || ""),
+        hash: row.hash || null
+      };
     }
   };
+}
+async function reconcilePresentSequences(backend, collection, fileId, presentSequences) {
+  const sequences = Array.isArray(presentSequences) ? presentSequences : [];
+  if (!sequences.length || typeof backend.getDocumentAccess !== "function") return sequences;
+  const surviving = [];
+  for (const sequence of sequences) {
+    try {
+      const access = await backend.getDocumentAccess(collection, `${fileId}-${sequence}`);
+      if (access) surviving.push(sequence);
+    } catch {
+      surviving.push(sequence);
+    }
+  }
+  return surviving;
 }
 async function getPresence(backend, collection, fileId) {
   const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);

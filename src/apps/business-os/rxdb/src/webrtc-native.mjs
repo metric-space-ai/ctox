@@ -43,6 +43,11 @@ const FAIR_SEND_SCHEDULE = ['high', 'high', 'high', 'high', 'normal', 'normal', 
 // JSON-ESCAPED byte length against this ceiling — NOT by UTF-16 char count.
 const MAX_SERIALIZED_FRAME_BYTES = 16384;
 const FRAME_ACK_TIMEOUT_MS = 30_000;
+// M3: an incoming multi-frame transfer that makes NO progress for this long is
+// abandoned and its buffered chunks (up to MAX_TRANSFER_BYTES) are freed. A
+// generous multiple of the frame-ack timeout so a slow-but-live transfer that
+// keeps landing frames (each resets `lastProgressAt`) is never discarded.
+const STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 // TODO(rxdb-webrtc-multiplexing): the real fix is to multiplex every
@@ -721,6 +726,12 @@ export class CtoxWebRtcNativePeer {
         }
         this.ensureConnection(remotePeerId);
       }
+      // M2: a peer-list broadcast names the full current room, so metadata for
+      // sessions no longer present is dead weight — each browser reload/tab is a
+      // fresh random peer id, so without this the map grows one ~200-500B entry
+      // per session ever seen. Prune entries absent from the current room set,
+      // but keep any peer with a live connection (its metadata is still in use).
+      this.prunePeerMetadata(descriptors);
       this.events.emit('joined', message);
       return;
     }
@@ -1252,12 +1263,17 @@ export class CtoxWebRtcNativePeer {
         totalBytes,
         received: new Map(),
         createdAt: Date.now(),
+        // M3: advanced on every genuinely-new frame (see recordReceivedFrame);
+        // the stall sweep ages a transfer by time-since-progress, not birth, so
+        // a slow-but-live transfer is never discarded.
+        lastProgressAt: Date.now(),
         attempt: Number(payload.attempt || 0),
         contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1),
       });
       this.completedFrameAcks.delete(transferId);
       this.cleanupCompletedFrameAcks();
+      this.sweepStalledIncomingTransfers();
       this.recordTransportStatus({
         incomingTransfers: this.incomingFrames.size,
         completedAckCacheSize: this.completedFrameAcks.size,
@@ -1374,6 +1390,7 @@ export class CtoxWebRtcNativePeer {
       expiresAt: Date.now() + COMPLETED_FRAME_ACK_TTL_MS,
     });
     this.cleanupCompletedFrameAcks();
+    this.sweepStalledIncomingTransfers();
     this.recordTransportStatus({
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
@@ -1502,6 +1519,26 @@ export class CtoxWebRtcNativePeer {
       ...(this.peerMetadata.get(normalized.peerId) || {}),
       ...normalized,
     });
+  }
+
+  // M2: bound peerMetadata to the live room. Drop entries whose peer id is not
+  // in the latest room descriptor set AND has no live connection. Self is never
+  // stored (rememberPeerMetadata skips it). A no-op when `descriptors` is empty,
+  // so a delta/edge broadcast that omits the peer list never wipes the map.
+  prunePeerMetadata(descriptors = []) {
+    const present = new Set();
+    for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+      if (descriptor?.peerId) present.add(String(descriptor.peerId));
+    }
+    if (present.size === 0) return 0;
+    let removed = 0;
+    for (const peerId of [...this.peerMetadata.keys()]) {
+      if (present.has(peerId)) continue;
+      if (this.connections.has(peerId)) continue;
+      this.peerMetadata.delete(peerId);
+      removed += 1;
+    }
+    return removed;
   }
 
   shouldConnectToRemotePeer(remotePeerId) {
@@ -1779,6 +1816,35 @@ export class CtoxWebRtcNativePeer {
         this.completedFrameAcks.delete(transferId);
       }
     }
+  }
+
+  // M3: drop incoming transfers that have made no progress within the stall
+  // window, freeing their buffered chunks (up to MAX_TRANSFER_BYTES each).
+  // Runs opportunistically from the same frame-activity path as the completed-
+  // ack cleanup, so a stalled transfer is reclaimed while other traffic flows
+  // rather than lingering until the peer is finally dropped. An actively-
+  // progressing transfer resets `lastProgressAt` and is never discarded.
+  sweepStalledIncomingTransfers(now = Date.now(), timeoutMs = STALLED_INCOMING_TRANSFER_TIMEOUT_MS) {
+    if (this.incomingFrames.size === 0) return 0;
+    let swept = 0;
+    for (const [transferId, entry] of [...this.incomingFrames.entries()]) {
+      const lastProgressAt = Number(entry.lastProgressAt ?? entry.createdAt ?? now);
+      if (now - lastProgressAt < timeoutMs) continue;
+      this.incomingFrames.delete(transferId);
+      swept += 1;
+      this.events.emit('error', {
+        code: 'ctox_webrtc_incoming_transfer_stalled',
+        peerId: entry.peerId,
+        transferId,
+        receivedFrames: entry.received?.size || 0,
+        totalFrames: entry.totalFrames,
+        ageMs: now - lastProgressAt,
+      });
+    }
+    if (swept > 0) {
+      this.recordTransportStatus({ incomingTransfers: this.incomingFrames.size });
+    }
+    return swept;
   }
 }
 
@@ -2507,6 +2573,9 @@ function jsonEscapedCharLen(ch) {
 function recordReceivedFrame(entry, seq, data) {
   const hadFrame = entry.received.has(seq);
   entry.received.set(seq, data);
+  // M3: a genuinely-new frame is forward progress — reset the stall clock so a
+  // resumed/slow transfer that keeps advancing is never aged out.
+  if (!hadFrame) entry.lastProgressAt = Date.now();
   if (!hadFrame && seq === Number(entry.contiguousSeq ?? -1) + 1) {
     while (
       entry.contiguousSeq + 1 < entry.totalFrames
