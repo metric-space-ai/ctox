@@ -8372,6 +8372,10 @@ var replicationWebRtcTestInternals = Object.freeze({
   shouldAttachQueryDemandLoader,
   shouldAttachFileDemandLoader,
   shouldPersistFetchedFileChunks,
+  // SYNC-12: read-permission digest change-detector for checkpoint reuse.
+  decodeCapabilityTokenClaims,
+  readPermissionDigestFromCapabilityToken,
+  readPermissionDigestMatches,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer
@@ -8944,6 +8948,7 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.localCheckpointValidityKey = "";
+    this.readPermissionDigest = "";
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -9066,9 +9071,10 @@ var CtoxWebRtcReplicationState = class {
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
     this.localCheckpointValidityKey = localValidityKey;
+    const readPermissionDigest = await this.resolveReadPermissionDigest();
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey) {
+      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -9682,6 +9688,9 @@ var CtoxWebRtcReplicationState = class {
       this.retainedCheckpoints = {
         validityKey,
         localValidityKey: this.localCheckpointValidityKey,
+        // SYNC-12: stamp the read-permission digest last resolved at handshake
+        // (removePeer is synchronous — the cached value is the current identity).
+        permissionDigest: this.readPermissionDigest,
         pull: retainedPull,
         push: retainedPush
       };
@@ -9720,6 +9729,27 @@ var CtoxWebRtcReplicationState = class {
     const remoteProtocol = this.remoteProtocolForPeer(peerId);
     return checkpointValidityKeyFromProtocol(remoteProtocol);
   }
+  // SYNC-12: resolve and cache a stable, non-secret digest of this browser's
+  // effective read-permission identity. The capability token is a native-signed
+  // `base64url(payload).base64url(sig)` value whose payload carries `uid`, `role`
+  // and `epoch` (capability_epoch); a role change or grant change bumps the epoch
+  // and issues a new token, so the digest changes. We hash ONLY the permission
+  // claims (never the raw bearer token / signature), so an ordinary token refresh
+  // that reissues the same role+epoch with fresh iat/exp keeps the digest stable
+  // and incremental resume is preserved. An unresolvable/absent token yields ''
+  // (unknown identity — no forced re-pull), which the match helper treats
+  // permissively so a transient token-endpoint blip never storms a full resync.
+  async resolveReadPermissionDigest() {
+    let digest = "";
+    try {
+      const token = await resolveCapabilityToken(this.ctox);
+      digest = await readPermissionDigestFromCapabilityToken(token);
+    } catch {
+      digest = "";
+    }
+    this.readPermissionDigest = digest;
+    return digest;
+  }
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     if (!validityKey) return;
@@ -9730,6 +9760,9 @@ var CtoxWebRtcReplicationState = class {
     const retained = {
       validityKey,
       localValidityKey,
+      // SYNC-12: keep the browser read-permission digest with the checkpoint so
+      // a later role/epoch change invalidates reuse and forces a full re-pull.
+      permissionDigest: this.readPermissionDigest,
       pull: this.pullCheckpointsByPeer.get(peerId) || null,
       push: this.pushCheckpointsByPeer.get(peerId) || null,
       collection: this.collection.name,
@@ -10039,6 +10072,54 @@ async function resolveCapabilityToken(ctox = {}) {
     }
   }
   return typeof source === "string" && source.trim() ? source.trim() : null;
+}
+function decodeCapabilityTokenClaims(token) {
+  if (typeof token !== "string" || !token) return null;
+  const dot = token.indexOf(".");
+  const payloadB64 = dot === -1 ? token : token.slice(0, dot);
+  if (!payloadB64) return null;
+  try {
+    const json = base64UrlDecodeToString(payloadB64);
+    const payload = JSON.parse(json);
+    if (!payload || typeof payload !== "object") return null;
+    return {
+      uid: typeof payload.uid === "string" ? payload.uid : "",
+      role: typeof payload.role === "string" ? payload.role : "",
+      epoch: Number.isFinite(payload.epoch) ? Number(payload.epoch) : 0
+    };
+  } catch {
+    return null;
+  }
+}
+async function readPermissionDigestFromCapabilityToken(token) {
+  const claims = decodeCapabilityTokenClaims(token);
+  if (!claims) return "";
+  const material = `${claims.uid}|${claims.role}|${claims.epoch}`;
+  try {
+    return await sha256Hex(material);
+  } catch {
+    return "";
+  }
+}
+function base64UrlDecodeToString(value) {
+  let base64 = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = base64.length % 4;
+  if (pad === 2) base64 += "==";
+  else if (pad === 3) base64 += "=";
+  else if (pad === 1) base64 = base64.slice(0, -1);
+  if (typeof globalThis.atob === "function") {
+    const binary = globalThis.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new TextDecoder().decode(bytes);
+  }
+  return globalThis.Buffer ? globalThis.Buffer.from(base64, "base64").toString("utf8") : "";
+}
+function readPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return true;
+  return String(storedDigest || "") === currentDigest;
 }
 function checkpointKey(checkpoint) {
   if (!checkpoint) return "";

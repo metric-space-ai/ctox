@@ -27,6 +27,7 @@ import {
   buildProtocolPayload,
   schemaHash,
   schemaHashSource,
+  sha256Hex,
 } from './schema.mjs';
 import {
   CTOX_APP_RUNTIME_CAPABILITY,
@@ -168,6 +169,10 @@ export const replicationWebRtcTestInternals = Object.freeze({
   shouldAttachQueryDemandLoader,
   shouldAttachFileDemandLoader,
   shouldPersistFetchedFileChunks,
+  // SYNC-12: read-permission digest change-detector for checkpoint reuse.
+  decodeCapabilityTokenClaims,
+  readPermissionDigestFromCapabilityToken,
+  readPermissionDigestMatches,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -836,6 +841,14 @@ class CtoxWebRtcReplicationState {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.localCheckpointValidityKey = '';
+    // SYNC-12: a non-secret digest of THIS browser's own effective read-permission
+    // identity (role + capability_epoch), stamped alongside retained checkpoints.
+    // The pull checkpoint advances past documents the read-authz filter excluded;
+    // if the checkpoint validity key ignores the filter identity, a later role
+    // upgrade (new capability epoch) reuses the retained checkpoint and NEVER
+    // re-delivers the now-permitted documents. Folding this digest into the reuse
+    // decision invalidates checkpoints on a permission change ⇒ one full re-pull.
+    this.readPermissionDigest = '';
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.demandStatus = createV1_5StatusState();
@@ -986,12 +999,20 @@ class CtoxWebRtcReplicationState {
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
     this.localCheckpointValidityKey = localValidityKey;
+    // SYNC-12: recompute this browser's read-permission digest at every
+    // handshake. A role upgrade issues a token with a bumped capability epoch,
+    // so the digest changes and retained checkpoints are treated as invalid —
+    // exactly like a storage-generation mismatch — forcing a full re-pull that
+    // delivers the newly-permitted documents. A token refresh that preserves
+    // role+epoch keeps the digest identical, so incremental resume survives.
+    const readPermissionDigest = await this.resolveReadPermissionDigest();
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
       if (
         retained.validityKey === validityKey
         && retained.localValidityKey
         && retained.localValidityKey === localValidityKey
+        && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
@@ -1693,6 +1714,9 @@ class CtoxWebRtcReplicationState {
       this.retainedCheckpoints = {
         validityKey,
         localValidityKey: this.localCheckpointValidityKey,
+        // SYNC-12: stamp the read-permission digest last resolved at handshake
+        // (removePeer is synchronous — the cached value is the current identity).
+        permissionDigest: this.readPermissionDigest,
         pull: retainedPull,
         push: retainedPush,
       };
@@ -1724,6 +1748,28 @@ class CtoxWebRtcReplicationState {
     return checkpointValidityKeyFromProtocol(remoteProtocol);
   }
 
+  // SYNC-12: resolve and cache a stable, non-secret digest of this browser's
+  // effective read-permission identity. The capability token is a native-signed
+  // `base64url(payload).base64url(sig)` value whose payload carries `uid`, `role`
+  // and `epoch` (capability_epoch); a role change or grant change bumps the epoch
+  // and issues a new token, so the digest changes. We hash ONLY the permission
+  // claims (never the raw bearer token / signature), so an ordinary token refresh
+  // that reissues the same role+epoch with fresh iat/exp keeps the digest stable
+  // and incremental resume is preserved. An unresolvable/absent token yields ''
+  // (unknown identity — no forced re-pull), which the match helper treats
+  // permissively so a transient token-endpoint blip never storms a full resync.
+  async resolveReadPermissionDigest() {
+    let digest = '';
+    try {
+      const token = await resolveCapabilityToken(this.ctox);
+      digest = await readPermissionDigestFromCapabilityToken(token);
+    } catch {
+      digest = '';
+    }
+    this.readPermissionDigest = digest;
+    return digest;
+  }
+
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     if (!validityKey) return;
@@ -1734,6 +1780,9 @@ class CtoxWebRtcReplicationState {
     const retained = {
       validityKey,
       localValidityKey,
+      // SYNC-12: keep the browser read-permission digest with the checkpoint so
+      // a later role/epoch change invalidates reuse and forces a full re-pull.
+      permissionDigest: this.readPermissionDigest,
       pull: this.pullCheckpointsByPeer.get(peerId) || null,
       push: this.pushCheckpointsByPeer.get(peerId) || null,
       collection: this.collection.name,
@@ -2106,6 +2155,80 @@ async function resolveCapabilityToken(ctox = {}) {
     }
   }
   return typeof source === 'string' && source.trim() ? source.trim() : null;
+}
+
+// SYNC-12: decode the permission-relevant claims from a capability token WITHOUT
+// verifying the signature. This is not an authorization decision (the native
+// master verifies the HMAC and enforces the actual read filter); it is only a
+// change-detector for THIS browser's own effective read identity. The token is
+// `base64url(payload).base64url(sig)`; the payload is JSON with `uid`, `role`,
+// `epoch`, `iat`, `exp` (see src/core/business_os/capability.rs). Returns null
+// on any malformed/absent token.
+function decodeCapabilityTokenClaims(token) {
+  if (typeof token !== 'string' || !token) return null;
+  const dot = token.indexOf('.');
+  const payloadB64 = dot === -1 ? token : token.slice(0, dot);
+  if (!payloadB64) return null;
+  try {
+    const json = base64UrlDecodeToString(payloadB64);
+    const payload = JSON.parse(json);
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      uid: typeof payload.uid === 'string' ? payload.uid : '',
+      role: typeof payload.role === 'string' ? payload.role : '',
+      epoch: Number.isFinite(payload.epoch) ? Number(payload.epoch) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// SYNC-12: SHA-256 of the permission-relevant claims only (uid + role + epoch).
+// Deliberately excludes iat/exp and the signature so a same-identity token
+// refresh does not change the digest (no spurious full re-pull), while a role
+// or grant change — which bumps `epoch` and reissues — does. Returns '' when no
+// claims are resolvable, meaning "unknown identity" rather than a specific one.
+async function readPermissionDigestFromCapabilityToken(token) {
+  const claims = decodeCapabilityTokenClaims(token);
+  if (!claims) return '';
+  const material = `${claims.uid}|${claims.role}|${claims.epoch}`;
+  try {
+    return await sha256Hex(material);
+  } catch {
+    return '';
+  }
+}
+
+function base64UrlDecodeToString(value) {
+  let base64 = String(value).replace(/-/g, '+').replace(/_/g, '/');
+  const pad = base64.length % 4;
+  if (pad === 2) base64 += '==';
+  else if (pad === 3) base64 += '=';
+  else if (pad === 1) base64 = base64.slice(0, -1);
+  if (typeof globalThis.atob === 'function') {
+    const binary = globalThis.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new TextDecoder().decode(bytes);
+  }
+  // Node fallback (tests run without atob in some contexts).
+  return globalThis.Buffer
+    ? globalThis.Buffer.from(base64, 'base64').toString('utf8')
+    : '';
+}
+
+// SYNC-12: a retained checkpoint may be reused only when its stamped read
+// permission digest still matches the browser's current identity. An empty
+// CURRENT digest means the identity is unknown right now (no token / endpoint
+// blip); we intentionally do NOT invalidate on that, so a transient token
+// outage never forces a whole-collection re-pull. A non-empty current digest
+// must equal the stored one; a retained checkpoint with no digest (pre-SYNC-12
+// format) mismatches a known identity and is dropped once — the safe direction.
+function readPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return true;
+  return String(storedDigest || '') === currentDigest;
 }
 
 function checkpointKey(checkpoint) {
