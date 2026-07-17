@@ -297,6 +297,12 @@ staged while the command is `validating`, but active Business OS command/queue
 compatibility projections are published only after the terminal owner commits
 `validating -> terminal` and `queue=handled`. A native peer can therefore not
 replay a stale leased projection as an illegal `validating -> leased` edge.
+The reviewer must not require that terminal queue transition as evidence for
+its own PASS decision: the reviewed row is expected to remain leased, running,
+or awaiting review until PASS. The service, not the worker or reviewer, owns
+the subsequent acknowledgement. Review handoffs and format retries receive the
+original task contract, artifact, required deliverables, and deterministic
+evidence again because each review leg runs in a fresh isolated session.
 
 The router's one-hour unchanged-source idle gate has a separate, cheap durable
 queue safety poll every 30 seconds. This uncached count is the WAL-safe wakeup

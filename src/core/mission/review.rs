@@ -32,6 +32,7 @@ Operate in strict read-only verification mode.
 You may use read-only shell/CLI/browser/database inspection to gather evidence. Do not mutate files, send messages, update tickets, apply patches, install packages, restart services, join meetings, or perform any worker action.
 Your current working directory is an empty disposable reviewer scratch workspace. The assignment's Workspace root remains the authoritative, read-only source. If a bounded check needs to write build output, copy only the relevant files into the scratch workspace and run it there. Never edit the authoritative workspace, never copy runtime/secret/evidence stores into scratch, and never treat scratch output as a production artifact.
 You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
+The CTOX service owns the reviewed task's queue lifecycle. While this review runs, the source queue row is expected to remain leased, running, or awaiting review. Its terminal acknowledgement or handled state is never a prerequisite for PASS because the service applies that transition only after PASS. Never ask the worker to acknowledge, release, fail, or otherwise mutate its own queue task or runtime database. This exception applies only to the reviewed task's own service-owned lifecycle; independently requested durable effects still require evidence.
 Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. Independently verify decisive claims against the original task contract and, where applicable, files, runtime state, communication records, tickets, live surfaces, or trusted external systems. Never PASS from prose claims alone when the task requires an artifact, delivery proof, mutation, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
 Finish the verdict before the execution slice expires. Use no more than six tool calls for one review leg. Inspect the declared artifact and its explicit acceptance command first; once those decisive checks settle the contract, stop investigating and emit the structured verdict. Do not repeat a failed external or network check with different curl flags. A failed optional check is evidence for PARTIAL or FAIL, not a reason to omit the verdict. Write any temporary output only inside the disposable reviewer scratch workspace, never `/tmp`.
@@ -978,6 +979,7 @@ External chat quick-response gate:\n\
         "\
 Workspace-backed task review gate:\n\
 - inspect the workspace root directly and evaluate the full task result against the original task contract, not just the final response text\n\
+- do not require the reviewed task's own queue row to be terminal, acknowledged, or handled before PASS; the CTOX service owns that post-review transition, and the worker must not run `ctox queue ack`, `ctox queue release`, `ctox queue fail`, or mutate the runtime database for its own task\n\
 - audit worker self-reports explicitly: if the worker says a file exists, tests passed, output was written, code was changed, or a command works, verify that exact claim in the current workspace before relying on it\n\
 - treat the current Workspace root above as the only authoritative workspace for this review; ignore same-named files, replay logs, backups, stale validations, and sibling workspaces unless they are explicitly trusted external acceptance records for this exact task\n\
 - do not inspect or trust host-global absolute task paths such as `/app/...`, `/workspace/...`, or `/project/...` as workspace proof; map those paths into the current workspace root or inspect the correct target runtime/container, otherwise return PARTIAL\n\
@@ -1170,6 +1172,7 @@ WAIT_REF: none\n"
 }
 
 fn build_review_handoff_prompt(request: &CompletionReviewRequest, handoff: &str) -> String {
+    let original_assignment = build_review_prompt(request, &[]);
     let thread_key = if request.thread_key.trim().is_empty() {
         "(none recorded)"
     } else {
@@ -1192,7 +1195,9 @@ fn build_review_handoff_prompt(request: &CompletionReviewRequest, handoff: &str)
     };
 
     format!(
-        "== REVIEW CONTINUATION ==\n\
+        "{original_assignment}\n\
+\n\
+== REVIEW CONTINUATION ==\n\
 \n\
 Conversation id: {}\n\
 Thread key: {thread_key}\n\
@@ -1215,6 +1220,7 @@ fn build_review_format_retry_prompt(
     request: &CompletionReviewRequest,
     prior_report: &str,
 ) -> String {
+    let original_assignment = build_review_prompt(request, &[]);
     let thread_key = if request.thread_key.trim().is_empty() {
         "(none recorded)"
     } else {
@@ -1232,7 +1238,9 @@ fn build_review_format_retry_prompt(
     };
 
     format!(
-        "== REVIEW FORMAT RETRY ==\n\
+        "{original_assignment}\n\
+\n\
+== REVIEW FORMAT RETRY ==\n\
 \n\
 The previous review response did not include a parseable `VERDICT:` line. Continue the same read-only review and return the required structured format exactly.\n\
 \n\
@@ -2327,6 +2335,12 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT.contains("Operate in strict read-only verification mode."));
         assert!(REVIEW_SYSTEM_PROMPT.contains("normal review compaction is disabled"));
         assert!(REVIEW_SYSTEM_PROMPT.contains("emit a review handoff instead of compacting"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains(
+            "Its terminal acknowledgement or handled state is never a prerequisite for PASS"
+        ));
+        assert!(REVIEW_SYSTEM_PROMPT.contains(
+            "Never ask the worker to acknowledge, release, fail, or otherwise mutate its own queue task"
+        ));
         assert!(
             !REVIEW_SYSTEM_PROMPT.contains("LCM"),
             "review prompt must not ask the reviewer to run the mission LCM harness"
@@ -2335,6 +2349,12 @@ mod tests {
         let request = CompletionReviewRequest {
             preview: "Review harness proof".to_string(),
             source_label: "queue".to_string(),
+            task_goal: "Create the verified proof bundle.".to_string(),
+            task_prompt: "Write receipt.json and verify its checksum.".to_string(),
+            artifact_text: "Created receipt.json with a verified checksum.".to_string(),
+            deterministic_evidence: vec![
+                "receipt.json exists in the authoritative workspace".to_string()
+            ],
             workspace_root: "/tmp/review-proof".to_string(),
             runtime_db_path: "/tmp/ctox.sqlite3".to_string(),
             review_skill_path: "/tmp/external-review/SKILL.md".to_string(),
@@ -2345,6 +2365,18 @@ mod tests {
         assert!(handoff.contains("Prior handoff:"));
         assert!(handoff.contains("Verified files; still need service log."));
         assert!(handoff.contains("read-only inspection only"));
+        assert!(handoff.contains("Create the verified proof bundle."));
+        assert!(handoff.contains("Write receipt.json and verify its checksum."));
+        assert!(handoff.contains("Created receipt.json with a verified checksum."));
+        assert!(handoff.contains("receipt.json exists in the authoritative workspace"));
+
+        let format_retry =
+            build_review_format_retry_prompt(&request, "SUMMARY: malformed response");
+        assert!(format_retry.contains("Create the verified proof bundle."));
+        assert!(format_retry.contains("Write receipt.json and verify its checksum."));
+        assert!(format_retry.contains("Created receipt.json with a verified checksum."));
+        assert!(format_retry.contains("receipt.json exists in the authoritative workspace"));
+        assert!(format_retry.contains("SUMMARY: malformed response"));
     }
 
     #[test]
