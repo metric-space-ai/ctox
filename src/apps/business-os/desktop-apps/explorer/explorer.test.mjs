@@ -118,7 +118,6 @@ describe('Explorer app helpers', () => {
     }
     assert.doesNotMatch(scope[1], /desktop_files|documents|knowledge_items/);
   });
-
   it('validates new folder and rename inputs before persistence', () => {
     const existing = new Set(['reports']);
 

@@ -1,0 +1,37 @@
+{
+  "input": {
+    "source_id": "firmenabc.at",
+    "company": "Kapsch Components GmbH & Co KG",
+    "country": "AT",
+    "url": "https://www.firmenabc.at/kapsch-components-gmbh-co-kg_XVn"
+  },
+  "expected": {
+    "firma_name": "Kapsch Components GmbH & Co KG",
+    "firma_anschrift": "Gutheil-Schoder-Gasse 17",
+    "firma_plz": "1230",
+    "firma_ort": "Wien",
+    "firma_domain": "kapsch.net"
+  },
+  "search": {
+    "results": [{
+      "title": "Kapsch Components GmbH & Co KG in Wien",
+      "url": "https://www.firmenabc.at/kapsch-components-gmbh-co-kg_XVn",
+      "summary": "Firmenprofil"
+    }]
+  },
+  "read": {
+    "ok": false,
+    "url": "https://www.firmenabc.at/kapsch-components-gmbh-co-kg_XVn"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.firmenabc.at/kapsch-components-gmbh-co-kg_XVn",
+      "title": "Kapsch Components GmbH & Co KG in Wien",
+      "body_text": "Kapsch Components GmbH & Co KG\nInformationen zur Firmenstruktur\nGutheil-Schoder-Gasse 17\n1230 Wien\nT:050 811 0\nM:kcomp.office@kapsch.net\nW:www.kapsch.net",
+      "html": "<main><h1>Kapsch Components GmbH &amp; Co KG</h1></main>",
+      "json_ld": []
+    },
+    "detection": { "markers": [] }
+  }
+}

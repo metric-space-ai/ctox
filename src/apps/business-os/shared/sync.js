@@ -326,7 +326,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-appsec-investigations-v63');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-office-file-stream-v65');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -682,19 +682,33 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         .filter((collection) => typeof collection === 'string')
         .map(normalizeCollectionName)
         .filter(Boolean))];
+      const restartable = requested.filter((collection) => (
+        !isModuleDemandOnlyCollection(collection) || collectionLeaseCounts.get(collection) > 0
+      ));
+      for (const collection of requested) {
+        if (restartable.includes(collection)) continue;
+        activeCollections.delete(collection);
+        recordCollection(collection, {
+          status: 'skipped',
+          connectionStatus: 'demand-only',
+          reason: 'demand-only-requires-lease',
+          lastError: null,
+          reconnectingSince: null,
+        });
+      }
       const pinnedBeforeRestart = new Map(
-        requested.map((collection) => [collection, pinnedCollections.has(collection)]),
+        restartable.map((collection) => [collection, pinnedCollections.has(collection)]),
       );
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
-      for (const collection of requested) activeCollections.add(collection);
-      for (const collection of requested) {
+      for (const collection of restartable) activeCollections.add(collection);
+      for (const collection of restartable) {
         await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
       }
       const startBatch = async () => {
         collectionStartQueue = Promise.resolve();
         const batch = [];
-        for (const collection of requested) {
+        for (const collection of restartable) {
           batch.push(await this.startCollection(collection, {
             pin: pinnedBeforeRestart.get(collection) === true,
           }));
@@ -703,10 +717,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         return batch;
       };
       const waitForStableBatch = async (batch) => {
-        for (let index = 0; index < requested.length; index += 1) {
+        for (let index = 0; index < restartable.length; index += 1) {
           await waitForStableNativePeerOpenState(
             batch[index]?.state,
-            requested[index],
+            restartable[index],
             NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS,
             NATIVE_PEER_RESTART_STABLE_MS,
           );
@@ -717,7 +731,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         await waitForStableBatch(restarted);
       } catch (error) {
         const lifecycleEvent = serializeError(error);
-        for (const collection of requested) {
+        for (const collection of restartable) {
           recordCollection(collection, {
             status: 'reconnecting',
             connectionStatus: 'reconnecting',
@@ -1011,7 +1025,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-appsec-investigations-v63');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260715-office-file-stream-v65');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }

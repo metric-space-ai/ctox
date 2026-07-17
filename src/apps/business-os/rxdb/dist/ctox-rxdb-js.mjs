@@ -8026,6 +8026,8 @@ var replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
+  shouldAttachFileDemandLoader,
+  shouldPersistFetchedFileChunks,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer
@@ -9634,7 +9636,7 @@ function primaryValue(doc = {}, primaryPath = "id") {
   return String(replicationValueAtPath(doc, primaryPath) ?? "");
 }
 function shouldPersistFetchedFileChunks(collectionName = "") {
-  return String(collectionName || "").endsWith("_chunks");
+  return String(collectionName || "") === "desktop_file_chunks";
 }
 function shouldAttachQueryDemandLoader(collectionName = "") {
   return !String(collectionName || "").endsWith("_chunks");
@@ -10544,7 +10546,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
       selector: patch.selector ?? this.query.selector,
       sort: patch.sort ?? this.query.sort,
       limit: patch.limit ?? this.query.limit,
-      skip: patch.skip ?? this.query.skip
+      skip: patch.skip ?? this.query.skip,
+      requireRevision: patch.requireRevision ?? this.query.requireRevision
     }, this.single);
   }
   _withSelectorPatch(patch = {}) {
@@ -10618,7 +10621,8 @@ function normalizeQuery(query, primaryPath) {
     selector: query?.selector || {},
     sort: normalizeSort2(query?.sort),
     limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : void 0,
-    skip: Number.isFinite(Number(query?.skip)) ? Math.max(0, Number(query.skip)) : void 0
+    skip: Number.isFinite(Number(query?.skip)) ? Math.max(0, Number(query.skip)) : void 0,
+    requireRevision: typeof query?.requireRevision === "string" && query.requireRevision ? query.requireRevision : void 0
   };
 }
 function matchesSelector(doc, selector = {}) {

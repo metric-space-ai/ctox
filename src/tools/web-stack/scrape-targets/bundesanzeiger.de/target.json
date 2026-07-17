@@ -1,15 +1,15 @@
 {
   "target_key": "bundesanzeiger-de",
   "display_name": "Bundesanzeiger DE Pflichtveroeffentlichungen",
-  "start_url": "https://www.bundesanzeiger.de/pub/de/suche?13",
+  "start_url": "https://www.bundesanzeiger.de/pub/de/suche?0",
   "target_kind": "prospect-research",
   "status": "active",
   "config": {
     "expected_provider": "bundesanzeiger",
     "country_hints": ["DE"],
     "tier": "P",
-    "skip_probe": false,
-    "expected_min_records": 0,
+    "skip_probe": true,
+    "expected_min_records": 1,
     "record_key_fields": ["field", "source_url"],
     "api": {
       "semantic": {

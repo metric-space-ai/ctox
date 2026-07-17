@@ -5,7 +5,7 @@
 //! aggregates evidence across scholarly/web/data sources for free-form
 //! topical queries, `person-research` aggregates **typed field evidence**
 //! for one company at a time, using the registered source modules
-//! ([`crate::sources`]) and the Thesen Nachrecherche source matrix
+//! ([`crate::sources`]) and the generic DACH prospect-research source matrix
 //! ([`crate::sources::EXCEL_MATRIX`]) as the routing oracle.
 //!
 //! The orchestrator never talks to a search engine directly: it builds
@@ -1087,7 +1087,7 @@ fn find_terms_for_fields(fields: &[FieldKey]) -> Vec<String> {
                 out.insert("Mitarbeiter".into());
                 out.insert("Arbeitnehmer".into());
             }
-            FieldKey::FirmaEmail | FieldKey::PersonEmail => {
+            FieldKey::FirmaEmail | FieldKey::PersonEmail | FieldKey::PersonEmailValidation => {
                 out.insert("E-Mail".into());
                 out.insert("Email".into());
             }

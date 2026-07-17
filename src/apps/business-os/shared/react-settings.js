@@ -990,6 +990,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
           ${option('openrouter', 'OpenRouter', provider)}
           ${option('anthropic', 'Anthropic', provider)}
           ${option('minimax', 'MiniMax', provider)}
+          ${option('ctox_proxy', 'CTOX LLM Proxy', provider)}
         </select></label>
         ${!isLocalProvider ? `
           <label><span>Autorisierung</span><select data-runtime-auth-mode ${canManage ? '' : 'disabled'}>
@@ -997,7 +998,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
             ${provider === 'openai' ? option('chatgpt_subscription', 'ChatGPT Subscription', authMode) : ''}
           </select></label>
         ` : ''}
-        ${runtimeModelControl(provider, runtime.chat_model, canManage)}
+        ${runtimeModelControl(provider, runtime.chat_model, canManage, runtime.available_models)}
         <label><span>Preset</span><select data-runtime-preset ${canManage ? '' : 'disabled'}>
           ${option('Quality', 'Quality', runtimePresetValue(runtime.preset))}
           ${option('Performance', 'Performance', runtimePresetValue(runtime.preset))}
@@ -1961,6 +1962,7 @@ function runtimeProviderLabel(provider) {
     openrouter: 'OpenRouter',
     anthropic: 'Anthropic',
     minimax: 'MiniMax',
+    ctox_proxy: 'CTOX LLM Proxy',
   }[String(provider || '').toLowerCase()] || provider || 'nicht geladen';
 }
 
@@ -2005,7 +2007,7 @@ function hostLabel(value) {
   }
 }
 
-function runtimeModelControl(provider, model, canManage) {
+function runtimeModelControl(provider, model, canManage, availableModels = []) {
   const value = String(model || '');
   if (!String(provider || '').trim()) {
     return `<label><span>Chat Modell</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="Runtime nicht geladen" ${canManage ? '' : 'disabled'} /></label>`;
@@ -2013,13 +2015,18 @@ function runtimeModelControl(provider, model, canManage) {
   if (String(provider || '').toLowerCase() === 'local') {
     return `<label><span>Lokales Modell</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="kein Modell aus Runtime gemeldet" ${canManage ? '' : 'disabled'} /></label>`;
   }
-  const options = runtimeModelOptions(provider, value);
+  const options = runtimeModelOptions(provider, value, availableModels);
   return `<label><span>Chat Modell</span><select data-runtime-model ${canManage ? '' : 'disabled'}>
     ${options.map(([optionValue, label]) => option(optionValue, label, value)).join('')}
   </select></label>`;
 }
 
-function runtimeModelOptions(provider, current) {
+function runtimeModelOptions(provider, current, availableModels = []) {
+  const discovered = Array.isArray(availableModels)
+    ? availableModels
+      .map((model) => typeof model === 'string' ? model.trim() : String(model?.id || '').trim())
+      .filter(Boolean)
+    : [];
   const byProvider = {
     openai: [
       ['gpt-5.5', 'gpt-5.5'],
@@ -2036,6 +2043,12 @@ function runtimeModelOptions(provider, current) {
     minimax: [
       ['MiniMax-M3', 'MiniMax-M3'],
     ],
+    ctox_proxy: discovered.length
+      ? discovered.map((model) => [model, model])
+      : [
+        ['MiniMax-M3', 'MiniMax-M3'],
+        ['kimi-k3', 'kimi-k3'],
+      ],
   };
   const options = byProvider[String(provider || '').toLowerCase()] || [];
   if (!current) return [['', 'Nicht gesetzt'], ...options];
@@ -4429,5 +4442,6 @@ function formatMsShort(value) {
 
 export const __reactSettingsTestHooks = {
   confirmedUsersAfterUpsert,
+  runtimeModelOptions,
   settingsTemplate,
 };

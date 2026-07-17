@@ -36,7 +36,6 @@ use uuid::Uuid;
 use super::policy;
 use super::store;
 
-const CORE_MODULE_IDS: &[&str] = &["ctox", "appsec-pentest", "knowledge"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -120,6 +119,8 @@ struct TemplateManifest {
     #[serde(default)]
     source_module: String,
     #[serde(default)]
+    starter_archetype: String,
+    #[serde(default)]
     default_title: String,
     #[serde(default)]
     tags: Vec<String>,
@@ -128,15 +129,6 @@ struct TemplateManifest {
 #[derive(Debug, Clone, Deserialize)]
 struct KnowledgeCommandRequest {
     args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct InstallTemplateRequest {
-    template_id: String,
-    #[serde(default)]
-    module_id: String,
-    #[serde(default)]
-    title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -523,16 +515,16 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_status(request, 403, "chef or admin role required")?;
             } else {
                 let body = read_json(&mut request)?;
-                let install = serde_json::from_value(body)?;
+                let install: store::ModuleInstallTemplateRequest = serde_json::from_value(body)?;
                 let installed_app_root = resolve_business_os_installed_app_root(root);
-                let manifest = install_template_module(app_root, &installed_app_root, install)?;
-                respond_json(
-                    request,
-                    &serde_json::json!({
-                        "ok": true,
-                        "module": manifest
-                    }),
+                let result = store::install_template_module_command(
+                    root,
+                    app_root,
+                    &installed_app_root,
+                    &session,
+                    install,
                 )?;
+                respond_json_value(request, result)?;
             }
         }
         (Method::Post, "/api/business-os/modules/delete") => {
@@ -2058,87 +2050,6 @@ fn save_module_layout(root: &Path, layout: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_template_module(
-    source_app_root: &Path,
-    installed_app_root: &Path,
-    request: InstallTemplateRequest,
-) -> anyhow::Result<ModuleManifest> {
-    let template_id = sanitize_slug(&request.template_id);
-    if template_id.is_empty() {
-        anyhow::bail!("template_id is required");
-    }
-    let template_path = source_app_root
-        .join("template-store")
-        .join(&template_id)
-        .join("template.json");
-    let text = fs::read_to_string(&template_path).with_context(|| {
-        format!(
-            "failed to read template manifest {}",
-            template_path.display()
-        )
-    })?;
-    let template: TemplateManifest = serde_json::from_str(&text).with_context(|| {
-        format!(
-            "failed to parse template manifest {}",
-            template_path.display()
-        )
-    })?;
-    let source_module = sanitize_slug(if template.source_module.is_empty() {
-        &template.id
-    } else {
-        &template.source_module
-    });
-    let source = source_app_root.join("modules").join(&source_module);
-    if !source.join("module.json").is_file() {
-        anyhow::bail!("template source module `{source_module}` is missing");
-    }
-    let requested_id = sanitize_slug(if request.module_id.trim().is_empty() {
-        if request.title.trim().is_empty() {
-            &template.id
-        } else {
-            &request.title
-        }
-    } else {
-        &request.module_id
-    });
-    let module_id = unique_module_id(installed_app_root, &requested_id);
-    let module_title = if request.title.trim().is_empty() {
-        if template.default_title.trim().is_empty() {
-            template.title.clone()
-        } else {
-            template.default_title.clone()
-        }
-    } else {
-        request.title.trim().to_owned()
-    };
-    let target = installed_app_root
-        .join("installed-modules")
-        .join(&module_id);
-    copy_dir_recursive(&source, &target)?;
-
-    let manifest_path = target.join("module.json");
-    let mut manifest_value: Value = serde_json::from_str(
-        &fs::read_to_string(&manifest_path)
-            .with_context(|| format!("failed to read {}", manifest_path.display()))?,
-    )?;
-    manifest_value["id"] = Value::String(module_id.clone());
-    manifest_value["title"] = Value::String(module_title);
-    manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
-    manifest_value["install_scope"] = Value::String("installed".to_owned());
-    manifest_value["default_installed"] = Value::Bool(false);
-    manifest_value["template_id"] = Value::String(template.id);
-    ensure_local_icon_manifest_value(&mut manifest_value, &target);
-    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
-        .with_context(|| format!("failed to write {}", manifest_path.display()))?;
-
-    let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
-    manifest.source = "installed".to_owned();
-    manifest.core = false;
-    manifest.editable = true;
-    manifest.deletable = true;
-    Ok(manifest)
-}
-
 fn upsert_module_manifest(
     source_app_root: &Path,
     installed_app_root: &Path,
@@ -2258,31 +2169,6 @@ fn html_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
-    let base = if requested_id.is_empty() {
-        "module".to_owned()
-    } else if is_core_module(requested_id) {
-        format!("{requested_id}-copy")
-    } else {
-        requested_id.to_owned()
-    };
-    let installed_root = app_root.join("installed-modules");
-    if !installed_root.join(&base).exists() {
-        return base;
-    }
-    for index in 2..1000 {
-        let candidate = format!("{base}-{index}");
-        if !installed_root.join(&candidate).exists() {
-            return candidate;
-        }
-    }
-    format!("{base}-{}", uuid::Uuid::new_v4())
-}
-
-fn is_core_module(id: &str) -> bool {
-    CORE_MODULE_IDS.iter().any(|core| id == *core)
-}
-
 fn sanitize_slug(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -2296,28 +2182,6 @@ fn sanitize_slug(value: &str) -> String {
         }
     }
     out.trim_matches('-').to_owned()
-}
-
-fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
-    if target.exists() {
-        anyhow::bail!("target module already exists: {}", target.display());
-    }
-    fs::create_dir_all(target)
-        .with_context(|| format!("failed to create module dir {}", target.display()))?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let from = entry.path();
-        let to = target.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if file_type.is_file() {
-            fs::copy(&from, &to).with_context(|| {
-                format!("failed to copy {} to {}", from.display(), to.display())
-            })?;
-        }
-    }
-    Ok(())
 }
 
 fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
@@ -3492,16 +3356,16 @@ mod tests {
         assert_eq!(
             business_os_static_cache_control(
                 false,
-                "installed-modules/sellify/index.js",
-                "/installed-modules/sellify/index.js?v=shell_0.4.27"
+                "installed-modules/private-crm/index.js",
+                "/installed-modules/private-crm/index.js?v=shell_0.4.27"
             ),
             "no-cache, must-revalidate"
         );
         assert_eq!(
             business_os_static_cache_control(
                 false,
-                "local-modules/thesen-outbound/core/view.js",
-                "/local-modules/thesen-outbound/core/view.js?v=0.3.17"
+                "local-modules/private-outbound/core/view.js",
+                "/local-modules/private-outbound/core/view.js?v=0.3.17"
             ),
             "no-cache, must-revalidate"
         );

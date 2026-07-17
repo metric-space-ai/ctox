@@ -8,7 +8,7 @@
     "expected_provider": "moneyhouse",
     "country_hints": ["CH"],
     "tier": "S",
-    "skip_probe": false,
+    "skip_probe": true,
     "expected_min_records": 1,
     "record_key_fields": ["field", "source_url"],
     "api": {

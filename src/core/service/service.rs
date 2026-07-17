@@ -885,6 +885,11 @@ enum ServiceIpcRequest {
     KnowledgeData {
         argv: Vec<String>,
     },
+    /// Execute browser-backed Business OS web-stack commands inside the
+    /// daemon process that owns the persistent browser runtime.
+    BusinessOsWebStack {
+        argv: Vec<String>,
+    },
     /// Validate and persist a typed Business OS command inside the daemon.
     /// Sandboxed workers may connect to the service socket, but cannot write
     /// the protected runtime/evidence store directly.
@@ -1297,6 +1302,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
     start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
+    crate::business_os::start_background_sync(root);
     start_channel_syncer(root.to_path_buf());
     start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
@@ -1873,6 +1879,40 @@ fn release_stale_service_communication_leases_on_boot(
                 "Boot Business OS app validation recovery skipped: {}",
                 clip_text(&err.to_string(), 180)
             ),
+        ),
+    }
+    match channels::release_stale_queue_task_leases(
+        root,
+        CHANNEL_ROUTER_LEASE_OWNER,
+        &HashSet::new(),
+    ) {
+        Ok(released) if !released.is_empty() => {
+            let released_count = released.len();
+            push_event(
+                state,
+                format!("Recovered {released_count} stale queue task lease(s) at boot"),
+            );
+            governance::record_event_or_count(
+                root,
+                governance::GovernanceEventRequest {
+                    mechanism_id: "boot_queue_lease_reclaim",
+                    conversation_id: None,
+                    severity: "info",
+                    reason: "a prior service process left expired or ownerless queue task leases",
+                    action_taken:
+                        "returned stale queue task leases to pending and moved linked commands to retry wait",
+                    details: serde_json::json!({
+                        "released_count": released_count,
+                        "released_message_keys": released,
+                    }),
+                    idempotence_key: None,
+                },
+            );
+        }
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!("Boot queue task lease recovery failed: {err}"),
         ),
     }
     match release_stale_service_communication_leases(root) {
@@ -2679,6 +2719,57 @@ pub fn dispatch_business_command(
     crate::business_os::store::accept_rxdb_business_command(root, document)
 }
 
+/// Route browser-backed Business OS web-stack work to the running daemon.
+/// Returns `None` when no daemon is available so offline CLI use can retain
+/// the existing in-process behavior.
+#[cfg(unix)]
+pub(crate) fn run_business_os_web_stack_via_service(
+    root: &Path,
+    argv: &[String],
+) -> Result<Option<Value>> {
+    let socket_path = service_socket_path(root);
+    if !socket_path.exists() {
+        return Ok(None);
+    }
+    let timeout_ms = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--timeout-ms")
+        .and_then(|pair| pair[1].parse::<u64>().ok())
+        .unwrap_or(60_000)
+        .clamp(1_000, 300_000);
+    let timeout = Duration::from_millis(timeout_ms.saturating_add(15_000));
+    match send_service_ipc_request_with_timeout(
+        root,
+        ServiceIpcRequest::BusinessOsWebStack {
+            argv: argv.to_vec(),
+        },
+        timeout,
+    ) {
+        Ok(ServiceIpcResponse::Json { payload, .. }) => Ok(Some(payload)),
+        Ok(ServiceIpcResponse::Error { message }) => anyhow::bail!(message),
+        Ok(other) => anyhow::bail!("unexpected CTOX service reply: {other:?}"),
+        Err(err)
+            if err.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                )
+            }) =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn run_business_os_web_stack_via_service(
+    _root: &Path,
+    _argv: &[String],
+) -> Result<Option<Value>> {
+    Ok(None)
+}
+
 /// Operator-supplied outbound-email intent attached to a chat submission.
 ///
 /// When present, the agent's reply will be routed through the reviewed
@@ -3225,6 +3316,18 @@ fn handle_service_ipc_request(
             // connection — not by a sandboxed CLI subprocess that may have
             // its writes silently discarded on sandbox teardown.
             match crate::knowledge::dispatch_capturing(root, &argv) {
+                Ok(payload) => Ok(ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }),
+                Err(err) => Ok(ServiceIpcResponse::Error {
+                    message: err.to_string(),
+                }),
+            }
+        }
+        ServiceIpcRequest::BusinessOsWebStack { argv } => {
+            match crate::service::business_os::run_business_os_web_stack_cli_json_local(root, &argv)
+            {
                 Ok(payload) => Ok(ServiceIpcResponse::Json {
                     status: 200,
                     payload,
@@ -4803,6 +4906,15 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
+        ServiceIpcRequest::BusinessOsWebStack { argv } => {
+            let timeout_ms = argv
+                .windows(2)
+                .find(|pair| pair[0] == "--timeout-ms")
+                .and_then(|pair| pair[1].parse::<u64>().ok())
+                .unwrap_or(60_000)
+                .clamp(1_000, 300_000);
+            Duration::from_millis(timeout_ms.saturating_add(15_000))
+        }
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
     }
 }
@@ -5524,6 +5636,85 @@ fn work_outcome_metadata(
     })
 }
 
+fn record_prompt_worker_progress(root: &Path, job: &QueuedPrompt, event: &str) {
+    let parsed = event
+        .strip_prefix("worker-progress ")
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok());
+    let (event_kind, title, body_text, mut metadata) = if let Some(payload) = parsed {
+        let Some(event_kind) = payload
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("worker."))
+        else {
+            return;
+        };
+        (
+            event_kind.to_string(),
+            payload
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Agent progress")
+                .to_string(),
+            payload
+                .get("body_text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            payload
+                .get("metadata")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        )
+    } else {
+        let phase = event.split_whitespace().next().unwrap_or_default();
+        let title = match phase {
+            "runtime-resolve" => "Preparing model runtime",
+            "runtime-settings" => "Loading runtime settings",
+            "runtime-backend-ready" => "Model runtime ready",
+            "session-start" => "Starting agent session",
+            "session-ready" => "Agent session ready",
+            "lcm-open" => "Loading task context",
+            "persist-user-turn" => "Task added to the agent session",
+            "turn-plan" => "Planning the agent turn",
+            "compaction-check" | "compaction-run" | "compaction-complete" => {
+                "Optimizing agent context"
+            }
+            "snapshot-context" | "render-prompt" => "Preparing task context",
+            "invoke-model" => "Agent is working",
+            "persist-assistant-turn" => "Saving agent result",
+            "turn-complete" => "Agent turn complete",
+            _ => return,
+        };
+        (
+            "worker.phase".to_string(),
+            title.to_string(),
+            String::new(),
+            serde_json::json!({
+                "phase": phase,
+            }),
+        )
+    };
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "source_label".to_string(),
+            Value::String(job.source_label.clone()),
+        );
+    }
+    harness_flow::record_harness_flow_event_lossy(
+        root,
+        harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: &event_kind,
+            title: &title,
+            body_text: &body_text,
+            message_key: job.leased_message_keys.first().map(String::as_str),
+            work_id: job.ticket_self_work_id.as_deref(),
+            ticket_key: None,
+            attempt_index: None,
+            metadata,
+        },
+    );
+}
+
 /// Emit a per-task `work.outcome` forensic flow event stamping the bound skill
 /// and structured outcome onto the existing message/work chain, so a
 /// systematically-failing skill becomes detectable in the flow ledger and can
@@ -5795,6 +5986,7 @@ fn start_prompt_worker(
                         session_options,
                         |event| {
                             push_event(&event_state, format!("phase {} {}", event_source, event));
+                            record_prompt_worker_progress(&root, &job, event);
                         },
                     );
                     if result.is_err() {
@@ -5818,6 +6010,7 @@ fn start_prompt_worker(
                         session_options,
                         |event| {
                             push_event(&event_state, format!("phase {} {}", event_source, event));
+                            record_prompt_worker_progress(&root, &job, event);
                         },
                     )
                 }
@@ -22235,11 +22428,9 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     if !runtime_error_is_transient_api_failure(error_text) {
         return Ok(0);
     }
-    let feedback_prompt =
-        (!is_cv_print_parser_queue_job(job)).then(|| render_runtime_retry_prompt(job, error_text));
     let note = format!(
         "Harness retry {} after runtime failure: {}",
-        if feedback_prompt.is_some() {
+        if !is_cv_print_parser_queue_job(job) {
             "feedback injected"
         } else {
             "kept original task prompt"
@@ -22248,9 +22439,23 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     );
     let mut updated = 0usize;
     for message_key in &job.leased_message_keys {
-        if channels::load_queue_task(root, message_key)?.is_none() {
+        let Some(task) = channels::load_queue_task(root, message_key)? else {
             continue;
-        }
+        };
+        let feedback_prompt = if is_cv_print_parser_queue_job(job) {
+            None
+        } else {
+            let canonical_prompt =
+                crate::business_os::store::rebuild_business_command_queue_prompt_for_task(
+                    root,
+                    message_key,
+                )?;
+            Some(render_runtime_retry_prompt_with_original_task(
+                job,
+                error_text,
+                canonical_prompt.as_deref().unwrap_or(task.prompt.as_str()),
+            ))
+        };
         channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
@@ -22516,6 +22721,15 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
 }
 
 fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
+    let original_task = runtime_retry_current_task(job);
+    render_runtime_retry_prompt_with_original_task(job, error_text, &original_task)
+}
+
+fn render_runtime_retry_prompt_with_original_task(
+    job: &QueuedPrompt,
+    error_text: &str,
+    original_task: &str,
+) -> String {
     let mut required_actions = vec![
         "inspect durable state and workspace artifacts before retrying; do not trust the previous reply text as proof",
         "preserve work that already exists and avoid duplicate queue tasks",
@@ -22542,22 +22756,21 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     }
     let prompt = format!(
         "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
-        runtime_retry_current_task_summary(job),
+        strip_harness_feedback_wrappers(original_task),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
     );
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
-fn runtime_retry_current_task_summary(job: &QueuedPrompt) -> String {
+fn runtime_retry_current_task(job: &QueuedPrompt) -> String {
     let prompt = strip_harness_feedback_wrappers(&job.prompt);
     let goal = strip_harness_feedback_wrappers(&job.goal);
-    let candidate = if !prompt.trim().is_empty() && prompt.trim() != job.prompt.trim() {
-        prompt
+    if !prompt.trim().is_empty() {
+        prompt.trim().to_string()
     } else {
-        goal
-    };
-    summarize_follow_up_goal(candidate)
+        goal.trim().to_string()
+    }
 }
 
 fn strip_harness_feedback_wrappers(value: &str) -> &str {
@@ -34527,7 +34740,7 @@ Use shell tools to create or update these files."
             .expect("lease queue task");
         let job = QueuedPrompt {
             prompt: task.prompt.clone(),
-            goal: task.prompt.clone(),
+            goal: task.title.clone(),
             preview: task.title.clone(),
             source_label: "queue".to_string(),
             suggested_skill: None,
@@ -34560,6 +34773,76 @@ Use shell tools to create or update these files."
             .contains("Create and verify the smoke artifact."));
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
+    }
+
+    #[test]
+    fn business_command_runtime_retry_restores_complete_canonical_prompt() {
+        let root = temp_root("business-command-runtime-retry-canonical-prompt");
+        let source_sequence = (1..=14)
+            .map(|index| format!("Quelle {index}: Feldgruppe {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sentinel = "RETRY_PROMPT_END_SENTINEL_14_SOURCES";
+        let instruction =
+            format!("Recherchiere den Lead vollständig.\n{source_sequence}\n{sentinel}");
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                id: Some("cmd_retry_prompt_recovery".to_string()),
+                module: "private-outbound".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("lead_wittenstein".to_string()),
+                payload: serde_json::json!({
+                    "title": "Nachrecherche Firma: WITTENSTEIN SE",
+                    "instruction": instruction,
+                    "source_policy": {
+                        "minimum_independent_sources": 2,
+                        "sources": (1..=14).map(|index| format!("source-{index}")).collect::<Vec<_>>()
+                    }
+                }),
+                client_context: serde_json::json!({
+                    "source_module": "private-outbound",
+                    "writeback_required": true
+                }),
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+            },
+        )
+        .expect("record business command");
+        let task_id = accepted.task_id.expect("business command queue task");
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease business command queue task");
+
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                prompt: Some(
+                    "HARNESS FEEDBACK\nProblem: lock\n\nCURRENT TASK\nNachrecherche Firma: WITTENSTEIN SE\n\nRUNTIME FAILURE\ndatabase is locked"
+                        .to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .expect("simulate previously truncated runtime retry prompt");
+        let damaged = channels::load_queue_task(&root, &task_id)
+            .expect("load damaged queue task")
+            .expect("damaged queue task exists");
+        let job = queued_prompt_from_queue_task(damaged);
+
+        let updated =
+            apply_runtime_retry_feedback_to_leased_queue(&root, &job, "database is locked")
+                .expect("restore canonical business command prompt");
+        assert_eq!(updated, 1);
+
+        let restored = channels::load_queue_task(&root, &task_id)
+            .expect("load restored queue task")
+            .expect("restored queue task exists");
+        assert!(restored.prompt.contains("HARNESS FEEDBACK"));
+        assert!(restored.prompt.contains("Quelle 14: Feldgruppe 14"));
+        assert!(restored.prompt.contains(sentinel));
+        assert!(restored.prompt.contains("minimum_independent_sources"));
+        assert!(restored.prompt.contains("source-14"));
+        assert_eq!(restored.prompt.matches("RUNTIME FAILURE").count(), 1);
     }
 
     #[test]

@@ -229,6 +229,7 @@ pub struct CleanRoomBaselinePlan {
 
 pub use crate::execution::models::model_registry::SUPPORTED_ANTHROPIC_API_CHAT_MODELS;
 pub use crate::execution::models::model_registry::SUPPORTED_CHAT_MODELS;
+pub use crate::execution::models::model_registry::SUPPORTED_CTOX_PROXY_API_CHAT_MODELS;
 pub use crate::execution::models::model_registry::SUPPORTED_EMBEDDING_MODELS;
 pub use crate::execution::models::model_registry::SUPPORTED_LOCAL_CHAT_FAMILIES;
 pub use crate::execution::models::model_registry::SUPPORTED_MINIMAX_API_CHAT_MODELS;
@@ -374,6 +375,13 @@ pub fn is_minimax_api_chat_model(model: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(&normalized))
 }
 
+pub fn is_ctox_proxy_api_chat_model(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    SUPPORTED_CTOX_PROXY_API_CHAT_MODELS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&normalized))
+}
+
 pub fn is_azure_foundry_api_chat_model(model: &str) -> bool {
     !model.trim().is_empty()
 }
@@ -386,6 +394,7 @@ pub fn is_api_chat_model(model: &str) -> bool {
     is_openai_api_chat_model(model)
         || is_anthropic_api_chat_model(model)
         || is_minimax_api_chat_model(model)
+        || is_ctox_proxy_api_chat_model(model)
         || (is_openrouter_api_chat_model(model) && !supports_local_chat_runtime(model))
 }
 
@@ -394,6 +403,7 @@ pub fn api_provider_supports_model(provider: &str, model: &str) -> bool {
         "openrouter" => is_openrouter_api_chat_model(model),
         "anthropic" => is_anthropic_api_chat_model(model),
         "minimax" => is_minimax_api_chat_model(model),
+        "ctox_proxy" => !model.trim().is_empty(),
         "azure_foundry" => is_azure_foundry_api_chat_model(model),
         "openai" => is_openai_api_chat_model(model),
         _ => false,
@@ -403,6 +413,8 @@ pub fn api_provider_supports_model(provider: &str, model: &str) -> bool {
 pub fn default_api_provider_for_model(model: &str) -> &'static str {
     if is_anthropic_api_chat_model(model) {
         "anthropic"
+    } else if model.trim().eq_ignore_ascii_case("kimi-k3") {
+        "ctox_proxy"
     } else if is_minimax_api_chat_model(model) {
         "minimax"
     } else if is_openrouter_api_chat_model(model) {
@@ -1935,6 +1947,19 @@ mod tests {
             chat_model_family_for_model("MiniMax-M3"),
             Some(ChatModelFamily::MiniMax)
         );
+    }
+
+    #[test]
+    fn recognizes_kimi_k3_as_ctox_proxy_model() {
+        assert!(is_ctox_proxy_api_chat_model("kimi-k3"));
+        assert!(is_api_chat_model("kimi-k3"));
+        assert_eq!(default_api_provider_for_model("kimi-k3"), "ctox_proxy");
+        assert!(api_provider_supports_model("ctox_proxy", "kimi-k3"));
+        assert!(
+            api_provider_supports_model("ctox_proxy", "future-proxy-model"),
+            "the authenticated proxy catalog is authoritative for future model ids"
+        );
+        assert!(!api_provider_supports_model("minimax", "kimi-k3"));
     }
 
     #[test]

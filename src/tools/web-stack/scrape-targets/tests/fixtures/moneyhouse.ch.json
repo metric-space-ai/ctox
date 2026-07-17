@@ -1,0 +1,43 @@
+{
+  "input": {
+    "source_id": "moneyhouse.ch",
+    "company": "Nests Sàrl",
+    "country": "CH",
+    "url": "https://www.moneyhouse.ch/de/company/nests-sarl-2272997971/management"
+  },
+  "expected": {
+    "firma_name": "Nests Sàrl",
+    "firma_anschrift": "Route de Montagnier 51",
+    "firma_plz": "1934",
+    "firma_ort": "Le Châble VS",
+    "person_nachname": "Bruchez"
+  },
+  "search": {
+    "results": [{
+      "title": "Management Nests Sàrl - Le Châble VS",
+      "url": "https://www.moneyhouse.ch/de/company/nests-sarl-2272997971/management",
+      "summary": "Firmenprofil"
+    }]
+  },
+  "read": {
+    "ok": false,
+    "url": "https://www.moneyhouse.ch/de/company/nests-sarl-2272997971/management"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.moneyhouse.ch/de/company/nests-sarl-2272997971/management",
+      "title": "Management Nests Sàrl - Le Châble VS",
+      "body_text": "Nests Sàrl\nManagement\nDiane Bruchez\nGeschäftsführung-Vorsitzender",
+      "html": "<table><tr><td class=\"entity-name entity-name-sticky\"><a>Diane Bruchez</a></td><td class=\"entity-relation-sticky\"><span>Geschäftsführung-Vorsitzender</span></td></tr></table>",
+      "profile": {
+        "name": "Nests Sàrl",
+        "street": "Route de Montagnier 51",
+        "postalCode": "1934",
+        "locality": "Le Châble VS"
+      },
+      "json_ld": ["{\"@context\":\"http://schema.org\",\"@type\":\"Organization\",\"legalName\":\"Nests Sàrl\",\"address\":{\"@type\":\"PostalAddress\",\"streetAddress\":\"Route de Montagnier 51\",\"postalCode\":\"1934\",\"addressLocality\":\"Le Châble VS\"}}"]
+    },
+    "detection": { "markers": [] }
+  }
+}

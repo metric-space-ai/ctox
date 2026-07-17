@@ -71,7 +71,7 @@ impl SourceModule for Companyhouse {
 
     fn authoritative_for(&self) -> &'static [FieldKey] {
         // Aus EXCEL_MATRIX.md: companyhouse.de ist DE-only und in der
-        // Thesen-Matrix für `person_titel` (B 1 / B 2 / Neu) gelistet.
+        // Die DACH-Matrix führt `person_titel` für B 1 / B 2 / Neu auf.
         // Firmenname wird zusätzlich angeboten, weil die Firmen-Profilseite
         // den Namen aus dem Handelsregister sauber als Heading führt; das
         // ist nicht „in der Excel" als Primärquelle vergeben, aber durch

@@ -295,6 +295,12 @@ mod tests {
                     "source_url": "https://example/profile"
                 },
                 {
+                    "field": "person_email_validation",
+                    "value": "valid",
+                    "confidence": "high",
+                    "source_url": "https://www.experte.de/email-pruefen"
+                },
+                {
                     "field": "umsatz",
                     "value": "",
                     "confidence": "high"
@@ -306,12 +312,14 @@ mod tests {
         assert_eq!(result.run_id.as_deref(), Some("scrape_run-abc"));
         assert!(!result.repair_queued);
         // Empty-value records are dropped.
-        assert_eq!(result.fields.len(), 2);
+        assert_eq!(result.fields.len(), 3);
         let (firma_key, firma_ev) = &result.fields[0];
         assert_eq!(*firma_key, FieldKey::FirmaName);
         assert_eq!(firma_ev.value, "Roche Holding AG");
         assert_eq!(firma_ev.confidence, Confidence::High);
         assert_eq!(firma_ev.note.as_deref(), Some("h1 selector"));
+        assert_eq!(result.fields[2].0, FieldKey::PersonEmailValidation);
+        assert_eq!(result.fields[2].1.value, "valid");
     }
 
     #[test]

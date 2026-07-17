@@ -1,0 +1,9 @@
+{
+  "input": { "source_id": "leadfeeder.com", "company": "WITTENSTEIN SE", "country": "DE", "task_id": "fixture-leadfeeder", "credential_ref": "ctox-secret://credentials/LEADFEEDER_BROWSER_LOGIN" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "person_email": "anna.wittenstein@wittenstein.de" },
+  "browser_allowed_domains": ["leadfeeder.com", "app.leadfeeder.com", "api.leadfeeder.com"],
+  "login_url": "https://app.leadfeeder.com/login",
+  "capture": { "ok": true, "company": "WITTENSTEIN SE", "source_status": "succeeded", "records": [{ "field": "firma_name", "value": "WITTENSTEIN SE", "confidence": "high", "source_url": "https://app.leadfeeder.com/leads/fixture", "note": "authenticated lead" }, { "field": "person_email", "value": "anna.wittenstein@wittenstein.de", "confidence": "medium", "source_url": "https://app.leadfeeder.com/leads/fixture", "note": "contact record" }] },
+  "search": { "results": [{ "title": "WITTENSTEIN SE", "url": "https://app.leadfeeder.com/leads/fixture", "summary": "WITTENSTEIN SE lead" }] },
+  "read": { "ok": true, "url": "https://app.leadfeeder.com/leads/fixture", "title": "WITTENSTEIN SE | Leadfeeder", "page_text_excerpt": "WITTENSTEIN SE anna.wittenstein@wittenstein.de" }
+}

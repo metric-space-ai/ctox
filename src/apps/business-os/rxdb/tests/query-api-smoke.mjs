@@ -45,6 +45,8 @@ assert(
 
 const mangoQuery = normalizeQuery({ selector: { status: 'open' }, sort: [{ score: -1 }], skip: 1, limit: 2 }, 'id');
 assert(mangoQuery.skip === 1 && mangoQuery.limit === 2 && mangoQuery.sort[0].score === 'desc', 'mango query normalization failed');
+const strictQuery = normalizeQuery({ selector: { status: 'open' }, requireRevision: 'authoritative-r2' }, 'id');
+assert(strictQuery.requireRevision === 'authoritative-r2', 'strict demand-query revision was discarded');
 
 const countCalls = [];
 const db = await createRxDatabase({
@@ -82,6 +84,16 @@ await db.addCollections({
     },
   },
 });
+let strictDemandQuery = null;
+db.items.setDemandLoader({
+  async resolveQuery(query) {
+    strictDemandQuery = query;
+    return [];
+  },
+});
+await db.items.find({ selector: { status: 'open' }, requireRevision: 'authoritative-r3' }).sort('id').exec();
+assert(strictDemandQuery?.requireRevision === 'authoritative-r3', 'RxQuery did not forward strict demand revision');
+db.items.setDemandLoader(null);
 const delegatedCount = await db.items.count({ selector: { status: 'open' }, limit: 10 }).exec();
 assert(delegatedCount === 7, `countDocuments delegation returned ${delegatedCount}`);
 assert(countCalls.length === 1, `countDocuments must be called once (got ${countCalls.length})`);

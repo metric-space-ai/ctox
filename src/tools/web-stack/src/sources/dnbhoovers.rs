@@ -42,8 +42,9 @@ const API_BASE: &str = "https://plus.dnb.com/v1";
 const TOKEN_ENDPOINT: &str = "https://plus.dnb.com/v3/token";
 const PROFILE_BASE: &str = "https://plus.dnb.com/data/duns";
 const SECRET_NAME: &str = "DNB_DIRECT_API_KEY";
+const BROWSER_SECRET_NAME: &str = "DNB_HOOVERS_BROWSER_LOGIN";
 const LOGIN_URL: &str = "https://app.dnbhoovers.com/login";
-const VERIFY_SELECTOR: &str = "[data-testid=\"global-search\"], input[type=\"search\"], nav";
+const VERIFY_SELECTOR: &str = "[data-testid=\"global-search\"], input[type=\"search\"]";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "dnbhoovers.company_capture.v1";
@@ -97,7 +98,7 @@ impl SourceModule for DnbHoovers {
                 "app.dnbhoovers.com".to_string(),
                 "plus.dnb.com".to_string(),
             ],
-            required_secret_name: Some(SECRET_NAME),
+            required_secret_name: Some(BROWSER_SECRET_NAME),
             verify_selector: Some(VERIFY_SELECTOR),
             credential_selector: Some(CREDENTIAL_SELECTOR),
             capture_script: Some(CAPTURE_SCRIPT),

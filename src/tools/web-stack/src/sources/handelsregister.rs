@@ -37,6 +37,7 @@
 //!     markiert diese Felder mit Asterisk; Medium ist der Default.
 
 use std::sync::OnceLock;
+#[cfg(test)]
 use std::time::Duration;
 
 use scraper::{ElementRef, Html, Selector};

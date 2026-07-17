@@ -7,10 +7,12 @@ mod browser_runtime;
 mod capability;
 pub(crate) mod command_lifecycle;
 mod command_lifecycle_generated;
+mod external_sql_sync;
 mod importer;
 mod invoices;
 pub mod mcp_channel;
 pub mod office_engine;
+mod person_research_command;
 pub mod policy;
 mod rxdb_peer;
 pub mod server;
@@ -33,3 +35,5 @@ pub use rxdb_peer::BrowserContextCaptureRequest;
 pub use rxdb_peer::{ensure_native_peer, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
+
+pub(crate) use external_sql_sync::start_background_sync;

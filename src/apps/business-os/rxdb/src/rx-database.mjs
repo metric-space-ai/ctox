@@ -660,6 +660,7 @@ class CtoxRxQuery {
       sort: patch.sort ?? this.query.sort,
       limit: patch.limit ?? this.query.limit,
       skip: patch.skip ?? this.query.skip,
+      requireRevision: patch.requireRevision ?? this.query.requireRevision,
     }, this.single);
   }
 
@@ -745,6 +746,9 @@ function normalizeQuery(query, primaryPath) {
     sort: normalizeSort(query?.sort),
     limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : undefined,
     skip: Number.isFinite(Number(query?.skip)) ? Math.max(0, Number(query.skip)) : undefined,
+    requireRevision: typeof query?.requireRevision === 'string' && query.requireRevision
+      ? query.requireRevision
+      : undefined,
   };
 }
 

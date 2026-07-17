@@ -1,0 +1,8 @@
+{
+  "input": { "source_id": "rocketreach.com", "company": "WITTENSTEIN SE", "country": "DE", "task_id": "fixture-rocketreach", "credential_ref": "ctox-secret://credentials/ROCKETREACH_BROWSER_LOGIN" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "person_email": "anna.wittenstein@wittenstein.de" },
+  "browser_allowed_domains": ["rocketreach.co"],
+  "login_url": "https://rocketreach.co/login",
+  "search": { "results": [{ "title": "WITTENSTEIN SE Contacts", "url": "https://rocketreach.co/wittenstein-se-profile_bfixture", "summary": "WITTENSTEIN SE contact directory" }] },
+  "read": { "ok": true, "url": "https://rocketreach.co/wittenstein-se-profile_bfixture", "title": "WITTENSTEIN SE Contacts | RocketReach", "page_text_excerpt": "WITTENSTEIN SE Anna Wittenstein anna.wittenstein@wittenstein.de", "extracted_fields": { "fields": [{ "field": "person_vorname", "value": "Anna", "confidence": "medium" }, { "field": "person_nachname", "value": "Wittenstein", "confidence": "medium" }, { "field": "person_email", "value": "anna.wittenstein@wittenstein.de", "confidence": "medium" }] } }
+}

@@ -1,0 +1,9 @@
+{
+  "input": { "source_id": "dnbhoovers.com", "company": "WITTENSTEIN SE", "country": "DE", "task_id": "fixture-dnbhoovers", "credential_ref": "ctox-secret://credentials/DNB_HOOVERS_BROWSER_LOGIN" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "umsatz": "519000000 EUR" },
+  "browser_allowed_domains": ["dnbhoovers.com", "app.dnbhoovers.com", "plus.dnb.com"],
+  "login_url": "https://app.dnbhoovers.com/login",
+  "capture": { "ok": true, "company": "WITTENSTEIN SE", "source_status": "succeeded", "records": [{ "field": "firma_name", "value": "WITTENSTEIN SE", "confidence": "high", "source_url": "https://app.dnbhoovers.com/company/fixture", "note": "authenticated company profile" }, { "field": "umsatz", "value": "519000000 EUR", "confidence": "high", "source_url": "https://app.dnbhoovers.com/company/fixture", "note": "financial summary" }] },
+  "search": { "results": [{ "title": "WITTENSTEIN SE", "url": "https://app.dnbhoovers.com/company/fixture", "summary": "WITTENSTEIN SE company profile" }] },
+  "read": { "ok": true, "url": "https://app.dnbhoovers.com/company/fixture", "title": "WITTENSTEIN SE | D&B Hoovers", "page_text_excerpt": "WITTENSTEIN SE revenue 519000000 EUR" }
+}

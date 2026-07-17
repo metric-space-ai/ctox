@@ -17,6 +17,7 @@ pub const SUPPORTED_ANTHROPIC_API_CHAT_MODELS: &[&str] = &[
 // routed variant with the same weights.
 pub const SUPPORTED_MINIMAX_API_CHAT_MODELS: &[&str] =
     &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+pub const SUPPORTED_CTOX_PROXY_API_CHAT_MODELS: &[&str] = &["MiniMax-M3", "kimi-k3"];
 pub const SUPPORTED_OPENROUTER_API_CHAT_MODELS: &[&str] = &[
     "openai/gpt-oss-120b",
     "anthropic/claude-opus-4.7",
@@ -56,6 +57,7 @@ pub const SUPPORTED_CHAT_MODELS: &[&str] = &[
     "MiniMax-M3",
     "MiniMax-M2.7",
     "MiniMax-M2.7-highspeed",
+    "kimi-k3",
     "openai/gpt-oss-120b",
     "Qwen/Qwen3.5-2B",
     "Qwen/Qwen3.5-4B",
@@ -347,8 +349,8 @@ const CHAT_FAMILY_REGISTRY: &[ChatFamilyCatalogEntry] = &[
         label: "Kimi",
         selector: "kimi",
         parse_aliases: &["kimi", "kimi-k2", "kimi k2", "moonshot"],
-        variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
-        planning_variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
+        variants: &["kimi-k3", "moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
+        planning_variants: &["kimi-k3", "moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
         supports_vision: true,
     },
     ChatFamilyCatalogEntry {
@@ -1492,6 +1494,10 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
     },
     // Kimi family
     RemoteChatFamilyEntry {
+        model: "kimi-k3",
+        chat_family: engine::ChatModelFamily::Kimi,
+    },
+    RemoteChatFamilyEntry {
         model: "moonshotai/kimi-k2.5",
         chat_family: engine::ChatModelFamily::Kimi,
     },
@@ -2086,7 +2092,7 @@ pub fn model_supports_vision(model: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    if trimmed == "moonshotai/kimi-k2.5" {
+    if trimmed == "moonshotai/kimi-k2.5" || trimmed.eq_ignore_ascii_case("kimi-k3") {
         return false;
     }
     // (1) chat family-based lookup

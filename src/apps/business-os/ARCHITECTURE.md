@@ -179,6 +179,27 @@ is the visible "CTOX is working" surface. The desktop module is the remaining
 intentional `module.json: { "shell": "full-workspace" }` shell exception, so it takes over the whole
 pane area rather than sitting inside the 3-pane module shell.
 
+The free-surface desktop context menu exposes a one-click **Create new app**
+action. It sends `ctox.business_os.app.create` through the replicated command
+bus with the canonical `record-workbench` starter, so native policy,
+validation, versioning, module-catalog projection, and RxDB peer refresh remain
+authoritative. The starter opens in the standard Business OS window shell with
+left navigation and a primary work area. It is a functional CRUD baseline,
+not blank scaffolding: search, status filtering, selection, create/edit,
+soft-delete, status transitions, JSON import/export, sort, offline and
+permission states, inspector context, and one server-routed signature action
+are present from the first launch. Runtime-installed app icons expose a
+separate **Rename app** action through `ctox.module.save`; **Rename icon** is
+intentionally only a per-desktop label override.
+
+The App Creator uses the same direct creation command but presents it as a
+prompt-first flow: a large editable request, a curated bilingual example
+library, and optional HTTP(S) inspiration URLs. Reference URLs are normalized
+in the browser and included explicitly as `inspiration_urls` in both the app
+command payload and client context. Installed apps and prior requests remain a
+compact secondary library; technical metadata and logs stay collapsed unless
+the user asks for them.
+
 The OS chrome is switchable Windows-style vs macOS-style at the **shell**
 level via `[data-shell-style="windows" | "macos"]` on `<body>` — not on
 the desktop module root. The desktop module follows that attribute; it

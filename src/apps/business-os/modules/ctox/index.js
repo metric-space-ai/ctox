@@ -81,6 +81,13 @@ const labels = {
     toolCalls: 'Tool Calls',
     elapsed: 'Zeit',
     notCaptured: 'nicht erfasst',
+    agentPreparing: 'Agent wird vorbereitet',
+    agentWorking: 'Agent arbeitet',
+    agentCompleted: 'Agent-Durchlauf abgeschlossen',
+    agentTimeout: 'Zeitlimit des Agenten erreicht',
+    modelUsageUpdated: 'Modellnutzung aktualisiert',
+    toolStarted: 'Werkzeug gestartet',
+    toolFinished: 'Werkzeug abgeschlossen',
     connected: 'verbunden',
     notLive: 'nicht live',
     notLogged: 'Zeit nicht geloggt',
@@ -216,6 +223,13 @@ const labels = {
     toolCalls: 'Tool calls',
     elapsed: 'Time',
     notCaptured: 'not captured',
+    agentPreparing: 'Preparing agent',
+    agentWorking: 'Agent is working',
+    agentCompleted: 'Agent turn completed',
+    agentTimeout: 'Agent turn timed out',
+    modelUsageUpdated: 'Model usage updated',
+    toolStarted: 'Tool started',
+    toolFinished: 'Tool finished',
     connected: 'connected',
     notLive: 'not live',
     notLogged: 'time not logged',
@@ -487,7 +501,7 @@ async function renderFromLocalCache(state) {
   const metrics = aggregateFlowMetrics(state.flow);
   state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
   state.liveStartedAt = Date.now();
-  state.model = buildHarnessModel(bundle, state.flow);
+  state.model = buildHarnessModel(bundle, state.flow, state.lang);
   state.harnessHealth = deriveHarnessHealth(state);
   state.focusTask = readFocusTask();
   reconcileSelection(state);
@@ -547,7 +561,7 @@ async function refresh(state) {
     const metrics = aggregateFlowMetrics(nextFlow);
     state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
     state.liveStartedAt = Date.now();
-    state.model = buildHarnessModel(bundle, nextFlow);
+    state.model = buildHarnessModel(bundle, nextFlow, state.lang);
     state.harnessHealth = deriveHarnessHealth(state);
     state.focusTask = readFocusTask();
     reconcileSelection(state);
@@ -1865,7 +1879,7 @@ function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de') {
   `;
 }
 
-function buildHarnessModel(data, flow) {
+function buildHarnessModel(data, flow, lang = 'de') {
   const tasks = applyHarnessFlowStatus(buildTaskList(data), flow)
     .filter(isTaskOverviewItemVisible);
   const activeTask = tasks.find((task) => normalizeCommandStatus(task.status) === 'running') || null;
@@ -1878,7 +1892,7 @@ function buildHarnessModel(data, flow) {
   const activeTraceIndex = Math.max(0, observedIds.length - 1);
   const activeNodeId = liveWork ? (observedIds.at(-1) || 'running') : (observedIds.at(-1) || 'queued');
   const activeIndex = Math.max(0, observedIds.lastIndexOf(activeNodeId));
-  const detailByNode = observedDetailsFromFlow(displayFlow);
+  const detailByNode = observedDetailsFromFlow(displayFlow, lang);
   const nodes = STATE_MACHINE_NODES.map((node) => {
     const observed = observedIdSet.has(node.id);
     const detail = observed ? detailByNode.get(node.id) : null;
@@ -2609,7 +2623,7 @@ function observedPathFromFlow(flowResult) {
   return ids.filter((id) => REVIEW_HARNESS_NODE_SET.has(id));
 }
 
-function observedDetailsFromFlow(flowResult) {
+function observedDetailsFromFlow(flowResult, lang = 'de') {
   const flow = flowResult?.flow || emptyHarnessFlow().flow;
   const map = new Map();
   const add = (id, lines, tools, rawSources = []) => {
@@ -2638,18 +2652,41 @@ function observedDetailsFromFlow(flowResult) {
     const id = eventToNodeId(event.event_kind || '', event.title || '');
     if (!id) continue;
     const existing = map.get(id);
-    const metrics = firstExplicitMetrics([event, parseMetadata(event.metadata_json)]);
+    const metadata = parseMetadata(event.metadata_json);
+    const metrics = firstExplicitMetrics([event, metadata]);
+    const eventLine = workerEventLabel(event, metadata, lang);
+    const eventTool = readString(metadata?.tool || {}, ['name']);
+    const lines = id === 'running'
+      ? [...(existing?.lines || []), eventLine].filter(Boolean).slice(-5)
+      : (existing?.lines?.length ? existing.lines : [eventLine, cleanUiCopy(event.body_text)].filter(Boolean));
+    const tools = [...(existing?.tools || []), eventTool].filter(Boolean);
     map.set(id, {
       inputTokens: metrics?.inputTokens ?? existing?.inputTokens ?? null,
       outputTokens: metrics?.outputTokens ?? existing?.outputTokens ?? null,
       toolCalls: metrics?.toolCalls ?? existing?.toolCalls ?? null,
       seconds: metrics?.seconds ?? existing?.seconds ?? 0,
-      timestamp: event.created_at || firstTimestamp([event, parseMetadata(event.metadata_json)]) || existing?.timestamp || '',
-      lines: existing?.lines?.length ? existing.lines : [cleanUiCopy(event.title), cleanUiCopy(event.body_text)].filter(Boolean),
-      tools: existing?.tools || [],
+      timestamp: event.created_at || firstTimestamp([event, metadata]) || existing?.timestamp || '',
+      lines,
+      tools: [...new Set(tools)].slice(-6),
     });
   }
   return map;
+}
+
+function workerEventLabel(event, metadata, lang = 'de') {
+  const t = labels[lang] || labels.en;
+  const kind = String(event?.event_kind || '');
+  const toolName = readString(metadata?.tool || {}, ['name']);
+  if (kind === 'worker.tool_started') return `${t.toolStarted}: ${toolName || t.tools}`;
+  if (kind === 'worker.tool_completed') return `${t.toolFinished}: ${toolName || t.tools}`;
+  if (kind === 'worker.token_usage') return t.modelUsageUpdated;
+  if (kind === 'worker.turn_started') return t.agentWorking;
+  if (kind === 'worker.turn_completed') return t.agentCompleted;
+  if (kind === 'worker.turn_timeout') return t.agentTimeout;
+  if (kind === 'worker.phase') {
+    return metadata?.phase === 'invoke-model' ? t.agentWorking : t.agentPreparing;
+  }
+  return cleanUiCopy(event?.title || event?.body_text || '');
 }
 
 function firstExplicitMetrics(rawSources) {
@@ -3617,16 +3654,21 @@ function nodeLiveFactMarkup(node, task, state) {
 
 function aggregateFlowMetrics(flowResult) {
   const metrics = { inputTokens: null, outputTokens: null, toolCalls: null, seconds: null };
-  const add = (candidate) => {
+  const add = (candidate, cumulative = false) => {
     if (!candidate) return;
-    if (candidate.inputTokens !== null) metrics.inputTokens = (metrics.inputTokens || 0) + candidate.inputTokens;
-    if (candidate.outputTokens !== null) metrics.outputTokens = (metrics.outputTokens || 0) + candidate.outputTokens;
-    if (candidate.toolCalls !== null && candidate.toolCalls !== undefined) metrics.toolCalls = (metrics.toolCalls || 0) + candidate.toolCalls;
+    const merge = (current, next) => cumulative ? Math.max(current || 0, next) : (current || 0) + next;
+    if (candidate.inputTokens !== null) metrics.inputTokens = merge(metrics.inputTokens, candidate.inputTokens);
+    if (candidate.outputTokens !== null) metrics.outputTokens = merge(metrics.outputTokens, candidate.outputTokens);
+    if (candidate.toolCalls !== null && candidate.toolCalls !== undefined) metrics.toolCalls = merge(metrics.toolCalls, candidate.toolCalls);
     if (candidate.seconds !== null && candidate.seconds !== undefined) metrics.seconds = Math.max(metrics.seconds || 0, candidate.seconds);
   };
   const flow = flowResult?.flow || {};
   for (const event of flow.ledger_events || []) {
-    add(firstExplicitMetrics([event, parseMetadata(event.metadata_json)]));
+    const metadata = parseMetadata(event.metadata_json);
+    add(
+      firstExplicitMetrics([event, metadata]),
+      metadata?.metrics_mode === 'cumulative',
+    );
   }
   for (const block of flow.blocks || []) {
     add(firstExplicitMetrics([block]));
@@ -3736,6 +3778,8 @@ function branchText(record) {
 
 function eventToNodeId(kind, title) {
   const value = `${kind} ${title}`.toLowerCase();
+  if (value.includes('worker.turn_timeout')) return 'model-failed';
+  if (value.includes('worker.')) return 'running';
   if (value.includes('work.outcome') && /\b(success|succeeded|completed|done|passed)\b/.test(value)) return 'passed';
   if (value.includes('work.outcome') && /\b(failed|failure|error|blocked)\b/.test(value)) return 'model-failed';
   if (/\b(workerfinished|worker_finished|worker finished)\b/.test(value)) return 'awaiting-review';
@@ -4014,8 +4058,10 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  aggregateFlowMetrics,
   clampMetric,
   deriveHarnessHealth,
+  eventToNodeId,
   flowSourceView,
   formatRelativeAge,
   friendlyWebStackStatus,
@@ -4025,6 +4071,7 @@ export const __ctoxTestHooks = {
   setFlowZoom,
   taskSteps,
   timelinePanel,
+  observedDetailsFromFlow,
   webStackStateFromRefreshResult,
   webStackProjectionMissing,
   normalizeFocusTask,

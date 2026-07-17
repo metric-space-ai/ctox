@@ -225,6 +225,40 @@ fn test_model_info() -> ModelInfo {
     .expect("deserialize test model info")
 }
 
+#[test]
+fn minimax_fallback_request_omits_unsupported_reasoning_include() {
+    let client = test_minimax_proxy_model_client(SessionSource::Cli);
+    let session = client.new_session();
+    let api_provider = client.state.provider.to_api_provider(None).unwrap();
+    let model_info = ModelInfo {
+        slug: "MiniMax-M3".to_string(),
+        supports_reasoning_summaries: true,
+        ..test_model_info()
+    };
+    let prompt = crate::client_common::Prompt {
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions::default(),
+        personality: None,
+        output_schema: None,
+    };
+
+    let request = session
+        .build_responses_request(
+            &api_provider,
+            &prompt,
+            &model_info,
+            Some(ReasoningEffortConfig::Medium),
+            ReasoningSummaryConfig::Auto,
+            None,
+        )
+        .unwrap();
+
+    assert!(request.reasoning.is_some());
+    assert!(request.include.is_empty());
+}
+
 fn test_session_telemetry() -> SessionTelemetry {
     SessionTelemetry::new(
         ThreadId::new(),

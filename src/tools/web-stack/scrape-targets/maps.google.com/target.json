@@ -1,0 +1,9 @@
+{
+  "target_key": "maps-google-com",
+  "display_name": "Google Maps Company Research",
+  "start_url": "https://www.google.de/maps",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": { "expected_provider": "maps.google.com", "country_hints": ["DE", "AT", "CH"], "tier": "S", "expected_min_records": 1, "record_key_fields": ["field", "source_url"] },
+  "output_schema": { "schema_key": "prospect.v1", "primary_artifact_kind": "field_records_json", "record_key_fields": ["field", "source_url"] }
+}

@@ -65,7 +65,7 @@ For a fork-source-only change, the already verified dependency closure may be re
 without a source checkout:
 
 ```sh
-node ../../scripts/vendor-builds/build-ctox-office.mjs --reuse-verified-upstream
+node ../../../scripts/vendor-builds/build-ctox-office.mjs --reuse-verified-upstream
 ```
 
 This mode verifies every staged upstream dependency against the existing

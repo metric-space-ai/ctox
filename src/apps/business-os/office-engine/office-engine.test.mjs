@@ -60,6 +60,117 @@ test('blob helper rejects a hash mismatch and recovers after replicated chunks a
   assert.deepEqual(await __officeBridgeTestHooks.loadBlob(chunks, 'blob_1', expected), good);
 });
 
+test('blob helper strictly revalidates an empty cached selector before failing', async () => {
+  const bytes = new TextEncoder().encode('replicated-office-data');
+  const queries = [];
+  const chunks = {
+    find(query) {
+      queries.push(query);
+      return {
+        async exec() {
+          if (!query.requireRevision) return [];
+          return [{
+            id: 'blob_1_0000',
+            blob_id: 'blob_1',
+            idx: 0,
+            total: 1,
+            data: Buffer.from(bytes).toString('base64'),
+          }];
+        },
+      };
+    },
+  };
+  assert.deepEqual(await __officeBridgeTestHooks.loadBlob(chunks, 'blob_1'), bytes);
+  assert.equal(queries.length, 2);
+  assert.match(queries[1].requireRevision, /^blob:blob_1:/);
+});
+
+test('blob helper recovers missing structured chunks through the WebRTC file stream', async () => {
+  const bytes = new TextEncoder().encode('native-streamed-editor-blob');
+  const firstChunk = bytes.subarray(0, 8);
+  const secondChunk = bytes.subarray(8);
+  let queries = 0;
+  const chunks = {
+    find() { return { async exec() { queries += 1; return []; } }; },
+  };
+  const fileIds = [];
+  const fileLoader = {
+    async fetchFile(fileId) {
+      fileIds.push(fileId);
+      return [
+        {
+          sequence: 1,
+          bytesBase64: Buffer.from(secondChunk).toString('base64'),
+          hash: createHash('sha256').update(secondChunk).digest('hex'),
+        },
+        {
+          sequence: 0,
+          bytesBase64: Buffer.from(firstChunk).toString('base64'),
+          hash: createHash('sha256').update(firstChunk).digest('hex'),
+        },
+      ];
+    },
+  };
+  assert.deepEqual(await __officeBridgeTestHooks.loadBlob(chunks, 'editor_blob_1', '', fileLoader), bytes);
+  assert.equal(queries, 2);
+  assert.deepEqual(fileIds, ['editor_blob_1']);
+});
+
+test('blob helper rejects a streamed chunk that fails transport verification', async () => {
+  const chunks = { find() { return { async exec() { return []; } }; } };
+  const fileLoader = {
+    async fetchFile() {
+      return [{
+        sequence: 0,
+        bytesBase64: Buffer.from('altered').toString('base64'),
+        hash: createHash('sha256').update('original').digest('hex'),
+      }];
+    },
+  };
+  await assert.rejects(
+    __officeBridgeTestHooks.loadBlob(chunks, 'streamed_corrupt', '', fileLoader),
+    (error) => error.code === 'blob_chunk_hash_mismatch',
+  );
+});
+
+test('blob helper refreshes stale local chunks before using the file stream', async () => {
+  const staleBytes = new TextEncoder().encode('stale-local-blob');
+  const currentBytes = new TextEncoder().encode('current-local-blob');
+  const expectedSha256 = createHash('sha256').update(currentBytes).digest('hex');
+  const queries = [];
+  const chunks = {
+    find(query) {
+      queries.push(query);
+      return {
+        async exec() {
+          const bytes = query.requireRevision ? currentBytes : staleBytes;
+          return [{
+            id: 'blob_refresh_0000',
+            blob_id: 'blob_refresh',
+            idx: 0,
+            total: 1,
+            data: Buffer.from(bytes).toString('base64'),
+          }];
+        },
+      };
+    },
+  };
+  let streams = 0;
+  const fileLoader = {
+    async fetchFile() {
+      streams += 1;
+      return [];
+    },
+  };
+  assert.deepEqual(
+    await __officeBridgeTestHooks.loadBlob(chunks, 'blob_refresh', expectedSha256, fileLoader),
+    currentBytes,
+  );
+  assert.equal(queries.length, 2);
+  assert.match(queries[1].requireRevision, /^blob:blob_refresh:/);
+  assert.equal(streams, 0);
+});
+
 test('bridge blocks writes without collection permission before staging any bytes', async () => {
   let writes = 0;
   let commands = 0;
@@ -78,10 +189,19 @@ test('bridge preserves native stale-base conflicts and waits for RxDB reconnect 
   const events = [];
   const bridge = createBusinessOsOfficeBridge({
     db: { collection() { return {}; } },
-    sync: { async startCollection(name) {
-      events.push(`start:${name}`);
-      return { state: { async awaitInSync() { events.push(`synced:${name}`); } } };
-    } },
+    sync: {
+      async startCollection(name) {
+        events.push(`start:${name}`);
+        return { state: { async awaitInSync() { events.push(`synced:${name}`); } } };
+      },
+      async leaseCollection(name, reason) {
+        events.push(`lease:${name}:${reason}`);
+        return {
+          bridge: { state: { async awaitInSync() { events.push(`synced:${name}`); } } },
+          async release() { events.push(`release:${name}`); },
+        };
+      },
+    },
     commandBus: { async dispatch() {
       events.push('dispatch');
       return { status: 'failed', payload: { outcome: { ok: false, error_code: 'version_conflict', error: 'stale base version' } } };
@@ -92,8 +212,9 @@ test('bridge preserves native stale-base conflicts and waits for RxDB reconnect 
   assert.deepEqual(events, [
     'start:spreadsheets', 'synced:spreadsheets',
     'start:spreadsheet_versions', 'synced:spreadsheet_versions',
-    'start:spreadsheet_blob_chunks', 'synced:spreadsheet_blob_chunks',
+    'lease:spreadsheet_blob_chunks:spreadsheets-prepare', 'synced:spreadsheet_blob_chunks',
     'dispatch',
+    'release:spreadsheet_blob_chunks',
   ]);
 });
 
@@ -106,6 +227,7 @@ test('Business OS bridge reads versions and dispatches typed office commands', a
     ['doc_1_v1', { id: 'doc_1_v1', document_id: 'doc_1', blob_id: 'blob_1' }],
   ]);
   const chunks = [{ id: 'blob_1_0000', blob_id: 'blob_1', document_id: 'doc_1', version_id: 'doc_1_v1', idx: 0, total: 1, data: base64 }];
+  const leases = [];
   const collection = (name) => ({
     findOne(id) { return { async exec() { return docs.get(id) || null; } }; },
     find({ selector }) { return { async exec() { return name === 'document_blob_chunks' ? chunks.filter((row) => row.blob_id === selector.blob_id) : []; } }; },
@@ -113,6 +235,16 @@ test('Business OS bridge reads versions and dispatches typed office commands', a
   });
   const ctx = {
     db: { collection },
+    sync: {
+      async startCollection() { return { state: { async awaitInSync() {} } }; },
+      async leaseCollection(name, reason) {
+        leases.push(`lease:${name}:${reason}`);
+        return {
+          bridge: { state: { async awaitInSync() {}, async pushToRemotePeers() { leases.push(`push:${name}`); } } },
+          async release() { leases.push(`release:${name}`); },
+        };
+      },
+    },
     permissions: { canWriteCollection: () => true },
     commandBus: { async dispatch(command, options) {
       commands.push({ command, options });
@@ -167,6 +299,119 @@ test('Business OS bridge reads versions and dispatches typed office commands', a
   const exported = await bridge.export({ recordId: 'doc_1', versionId: 'doc_1_v1', format: 'docx' });
   assert.deepEqual(exported.bytes, source);
   assert.equal(commands[2].command.type, 'office.document.export');
+  assert.deepEqual(leases, [
+    'lease:document_blob_chunks:documents-load-version', 'release:document_blob_chunks',
+    'lease:document_blob_chunks:documents-prepare', 'release:document_blob_chunks',
+    'lease:document_blob_chunks:documents-commit', 'push:document_blob_chunks', 'release:document_blob_chunks',
+    'lease:document_blob_chunks:documents-export', 'release:document_blob_chunks',
+  ]);
+});
+
+test('prepare result is immediately readable before the native version projection arrives', async () => {
+  const canonicalBytes = new TextEncoder().encode('canonical-docx');
+  const editorBytes = new TextEncoder().encode('DOCY;v10;0;prepared-editor');
+  const canonicalSha = createHash('sha256').update(canonicalBytes).digest('hex');
+  const editorSha = createHash('sha256').update(editorBytes).digest('hex');
+  const docs = new Map([
+    ['doc_1', { id: 'doc_1', current_version_id: 'doc_1_v1', filename: 'one.docx' }],
+    ['doc_1_v1', { id: 'doc_1_v1', document_id: 'doc_1', blob_id: 'canonical_1', source_sha256: canonicalSha }],
+  ]);
+  const localChunks = [{
+    id: 'canonical_1_0000',
+    blob_id: 'canonical_1',
+    document_id: 'doc_1',
+    version_id: 'doc_1_v1',
+    idx: 0,
+    total: 1,
+    data: Buffer.from(canonicalBytes).toString('base64'),
+  }];
+  const streamed = [];
+  const collection = (name) => ({
+    findOne(id) { return { async exec() { return docs.get(id) || null; } }; },
+    find({ selector }) {
+      return {
+        async exec() {
+          return name === 'document_blob_chunks'
+            ? localChunks.filter((row) => row.blob_id === selector.blob_id)
+            : [];
+        },
+      };
+    },
+  });
+  const fileLoader = {
+    async fetchFile(blobId) {
+      streamed.push(blobId);
+      return [{ sequence: 0, bytesBase64: Buffer.from(editorBytes).toString('base64') }];
+    },
+  };
+  const bridge = createBusinessOsOfficeBridge({
+    db: { collection },
+    sync: {
+      async startCollection() { return { state: { async awaitInSync() {} } }; },
+      async leaseCollection() {
+        return {
+          bridge: { state: { async awaitInSync() {}, demandFileLoader: fileLoader } },
+          async release() {},
+        };
+      },
+    },
+    commandBus: {
+      async dispatch() {
+        return {
+          status: 'completed',
+          result: {
+            ok: true,
+            version_id: 'doc_1_v1',
+            editor_blob_id: 'editor_1',
+            editor_protocol: 'euro-office-word-binary-v10',
+            editor_protocol_version: 10,
+            editor_sha256: editorSha,
+            source_sha256: canonicalSha,
+            manifest: { schema_version: 'ctox-office-semantic-manifest-v1' },
+            editor_manifest: { schema_version: 'ctox-office-editor-payload-manifest-v1' },
+          },
+        };
+      },
+    },
+  }, 'document');
+
+  await bridge.prepare({ recordId: 'doc_1', versionId: 'doc_1_v1' });
+  const loaded = await bridge.loadVersion({ recordId: 'doc_1', versionId: 'doc_1_v1' });
+
+  assert.equal(docs.get('doc_1_v1').editor_blob_id, undefined);
+  assert.equal(loaded.version.editor_blob_id, 'editor_1');
+  assert.equal(loaded.version.conversion_state, 'prepared');
+  assert.deepEqual(loaded.canonicalBytes, canonicalBytes);
+  assert.deepEqual(loaded.editorBytes, editorBytes);
+  assert.deepEqual(streamed, ['editor_1']);
+});
+
+test('office bridge resumes an inserted command after a retryable push timeout', async () => {
+  let dispatches = 0;
+  let resumes = 0;
+  const timeout = Object.assign(new Error('push timed out'), { code: 'sync_unavailable', retryable: true });
+  const bridge = createBusinessOsOfficeBridge({
+    db: { collection() { return {}; } },
+    sync: {
+      async startCollection() { return { state: { async awaitInSync() {} } }; },
+      async leaseCollection() {
+        return { bridge: { state: { async awaitInSync() {} } }, async release() {} };
+      },
+    },
+    commandBus: {
+      async dispatch() { dispatches += 1; throw timeout; },
+      async getStatus(commandId) { return { id: commandId, status: 'pending_sync' }; },
+      async resumeTracking() {
+        resumes += 1;
+        return { status: 'completed', result: { ok: true, version_id: 'doc_1_v1', editor_blob_id: 'editor_1' } };
+      },
+    },
+  }, 'document');
+
+  const result = await bridge.prepare({ recordId: 'doc_1', versionId: 'doc_1_v1' });
+  assert.equal(result.editor_blob_id, 'editor_1');
+  assert.equal(dispatches, 1);
+  assert.equal(resumes, 1);
 });
 
 test('spreadsheet commit stages XLSX bytes and carries the conflict base through the command bus', async () => {
@@ -178,6 +423,14 @@ test('spreadsheet commit stages XLSX bytes and carries the conflict base through
       return { async bulkUpsert(rows) { staged.push(...rows); } };
     } },
     permissions: { canWriteCollection: () => true },
+    sync: {
+      async leaseCollection() {
+        return {
+          bridge: { state: { async awaitInSync() {}, async pushToRemotePeers() {} } },
+          async release() {},
+        };
+      },
+    },
     commandBus: { async dispatch(command, options) {
       commands.push({ command, options });
       return { status: 'completed', payload: { outcome: { ok: true, record_id: 'sheet_1', version_id: 'sheet_1_v2', blob_id: 'sheet_1_v2_blob' } } };
@@ -200,6 +453,37 @@ test('spreadsheet commit stages XLSX bytes and carries the conflict base through
   assert.equal(commands[0].command.client_context.transport, 'rxdb-webrtc');
   assert.deepEqual(commands[0].command.payload.implemented_features, ['spreadsheet.open-render-sheets', 'spreadsheet.edit-save']);
   assert.equal(commands[0].options.until, 'terminal');
+});
+
+test('Business OS bridge releases a demand-only chunk lease after an operation fails', async () => {
+  let released = 0;
+  const bridge = createBusinessOsOfficeBridge({
+    db: { collection() { return {}; } },
+    sync: {
+      async startCollection() { return { state: { async awaitInSync() {} } }; },
+      async leaseCollection() {
+        return {
+          bridge: { state: { async awaitInSync() {} } },
+          async release() { released += 1; },
+        };
+      },
+    },
+    commandBus: { async dispatch() { throw new Error('native command failed'); } },
+  }, 'document');
+  await assert.rejects(bridge.prepare({ recordId: 'doc_1', versionId: 'v1' }), /native command failed/);
+  assert.equal(released, 1);
+});
+
+test('Office RPC budgets all storage-backed editor operations for live replication latency', async () => {
+  const capsule = await readFile(new URL('./src/capsule.mjs', import.meta.url), 'utf8');
+  const frameRuntime = await readFile(new URL('./src/frame-runtime.mjs', import.meta.url), 'utf8');
+  assert.match(capsule, /const OFFICE_OPERATION_TIMEOUT_MS = 120000/);
+  for (const method of ['open', 'save', 'export']) {
+    assert.match(capsule, new RegExp(`editor\\.${method}[^\\n]+timeoutMs: OFFICE_OPERATION_TIMEOUT_MS`));
+  }
+  for (const method of ['loadVersion', 'prepare', 'commit', 'export']) {
+    assert.match(frameRuntime, new RegExp(`bridge\\.${method}[^\\n]+timeoutMs: OFFICE_OPERATION_TIMEOUT_MS`));
+  }
 });
 
 test('CTOX Spreadsheets production lifecycle uses the Business OS wrapper and fork UI', async () => {

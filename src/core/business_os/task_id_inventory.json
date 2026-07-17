@@ -158,14 +158,14 @@
     },
     {
       "file": "src/core/business_os/store.rs",
-      "function": "write_rxdb_control_command_outcome",
+      "function": "write_rxdb_control_command_state",
       "occurrence": 1,
       "semantics": "compatibility_target",
       "target_field": "target_task_id/target_record_id; execution_task_id stays empty"
     },
     {
       "file": "src/core/business_os/store.rs",
-      "function": "write_rxdb_control_command_outcome",
+      "function": "write_rxdb_control_command_state",
       "occurrence": 2,
       "semantics": "compatibility_target",
       "target_field": "target_task_id/target_record_id; execution_task_id stays empty"

@@ -1,0 +1,38 @@
+{
+  "input": {
+    "source_id": "handelsregister.de",
+    "company": "WITTENSTEIN SE",
+    "country": "DE"
+  },
+  "expected": {
+    "firma_name": "WITTENSTEIN SE",
+    "firma_plz": "97999",
+    "firma_ort": "Igersheim"
+  },
+  "search": {
+    "results": [
+      {
+        "title": "WITTENSTEIN SE",
+        "url": "https://www.handelsregister.de/rp_web/auszug.xhtml?id=fixture",
+        "summary": "Aktueller Abdruck"
+      }
+    ]
+  },
+  "read": {
+    "ok": true,
+    "url": "https://www.handelsregister.de/rp_web/auszug.xhtml?id=fixture",
+    "title": "Sicherheitsprüfung - Handelsregister",
+    "raw_html": "<main>Bitte beweisen Sie, dass Sie ein Mensch sind. reCAPTCHA</main>"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.handelsregister.de/rp_web/auszug.xhtml?id=fixture",
+      "title": "WITTENSTEIN SE - Handelsregister",
+      "text": "WITTENSTEIN SE Walter-Wittenstein-Strasse 1, 97999 Igersheim",
+      "html": "<table><tr><td>Firma</td><td>WITTENSTEIN SE</td></tr><tr><td>Geschaftsanschrift</td><td>Walter-Wittenstein-Strasse 1, 97999 Igersheim</td></tr><tr><td>Vorstand</td><td>Wittenstein, Anna, Igersheim</td></tr></table>",
+      "origin_ok": true,
+      "blocked": false
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import { OfficeRpcPeer } from './rpc.mjs';
 
 const VALID_KINDS = new Set(['document', 'spreadsheet']);
+const OFFICE_OPERATION_TIMEOUT_MS = 120000;
 
 export async function createCtoxOfficeEditor(options = {}) {
   const kind = String(options.kind || '');
@@ -56,9 +57,9 @@ export async function createCtoxOfficeEditor(options = {}) {
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   return Object.freeze({
     kind,
-    open: (request) => rpc.call('editor.open', request),
-    save: (request = {}) => rpc.call('editor.save', request),
-    export: (request = {}) => rpc.call('editor.export', request),
+    open: (request) => rpc.call('editor.open', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
+    save: (request = {}) => rpc.call('editor.save', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
+    export: (request = {}) => rpc.call('editor.export', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
     focus: () => rpc.call('editor.focus'),
     setPermissions: (permissions) => rpc.call('editor.setPermissions', normalizePermissions(permissions)),
     inspect: () => rpc.call('editor.inspect'),

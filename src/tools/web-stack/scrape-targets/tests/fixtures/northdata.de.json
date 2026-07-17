@@ -1,0 +1,39 @@
+{
+  "input": {
+    "source_id": "northdata.de",
+    "company": "WITTENSTEIN SE",
+    "country": "DE",
+    "url": "https://www.northdata.de/WITTENSTEIN+SE,+Igersheim/Amtsgericht+Ulm+HRB+680782"
+  },
+  "expected": {
+    "firma_name": "WITTENSTEIN SE",
+    "firma_anschrift": "Walter-Wittenstein-Strasse 1",
+    "firma_plz": "97999",
+    "firma_ort": "Igersheim"
+  },
+  "search": {
+    "results": [{
+      "title": "WITTENSTEIN SE, Igersheim",
+      "url": "https://www.northdata.de/WITTENSTEIN+SE,+Igersheim/Amtsgericht+Ulm+HRB+680782",
+      "summary": "Unternehmensprofil"
+    }]
+  },
+  "read": {
+    "ok": false,
+    "url": "https://www.northdata.de/WITTENSTEIN+SE,+Igersheim/Amtsgericht+Ulm+HRB+680782"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.northdata.de/WITTENSTEIN+SE,+Igersheim/Amtsgericht+Ulm+HRB+680782",
+      "title": "WITTENSTEIN SE, Igersheim",
+      "body_text": "WITTENSTEIN SE\nWalter-Wittenstein-Strasse 1, 97999 Igersheim",
+      "profile": {
+        "name": "WITTENSTEIN SE",
+        "address": "Walter-Wittenstein-Strasse 1, 97999 Igersheim"
+      },
+      "html": "<h1 class=\"qualified\">WITTENSTEIN SE, Igersheim</h1><h3 class=\"ribbon label\">Name</h3><div class=\"general-information\"><div class=\"content\">WITTENSTEIN SE</div></div><h3 class=\"ribbon label\">Adresse</h3><div class=\"general-information\"><div class=\"content\">Walter-Wittenstein-Strasse 1, 97999 Igersheim</div></div><h3 class=\"ribbon label\">Status</h3>"
+    },
+    "detection": { "markers": [] }
+  }
+}

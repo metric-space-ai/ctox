@@ -3,7 +3,7 @@
 //! Leadfeeder (heute Dealfront Leadfeeder) ist ein Visitor-Identification-
 //! Werkzeug, das B2B-Webseitenbesucher zu Firmen und Kontakten zuordnet.
 //! Im CTOX-Webstack ist Leadfeeder die einzige Quelle, die die
-//! Thesen-Quellenmatrix (`EXCEL_MATRIX.md`) für `person_email` in
+//! DACH-Quellenmatrix (`EXCEL_MATRIX.md`) für `person_email` in
 //! Deutschland, Österreich und der Schweiz listet, und sie taucht als
 //! Sekundär-Quelle für `firma_email` und `firma_domain` auf.
 //!
@@ -56,8 +56,10 @@ use crate::runtime_config;
 
 const API_BASE: &str = "https://api.leadfeeder.com";
 const SECRET_NAME: &str = "LEADFEEDER_API_KEY";
+const BROWSER_SECRET_NAME: &str = "LEADFEEDER_BROWSER_LOGIN";
 const LOGIN_URL: &str = "https://app.leadfeeder.com/login";
-const VERIFY_SELECTOR: &str = "[data-testid=\"account-menu\"], nav, a[href*=\"/leads\"]";
+const VERIFY_SELECTOR: &str =
+    "[data-testid=\"account-menu\"], [data-testid*=\"account-switcher\"], a[href*=\"/leads\"]";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "leadfeeder.lead_capture.v1";
@@ -110,7 +112,7 @@ impl SourceModule for Leadfeeder {
                 "app.leadfeeder.com".to_string(),
                 "api.leadfeeder.com".to_string(),
             ],
-            required_secret_name: Some(SECRET_NAME),
+            required_secret_name: Some(BROWSER_SECRET_NAME),
             verify_selector: Some(VERIFY_SELECTOR),
             credential_selector: Some(CREDENTIAL_SELECTOR),
             capture_script: Some(CAPTURE_SCRIPT),

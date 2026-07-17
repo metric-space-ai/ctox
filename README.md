@@ -42,9 +42,10 @@ change is versioned and reversible.
   through the daemon, without a build step or redeploy. Every patch is
   SHA-256-hashed and versioned, with one-click rollback.
 - **Model backends** — API providers (`openai`, `anthropic`, `openrouter`,
-  `minimax`, `azure_foundry`) or local inference (currently
+  `minimax`, `ctox_proxy`, `azure_foundry`) or local inference (currently
   `Qwen/Qwen3.6-27B` on CUDA). Configured in the TUI; credentials live in the
-  CTOX secret store.
+  CTOX secret store. The authenticated CTOX proxy discovers its available
+  model IDs from its OpenAI-compatible `GET /v1/models` endpoint.
 - **Cross-platform** — macOS, Linux, Windows. An optional Desktop app (beta)
   installs and manages local and remote instances.
 

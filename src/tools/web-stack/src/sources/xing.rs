@@ -53,8 +53,9 @@ use super::{
 
 const API_BASE: &str = "https://api.xing.com/v1";
 const SECRET_NAME: &str = "XING_API_TOKEN";
+const BROWSER_SECRET_NAME: &str = "XING_BROWSER_LOGIN";
 const LOGIN_URL: &str = "https://login.xing.com/";
-const VERIFY_SELECTOR: &str = "a[href*=\"/profile/\"], [data-testid=\"user-menu\"], nav";
+const VERIFY_SELECTOR: &str = "a[href*=\"/profile/\"], [data-testid=\"user-menu\"]";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "xing.profile_capture.v1";
@@ -103,7 +104,7 @@ impl SourceModule for Xing {
                 "login.xing.com".to_string(),
                 "api.xing.com".to_string(),
             ],
-            required_secret_name: Some(SECRET_NAME),
+            required_secret_name: Some(BROWSER_SECRET_NAME),
             verify_selector: Some(VERIFY_SELECTOR),
             credential_selector: Some(CREDENTIAL_SELECTOR),
             capture_script: Some(CAPTURE_SCRIPT),

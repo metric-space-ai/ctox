@@ -44,7 +44,7 @@ runtime directories:
 
 | Instance | App Store installations | Private `local-modules/` |
 | --- | --- | --- |
-| `thesen.ctox.dev` | none required | `thesen-outbound`, `sellify` |
+| customer-managed instance | none required | customer-local modules |
 | `infyoda.ctox.dev` | none required | exactly the five private REM apps |
 | `skf.ctox.dev` | `research` (Web Research) | none |
 
@@ -56,7 +56,7 @@ public repository. They must be deployed from the private package to
 
 `runtime/business-os/local-modules/<id>/` is the private module location:
 hand-developed apps that must never land in the public repo — private test
-modules or per-customer apps (e.g. a `sellify` app). `runtime/` is already
+modules or per-customer apps (e.g. a private CRM app). `runtime/` is already
 git-ignored, so no `.gitignore` entry per app is needed. Dropping the module
 directory there IS the install: the runtime discovers it, projects it into
 the module catalog with `source: "local"` / `install_scope: "local"`, serves

@@ -1,25 +1,62 @@
-<section class="documents-module" data-documents-module>
-  <div class="documents-workbench">
-    <div class="documents-editor-shell" data-documents-editor>
+<section
+  class="documents-module"
+  data-documents-module
+  data-resize-frame
+>
+  <aside class="documents-library-pane" data-documents-library-pane>
+    <div data-documents-explorer-slot>
       <div class="module-loading-shell documents-loading-shell" aria-busy="true">
         <section class="module-loading-panel" aria-hidden="true">
           <div class="module-loading-panel-head"><span></span><i></i></div>
           <div class="module-loading-tools"><b></b><b></b></div>
           <div class="module-loading-list"><b></b><b></b><b></b></div>
         </section>
+      </div>
+    </div>
+  </aside>
+
+  <button
+    class="ctox-column-resizer documents-library-resizer"
+    type="button"
+    data-resizer="left"
+    data-resizer-var="--documents-library-width"
+    data-resizer-min="220"
+    data-resizer-max="560"
+    aria-label="Breite der Dokumentliste ändern"
+    title="Breite der Dokumentliste ändern"
+  ></button>
+
+  <main class="documents-workbench">
+    <div class="documents-document-strip" data-documents-document-strip></div>
+    <div class="documents-editor-shell" data-documents-editor>
+      <div class="module-loading-shell documents-loading-shell" aria-busy="true">
         <section class="module-loading-panel module-loading-panel-main">
           <div class="module-loading-panel-head"><span></span><i></i></div>
           <div class="module-loading-copy">
-            <strong>Documents</strong>
+            <strong>Dokumente</strong>
             <span>Workspace wird geladen.</span>
           </div>
           <div class="module-loading-document" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
         </section>
-        <section class="module-loading-panel" aria-hidden="true">
-          <div class="module-loading-panel-head"><span></span><i></i></div>
-          <div class="module-loading-list is-compact"><b></b><b></b><b></b></div>
-        </section>
       </div>
     </div>
-  </div>
+  </main>
+
+  <button
+    class="documents-drawer-backdrop"
+    type="button"
+    data-documents-drawer-backdrop
+    aria-label="Seitenleiste schließen"
+    hidden
+  ></button>
+  <aside
+    id="documents-actions-drawer"
+    class="documents-actions-drawer"
+    data-documents-actions-drawer
+    aria-label="Dokumentaktionen"
+    aria-hidden="true"
+    hidden
+  >
+    <div data-documents-actions-content></div>
+  </aside>
 </section>

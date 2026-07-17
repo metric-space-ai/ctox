@@ -1,6 +1,6 @@
 ---
 name: prospect-research
-description: Use when the operator asks to research one or more companies / Ansprechpartner for sales pipeline work — fill the Sellify / Master-AT field set (Firmierung, Anschrift, Register-ID, Status, Tel/Fax/E-Mail/Website, USt-Id, Branche WZ, Geschäftsführung, Gegenstand, Tickers, Finanzkennzahlen, Mitarbeiter, etc.) using the CTOX web-stack source modules (zefix.ch, northdata.de, firmenabc.at, bundesanzeiger.de, handelsregister.de, companyhouse.de, optional Tier-C: linkedin.com / xing.com / dnbhoovers.com / leadfeeder.com). Trigger phrases (DE/EN) — "recherchier (mir) Firma X", "Stammdaten zu …", "Master-AT für …", "Sellify-Eintrag bauen", "Ansprechpartner finden für …", "Nachrecherche …", "Neurecherche …", "company research", "fill the prospect record for …".
+description: Use when the operator asks to research one or more companies or contacts for sales-pipeline work and populate a structured CRM prospect record using the CTOX web-stack source modules. Trigger phrases include "recherchier Firma X", "Stammdaten zu …", "Ansprechpartner finden", "Nachrecherche", "Neurecherche", "company research", and "fill the prospect record".
 cluster: research
 ---
 
@@ -17,11 +17,11 @@ cluster: research
 
 ## When to use this skill
 
-Trigger this skill when the operator asks to recherchier one or more companies (and optionally their Ansprechpartner) and wants the Sellify-/Master-AT-typical field set populated. This is **not** the right skill for free-form market studies, decision briefs, or feasibility reports — those go to [`systematic-research`](../systematic-research/SKILL.md). This skill is for the structured *prospect record*: a typed bundle of fields per company that another system (Sellify, Business OS Sales pipeline, CSV export) can consume.
+Trigger this skill when the operator asks to research one or more companies and optionally their contacts and wants a structured CRM field set populated. This is **not** the right skill for free-form market studies, decision briefs, or feasibility reports — those go to [`systematic-research`](../systematic-research/SKILL.md). This skill produces a typed prospect record that a CRM, Business OS sales pipeline, or CSV export can consume.
 
 ## Field vocabulary
 
-The canonical field set is the union of the Thesen Nachrecherche fields and the Master-AT Excel schema:
+The canonical field set covers the shared requirements of DACH CRM refresh and greenfield prospect imports:
 
 | Group | Fields |
 | --- | --- |
@@ -37,7 +37,7 @@ The web-stack [`FieldKey`](../../../../tools/web-stack/src/sources/mod.rs) enum 
 
 ## Source priority by country
 
-Pulled from the Thesen Abstimmungs-Excel translation in
+Defined by the generic DACH source-priority translation in
 [tools/web-stack/src/sources/EXCEL_MATRIX.md](../../../../tools/web-stack/src/sources/EXCEL_MATRIX.md).
 Per `(mode, country, field)` the agent should consult sources in tier order
 **P → S → C**, stopping when a high-confidence value is captured.
@@ -145,7 +145,7 @@ ctox scrape execute --target-key <key> \
 ## Procedure
 
 1. **Classify the mode.** For each company:
-   - `new_record` — kein Excel-/Sellify-Eintrag vorhanden, ab Stammdaten
+   - `new_record` — kein CRM- oder Excel-Eintrag vorhanden, ab Stammdaten
    - `update_firm` — Firmierung/Anschrift potenziell veraltet
    - `update_person` — Firma stabil, Ansprechpartner hat gewechselt
    - `update_inventory_general` — periodischer Refresh (Excel B-Block leer ⇒ skip)
@@ -174,7 +174,7 @@ ctox scrape execute --target-key <key> \
      (3- bzw. 5-Jahres-Datenreihe).
 
 5. **Verify against existing evidence.** If the operator gave a reference
-   (Sellify-Nummer, FN, HRB, USt-Id), check that the consolidated record
+   (CRM-Nummer, FN, HRB, USt-Id), check that the consolidated record
    matches. Conflicting values → keep all `candidates` in the envelope and
    flag for user confirmation.
 
@@ -205,8 +205,8 @@ surfaced to the operator as an opt-in suggestion, not a failure.
 
 - Free-form market research, competitor analyses, feasibility reports → use
   [`systematic-research`](../systematic-research/SKILL.md).
-- Sellify or Business-OS writeback — this skill produces the typed
-  prospect record; persistence to Postgres / Sellify is the calling
+- CRM or Business-OS writeback — this skill produces the typed
+  prospect record; persistence to a target database is the calling
   module's responsibility.
 - Adapter / DOM-drift repair — that's the job of the
   [`universal-scraping`](../../communication/universal-scraping/SKILL.md)
@@ -214,6 +214,6 @@ surfaced to the operator as an opt-in suggestion, not a failure.
 
 ## Resources
 
-- [tools/web-stack/src/sources/EXCEL_MATRIX.md](../../../../tools/web-stack/src/sources/EXCEL_MATRIX.md) — the Thesen Abstimmungs-Excel as a `(mode, country, field) → source-priority` table
+- [tools/web-stack/src/sources/EXCEL_MATRIX.md](../../../../tools/web-stack/src/sources/EXCEL_MATRIX.md) — the generic `(mode, country, field) → source-priority` table
 - [tools/web-stack/src/sources/README.md](../../../../tools/web-stack/src/sources/README.md) — source-module trait + fixture conventions
 - [skills/system/communication/universal-scraping/SKILL.md](../../communication/universal-scraping/SKILL.md) — drift-repair sibling skill

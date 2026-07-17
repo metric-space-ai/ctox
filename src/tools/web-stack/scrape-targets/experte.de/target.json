@@ -1,0 +1,9 @@
+{
+  "target_key": "experte-de",
+  "display_name": "Experte Email Verification",
+  "start_url": "https://www.experte.de/email-pruefen",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": { "expected_provider": "experte.de", "country_hints": ["DE", "AT", "CH"], "tier": "S", "expected_min_records": 1, "record_key_fields": ["field", "source_url"] },
+  "output_schema": { "schema_key": "prospect.v1", "primary_artifact_kind": "field_records_json", "record_key_fields": ["field", "source_url"] }
+}

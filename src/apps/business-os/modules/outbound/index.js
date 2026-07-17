@@ -134,7 +134,7 @@ const RESEARCH_FIELD_DEFS = Object.freeze([
   ['revenue_eur', 'Umsatz EUR'],
   ['equity_eur', 'Eigenkapital EUR'],
   ['employee_count', 'Mitarbeiterzahl'],
-  ['sellify_number', 'Sellify-Nummer'],
+  ['crm_number', 'CRM-Nummer'],
 ]);
 const DEFAULT_RESEARCH_FIELD_IDS = Object.freeze(RESEARCH_FIELD_DEFS.map(([id]) => id));
 const DEFAULT_RESEARCH_FIELD_IDS_COMPACT = Object.freeze([

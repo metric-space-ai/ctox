@@ -33,12 +33,14 @@ const DEFAULT_AZURE_FOUNDRY_RESPONSES_BASE_URL: &str = "";
 // (`/v1/chat/completions`) onto this base — same convention as
 // DEFAULT_OPENAI_RESPONSES_BASE_URL.
 const DEFAULT_MINIMAX_RESPONSES_BASE_URL: &str = "https://api.minimax.io";
+const DEFAULT_CTOX_PROXY_RESPONSES_BASE_URL: &str = "https://llm.ctox.dev";
 const API_PROVIDER_LOCAL: &str = "local";
 const LOCAL_RUNTIME_CANDLE: &str = "candle";
 const API_PROVIDER_OPENAI: &str = "openai";
 const API_PROVIDER_ANTHROPIC: &str = "anthropic";
 const API_PROVIDER_OPENROUTER: &str = "openrouter";
 const API_PROVIDER_MINIMAX: &str = "minimax";
+const API_PROVIDER_CTOX_PROXY: &str = "ctox_proxy";
 const API_PROVIDER_AZURE_FOUNDRY: &str = "azure_foundry";
 pub const CTOX_LLM_PROXY_API_KEY_ENV: &str = "CTOX_LLM_PROXY_API_KEY";
 pub const CTOX_LLM_PROXY_BASE_URL_ENV: &str = "CTOX_LLM_PROXY_BASE_URL";
@@ -299,6 +301,7 @@ pub fn default_api_upstream_base_url_for_provider(provider: &str) -> &'static st
         API_PROVIDER_ANTHROPIC => DEFAULT_ANTHROPIC_RESPONSES_BASE_URL,
         API_PROVIDER_OPENROUTER => DEFAULT_OPENROUTER_RESPONSES_BASE_URL,
         API_PROVIDER_MINIMAX => DEFAULT_MINIMAX_RESPONSES_BASE_URL,
+        API_PROVIDER_CTOX_PROXY => DEFAULT_CTOX_PROXY_RESPONSES_BASE_URL,
         API_PROVIDER_AZURE_FOUNDRY => DEFAULT_AZURE_FOUNDRY_RESPONSES_BASE_URL,
         _ => DEFAULT_OPENAI_RESPONSES_BASE_URL,
     }
@@ -309,6 +312,7 @@ pub fn normalize_api_provider(provider: &str) -> &'static str {
         API_PROVIDER_ANTHROPIC => API_PROVIDER_ANTHROPIC,
         API_PROVIDER_OPENROUTER => API_PROVIDER_OPENROUTER,
         API_PROVIDER_MINIMAX => API_PROVIDER_MINIMAX,
+        API_PROVIDER_CTOX_PROXY | "ctox-proxy" | "ctox" => API_PROVIDER_CTOX_PROXY,
         API_PROVIDER_AZURE_FOUNDRY | "azure" | "azure-foundry" | "azure_openai" => {
             API_PROVIDER_AZURE_FOUNDRY
         }
@@ -361,6 +365,7 @@ pub fn is_openai_compatible_api_upstream(upstream_base_url: &str) -> bool {
     let trimmed = upstream_base_url.trim();
     trimmed.starts_with(DEFAULT_OPENAI_RESPONSES_BASE_URL)
         || trimmed.starts_with(DEFAULT_ANTHROPIC_RESPONSES_BASE_URL)
+        || is_ctox_llm_proxy_base_url(trimmed)
         || is_azure_foundry_upstream(trimmed)
 }
 
@@ -371,7 +376,7 @@ pub fn api_provider_for_upstream_base_url(upstream_base_url: &str) -> &'static s
     }
     let lower = trimmed.to_ascii_lowercase();
     if is_ctox_llm_proxy_base_url(trimmed) {
-        API_PROVIDER_MINIMAX
+        API_PROVIDER_CTOX_PROXY
     } else if is_azure_foundry_upstream(trimmed) {
         API_PROVIDER_AZURE_FOUNDRY
     } else if trimmed.starts_with(DEFAULT_OPENROUTER_RESPONSES_BASE_URL) {
@@ -435,6 +440,7 @@ pub fn api_key_env_var_for_provider(provider: &str) -> &'static str {
         API_PROVIDER_OPENROUTER => "OPENROUTER_API_KEY",
         API_PROVIDER_ANTHROPIC => "ANTHROPIC_API_KEY",
         API_PROVIDER_MINIMAX => "MINIMAX_API_KEY",
+        API_PROVIDER_CTOX_PROXY => CTOX_LLM_PROXY_API_KEY_ENV,
         API_PROVIDER_AZURE_FOUNDRY => "AZURE_FOUNDRY_API_KEY",
         _ => "OPENAI_API_KEY",
     }
@@ -480,8 +486,9 @@ pub fn api_key_env_var_for_provider_with_env_map(
     provider: &str,
     env_map: &BTreeMap<String, String>,
 ) -> &'static str {
-    if normalize_api_provider(provider).eq_ignore_ascii_case(API_PROVIDER_MINIMAX)
-        && use_ctox_llm_proxy_credentials(env_map)
+    if normalize_api_provider(provider).eq_ignore_ascii_case(API_PROVIDER_CTOX_PROXY)
+        || (normalize_api_provider(provider).eq_ignore_ascii_case(API_PROVIDER_MINIMAX)
+            && use_ctox_llm_proxy_credentials(env_map))
     {
         CTOX_LLM_PROXY_API_KEY_ENV
     } else {
@@ -1645,14 +1652,14 @@ mod tests {
             "https://llm.ctox.dev".to_string(),
         );
 
-        assert_eq!(infer_api_provider_from_env_map(&env_map), "minimax");
+        assert_eq!(infer_api_provider_from_env_map(&env_map), "ctox_proxy");
         assert_eq!(
             api_provider_for_upstream_base_url("https://llm.ctox.dev/v1"),
-            "minimax"
+            "ctox_proxy"
         );
         assert_eq!(
             api_key_env_var_for_upstream_base_url("https://llm.ctox.dev"),
-            "MINIMAX_API_KEY"
+            CTOX_LLM_PROXY_API_KEY_ENV
         );
         assert_eq!(
             api_key_env_var_for_provider_with_env_map("minimax", &env_map),

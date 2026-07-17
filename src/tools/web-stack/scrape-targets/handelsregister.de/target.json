@@ -1,7 +1,7 @@
 {
   "target_key": "handelsregister-de",
   "display_name": "Handelsregister DE (Registerportal der Länder)",
-  "start_url": "https://www.handelsregister.de/rp_web/erweiterte-suche.xhtml",
+  "start_url": "https://www.handelsregister.de/rp_web/welcome.xhtml",
   "target_kind": "prospect-research",
   "status": "active",
   "config": {

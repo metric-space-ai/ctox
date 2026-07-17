@@ -1137,18 +1137,12 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         write_tool(
             "appsec_assessment_create",
             "Use this when an authorized external agent needs to create an AppSec assessment scope in the local CTOX AppSec state. This initializes state only; it does not run scanners.",
-            object_schema(vec![
-                required_string("url"),
-                optional_string("state_dir"),
-            ]),
+            object_schema(vec![required_string("url"), optional_string("state_dir")]),
         ),
         write_tool(
             "appsec_lab_create",
             "Use this when an authorized external agent needs to create the local vulnerable AppSec lab fixture for sandbox validation.",
-            object_schema(vec![
-                optional_string("state_dir"),
-                optional_string("out"),
-            ]),
+            object_schema(vec![optional_string("state_dir"), optional_string("out")]),
         ),
         write_tool(
             "appsec_lab_run",
@@ -1164,10 +1158,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         read_tool(
             "appsec_assessment_status",
             "Use this when an external agent needs the durable AppSec assessment status and completion blockers through the policy-gated Business OS MCP channel.",
-            object_schema(vec![
-                optional_string("state_dir"),
-                optional_boolean("sync"),
-            ]),
+            object_schema(vec![optional_string("state_dir"), optional_boolean("sync")]),
         ),
         read_tool(
             "appsec_completion_review",
@@ -1478,10 +1469,8 @@ pub fn upsert_record(
         })?;
     ensure_non_empty("record_id", &record_id)?;
 
-    let conn = store::open_store(root)?;
     let updated_at_ms = now_ms() as i64;
-    store::upsert_business_record(&conn, &collection, &record_id, updated_at_ms, record)?;
-    drop(conn);
+    store::upsert_projection_record(root, &collection, &record_id, updated_at_ms, record)?;
 
     let record = get_record(root, context, &collection, &record_id)?.record;
     Ok(BusinessOsMcpMutationResponse {
@@ -3962,6 +3951,31 @@ pub fn list_module_actions(
         ],
         _ => Vec::new(),
     });
+    let has_external_sql = store::local_external_data_source_declarations(root)?
+        .iter()
+        .any(|source| source.get("module_id").and_then(Value::as_str) == Some(module.id.as_str()));
+    if has_external_sql {
+        actions.extend([
+            action_descriptor(
+                "external_sql.sync.refresh",
+                &module.id,
+                "Refresh external data",
+                "Synchronize the registered SQL source into local projections.",
+                "long_running",
+                false,
+                false,
+            ),
+            action_descriptor(
+                "external_sql.write",
+                &module.id,
+                "Write external data",
+                "Run a registered, parameterized SQL write operation.",
+                "write",
+                true,
+                false,
+            ),
+        ]);
+    }
     Ok(BusinessOsMcpList {
         ok: true,
         count: actions.len(),
@@ -3997,6 +4011,29 @@ pub fn propose_action(
         .get("payload")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    if is_native_mcp_control_action(module_id, &action.action_id) {
+        return Ok(BusinessOsActionProposal {
+            ok: true,
+            command_type: action.action_id.clone(),
+            payload,
+            client_context: serde_json::json!({
+                "channel": &context.channel,
+                "surface": &context.surface,
+                "actor": resolved_mcp_actor_context(root, context)?,
+                "mcp_actor": &context.actor,
+                "workspace": &context.workspace,
+                "request_id": &context.request_id,
+                "requires_confirmation": action.confirmation_required,
+                "proposal_only": true,
+                "writeback_contract": "external_sql"
+            }),
+            confirmation_required: action.confirmation_required,
+            would_execute: false,
+            module_id: module_id.to_string(),
+            record_id,
+            action,
+        });
+    }
     if module_id == "support" && action.action_id.starts_with("support.agent.") {
         let support_payload = support_agent_action_payload(arguments, &record_id, payload);
         return Ok(BusinessOsActionProposal {
@@ -4095,6 +4132,49 @@ pub fn execute_action(
         "proposal_only": false,
         "mcp_tool": &context.tool
     });
+    if is_native_mcp_control_action(module_id, action_id) {
+        let command_id = format!("cmd_{}", uuid::Uuid::new_v4());
+        let outcome = store::accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": module_id,
+                "command_type": proposal.command_type,
+                "record_id": proposal.record_id,
+                "payload": proposal.payload,
+                "client_context": client_context,
+            }),
+        )?;
+        let status = outcome
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed")
+            .to_string();
+        let task_status = outcome
+            .get("task_status")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+        let task_id = outcome
+            .get("task_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+        return Ok(BusinessOsActionExecution {
+            ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true),
+            action: proposal.action,
+            module_id: module_id.to_string(),
+            record_id: proposal.record_id,
+            command_type: proposal.command_type,
+            command_id,
+            status,
+            task_id,
+            task_status,
+            confirmation_required: proposal.confirmation_required,
+            client_context,
+        });
+    }
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
@@ -4120,6 +4200,14 @@ pub fn execute_action(
         confirmation_required: proposal.confirmation_required,
         client_context,
     })
+}
+
+fn is_native_mcp_control_action(module_id: &str, action_id: &str) -> bool {
+    !module_id.trim().is_empty()
+        && matches!(
+            action_id,
+            "external_sql.sync.refresh" | "external_sql.write"
+        )
 }
 
 fn ensure_non_empty(field: &str, value: &str) -> Result<(), BusinessOsMcpError> {
@@ -6505,6 +6593,21 @@ mod tests {
         let root = temp.path();
         write_module(root, "customers", "Customers", &["customer_accounts"])?;
         seed_default_mcp_admin(root)?;
+        let rxdb = store::rxdb_store_path(root);
+        if let Some(parent) = rxdb.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let rxdb_conn = rusqlite::Connection::open(&rxdb)?;
+        rxdb_conn.execute_batch(
+            "CREATE TABLE ctox_business_os__customer_accounts__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )?;
+        drop(rxdb_conn);
 
         let result = call_tool(
             root,
@@ -6541,6 +6644,23 @@ mod tests {
         )?;
         assert_eq!(
             stored.record.data.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+
+        let conn = rusqlite::Connection::open(rxdb)?;
+        let table: String = conn.query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%customer_accounts%' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let projected: String = conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = ?1 AND deleted = 0"),
+            rusqlite::params!["acct_mcp_1"],
+            |row| row.get(0),
+        )?;
+        let projected: Value = serde_json::from_str(&projected)?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
             Some("active")
         );
         Ok(())
@@ -9624,6 +9744,100 @@ mod tests {
         assert!(action_ids.contains(&"support.agent.writeback"));
         assert!(action_ids.contains(&"support.agent.apply_suggestion"));
         assert!(action_ids.contains(&"support.agent.reject_suggestion"));
+        Ok(())
+    }
+
+    #[test]
+    fn local_external_sql_module_actions_expose_typed_sync_commands() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "inventory", "Inventory", &["inventory_items"])?;
+        seed_default_mcp_admin(root)?;
+
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "inventory",
+        )?;
+        let action_ids = actions
+            .items
+            .iter()
+            .map(|action| action.action_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(!action_ids.contains(&"external_sql.sync.refresh"));
+        assert!(!action_ids.contains(&"external_sql.write"));
+        Ok(())
+    }
+
+    #[test]
+    fn external_sql_actions_use_native_control_execution() {
+        assert!(is_native_mcp_control_action(
+            "inventory",
+            "external_sql.sync.refresh"
+        ));
+        assert!(is_native_mcp_control_action(
+            "inventory",
+            "external_sql.write"
+        ));
+        assert!(!is_native_mcp_control_action(
+            "inventory",
+            "ctox.delegate_task"
+        ));
+        assert!(!is_native_mcp_control_action(
+            "",
+            "external_sql.sync.refresh"
+        ));
+    }
+
+    #[test]
+    fn external_sql_action_proposal_keeps_typed_payload_unwrapped() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "inventory", "Inventory", &["inventory_items"])?;
+        let module_root = root.join("runtime/business-os/local-modules/inventory");
+        std::fs::create_dir_all(&module_root)?;
+        std::fs::write(
+            module_root.join("module.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "description": "Private inventory module",
+                "version": "1.0.0",
+                "install_scope": "local",
+                "source": "local",
+                "entry": "local-modules/inventory/index.html",
+                "collections": ["inventory_items"],
+                "external_data_sources_file": "external-sql.json"
+            }))?,
+        )?;
+        std::fs::write(
+            module_root.join("external-sql.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "warehouse-db",
+                "kind": "sqlserver",
+                "enabled": true
+            }))?,
+        )?;
+        seed_default_mcp_admin(root)?;
+
+        let proposal = propose_action(
+            root,
+            &test_context("business_os.propose_action"),
+            "inventory",
+            "external_sql.sync.refresh",
+            &serde_json::json!({
+                "record_id": "inventory-sync-status",
+                "payload": { "source_id": "warehouse-db" }
+            }),
+        )?;
+
+        assert_eq!(proposal.command_type, "external_sql.sync.refresh");
+        assert_eq!(
+            proposal.payload,
+            serde_json::json!({ "source_id": "warehouse-db" })
+        );
+        assert!(proposal.payload.get("input").is_none());
         Ok(())
     }
 

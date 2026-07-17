@@ -142,7 +142,7 @@ INSTALL / UPGRADE
   ctox business-os peer rotate   rotate the persisted Business OS WebRTC room
   ctox business-os serve [--addr 127.0.0.1:8765]
                                  serve the native no-build Business OS app
-  ctox business-os desktop invite [--display-name <name>] [--format json|link]
+  ctox business-os desktop invite [--display-name <name>] [--user <id>] [--role chef|admin|founder|user] [--format json|link]
                                  emit a Desktop pairing invite for this instance
   ctox business-os modules list|enable|disable
                                  manage optional Business OS skill-app modules

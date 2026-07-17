@@ -32,7 +32,7 @@ test('business chat task submission returns the real queue id after rendering pe
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;
   globalThis.document = { documentElement: { lang: 'de' } };
-  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
   const state = { ownerUserId: 'user-1', chats: [] };
   const chat = { id: 'chat-1', title: 'Recherche', messages: [], contextMeta: {} };
   let pendingRendered = false;
@@ -50,7 +50,7 @@ test('business chat task submission returns the real queue id after rendering pe
       },
       db: null,
       sync: null,
-      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      getActiveModule: () => ({ id: 'private-outbound', title: 'Private Outbound' }),
       meta: { command_id: 'cmd-research-42' },
       onPending: () => { pendingRendered = true; },
     });
@@ -73,7 +73,7 @@ test('business chat tracks a terminal native control command without inventing a
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;
   globalThis.document = { documentElement: { lang: 'de' } };
-  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
   const state = { ownerUserId: 'user-1', chats: [] };
   const chat = { id: 'chat-control', title: 'Nachrecherche', messages: [], contextMeta: {} };
   try {
@@ -95,7 +95,7 @@ test('business chat tracks a terminal native control command without inventing a
       },
       db: null,
       sync: null,
-      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      getActiveModule: () => ({ id: 'private-outbound', title: 'Private Outbound' }),
       meta: {
         command_id: 'cmd-control-research',
         command_type: 'web_stack.person_research',
@@ -121,7 +121,7 @@ test('business chat acknowledges a declared long-running control command locally
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;
   globalThis.document = { documentElement: { lang: 'de' } };
-  globalThis.location = { href: 'https://thesen.ctox.dev/#desktop' };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
   const state = { ownerUserId: 'user-1', chats: [] };
   const chat = { id: 'chat-control-local', title: 'Nachrecherche', messages: [], contextMeta: {} };
   try {
@@ -138,7 +138,7 @@ test('business chat acknowledges a declared long-running control command locally
       },
       db: null,
       sync: null,
-      getActiveModule: () => ({ id: 'thesen-outbound', title: 'THESEN Outbound' }),
+      getActiveModule: () => ({ id: 'private-outbound', title: 'Private Outbound' }),
       meta: {
         command_id: 'cmd-control-local',
         command_type: 'web_stack.person_research',

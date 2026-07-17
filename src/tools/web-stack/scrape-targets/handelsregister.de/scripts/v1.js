@@ -42,6 +42,8 @@
 const { execFileSync } = require("child_process");
 
 const MAX_HITS = 5;
+const ALLOWED_HOST = "handelsregister.de";
+const BROWSER_TIMEOUT_MS = 45_000;
 
 function readInput() {
   const raw = process.env.CTOX_SCRAPE_INPUT_JSON;
@@ -60,11 +62,13 @@ function ctoxBin() {
   return process.env.CTOX_BIN || "ctox";
 }
 
-function runCtox(args) {
+function runCtox(args, input) {
   try {
     const out = execFileSync(ctoxBin(), args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      input,
+      timeout: BROWSER_TIMEOUT_MS + 5_000,
       maxBuffer: 32 * 1024 * 1024,
     });
     return JSON.parse(out);
@@ -79,12 +83,61 @@ function runCtox(args) {
   }
 }
 
+function allowedSourceUrl(raw) {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (host !== ALLOWED_HOST && !host.endsWith(`.${ALLOWED_HOST}`)) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function browserRead(rawUrl) {
+  const safeUrl = allowedSourceUrl(rawUrl);
+  if (!safeUrl) return null;
+  const source = `// ctox-browser: timeout_ms=${BROWSER_TIMEOUT_MS}
+const targetUrl = ${JSON.stringify(safeUrl.href)};
+const allowedHost = ${JSON.stringify(ALLOWED_HOST)};
+await page.goto("https://www.handelsregister.de/rp_web/welcome.xhtml", { waitUntil: "domcontentloaded", timeout: 25000 });
+await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
+await page.waitForTimeout(1800);
+const finalUrl = page.url();
+const parsed = new URL(finalUrl);
+const host = parsed.hostname.toLowerCase().replace(/\\.$/, "");
+const originOk = parsed.protocol === "https:"
+  && !parsed.username && !parsed.password
+  && (host === allowedHost || host.endsWith("." + allowedHost));
+const title = await page.title();
+const text = (await page.locator("body").innerText({ timeout: 5000 }).catch(() => "")).slice(0, 160000);
+const html = (await page.content()).slice(0, 500000);
+const corpus = (title + " " + text + " " + html.slice(0, 64000)).toLowerCase();
+const blocked = /recaptcha|g-recaptcha|captcha|bitte beweisen sie|verify (?:that )?you are human|access denied|request blocked|session ist abgelaufen|abgelaufene session/.test(corpus);
+return { url: finalUrl, title, text, html, origin_ok: originOk, blocked };
+`;
+  const payload = runCtox(
+    ["web", "browser-automation", "--timeout-ms", String(BROWSER_TIMEOUT_MS)],
+    source,
+  );
+  const result = payload && payload.ok === true ? payload.result : null;
+  if (!result || result.origin_ok !== true || !allowedSourceUrl(result.url)) return null;
+  return {
+    ok: true,
+    url: result.url,
+    title: result.title,
+    page_text_excerpt: result.text,
+    raw_html: result.html,
+    blocked: result.blocked === true || /(?:^|[-|:]\s*)(?:login|anmeldung|anmelden|portal)\b/i.test(String(result.title || "")),
+    transport: "browser",
+  };
+}
+
 function searchHits(company, country) {
-  // `--source handelsregister.de` pins the provider cascade through the
-  // Rust adapter's `shape_query`, which already adds
-  // `site:handelsregister.de OR site:unternehmensregister.de`. We *also*
-  // pass `--domain` for both hosts so the search-provider host filter
-  // matches independently of how Google/Brave interprets the OR.
+  // Keep discovery and evidence on the configured source origin. Results
+  // from sister portals may be useful hints, but they are not evidence for
+  // this target and must not become a handelsregister.de source_url.
   const args = [
     "web",
     "search",
@@ -94,8 +147,6 @@ function searchHits(company, country) {
     "handelsregister.de",
     "--domain",
     "handelsregister.de",
-    "--domain",
-    "unternehmensregister.de",
     "--include-sources",
   ];
   if (country) {
@@ -106,12 +157,7 @@ function searchHits(company, country) {
     return [];
   }
   return payload.results
-    .filter(
-      (hit) =>
-        typeof hit.url === "string" &&
-        (hit.url.includes("handelsregister.de") ||
-          hit.url.includes("unternehmensregister.de")),
-    )
+    .filter((hit) => typeof hit.url === "string" && allowedSourceUrl(hit.url))
     .slice(0, MAX_HITS);
 }
 
@@ -121,6 +167,21 @@ function readPage(url, country) {
     args.push("--country", country);
   }
   return runCtox(args);
+}
+
+function pageMatchesCompany(company, page) {
+  const title = String(page?.title || "").replace(/\s+/g, " ").trim();
+  if (/\b(?:log[ -]?in|sign[ -]?in|anmeld(?:en|ung)|authentication|authentifizierung|kundenportal|customer portal)\b/i.test(title)
+      || /^(?:portal|startseite|home|willkommen)(?:\s*[-|:]\s*.*)?$/i.test(title)) {
+    return false;
+  }
+  const legalForms = new Set(["ag", "gmbh", "mbh", "se", "kg", "kgaa", "ohg", "ug", "sa", "sarl"]);
+  const tokens = String(company || "").toLocaleLowerCase("de-DE").normalize("NFKD")
+    .replace(/\p{M}/gu, "").replace(/[^a-z0-9äöüß]+/gi, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !legalForms.has(token));
+  const corpus = [page?.title, page?.summary, page?.page_text_excerpt, page?.raw_html_excerpt, page?.raw_html]
+    .filter(Boolean).join(" ").toLocaleLowerCase("de-DE").normalize("NFKD").replace(/\p{M}/gu, "");
+  return tokens.length > 0 && tokens.every((token) => corpus.includes(token));
 }
 
 // ---------------------------------------------------------------------------
@@ -143,9 +204,7 @@ function stripTags(input) {
 
 function isCaptchaPage(html) {
   if (!html) return false;
-  if (html.indexOf("reCAPTCHA") !== -1) return true;
-  if (html.indexOf("Bitte beweisen Sie") !== -1) return true;
-  return false;
+  return /recaptcha|g-recaptcha|captcha|bitte beweisen sie|verify (?:that )?you are human|access denied|request blocked|session ist abgelaufen|abgelaufene session/i.test(html);
 }
 
 function splitAddress(raw) {
@@ -279,13 +338,12 @@ function parseDetailPage(html, url) {
   while ((row = rowRe.exec(html)) !== null) {
     const rowInner = row[1];
     const cells = [];
+    cellRe.lastIndex = 0;
     let c;
     while ((c = cellRe.exec(rowInner)) !== null) {
       cells.push(stripTags(c[1]));
       if (cells.length >= 2) break;
     }
-    // Reset lastIndex on the inner regex — cellRe is local to this loop
-    // iteration via redeclaration on next while-pass; nothing to do.
     if (cells.length < 2) continue;
     const label = normalizeLabel(cells[0]);
     const value = cells[1];
@@ -500,44 +558,51 @@ function extractRecords(url, html) {
   }
 
   const aggregated = [];
-  let captchaSeen = false;
-  let pagesRead = 0;
+  let blockedSeen = false;
+  let matchingPageSeen = false;
   for (const hit of hits) {
-    const page = readPage(hit.url, country);
-    if (!page || !page.ok) {
-      continue;
+    const safeHit = allowedSourceUrl(hit.url);
+    if (!safeHit) continue;
+    let page = readPage(safeHit.href, country);
+    let html = page && page.ok
+      ? page.raw_html_excerpt || page.raw_html || page.page_text_excerpt || ""
+      : "";
+    if (!page || !page.ok || !html || isCaptchaPage(html)) {
+      if (html && isCaptchaPage(html)) blockedSeen = true;
+      const browserPage = browserRead(safeHit.href);
+      if (browserPage) {
+        page = browserPage;
+        html = page.raw_html || page.page_text_excerpt || "";
+        blockedSeen = page.blocked || isCaptchaPage(html);
+      }
     }
-    const html =
-      page.raw_html_excerpt || page.raw_html || page.page_text_excerpt || "";
-    if (!html) continue;
-    pagesRead += 1;
-    if (isCaptchaPage(html)) {
-      captchaSeen = true;
-      continue;
-    }
-    const records = extractRecords(page.url || hit.url, html);
+    if (!page || !page.ok || !html || page.blocked || isCaptchaPage(html)) continue;
+    const evidenceUrl = allowedSourceUrl(page.url || safeHit.href);
+    if (!evidenceUrl) continue;
+    if (!pageMatchesCompany(company, page)) continue;
+    matchingPageSeen = true;
+    const records = extractRecords(evidenceUrl.href, html);
     if (records.length > 0) {
+      const names = records.filter((record) => record.field === "firma_name");
+      if (names.length > 0 && !names.some((record) => pageMatchesCompany(company, { raw_html: record.value }))) {
+        continue;
+      }
       aggregated.push(...records);
       break; // first hit with extractable records is enough
     }
   }
 
-  if (aggregated.length === 0 && captchaSeen) {
-    // Every readable page was a captcha — surface that to the executor so
-    // it doesn't queue a portal_drift repair. classify_outcome maps
-    // failure_mode=blocked to outcome="blocked" (status code stays 200
-    // because the captcha wall is rendered as a normal 200, which is why
-    // skip_probe=true is set in target.json — the wall would otherwise
-    // also kill the upfront probe).
-    process.stdout.write(
-      JSON.stringify({
-        records: [],
-        failure_mode: "blocked",
-        detail: "handelsregister.de captcha wall on all " + pagesRead + " hit page(s)",
-      }),
-    );
+  if (aggregated.length > 0) {
+    process.stdout.write(JSON.stringify({ records: aggregated }));
     return;
   }
-
-  process.stdout.write(JSON.stringify({ records: aggregated }));
+  process.stdout.write(JSON.stringify({
+    records: [],
+    failure_mode: blockedSeen ? "blocked" : matchingPageSeen ? "portal_drift" : "temporary_unreachable",
+    detail: blockedSeen
+      ? "handelsregister.de remained blocked after CTOX browser fallback"
+      : matchingPageSeen
+        ? "company-matching handelsregister.de evidence did not match known register selectors"
+        : "handelsregister.de returned no readable evidence for the requested company",
+  }));
 })();

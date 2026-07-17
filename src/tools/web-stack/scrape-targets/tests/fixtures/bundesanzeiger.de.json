@@ -1,0 +1,36 @@
+{
+  "input": {
+    "source_id": "bundesanzeiger.de",
+    "company": "WITTENSTEIN SE",
+    "country": "DE"
+  },
+  "expected": {
+    "firma_name": "WITTENSTEIN SE"
+  },
+  "search": {
+    "results": [
+      {
+        "title": "WITTENSTEIN SE Jahresabschluss",
+        "url": "https://www.bundesanzeiger.de/pub/de/suche?result=1",
+        "summary": "WITTENSTEIN SE"
+      }
+    ]
+  },
+  "read": {
+    "ok": true,
+    "url": "https://www.bundesanzeiger.de/pub/de/suche?result=1",
+    "title": "Schutzmaßnahme - Bundesanzeiger",
+    "raw_html": "<main>Schutzmaßnahme to_nlp_start</main>"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.bundesanzeiger.de/pub/de/suche?result=1",
+      "title": "WITTENSTEIN SE - Bundesanzeiger",
+      "text": "WITTENSTEIN SE",
+      "html": "<article data-id=\"hit-1\"><div class=\"title\">WITTENSTEIN SE</div></article>",
+      "origin_ok": true,
+      "blocked": false
+    }
+  }
+}

@@ -1,12 +1,23 @@
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs';
+import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs?v=20260717-documents-blob-integrity-v6';
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MARKDOWN_MIME = 'text/markdown';
+const CTOX_DOCUMENTS_LOAD_TIMEOUT_MS = 60000;
+const CTOX_DOCUMENTS_READY_TIMEOUT_MS = 60000;
 const CHUNK_SIZE = 256000;
 const DOCX_TOOLBAR_VISIBILITY_KEY = 'ctox.businessOs.documents.docxToolbarVisible';
 const DOCUMENT_RENDER_DEBOUNCE_MS = 80;
+const DOCUMENTS_ASSET_REVISION = '20260717-documents-workspace-v1018';
+const MAIL_MERGE_SOURCE_NAMES = new Set([
+  'campaign-mail-merge',
+  'mail-merge',
+  'mail_merge',
+  'series-letter',
+  'series_letter',
+  'serienbrief',
+]);
 const SYSTEMATIC_REPORT_RUNBOOKS = [
   {
     id: 'research.report.auto',
@@ -101,6 +112,10 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
 ];
 
 function applyStaticLabels(host, t) {
+  const loadingTitle = host.querySelector('.module-loading-copy strong');
+  if (loadingTitle) {
+    loadingTitle.textContent = t('documentsTitle', 'Dokumente');
+  }
   const loadingText = host.querySelector('.module-loading-copy span');
   if (loadingText) {
     loadingText.textContent = t('workspaceLoading', 'Workspace wird geladen.');
@@ -120,9 +135,16 @@ export async function mount(ctx) {
     return val;
   };
 
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const html = await fetch(revisionedModuleAssetUrl('./index.html')).then((res) => res.text());
   ctx.host.innerHTML = html;
+  // Windowed modules historically received fixed outer left/right panes. The
+  // document workbench owns its resizable list and optional actions drawer so
+  // the Word surface can use the full window width.
+  ctx.left?.replaceChildren?.();
+  ctx.right?.replaceChildren?.();
   applyStaticLabels(ctx.host, t);
+  const requestedDocumentId = documentIdFromLaunchArgs(ctx.args);
+  const requestedVersionId = versionIdFromLaunchArgs(ctx.args);
 
   const state = {
     ctx,
@@ -137,8 +159,13 @@ export async function mount(ctx) {
     knowledgeRunbooks: [],
     knowledgeTables: [],
     selectedId: '',
+    requestedSelectedId: requestedDocumentId,
     selectedVersion: null,
+    requestedVersionId,
+    requestedVersionDocumentId: requestedVersionId ? requestedDocumentId : '',
+    mailMergeNavigation: null,
     editorHandle: null,
+    editorDestroyPromise: null,
     superdocSaveTimer: null,
     superdocSavePromise: null,
     renderSerial: 0,
@@ -146,11 +173,18 @@ export async function mount(ctx) {
     needsFinalSave: false,
     dirty: false,
     searchQuery: '',
+    typeFilter: 'all',
     statusFilter: 'all',
+    appFilter: 'all',
+    sourceFilter: 'all',
     tagFilter: 'all',
     sortBy: 'updated_desc',
+    filtersOpen: false,
+    actionsOpen: false,
+    libraryOpen: false,
     docxToolbarVisible: localStorage.getItem(DOCX_TOOLBAR_VISIBILITY_KEY) !== 'false',
     localSubscriptionCleanup: null,
+    launchCleanup: null,
     contextMenu: null,
     contextMenuCleanup: null,
     openFileToken: null,
@@ -160,7 +194,8 @@ export async function mount(ctx) {
     lang: ctx.locale === 'en' ? 'en' : 'de',
   };
 
-  wireModule(state);
+  state.launchCleanup = wireModule(state);
+  state.paneCleanup = wireDocumentPanes(state);
   state.openFileToken = ctx.eventBus?.on?.('desktop-app:open-file', (payload = {}) => {
     if (payload.appId !== 'documents') return;
     enqueueDocumentOpenFile(state, payload.args?.openFile);
@@ -194,6 +229,8 @@ export async function mount(ctx) {
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
+    state.launchCleanup?.();
+    state.paneCleanup?.();
     flushActiveEditorDraft(state).catch((error) => console.error('[documents] final editor draft save failed', error));
     state.editorHandle?.destroy?.();
   };
@@ -238,7 +275,7 @@ function documentBySourceSha(records = [], sourceSha = '') {
 }
 
 async function loadDocumentFormatModule() {
-  return import('../../vendor/document-format.mjs');
+  return import('../../vendor/document-format.mjs?v=20260715-documents-format-v3');
 }
 
 async function ensureDocumentFormatModule(state) {
@@ -261,7 +298,7 @@ async function loadSuperDocModule(state) {
 
 async function loadCtoxDocumentsModule(state) {
   if (!state.ctoxDocumentsModule) {
-    state.ctoxDocumentsModule = await import('../../vendor/ctox-office/ctox-office-document.mjs');
+    state.ctoxDocumentsModule = await import('../../vendor/ctox-office/ctox-office-document.mjs?v=20260715-documents-editor-v4');
   }
   return state.ctoxDocumentsModule;
 }
@@ -280,7 +317,99 @@ function officeEngineFromSettings(settings) {
 }
 
 function wireModule(state) {
-  state.ctx.host.addEventListener('documents:refresh-left', () => renderLeft(state));
+  const refreshLeft = () => renderLeft(state);
+  const handleAppLaunch = (event) => {
+    if (event?.detail?.appId && event.detail.appId !== state.ctx.module?.id) return;
+    const documentId = documentIdFromLaunchArgs(event?.detail?.args);
+    const versionId = versionIdFromLaunchArgs(event?.detail?.args);
+    if (!documentId) return;
+    if (state.documents.some((record) => record.id === documentId)) {
+      switchSelectedDocument(state, documentId, { versionId }).catch((error) => {
+        console.error('[documents] requested document could not be opened', error);
+      });
+      return;
+    }
+    state.requestedSelectedId = documentId;
+    state.requestedVersionId = versionId;
+    state.requestedVersionDocumentId = versionId ? documentId : '';
+    state.selectedVersion = null;
+    refreshDocumentsFromLocal(state).catch((error) => {
+      console.error('[documents] requested document could not be opened', error);
+    });
+  };
+  state.ctx.host.addEventListener('documents:refresh-left', refreshLeft);
+  state.ctx.host.addEventListener('ctox-business-os-app-launch', handleAppLaunch);
+  return () => {
+    state.ctx.host.removeEventListener('documents:refresh-left', refreshLeft);
+    state.ctx.host.removeEventListener('ctox-business-os-app-launch', handleAppLaunch);
+  };
+}
+
+function wireDocumentPanes(state) {
+  const root = state.ctx.host.querySelector('[data-documents-module]');
+  const backdrop = root?.querySelector('[data-documents-drawer-backdrop]');
+  let responsiveMode = '';
+  const closeDrawers = () => {
+    state.actionsOpen = false;
+    state.libraryOpen = false;
+    renderPaneVisibility(state);
+    renderDocumentStrip(state);
+  };
+  const handleKeydown = (event) => {
+    if (event.key !== 'Escape' || (!state.actionsOpen && !state.libraryOpen)) return;
+    event.preventDefault();
+    closeDrawers();
+  };
+  const updateResponsiveMode = (width = root?.getBoundingClientRect?.().width || 0) => {
+    const nextMode = width <= 440 ? 'phone' : width <= 620 ? 'narrow' : width <= 720 ? 'compact' : 'wide';
+    if (!root || nextMode === responsiveMode) return;
+    responsiveMode = nextMode;
+    root.classList.toggle('is-compact', width <= 720);
+    root.classList.toggle('is-narrow', width <= 620);
+    root.classList.toggle('is-phone', width <= 440);
+    if (width > 720 && state.libraryOpen) {
+      state.libraryOpen = false;
+      renderPaneVisibility(state);
+    }
+  };
+  const resizeObserver = typeof ResizeObserver === 'function' && root
+    ? new ResizeObserver((entries) => updateResponsiveMode(entries[0]?.contentRect?.width))
+    : null;
+  const handleWindowResize = () => updateResponsiveMode();
+  backdrop?.addEventListener('click', closeDrawers);
+  root?.addEventListener('keydown', handleKeydown);
+  resizeObserver?.observe(root);
+  window.addEventListener('resize', handleWindowResize);
+  updateResponsiveMode();
+  renderPaneVisibility(state);
+  return () => {
+    backdrop?.removeEventListener('click', closeDrawers);
+    root?.removeEventListener('keydown', handleKeydown);
+    resizeObserver?.disconnect();
+    window.removeEventListener('resize', handleWindowResize);
+  };
+}
+
+function renderPaneVisibility(state) {
+  const root = state.ctx.host.querySelector('[data-documents-module]');
+  const actions = root?.querySelector('[data-documents-actions-drawer]');
+  const backdrop = root?.querySelector('[data-documents-drawer-backdrop]');
+  const anyDrawerOpen = Boolean(state.actionsOpen || state.libraryOpen);
+  root?.classList.toggle('is-actions-open', Boolean(state.actionsOpen));
+  root?.classList.toggle('is-library-open', Boolean(state.libraryOpen));
+  if (actions) {
+    actions.hidden = !state.actionsOpen;
+    actions.setAttribute('aria-hidden', String(!state.actionsOpen));
+  }
+  if (backdrop) backdrop.hidden = !anyDrawerOpen;
+}
+
+function documentIdFromLaunchArgs(args) {
+  return String(args?.record || args?.documentId || '').trim();
+}
+
+function versionIdFromLaunchArgs(args) {
+  return String(args?.version || args?.versionId || '').trim();
 }
 
 function initDocumentsContextMenu(state) {
@@ -353,7 +482,7 @@ function renderDocumentsContextMenu(state, context, x, y) {
     <form class="documents-context-chat" data-documents-context-chat-form>
       <header>
         <div>
-          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
+          <strong>${escapeHtml(state.t('chatToCtox', 'CTOX beauftragen'))}</strong>
           <span>${escapeHtml(documentContextSummary(context))}</span>
         </div>
         <button type="button" data-documents-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
@@ -400,7 +529,7 @@ function canModifyDocumentsApp(state) {
 function documentContextSummary(context) {
   return [context.column || 'module', context.record_type || '', context.label || context.filename || context.record_id || '']
     .filter(Boolean)
-    .join(' · ') || 'Documents';
+    .join(' · ') || 'Dokumente';
 }
 
 async function dispatchDocumentsContextChat(state, context, message, mode = 'data') {
@@ -419,15 +548,15 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
     if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
-  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
+  if (status) status.textContent = state.t('chatOpening', 'Chat wird geöffnet...');
   const titlePrefix = safeMode === 'app'
-    ? state.t('chatModifyAppTitle', 'Documents App modifizieren')
+    ? state.t('chatModifyAppTitle', 'Dokumente-App anpassen')
     : safeMode === 'ask'
       ? state.t('chatAnswerLabel', 'Frage beantworten')
-      : state.t('chatWorkDataTitle', 'Documents bearbeiten');
-  const title = `${titlePrefix} · ${context.label || record?.title || context.column || 'Documents'}`;
+      : state.t('chatWorkDataTitle', 'Mit Dokumenten arbeiten');
+  const title = `${titlePrefix} · ${context.label || record?.title || context.column || 'Dokumente'}`;
   const instruction = safeMode === 'app'
-    ? state.t('chatModifyAppInstruction', `Modifiziere die Documents-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n{0}`, trimmed)
+    ? state.t('chatModifyAppInstruction', `Passe die Dokumente-App anhand dieser Admin-Anweisung an. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n{0}`, trimmed)
     : safeMode === 'ask'
       ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
       : trimmed;
@@ -435,7 +564,7 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
     detail: {
       text: trimmed,
       module: 'documents',
-      source_title: 'Documents',
+      source_title: 'Dokumente',
       command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
       record_id: safeMode === 'app' ? 'documents' : (record?.id || context.record_id || 'documents'),
       title,
@@ -501,11 +630,17 @@ async function refreshDocumentsFromLocal(state) {
     refreshKnowledge(state),
     refreshDocuments(state),
   ]);
-  if (state.selectedId && previousSelectedVersionId !== selectedRecord(state)?.current_version_id) {
-    await loadSelectedVersion(state).catch(() => null);
+  let selectedVersionLoaded = false;
+  const expectedSelectedVersionId = state.requestedVersionDocumentId === state.selectedId
+    ? state.requestedVersionId
+    : selectedRecord(state)?.current_version_id;
+  if (state.selectedId && previousSelectedVersionId !== expectedSelectedVersionId) {
+    selectedVersionLoaded = Boolean(await loadSelectedVersion(state).catch(() => null));
   }
   renderLeft(state);
   renderRight(state);
+  renderDocumentStrip(state);
+  if (selectedVersionLoaded) renderCenter(state);
 }
 
 async function refreshDocuments(state) {
@@ -517,9 +652,24 @@ async function refreshDocuments(state) {
     .map((doc) => normalizeDocumentRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
     .filter(isActiveDocumentRecord);
 
+  if (state.requestedSelectedId
+      && state.documents.some((record) => record.id === state.requestedSelectedId)) {
+    state.selectedId = state.requestedSelectedId;
+    state.requestedSelectedId = '';
+    state.selectedVersion = null;
+    if (state.requestedVersionDocumentId !== state.selectedId) {
+      state.requestedVersionId = '';
+      state.requestedVersionDocumentId = '';
+    }
+    state.mailMergeNavigation = null;
+  }
+
   if (state.selectedId && !state.documents.some((record) => record.id === state.selectedId)) {
     state.selectedId = state.documents[0]?.id || '';
     state.selectedVersion = null;
+    state.requestedVersionId = '';
+    state.requestedVersionDocumentId = '';
+    state.mailMergeNavigation = null;
   }
   if (!state.selectedId && state.documents[0]) state.selectedId = state.documents[0].id;
 }
@@ -671,11 +821,16 @@ async function loadSelectedVersion(state) {
     state.selectedVersion = null;
     return null;
   }
-  let doc = record.current_version_id
+  await ensureDocumentVersionReplication(state.ctx);
+  const requestedVersionId = state.requestedVersionId && state.requestedVersionDocumentId === record.id
+    ? state.requestedVersionId
+    : '';
+  const targetVersionId = requestedVersionId || record.current_version_id;
+  let doc = targetVersionId
     ? await withTimeout(
-      documentCollection(state.ctx, 'document_versions').findOne(record.current_version_id).exec(),
+      documentCollection(state.ctx, 'document_versions').findOne(targetVersionId).exec(),
       4500,
-      `Version ${record.current_version_id} konnte nicht geladen werden.`,
+      `Version ${targetVersionId} konnte nicht geladen werden.`,
     )
     : null;
   if (!doc) {
@@ -689,7 +844,7 @@ async function loadSelectedVersion(state) {
       `Keine Versionen für ${record.id} gefunden.`,
     );
     doc = fallback[0] || null;
-    if (doc) {
+    if (doc && !requestedVersionId) {
       const versionJson = doc.toJSON();
       const recordDoc = await documentCollection(state.ctx, 'documents').findOne(record.id).exec();
       await recordDoc?.incrementalPatch({ current_version_id: versionJson.id });
@@ -698,20 +853,185 @@ async function loadSelectedVersion(state) {
   }
   state.selectedVersion = doc?.toJSON() || null;
   state.dirty = false;
+  await refreshMailMergeNavigation(state);
   return state.selectedVersion;
 }
 
+async function ensureDocumentVersionReplication(ctx) {
+  if (typeof ctx?.sync?.startCollection !== 'function') return;
+  const bridge = await ctx.sync.startCollection('document_versions');
+  const replication = bridge?.state || bridge || null;
+  if (!replication) return;
+  if (typeof replication.awaitInitialReplication === 'function') {
+    await withTimeout(
+      replication.awaitInitialReplication(),
+      120000,
+      'Dokumentversionen konnten nicht rechtzeitig synchronisiert werden.',
+    );
+  }
+  if (typeof replication.awaitInSync === 'function') {
+    await withTimeout(
+      replication.awaitInSync(),
+      120000,
+      'Dokumentversionen konnten nicht vollständig synchronisiert werden.',
+    );
+  }
+}
+
+async function refreshMailMergeNavigation(state) {
+  const group = selectedDocumentGroup(state);
+  if (!group?.is_mail_merge) {
+    state.mailMergeNavigation = null;
+    return null;
+  }
+  let entries;
+  if (group.records.length === 1 && ['mail_merge', 'series_letter'].includes(group.records[0].document_type)) {
+    const collection = documentCollection(state.ctx, 'document_versions');
+    const docs = collection
+      ? await collection.find({ selector: { document_id: group.records[0].id } }).exec()
+      : [];
+    entries = docs
+      .map((doc) => typeof doc?.toJSON === 'function' ? doc.toJSON() : doc)
+      .filter((version) => (
+        version?.id
+        && (version.source_kind === 'mail_merge_recipient'
+          || plainObject(version.mail_merge_recipient))
+      ))
+      .sort((left, right) => (
+        Number(left.mail_merge_recipient?.index ?? left.version ?? 0)
+        - Number(right.mail_merge_recipient?.index ?? right.version ?? 0)
+      ))
+      .map((version, index) => ({
+        documentId: group.records[0].id,
+        versionId: version.id,
+        recipientId: firstText(version.mail_merge_recipient?.id, version.provenance?.recipient_id, version.id),
+        label: firstText(version.mail_merge_recipient?.label, version.provenance?.recipient_label, `Empfänger ${index + 1}`),
+        index,
+      }));
+  } else {
+    entries = group.records.map((record, index) => ({
+      documentId: record.id,
+      versionId: record.current_version_id,
+      recipientId: firstText(
+        record.provenance?.selectionmember_id,
+        record.provenance?.recipient_id,
+        record.id,
+      ),
+      label: recipientLabelFromRecord(record, group.title),
+      index,
+    }));
+  }
+  if (!entries.length) {
+    state.mailMergeNavigation = null;
+    return null;
+  }
+  const activeIndex = Math.max(0, entries.findIndex((entry) => (
+    entry.documentId === state.selectedId
+    && (!state.selectedVersion?.id || entry.versionId === state.selectedVersion.id)
+  )));
+  state.mailMergeNavigation = {
+    groupId: group.group_id,
+    title: group.title,
+    entries,
+    activeIndex,
+  };
+  return state.mailMergeNavigation;
+}
+
+function renderDocumentStrip(state) {
+  const host = state.ctx.host.querySelector('[data-documents-document-strip]');
+  if (!host) return;
+  const record = selectedRecord(state);
+  const navigation = state.mailMergeNavigation;
+  const active = navigation?.entries?.[navigation.activeIndex] || null;
+  const hasMailMerge = Boolean(active && navigation.entries.length);
+  host.innerHTML = `
+    <div class="documents-strip-leading">
+      <button class="ctox-pane-icon documents-library-toggle" type="button" data-documents-library-toggle aria-label="${escapeHtml(state.t('showDocuments', 'Dokumentliste öffnen'))}" title="${escapeHtml(state.t('showDocuments', 'Dokumentliste öffnen'))}" aria-expanded="${String(state.libraryOpen)}">${actionIcon(state, 'folder')}</button>
+      ${hasMailMerge ? `
+        <span class="documents-series-label">${actionIcon(state, 'copy')}<strong>${escapeHtml(state.t('seriesLetter', 'Serienbrief'))}</strong></span>
+        <div class="documents-recipient-navigator" data-documents-recipient-navigator>
+          <button class="ctox-pane-icon" type="button" data-documents-recipient-previous aria-label="${escapeHtml(state.t('previousRecipient', 'Vorheriger Empfänger'))}" title="${escapeHtml(state.t('previousRecipient', 'Vorheriger Empfänger'))}" ${navigation.activeIndex <= 0 ? 'disabled aria-disabled="true"' : ''}>${actionIcon(state, 'chevronLeft')}</button>
+          <span class="documents-recipient-position">${navigation.activeIndex + 1} ${escapeHtml(state.t('of', 'von'))} ${navigation.entries.length}</span>
+          <label class="documents-recipient-search">
+            <span class="sr-only">${escapeHtml(state.t('searchRecipient', 'Empfänger suchen'))}</span>
+            <input type="search" data-documents-recipient-search list="documents-recipient-options" value="${escapeHtml(active.label)}" aria-label="${escapeHtml(state.t('searchRecipient', 'Empfänger suchen'))}" autocomplete="off">
+            <datalist id="documents-recipient-options">${navigation.entries.map((entry) => `<option value="${escapeHtml(entry.label)}"></option>`).join('')}</datalist>
+          </label>
+          <button class="ctox-pane-icon" type="button" data-documents-recipient-next aria-label="${escapeHtml(state.t('nextRecipient', 'Nächster Empfänger'))}" title="${escapeHtml(state.t('nextRecipient', 'Nächster Empfänger'))}" ${navigation.activeIndex >= navigation.entries.length - 1 ? 'disabled aria-disabled="true"' : ''}>${actionIcon(state, 'chevronRight')}</button>
+        </div>
+      ` : `<div class="documents-current-document"><strong>${escapeHtml(record?.title || state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</strong>${record ? `<span>${escapeHtml(documentTypeLabel(state, record.document_type))}</span>` : ''}</div>`}
+    </div>
+    <button class="ctox-button documents-actions-toggle" type="button" data-documents-actions-toggle aria-expanded="${String(state.actionsOpen)}" aria-controls="documents-actions-drawer">
+      ${actionIcon(state, 'settings')}
+      <span>${escapeHtml(state.t('actions', 'Aktionen'))}</span>
+    </button>
+  `;
+  host.querySelector('[data-documents-library-toggle]')?.addEventListener('click', () => {
+    state.libraryOpen = !state.libraryOpen;
+    if (state.libraryOpen) state.actionsOpen = false;
+    renderPaneVisibility(state);
+    renderDocumentStrip(state);
+  });
+  host.querySelector('[data-documents-actions-toggle]')?.addEventListener('click', () => {
+    state.actionsOpen = !state.actionsOpen;
+    if (state.actionsOpen) state.libraryOpen = false;
+    renderPaneVisibility(state);
+    renderDocumentStrip(state);
+    if (state.actionsOpen) {
+      state.ctx.host.querySelector('[data-documents-actions-close]')?.focus({ preventScroll: true });
+    }
+  });
+  host.querySelector('[data-documents-recipient-previous]')?.addEventListener('click', () => {
+    selectMailMergeRecipient(state, navigation.activeIndex - 1);
+  });
+  host.querySelector('[data-documents-recipient-next]')?.addEventListener('click', () => {
+    selectMailMergeRecipient(state, navigation.activeIndex + 1);
+  });
+  const search = host.querySelector('[data-documents-recipient-search]');
+  const chooseSearchResult = () => {
+    const index = findMailMergeRecipientIndex(navigation.entries, search?.value);
+    if (index >= 0 && index !== navigation.activeIndex) selectMailMergeRecipient(state, index);
+  };
+  search?.addEventListener('change', chooseSearchResult);
+  search?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    chooseSearchResult();
+  });
+}
+
+async function selectMailMergeRecipient(state, requestedIndex) {
+  const navigation = state.mailMergeNavigation;
+  if (!navigation?.entries?.length) return;
+  const index = clampNumber(Number(requestedIndex) || 0, 0, navigation.entries.length - 1);
+  const entry = navigation.entries[index];
+  await switchSelectedDocument(state, entry.documentId, { versionId: entry.versionId });
+}
+
+function findMailMergeRecipientIndex(entries = [], query = '') {
+  const expected = normalizeSearchText(query);
+  if (!expected) return -1;
+  const exact = entries.findIndex((entry) => normalizeSearchText(entry.label) === expected);
+  if (exact >= 0) return exact;
+  const prefix = entries.findIndex((entry) => normalizeSearchText(entry.label).startsWith(expected));
+  if (prefix >= 0) return prefix;
+  return entries.findIndex((entry) => normalizeSearchText(entry.label).includes(expected));
+}
+
 function renderLeft(state) {
+  const slot = state.ctx.host.querySelector('[data-documents-explorer-slot]');
+  if (!slot) return;
   const wrap = document.createElement('div');
   wrap.className = 'documents-explorer';
   const visible = visibleDocuments(state);
-  const selected = selectedRecord(state);
+  const activeFilterCount = documentFilterCount(state);
   wrap.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Dateien</span>
-          <h2 class="ctox-pane-title">${escapeHtml(state.t('documentsTitle', 'CTOX Documents'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(state.t('documentsTitle', 'Dokumente'))}</h2>
         </div>
         <div class="ctox-pane-actions">
           <button class="ctox-pane-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${actionIcon(state, 'add')}</button>
@@ -721,22 +1041,40 @@ function renderLeft(state) {
       </div>
       <div class="ctox-pane-tools documents-filter-bar">
         <input class="ctox-pane-search" type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Dokument suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Dokumente suchen'))}" data-documents-search value="${escapeHtml(state.searchQuery)}">
-        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort>
-          <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
-          <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
-          <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
-          <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
-        </select>
-        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
-          <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
-          <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
-          <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
-          <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
-          <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
-        </select>
-        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
-          ${tagFilterOptions(state)}
-        </select>
+        <div class="documents-filter-summary">
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort>
+            <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Zuletzt geändert'))}</option>
+            <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
+            <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
+            <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
+          </select>
+          <button class="ctox-button documents-filter-toggle" type="button" data-documents-filter-toggle aria-expanded="${String(state.filtersOpen)}">
+            ${actionIcon(state, 'filter')}
+            <span>${escapeHtml(state.t('filters', 'Filter'))}</span>
+            ${activeFilterCount ? `<strong>${activeFilterCount}</strong>` : ''}
+          </button>
+        </div>
+        <div class="documents-filter-panel" data-documents-filter-panel ${state.filtersOpen ? '' : 'hidden'}>
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('typeFilterLabel', 'Dokumenttyp filtern'))}" data-documents-type>
+            ${documentTypeFilterOptions(state)}
+          </select>
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
+            ${documentStatusFilterOptions(state)}
+          </select>
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('appFilterLabel', 'Ersteller-App filtern'))}" data-documents-app>
+            ${documentAppFilterOptions(state)}
+          </select>
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('sourceFilterLabel', 'Quelle filtern'))}" data-documents-source>
+            ${documentSourceFilterOptions(state)}
+          </select>
+          <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
+            ${tagFilterOptions(state)}
+          </select>
+          <button class="ctox-button documents-filter-reset" type="button" data-documents-clear-filters ${activeFilterCount ? '' : 'disabled aria-disabled="true"'}>
+            ${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}
+          </button>
+        </div>
+        ${renderActiveDocumentFilters(state)}
       </div>
     </header>
   `;
@@ -746,7 +1084,8 @@ function renderLeft(state) {
   populateDocumentList(state, list, visible);
   wrap.append(list);
   bindLeftControls(state, wrap);
-  state.ctx.left.replaceChildren(wrap);
+  slot.replaceChildren(wrap);
+  renderPaneVisibility(state);
 }
 
 function populateDocumentList(state, list, records = visibleDocuments(state)) {
@@ -759,20 +1098,24 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     card.dataset.contextRecordId = record.id;
     card.dataset.contextLabel = record.title || record.filename || record.id;
     card.dataset.documentsColumn = 'documents';
-    card.setAttribute('aria-current', String(record.id === state.selectedId));
+    card.setAttribute('aria-current', String(record.record_ids.includes(state.selectedId)));
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'documents-card-main';
     button.dataset.documentId = record.id;
+    const sourceLabel = record.source_labels[0] || '';
     button.innerHTML = `
       <strong>${escapeHtml(record.title)}</strong>
-      <span class="documents-card-filename">${escapeHtml(record.filename)}</span>
+      ${record.is_mail_merge
+        ? `<span class="documents-card-bundle">${actionIcon(state, 'copy')} ${escapeHtml(state.t('seriesLetter', 'Serienbrief'))} · ${escapeHtml(String(record.recipient_count))} ${escapeHtml(state.t('recipients', 'Empfänger'))}</span>`
+        : `<span class="documents-card-filename">${escapeHtml(record.filename)}</span>`}
       ${documentDescription(record) ? `<span class="documents-card-description">${escapeHtml(documentDescription(record))}</span>` : ''}
-      <small>${escapeHtml(record.status)} · ${escapeHtml(record.document_type === 'markdown_document' ? 'Markdown' : 'DOCX')}</small>
+      <small>${escapeHtml(record.status)} · ${escapeHtml(documentTypeLabel(state, record.document_type))}${sourceLabel ? ` · ${escapeHtml(sourceLabel)}` : ''}</small>
       ${renderTagPills(record)}
     `;
     button.addEventListener('click', () => {
-      switchSelectedDocument(state, record.id).catch((error) => {
+      const documentId = record.record_ids.includes(state.selectedId) ? state.selectedId : record.id;
+      switchSelectedDocument(state, documentId).catch((error) => {
         console.error('[documents] document switch failed', error);
         renderError(state, `${state.t('documentSwitchFailed', 'Dokumentwechsel fehlgeschlagen:')} ${error?.message || error}`);
       });
@@ -784,7 +1127,7 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     manage.title = `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`;
     manage.setAttribute('aria-label', `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`);
     manage.innerHTML = actionIcon(state, 'settings');
-    manage.addEventListener('click', () => openManageDocumentDrawer(state, record));
+    manage.addEventListener('click', () => openManageDocumentDrawer(state, selectedRecordInGroup(state, record)));
     card.append(button, manage);
     list.append(card);
   }
@@ -811,7 +1154,10 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => openNewDocumentDrawer(state));
     empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
       state.searchQuery = '';
+      state.typeFilter = 'all';
       state.statusFilter = 'all';
+      state.appFilter = 'all';
+      state.sourceFilter = 'all';
       state.tagFilter = 'all';
       state.sortBy = 'updated_desc';
       renderLeft(state);
@@ -820,10 +1166,16 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
   }
 }
 
-async function switchSelectedDocument(state, documentId) {
+async function switchSelectedDocument(state, documentId, options = {}) {
   if (!documentId) return;
-  if (documentId === state.selectedId && state.selectedVersion) {
-    renderCenter(state);
+  const versionId = String(options.versionId || '').trim();
+  if (
+    documentId === state.selectedId
+    && state.selectedVersion
+    && (!versionId || versionId === state.selectedVersion.id)
+  ) {
+    if (state.editorHandle) state.editorHandle.focus?.();
+    else renderCenter(state);
     return;
   }
   const switchSerial = (state.switchSerial || 0) + 1;
@@ -839,10 +1191,19 @@ async function switchSelectedDocument(state, documentId) {
     console.warn('[documents] continuing document switch after draft save failed', error);
   }
   if (state.switchSerial !== switchSerial) return;
+  state.renderSerial = (state.renderSerial || 0) + 1;
+  await destroyActiveEditor(state);
+  if (state.switchSerial !== switchSerial) return;
   state.selectedId = documentId;
+  state.requestedVersionId = versionId;
+  state.requestedVersionDocumentId = versionId ? documentId : '';
   state.selectedVersion = null;
+  state.mailMergeNavigation = null;
+  state.libraryOpen = false;
   renderLeft(state);
   renderRight(state);
+  renderDocumentStrip(state);
+  renderPaneVisibility(state);
   const host = state.ctx.host.querySelector('[data-documents-editor]');
   if (host) host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${escapeHtml(state.t('documentSwitchRunning', 'Dokumentwechsel läuft.'))}</span></div>`;
   try {
@@ -874,17 +1235,44 @@ function bindLeftControls(state, wrap) {
     const list = wrap.querySelector('[data-documents-list]');
     if (list) populateDocumentList(state, list);
   });
+  wrap.querySelector('[data-documents-filter-toggle]')?.addEventListener('click', () => {
+    state.filtersOpen = !state.filtersOpen;
+    renderLeft(state);
+  });
   wrap.querySelector('[data-documents-sort]')?.addEventListener('change', (event) => {
     state.sortBy = event.currentTarget.value || 'updated_desc';
+    renderLeft(state);
+  });
+  wrap.querySelector('[data-documents-type]')?.addEventListener('change', (event) => {
+    state.typeFilter = event.currentTarget.value || 'all';
     renderLeft(state);
   });
   wrap.querySelector('[data-documents-status]')?.addEventListener('change', (event) => {
     state.statusFilter = event.currentTarget.value || 'all';
     renderLeft(state);
   });
+  wrap.querySelector('[data-documents-app]')?.addEventListener('change', (event) => {
+    state.appFilter = event.currentTarget.value || 'all';
+    renderLeft(state);
+  });
+  wrap.querySelector('[data-documents-source]')?.addEventListener('change', (event) => {
+    state.sourceFilter = event.currentTarget.value || 'all';
+    renderLeft(state);
+  });
   wrap.querySelector('[data-documents-tag]')?.addEventListener('change', (event) => {
     state.tagFilter = event.currentTarget.value || 'all';
     renderLeft(state);
+  });
+  wrap.querySelectorAll('[data-documents-clear-filters]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.searchQuery = '';
+      state.typeFilter = 'all';
+      state.statusFilter = 'all';
+      state.appFilter = 'all';
+      state.sourceFilter = 'all';
+      state.tagFilter = 'all';
+      renderLeft(state);
+    });
   });
 }
 
@@ -1161,6 +1549,7 @@ function openImportDrawer(state) {
 
 function openExportDrawer(state) {
   const record = selectedRecord(state);
+  const activeFilename = state.selectedVersion?.filename || record?.filename || '';
   const canExport = canExportDocument(state);
   const body = document.createElement('div');
   body.className = 'drawer-body documents-action-drawer';
@@ -1181,7 +1570,7 @@ function openExportDrawer(state) {
       </label>
       <label>
         <span>${escapeHtml(state.t('filename', 'Dateiname'))}</span>
-        <input name="filename" value="${escapeHtml(record ? record.filename.replace(/\.(docx|md|markdown)$/i, '') + (record.document_type === 'markdown_document' ? '-edited.md' : '-edited.docx') : '')}" ${canExport ? '' : 'disabled'}>
+        <input name="filename" value="${escapeHtml(record ? activeFilename.replace(/\.(docx|md|markdown)$/i, '') + (record.document_type === 'markdown_document' ? '-edited.md' : '-edited.docx') : '')}" ${canExport ? '' : 'disabled'}>
       </label>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
@@ -1361,16 +1750,25 @@ function bindWorkflowControls(state, wrap) {
 function normalizeDocumentRecord(record = {}) {
   const title = String(record.title || record.filename || record.id || '').trim();
   const filename = String(record.filename || (title ? ensureExtension(slugFilename(title), record.document_type === 'markdown_document' ? '.md' : '.docx') : '')).trim();
+  const provenance = plainObject(record.provenance)
+    ? record.provenance
+    : plainObject(record.display_cache?.provenance)
+      ? record.display_cache.provenance
+      : {};
   return {
     ...record,
     id: String(record.id || '').trim(),
     title: title || stateLessTitleFallback(record),
     filename: filename || 'document.docx',
-    status: normalizeDocumentStatus(record.status || 'Draft'),
+    status: String(record.status || 'Draft').trim() || 'Draft',
     document_type: record.document_type || (isMarkdownFilename(filename) ? 'markdown_document' : 'word_document'),
     current_version_id: String(record.current_version_id || ''),
     index_text: String(record.index_text || ''),
     tags: normalizeTags(record.tags || []),
+    provenance,
+    template_ref: plainObject(record.template_ref) ? record.template_ref : null,
+    mail_merge: plainObject(record.mail_merge) ? record.mail_merge : null,
+    series_letter: plainObject(record.series_letter) ? record.series_letter : null,
     updated_at_ms: Number(record.updated_at_ms || record.created_at_ms || 0),
   };
 }
@@ -1615,42 +2013,352 @@ function tagFilterOptions(state) {
   ].join('');
 }
 
+function documentTypeFilterOptions(state) {
+  const types = [...new Set(groupDocumentRecords(state.documents).map((record) => record.document_type))]
+    .filter(Boolean)
+    .sort((left, right) => documentTypeLabel(state, left).localeCompare(documentTypeLabel(state, right), state.lang));
+  return [
+    `<option value="all" ${state.typeFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('allDocumentTypes', 'Alle Typen'))}</option>`,
+    ...types.map((type) => `<option value="${escapeHtml(type)}" ${state.typeFilter === type ? 'selected' : ''}>${escapeHtml(documentTypeLabel(state, type))}</option>`),
+  ].join('');
+}
+
+function documentStatusFilterOptions(state) {
+  const statuses = [...new Set(state.documents.map((record) => record.status).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, state.lang));
+  return [
+    `<option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('allStatuses', 'Alle Status'))}</option>`,
+    ...statuses.map((status) => `<option value="${escapeHtml(status)}" ${state.statusFilter === status ? 'selected' : ''}>${escapeHtml(status)}</option>`),
+  ].join('');
+}
+
+function documentSourceFilterOptions(state) {
+  const identities = uniqueBy(state.documents.map(documentSourceIdentity), ({ source_key: key }) => key)
+    .sort((left, right) => left.label.localeCompare(right.label, state.lang));
+  return [
+    `<option value="all" ${state.sourceFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('allSources', 'Alle Quellen'))}</option>`,
+    ...identities.map(({ source_key: key, source_label: label }) => `<option value="${escapeHtml(key)}" ${state.sourceFilter === key ? 'selected' : ''}>${escapeHtml(label)}</option>`),
+  ].join('');
+}
+
+function documentAppFilterOptions(state) {
+  const identities = uniqueBy(state.documents.map(documentSourceIdentity), ({ app_key: key }) => key)
+    .sort((left, right) => left.app_label.localeCompare(right.app_label, state.lang));
+  return [
+    `<option value="all" ${state.appFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('allApps', 'Alle Ersteller-Apps'))}</option>`,
+    ...identities.map(({ app_key: key, app_label: label }) => `<option value="${escapeHtml(key)}" ${state.appFilter === key ? 'selected' : ''}>${escapeHtml(label)}</option>`),
+  ].join('');
+}
+
+function documentTypeLabel(state, type) {
+  const labels = {
+    mail_merge: state.t('seriesLetter', 'Serienbrief'),
+    series_letter: state.t('seriesLetter', 'Serienbrief'),
+    word_document: 'Word',
+    markdown_document: 'Markdown',
+  };
+  return labels[type] || humanizeIdentifier(type || state.t('unknownDocumentType', 'Dokument'));
+}
+
+function documentFilterCount(state) {
+  return ['typeFilter', 'statusFilter', 'appFilter', 'sourceFilter', 'tagFilter']
+    .filter((key) => state[key] && state[key] !== 'all').length;
+}
+
+function renderActiveDocumentFilters(state) {
+  const labels = [];
+  if (state.typeFilter !== 'all') labels.push(documentTypeLabel(state, state.typeFilter));
+  if (state.statusFilter !== 'all') labels.push(state.statusFilter);
+  if (state.appFilter !== 'all') {
+    const app = state.documents.map(documentSourceIdentity)
+      .find(({ app_key: key }) => key === state.appFilter);
+    if (app) labels.push(app.app_label);
+  }
+  if (state.sourceFilter !== 'all') {
+    const source = state.documents.map(documentSourceIdentity)
+      .find(({ source_key: key }) => key === state.sourceFilter);
+    if (source) labels.push(source.source_label);
+  }
+  if (state.tagFilter !== 'all') labels.push(state.tagFilter === 'untagged' ? state.t('untagged', 'Ohne Tags') : state.tagFilter);
+  if (!labels.length) return '';
+  return `<div class="documents-active-filters" aria-label="${escapeHtml(state.t('activeFilters', 'Aktive Filter'))}">
+    ${labels.map((label) => `<span>${escapeHtml(label)}</span>`).join('')}
+    <button type="button" data-documents-clear-filters aria-label="${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}" title="${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}">${actionIcon(state, 'close')}</button>
+  </div>`;
+}
+
 function normalizeDocumentStatus(value, fallback = 'Draft') {
-  const allowed = new Set(['Imported', 'Draft', 'Review', 'Final']);
+  const allowed = new Set(['Imported', 'Created', 'CreatedWithWarnings', 'Draft', 'Review', 'Final']);
   const status = String(value || '').trim();
   return allowed.has(status) ? status : allowed.has(fallback) ? fallback : 'Draft';
 }
 
 function documentStatusOptions(selectedStatus) {
-  return ['Imported', 'Draft', 'Review', 'Final']
+  return ['Imported', 'Created', 'CreatedWithWarnings', 'Draft', 'Review', 'Final']
     .map((status) => `<option value="${status}" ${selectedStatus === status ? 'selected' : ''}>${status}</option>`)
     .join('');
 }
 
 function visibleDocuments(state) {
-  const query = state.searchQuery.trim().toLowerCase();
-  const status = state.statusFilter;
-  const tag = state.tagFilter;
-  return [...state.documents]
-    .filter((record) => {
-      if (status !== 'all' && record.status !== status) return false;
-      const tags = documentTags(record);
-      if (tag === 'untagged' && tags.length) return false;
-      if (tag !== 'all' && tag !== 'untagged' && !tags.includes(tag)) return false;
+  const query = normalizeSearchText(state.searchQuery);
+  const status = state.statusFilter || 'all';
+  const type = state.typeFilter || 'all';
+  const app = state.appFilter || 'all';
+  const source = state.sourceFilter || 'all';
+  const tag = state.tagFilter || 'all';
+  return groupDocumentRecords(state.documents)
+    .filter((entry) => {
+      if (status !== 'all' && !entry.statuses.includes(status)) return false;
+      if (type !== 'all' && entry.document_type !== type) return false;
+      if (app !== 'all' && !entry.app_keys.includes(app)) return false;
+      if (source !== 'all' && !entry.source_keys.includes(source)) return false;
+      if (tag === 'untagged' && entry.tags.length) return false;
+      if (tag !== 'all' && tag !== 'untagged' && !entry.tags.includes(tag)) return false;
       if (!query) return true;
-      return [record.title, record.filename, documentDescription(record), record.status, record.document_type, record.index_text, ...tags]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
+      return normalizeSearchText(entry.search_text).includes(query);
     })
-    .sort((a, b) => {
-      if (state.sortBy === 'updated_asc') return (a.updated_at_ms || 0) - (b.updated_at_ms || 0);
-      if (state.sortBy === 'title_asc') return String(a.title || '').localeCompare(String(b.title || ''));
-      if (state.sortBy === 'status') return String(a.status || '').localeCompare(String(b.status || '')) || String(a.title || '').localeCompare(String(b.title || ''));
-      return (b.updated_at_ms || 0) - (a.updated_at_ms || 0);
+    .sort((left, right) => {
+      if (state.sortBy === 'updated_asc') return left.updated_at_ms - right.updated_at_ms;
+      if (state.sortBy === 'title_asc') return left.title.localeCompare(right.title, 'de');
+      if (state.sortBy === 'status') {
+        return left.status.localeCompare(right.status, 'de') || left.title.localeCompare(right.title, 'de');
+      }
+      return right.updated_at_ms - left.updated_at_ms;
     });
 }
 
+function groupDocumentRecords(records = []) {
+  const groups = new Map();
+  for (const record of records.filter(isActiveDocumentRecord)) {
+    const bundle = mailMergeBundleDescriptor(record);
+    const key = bundle?.key || `document:${record.id}`;
+    if (!groups.has(key)) groups.set(key, { key, bundle, records: [] });
+    groups.get(key).records.push(record);
+  }
+  return [...groups.values()].map(finalizeDocumentGroup);
+}
+
+function finalizeDocumentGroup(group) {
+  const records = [...group.records].sort((left, right) => (
+    recipientLabelFromRecord(left).localeCompare(recipientLabelFromRecord(right), 'de')
+    || left.id.localeCompare(right.id)
+  ));
+  const primary = records[0];
+  const isMailMerge = Boolean(group.bundle);
+  const statuses = [...new Set(records.map((record) => record.status).filter(Boolean))];
+  const tags = [...new Set(records.flatMap(documentTags))];
+  const sourceIdentities = uniqueBy(
+    records.map(documentSourceIdentity),
+    (identity) => identity.key,
+  );
+  const title = isMailMerge ? mailMergeGroupTitle(records, group.bundle) : primary.title;
+  const recipientCount = isMailMerge
+    ? Math.max(
+      records.length,
+      Number(primary.mail_merge?.recipient_count || primary.series_letter?.recipient_count || 0),
+    )
+    : 0;
+  const searchValues = records.flatMap((record) => [
+    record.title,
+    record.filename,
+    record.index_text,
+    documentDescription(record),
+    record.status,
+    record.document_type,
+    recipientLabelFromRecord(record),
+    ...documentTags(record),
+    ...Object.values(record.provenance || {}),
+  ]);
+  return {
+    ...primary,
+    group_id: group.key,
+    bundle_key: group.bundle?.key || '',
+    is_mail_merge: isMailMerge,
+    records,
+    record_ids: records.map((record) => record.id),
+    title,
+    filename: isMailMerge ? `${title}.docx` : primary.filename,
+    document_type: isMailMerge ? 'mail_merge' : primary.document_type,
+    status: statuses.length === 1 ? statuses[0] : statuses.join(', '),
+    statuses,
+    tags,
+    app_keys: [...new Set(sourceIdentities.map(({ app_key: key }) => key))],
+    source_keys: [...new Set(sourceIdentities.map(({ source_key: key }) => key))],
+    source_labels: sourceIdentities.map(({ label }) => label),
+    recipient_count: recipientCount,
+    updated_at_ms: Math.max(...records.map((record) => Number(record.updated_at_ms || 0)), 0),
+    search_text: searchValues.filter((value) => value != null).join(' '),
+  };
+}
+
+function mailMergeBundleDescriptor(record = {}) {
+  const mailMerge = plainObject(record.mail_merge) ? record.mail_merge : null;
+  const seriesLetter = plainObject(record.series_letter) ? record.series_letter : null;
+  const explicit = mailMerge || seriesLetter;
+  const provenance = plainObject(record.provenance) ? record.provenance : {};
+  const source = String(provenance.source || '').trim().toLowerCase();
+  const isTypedBundle = record.document_type === 'mail_merge'
+    || record.document_type === 'series_letter'
+    || Boolean(explicit);
+  if (isTypedBundle) {
+    const bundleId = firstText(
+      explicit?.bundle_id,
+      explicit?.id,
+      provenance.mail_merge_id,
+      provenance.series_letter_id,
+      record.idempotency_key,
+      record.id,
+    );
+    return bundleId ? {
+      key: `mail_merge:${bundleId}`,
+      kind: record.document_type === 'series_letter' ? 'series_letter' : 'mail_merge',
+      id: bundleId,
+      explicit: true,
+    } : null;
+  }
+  if (!MAIL_MERGE_SOURCE_NAMES.has(source)) return null;
+  const explicitBundleId = firstText(
+    provenance.bundle_id,
+    provenance.mail_merge_id,
+    provenance.series_letter_id,
+  );
+  if (explicitBundleId) {
+    return {
+      key: `mail_merge:${explicitBundleId}`,
+      kind: 'mail_merge',
+      id: explicitBundleId,
+      explicit: false,
+    };
+  }
+  const appId = firstText(provenance.app_id, provenance.appId);
+  const campaignId = firstText(
+    provenance.selection_id,
+    provenance.campaign_id,
+    provenance.campaignId,
+  );
+  const templateId = firstText(
+    record.template_ref?.template_id,
+    record.template_ref?.id,
+    provenance.template_id,
+  );
+  if (!campaignId || !templateId) return null;
+  const templateVersion = firstText(record.template_ref?.version, provenance.template_version, '1');
+  return {
+    key: `mail_merge:${appId || 'unknown'}:${source}:${campaignId}:${templateId}:${templateVersion}`,
+    kind: 'mail_merge',
+    id: `${campaignId}:${templateId}:${templateVersion}`,
+    explicit: false,
+  };
+}
+
+function mailMergeGroupTitle(records, bundle) {
+  const configured = records.map((record) => firstText(
+    record.mail_merge?.title,
+    record.series_letter?.title,
+    record.provenance?.bundle_title,
+    record.provenance?.campaign_name,
+    record.display_cache?.mail_merge_title,
+  )).find(Boolean);
+  if (configured) return configured;
+  if (bundle?.explicit && records.length === 1) return records[0].title || 'Serienbrief';
+  const common = longestCommonPrefix(records.map((record) => record.title || record.filename))
+    .replace(/[\s\-–—:|]+$/g, '')
+    .trim();
+  return common.length >= 3 ? common : records[0]?.title || 'Serienbrief';
+}
+
+function longestCommonPrefix(values = []) {
+  const texts = values.map((value) => String(value || '')).filter(Boolean);
+  if (!texts.length) return '';
+  let prefix = texts[0];
+  for (const text of texts.slice(1)) {
+    while (prefix && !text.toLocaleLowerCase('de').startsWith(prefix.toLocaleLowerCase('de'))) {
+      prefix = prefix.slice(0, -1);
+    }
+    if (!prefix) break;
+  }
+  return prefix;
+}
+
+function recipientLabelFromRecord(record, groupTitle = '') {
+  const configured = firstText(
+    record.mail_merge_recipient?.label,
+    record.provenance?.recipient_label,
+    record.provenance?.recipient_name,
+    record.display_cache?.recipient_label,
+  );
+  if (configured) return configured;
+  let title = String(record.title || record.filename || '').replace(/\.docx$/i, '').trim();
+  if (groupTitle && title.toLocaleLowerCase('de').startsWith(groupTitle.toLocaleLowerCase('de'))) {
+    title = title.slice(groupTitle.length).replace(/^[\s\-–—:|]+/, '');
+  }
+  const parts = title.split(/\s+-\s+/).filter(Boolean);
+  if (groupTitle && parts.length > 1) parts.pop();
+  return parts.join(' - ') || title || record.id;
+}
+
+function documentSourceIdentity(record = {}) {
+  const provenance = plainObject(record.provenance) ? record.provenance : {};
+  const appId = firstText(provenance.app_id, provenance.appId);
+  const source = firstText(provenance.source);
+  const appKey = appId || 'manual';
+  const sourceKey = source || 'manual';
+  const appLabel = appId ? humanizeIdentifier(appId) : 'Manuell';
+  const sourceLabel = source ? humanizeIdentifier(source) : 'Import';
+  return {
+    key: `${appKey}::${sourceKey}`,
+    app_key: appKey,
+    source_key: sourceKey,
+    app_id: appId,
+    source,
+    app_label: appLabel,
+    source_label: sourceLabel,
+    label: `${appLabel} · ${sourceLabel}`,
+  };
+}
+
+function humanizeIdentifier(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toLocaleUpperCase('de'))
+    .trim();
+}
+
+function selectedDocumentGroup(state) {
+  return groupDocumentRecords(state.documents)
+    .find((group) => group.record_ids.includes(state.selectedId)) || null;
+}
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('de')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueBy(values, keyFn) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = keyFn(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function firstText(...values) {
+  return values.map((value) => String(value ?? '').trim()).find(Boolean) || '';
+}
+
+function plainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function renderRight(state) {
+  const slot = state.ctx.host.querySelector('[data-documents-actions-content]');
+  if (!slot) return;
   const record = selectedRecord(state);
   const selectedRunbook = defaultRunbookId(state);
   const knowledgeLink = documentKnowledgeLink(record);
@@ -1667,6 +2375,7 @@ function renderRight(state) {
         </div>
         <div class="ctox-pane-actions">
           <strong class="ctox-badge documents-runbook-state">${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'keine'))}</strong>
+          <button class="ctox-pane-icon" type="button" data-documents-actions-close aria-label="${escapeHtml(state.t('closeActions', 'Aktionen schließen'))}" title="${escapeHtml(state.t('closeActions', 'Aktionen schließen'))}">${actionIcon(state, 'close')}</button>
         </div>
       </div>
     </header>
@@ -1714,7 +2423,13 @@ function renderRight(state) {
     });
   });
   wrap.querySelector('[data-documents-open-knowledge]')?.addEventListener('click', () => openKnowledgeRunbooks(state));
-  state.ctx.right.replaceChildren(wrap);
+  wrap.querySelector('[data-documents-actions-close]')?.addEventListener('click', () => {
+    state.actionsOpen = false;
+    renderPaneVisibility(state);
+    renderDocumentStrip(state);
+  });
+  slot.replaceChildren(wrap);
+  renderPaneVisibility(state);
 }
 
 async function dispatchDocumentRunbook(state, input) {
@@ -1961,23 +2676,22 @@ async function openKnowledgeRunbooks(state) {
   document.querySelector('[data-module="ctox"]')?.click();
 }
 
-function renderCenter(state) {
+async function renderCenter(state) {
   const host = state.ctx.host.querySelector('[data-documents-editor]');
   const record = selectedRecord(state);
+  renderDocumentStrip(state);
   const renderSerial = (state.renderSerial || 0) + 1;
   state.renderSerial = renderSerial;
   if (state.superdocSaveTimer) {
     clearTimeout(state.superdocSaveTimer);
     state.superdocSaveTimer = null;
   }
-  try {
-    state.editorHandle?.destroy?.();
-  } catch (error) {
-    console.warn('[documents] previous editor destroy failed', error);
-  }
-  state.editorHandle = null;
+  await destroyActiveEditor(state);
+  if (state.renderSerial !== renderSerial) return;
 
   if (!record) {
+    state.mailMergeNavigation = null;
+    renderDocumentStrip(state);
     host.innerHTML = `<div class="documents-empty"><strong>${escapeHtml(state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</strong><span>${escapeHtml(state.t('noDocumentSelectedPrompt', 'Links ein DOCX importieren oder auswählen.'))}</span></div>`;
     return;
   }
@@ -1999,15 +2713,16 @@ function renderCenter(state) {
       });
     return;
   }
-  if (record.document_type === 'word_document') {
+  if (!state.mailMergeNavigation && selectedDocumentGroup(state)?.is_mail_merge) {
+    await refreshMailMergeNavigation(state);
+    if (state.renderSerial !== renderSerial) return;
+    renderDocumentStrip(state);
+  }
+  if (isDocxDocumentRecord(record)) {
     const useCtoxDocuments = state.officeEngine === 'ctox_documents';
-    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(useCtoxDocuments ? 'CTOX Documents wird initialisiert.' : state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
+    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade Word-Editor'))}</strong><span>${escapeHtml(useCtoxDocuments ? state.t('documentEditorInitializing', 'Dokumenteditor wird initialisiert.') : state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
     const mountEditor = useCtoxDocuments ? mountCtoxDocuments : mountSuperDocDocument;
-    mountEditor(state, host, record, version, renderSerial).catch((error) => {
-      if (state.renderSerial !== renderSerial) return;
-      console.error(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
-      renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
-    });
+    mountWordEditor(state, host, record, version, renderSerial, mountEditor, useCtoxDocuments);
     return;
   }
 
@@ -2019,6 +2734,57 @@ function renderCenter(state) {
     if (state.renderSerial !== renderSerial) return;
     renderError(state, `${state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:')} ${error?.message || error}`);
   });
+}
+
+async function mountWordEditor(state, host, record, version, renderSerial, mountEditor, useCtoxDocuments, attempt = 0) {
+  try {
+    await mountEditor(state, host, record, version, renderSerial);
+  } catch (error) {
+    if (state.renderSerial !== renderSerial) return;
+    if (useCtoxDocuments && attempt === 0 && isTransientOfficeStartupError(error)) {
+      host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(state.t('officeEditorRetry', 'Editor wird erneut gestartet.'))}</span></div>`;
+      await delay(1200);
+      if (state.renderSerial !== renderSerial) return;
+      await mountWordEditor(state, host, record, version, renderSerial, mountEditor, useCtoxDocuments, attempt + 1);
+      return;
+    }
+    console.error(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
+    renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
+  }
+}
+
+function isTransientOfficeStartupError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('iframe load timed out')
+    || message.includes('editor.ready')
+    || message.includes('app-ready timed out')
+    || message.includes('fork sdk load timed out');
+}
+
+async function destroyActiveEditor(state) {
+  const editorHandle = state.editorHandle;
+  state.editorHandle = null;
+  const previousDestroy = state.editorDestroyPromise || Promise.resolve();
+  if (!editorHandle) {
+    await previousDestroy.catch((error) => {
+      console.warn('[documents] previous editor destroy failed', error);
+    });
+    return;
+  }
+
+  const destroyPromise = previousDestroy
+    .catch((error) => {
+      console.warn('[documents] previous editor destroy failed', error);
+    })
+    .then(() => editorHandle.destroy?.());
+  state.editorDestroyPromise = destroyPromise;
+  try {
+    await destroyPromise;
+  } catch (error) {
+    console.warn('[documents] previous editor destroy failed', error);
+  } finally {
+    if (state.editorDestroyPromise === destroyPromise) state.editorDestroyPromise = null;
+  }
 }
 
 function mountMarkdownDocument(state, host, version, formatModule) {
@@ -2157,6 +2923,8 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial) {
     locale: state.lang,
     theme: document.documentElement.dataset.theme || 'system',
     permissions,
+    loadTimeoutMs: CTOX_DOCUMENTS_LOAD_TIMEOUT_MS,
+    readyTimeoutMs: CTOX_DOCUMENTS_READY_TIMEOUT_MS,
   });
   if (state.renderSerial !== renderSerial) {
     await editor.destroy();
@@ -2174,6 +2942,12 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial) {
     state.dirty = false;
   });
   await editor.open({ recordId: record.id, versionId: version.id });
+  if (state.renderSerial !== renderSerial) {
+    removeDirtyListener();
+    removeSavedListener();
+    await editor.destroy();
+    return;
+  }
   state.editorHandle = {
     kind: 'ctox-documents',
     editor,
@@ -2280,7 +3054,7 @@ async function mountSuperDocDocument(state, host, record, version, renderSerial)
   editorHost.append(mount);
   frame.append(controls, toolbar, ruler, editorHost);
   host.append(frame);
-  const file = new File([bytes], record.filename || 'document.docx', { type: DOCX_MIME });
+  const file = new File([bytes], version.filename || record.filename || 'document.docx', { type: DOCX_MIME });
   if (state.renderSerial !== renderSerial) return;
   const superdoc = new SuperDoc({
     selector: mount,
@@ -2475,6 +3249,10 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   if (!state.selectedVersion) return;
   const formatModule = await ensureDocumentFormatModule(state);
   const isMarkdown = record.document_type === 'markdown_document' || record.mime_type === MARKDOWN_MIME;
+  if (!isMarkdown && !isDocxDocumentRecord(record)) {
+    renderError(state, state.t('unsupportedDocumentExport', 'Dieser Dokumenttyp kann nicht als DOCX exportiert werden.'));
+    return;
+  }
   let data;
   if (isMarkdown) {
     data = formatModule.exportMarkdown(state.selectedVersion.model_json);
@@ -2488,8 +3266,9 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
+  const selectedFilename = state.selectedVersion?.filename || record.filename;
   a.download = sanitizeExportFilename(requestedFilename, isMarkdown)
-    || record.filename.replace(/\.(docx|md|markdown)$/i, '') + (isMarkdown ? '-edited.md' : '-edited.docx');
+    || selectedFilename.replace(/\.(docx|md|markdown)$/i, '') + (isMarkdown ? '-edited.md' : '-edited.docx');
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -2618,6 +3397,10 @@ function selectedRecord(state) {
   return state.documents.find((record) => record.id === state.selectedId) || null;
 }
 
+function selectedRecordInGroup(state, group) {
+  return group.records.find((record) => record.id === state.selectedId) || group.records[0] || null;
+}
+
 function withTimeout(promise, ms, message) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -2641,6 +3424,12 @@ function renderError(state, message) {
 
 function isSupportedDocumentFile(file) {
   return isDocxFile(file) || isMarkdownFile(file) || isTextFile(file);
+}
+
+function isDocxDocumentRecord(record = {}) {
+  return ['word_document', 'mail_merge', 'series_letter'].includes(record.document_type)
+    || record.mime_type === DOCX_MIME
+    || /\.docx$/i.test(String(record.filename || ''));
 }
 
 function isDocxFile(file) {
@@ -2674,6 +3463,11 @@ const DOCUMENTS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
   upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
   export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
   close: 'M6 6l12 12M18 6L6 18',
+  filter: 'M4 6h16M7 12h10M10 18h4',
+  copy: 'M9 9h10v11H9zM5 15V4h10',
+  folder: 'M4 6h5l2 2h9v11H4V6Z',
+  chevronLeft: 'M15 6l-6 6 6 6',
+  chevronRight: 'M9 6l6 6-6 6',
   settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
   more: 'M6 12h.01M12 12h.01M18 12h.01',
 });
@@ -2755,9 +3549,15 @@ async function ensureStyles() {
   if (document.querySelector('link[data-documents-style]')) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
+  link.href = revisionedModuleAssetUrl('./index.css').href;
   link.dataset.documentsStyle = 'true';
   document.head.append(link);
+}
+
+function revisionedModuleAssetUrl(relativePath) {
+  const url = new URL(relativePath, import.meta.url);
+  url.searchParams.set('v', DOCUMENTS_ASSET_REVISION);
+  return url;
 }
 
 function ensureSuperDocStyles() {
@@ -2778,6 +3578,13 @@ export const __documentsTestHooks = {
   normalizeDocumentRecord,
   normalizeKnowledgeRecord,
   resolveKnowledgeContext,
+  groupDocumentRecords,
+  mailMergeBundleDescriptor,
+  refreshMailMergeNavigation,
+  findMailMergeRecipientIndex,
+  documentSourceIdentity,
+  documentFilterCount,
+  isDocxDocumentRecord,
   validateImportInput,
   validateNewDocumentInput,
   visibleDocuments,
@@ -2785,6 +3592,10 @@ export const __documentsTestHooks = {
   officeEngineFromSettings,
   ctoxDocumentsPermissions,
   saveBlobChunks,
+  documentIdFromLaunchArgs,
+  versionIdFromLaunchArgs,
+  destroyActiveEditor,
+  isTransientOfficeStartupError,
 };
 
 function escapeHtml(value) {

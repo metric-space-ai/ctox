@@ -395,6 +395,7 @@ export async function mount(ctx) {
         .then(renderIcons)
         .catch((error) => {
           if (isDatabaseClosingError(error)) return;
+          if (showManagedAuthorizationError(error)) return;
           console.error('[desktop] module catalog refresh failed:', error);
         });
     });
@@ -873,6 +874,7 @@ export async function mount(ctx) {
     const sub = iconsCollection.$.subscribe(() => {
       renderIcons().catch((error) => {
         if (isDatabaseClosingError(error)) return;
+        if (showManagedAuthorizationError(error)) return;
         console.error('[desktop] icon render failed:', error);
       });
     });
@@ -881,13 +883,14 @@ export async function mount(ctx) {
 
   function isDatabaseClosingError(error) {
     const message = String(error?.message || error || '');
-    // Demand queries already publish durable authorization failures through
-    // Sync/Advanced Status. During an internally supervised peer replacement,
-    // an in-flight icon refresh can additionally observe the retiring peer's
-    // authorization map. The desktop falls back to launcher icons here and
-    // lets the status surface remain the single error owner.
-    if (/UNAUTHORIZED: peer is not authorized for this collection/i.test(message)) return true;
     return /IDBDatabase.*closing|database connection is closing/i.test(message);
+  }
+
+  function showManagedAuthorizationError(error) {
+    const message = String(error?.message || error || '');
+    if (!/UNAUTHORIZED: peer is not authorized for this collection/i.test(message)) return false;
+    globalThis.showStartupError?.(error);
+    return true;
   }
 
   function subscribeCommandStream() {

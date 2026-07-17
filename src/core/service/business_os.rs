@@ -451,7 +451,7 @@ fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_js
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(config.instance_id.as_str());
-    let expires_at = flag_value(args, "--expires-at")
+    let requested_expires_at = flag_value(args, "--expires-at")
         .map(str::to_string)
         .unwrap_or_else(|| {
             let ttl_hours = flag_value(args, "--ttl-hours")
@@ -461,6 +461,42 @@ fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_js
             (chrono::Utc::now() + chrono::Duration::hours(ttl_hours))
                 .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         });
+    let requested_expires_at = chrono::DateTime::parse_from_rfc3339(&requested_expires_at)
+        .context("desktop invite --expires-at must be RFC3339")?
+        .with_timezone(&chrono::Utc);
+    let user_id = flag_value(args, "--user")
+        .or_else(|| flag_value(args, "--user-id"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("desktop-owner");
+    let user_display_name = flag_value(args, "--user-display-name")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Desktop Owner");
+    let role = flag_value(args, "--role")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("chef");
+    anyhow::ensure!(
+        matches!(role, "chef" | "admin" | "founder" | "user"),
+        "desktop invite --role must be chef, admin, founder, or user"
+    );
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0);
+    let (capability_token, capability_expires_at_ms) =
+        crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+            root,
+            user_id,
+            user_display_name,
+            role,
+            now_ms,
+        )?;
+    let capability_expires_at = chrono::DateTime::from_timestamp_millis(capability_expires_at_ms)
+        .context("desktop invite capability expiry is invalid")?;
+    let expires_at = std::cmp::min(requested_expires_at, capability_expires_at)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let mut invite = serde_json::json!({
         "type": "ctox-business-os-invite",
         "version": 1,
@@ -475,6 +511,18 @@ fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_js
         "data_plane": "rxdb-webrtc",
         "http_bridge_available": false,
         "secret_value_in_payload": true,
+        "session": {
+            "authenticated": true,
+            "source": "desktop_invite",
+            "capability_token": capability_token,
+            "capability_expires_at_ms": capability_expires_at_ms,
+            "user": {
+                "id": user_id,
+                "display_name": user_display_name,
+                "role": role,
+                "is_admin": matches!(role, "chef" | "admin" | "founder"),
+            }
+        }
     });
     let encoded =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&invite)?);
@@ -2857,6 +2905,7 @@ pub(crate) fn run_business_os_web_stack_auth_assist_request(
         "ctox_harness",
         "ctox_web_auth_assist_request",
         false,
+        true,
     )
 }
 
@@ -2954,6 +3003,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         requesting_task_id,
         "ctox_harness",
         "ctox_web_auth_assist_login",
+        false,
         false,
     )?;
     let session_id = auth_assist
@@ -3081,6 +3131,170 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
     }))
 }
 
+fn run_business_os_web_stack_source_capture(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let source_id = flag_value(args, "--source-id")
+        .context("source-capture requires --source-id <id>")?
+        .trim()
+        .to_ascii_lowercase();
+    anyhow::ensure!(
+        matches!(
+            source_id.as_str(),
+            "dnbhoovers.com" | "leadfeeder.com" | "xing.com"
+        ),
+        "source-capture supports only authenticated D&B, Leadfeeder, and XING sessions"
+    );
+    let company = flag_value(args, "--company")
+        .context("source-capture requires --company <name>")?
+        .trim();
+    anyhow::ensure!(!company.is_empty(), "source-capture company is empty");
+    let country = flag_value(args, "--country").unwrap_or("DE").trim();
+    let session_id = flag_value(args, "--session-id")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "browser_session_web_stack_auth_{}",
+                rxdb_id_slug(&source_id)
+            )
+        });
+    let timeout_ms = flag_value(args, "--timeout-ms")
+        .map(str::parse::<u64>)
+        .transpose()
+        .context("failed to parse --timeout-ms")?
+        .unwrap_or(60_000)
+        .clamp(1_000, 120_000);
+    let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
+    let automation = crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.clone(),
+            dir: flag_value(args, "--dir").map(PathBuf::from),
+            timeout_ms: Some(timeout_ms),
+            source,
+        },
+    )?;
+    let result = automation
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let records = result
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "ok": automation.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "source_id": source_id,
+        "session_id": session_id,
+        "company": company,
+        "country": country,
+        "records": records,
+        "record_count": records.len(),
+        "source_status": result.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"),
+        "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
+        "secret_value_in_payload": false,
+        "browser_stream": "rxdb",
+        "automation": automation,
+    }))
+}
+
+fn build_web_stack_authenticated_source_capture(
+    source_id: &str,
+    company: &str,
+    country: &str,
+) -> anyhow::Result<String> {
+    Ok(format!(
+        r#"const sourceId = {};
+const company = {};
+const country = {};
+const allowedHosts = {{
+  "dnbhoovers.com": ["dnbhoovers.com", "app.dnbhoovers.com"],
+  "leadfeeder.com": ["leadfeeder.com", "app.leadfeeder.com"],
+  "xing.com": ["xing.com", "www.xing.com"],
+}}[sourceId];
+const hostAllowed = (raw) => {{
+  try {{
+    const host = new URL(raw).hostname.toLowerCase();
+    return allowedHosts.some((allowed) => host === allowed || host.endsWith(`.${{allowed}}`));
+  }} catch {{ return false; }}
+}};
+const currentUrl = page.url();
+if (/login|signin|auth/i.test(currentUrl)) {{
+  return {{ status: "auth_required", source_url: currentUrl, records: [] }};
+}}
+if (sourceId === "xing.com") {{
+  await page.goto(`https://www.xing.com/search/people?keywords=${{encodeURIComponent(company)}}`, {{
+    waitUntil: "domcontentloaded", timeout: 30000,
+  }});
+}} else {{
+  const candidates = [
+    'input[type="search"]',
+    'input[placeholder*="search" i]',
+    'input[placeholder*="suche" i]',
+    'input[aria-label*="search" i]',
+  ];
+  for (const selector of candidates) {{
+    const field = page.locator(selector).first();
+    if ((await field.count()) < 1 || !(await field.isVisible().catch(() => false))) continue;
+    await field.fill(company);
+    await field.press("Enter");
+    break;
+  }}
+}}
+await page.waitForLoadState("networkidle", {{ timeout: 12000 }}).catch(() => null);
+await page.waitForTimeout(1200);
+if (!hostAllowed(page.url())) {{
+  return {{ status: "wrong_origin", source_url: page.url(), records: [] }};
+}}
+const snapshot = await page.evaluate((companyName) => {{
+  const text = String(document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 100000);
+  const links = Array.from(document.querySelectorAll("a[href]"))
+    .map((link) => ({{ url: link.href, text: String(link.innerText || link.textContent || "").replace(/\s+/g, " ").trim() }}))
+    .filter((link) => link.text)
+    .slice(0, 500);
+  return {{ text, links, title: document.title, companyName }};
+}}, company);
+const normalized = (value) => String(value || "").toLocaleLowerCase("de-DE").replace(/[^a-z0-9äöüß]+/g, " ").trim();
+const companyTokens = normalized(company).split(/\s+/).filter((token) => token.length >= 4 && !["gmbh", "gesellschaft", "aktiengesellschaft"].includes(token));
+const corpus = normalized(`${{snapshot.title}} ${{snapshot.text}}`);
+const matched = companyTokens.length > 0 && companyTokens.slice(0, 2).every((token) => corpus.includes(token));
+const records = [];
+const push = (field, value, confidence, note, url = page.url()) => {{
+  if (!value || !hostAllowed(url)) return;
+  records.push({{ field, value: String(value).trim(), confidence, source_url: url, note }});
+}};
+if (matched) push("firma_name", company, "medium", `${{sourceId}} authenticated search result`);
+const sourceLinks = snapshot.links.filter((link) => hostAllowed(link.url));
+for (const link of sourceLinks.slice(0, 20)) {{
+  if (sourceId === "xing.com" && /\/profile\//i.test(link.url)) {{
+    const parts = link.text.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {{
+      push("person_vorname", parts[0], "medium", "XING profile result", link.url);
+      push("person_nachname", parts.slice(1).join(" "), "medium", "XING profile result", link.url);
+      push("person_xing", link.url, "high", "XING profile URL", link.url);
+    }}
+  }}
+}}
+for (const email of [...snapshot.text.matchAll(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{{2,}}\b/gi)].map((match) => match[0]).slice(0, 5)) {{
+  push("person_email", email.toLowerCase(), "medium", `${{sourceId}} authenticated page`);
+}}
+for (const phone of [...snapshot.text.matchAll(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/g)].map((match) => match[0]).slice(0, 3)) {{
+  push("person_telefon", phone, "medium", `${{sourceId}} authenticated page`);
+}}
+return {{
+  status: records.length > 0 ? "succeeded" : (matched ? "no_extractable_fields" : "no_match"),
+  source_url: page.url(),
+  country,
+  records,
+}};"#,
+        serde_json::to_string(source_id)?,
+        serde_json::to_string(company)?,
+        serde_json::to_string(country)?,
+    ))
+}
+
 fn run_business_os_web_stack_auth_assist_signup(
     root: &Path,
     args: &[String],
@@ -3119,6 +3333,7 @@ fn run_business_os_web_stack_auth_assist_signup(
         requesting_task_id,
         "ctox_harness",
         "ctox_web_auth_assist_signup",
+        false,
         false,
     )?;
     let session_id = auth_assist
@@ -3386,7 +3601,7 @@ pub(crate) fn run_business_os_web_stack_context_extract(
     }))
 }
 
-pub(crate) fn run_business_os_web_stack_cli_json(
+pub(crate) fn run_business_os_web_stack_cli_json_local(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
@@ -3429,6 +3644,16 @@ pub(crate) fn run_business_os_web_stack_cli_json(
         Some(other) => anyhow::bail!("unknown business-os web-stack command `{other}`"),
         None => anyhow::bail!("usage: ctox business-os web-stack <command>"),
     }
+}
+
+pub(crate) fn run_business_os_web_stack_cli_json(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    if let Some(payload) = crate::service::run_business_os_web_stack_via_service(root, args)? {
+        return Ok(payload);
+    }
+    run_business_os_web_stack_cli_json_local(root, args)
 }
 
 fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<()> {
@@ -3500,6 +3725,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
                         "ctox_web_stack",
                         "ctox_business_os_web_stack_person_research",
                         true,
+                        true,
                     )?;
                     commands.push(command);
                 }
@@ -3535,15 +3761,16 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
                 "ctox_harness",
                 "ctox_web_auth_assist_request",
                 false,
+                true,
             )?;
             print_json(&summary)
         }
         Some("auth-assist-signup") => {
-            let signup = run_business_os_web_stack_auth_assist_signup(root, args)?;
+            let signup = run_business_os_web_stack_cli_json(root, args)?;
             print_json(&signup)
         }
         Some("auth-assist-login") => {
-            let login = run_business_os_web_stack_auth_assist_login(root, args)?;
+            let login = run_business_os_web_stack_cli_json(root, args)?;
             print_json(&login)
         }
         Some("authenticated-automation") => {
@@ -3936,6 +4163,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os peer start\n  ctox business-os desktop invite",
             "  ctox business-os peer start\n  ctox business-os auth issue-capability --user <user-id> [--display-name <name>] [--role chef|admin|founder|user] [--ensure-user]\n  ctox business-os desktop invite",
+        )
+        .replace(
+            "  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]",
+            "  ctox business-os desktop invite [--display-name <name>] [--user <id>] [--user-id <id>] [--user-display-name <name>] [--role chef|admin|founder|user] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]",
         )
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
@@ -4474,7 +4705,7 @@ fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-fn enqueue_web_stack_auth_assist_request(
+pub(crate) fn enqueue_web_stack_auth_assist_request(
     root: &Path,
     source_id: &str,
     target_url_override: Option<&str>,
@@ -4484,6 +4715,7 @@ fn enqueue_web_stack_auth_assist_request(
     source_module: &str,
     command_path: &str,
     deterministic_for_task: bool,
+    accept_as_trusted_local: bool,
 ) -> anyhow::Result<serde_json::Value> {
     let module = ctox_web_stack::sources::find(source_id);
     let recipe = module.and_then(|module| module.browser_recipe());
@@ -4503,9 +4735,17 @@ fn enqueue_web_stack_auth_assist_request(
         .map(|recipe| recipe.allowed_domains.clone())
         .filter(|domains| !domains.is_empty())
         .unwrap_or_else(|| allowed_domains_from_url(&target_url));
-    let secret_name = recipe
-        .as_ref()
-        .and_then(|recipe| recipe.required_secret_name)
+    let explicit_secret_name = credential_ref
+        .and_then(|value| parse_local_ctox_secret_ref(value).ok())
+        .filter(|reference| reference.scope == crate::secrets::credential_scope())
+        .map(|reference| reference.name);
+    let secret_name = explicit_secret_name
+        .as_deref()
+        .or_else(|| {
+            recipe
+                .as_ref()
+                .and_then(|recipe| recipe.required_secret_name)
+        })
         .or_else(|| module.and_then(|module| module.requires_credential()))
         .unwrap_or_default();
     let now = now_ms();
@@ -4569,12 +4809,14 @@ fn enqueue_web_stack_auth_assist_request(
             "secret_value_in_rxdb": false,
             "dedupe_key": dedupe_key,
             "requesting_task_id": requesting_task_id,
+            "instruction": "Oeffne die Recherchequelle ueber den CTOX Web Stack. Nutze die hinterlegte Credential-Referenz ausschliesslich ueber den CTOX Secret Store. Fuehre die Anmeldung mit auth-assist-login aus. Falls MFA oder eine interaktive Freigabe erforderlich ist, halte die persistente CTOX-Browser-Sitzung fuer den Benutzer offen. Gib niemals Zugangswerte in Prompt, Ergebnis, Log oder RxDB aus.",
+            "required_skills": ["universal-scraping", "web-unlock"],
         },
         "client_context": {
             "source_module": source_module,
             "command_path": command_path,
             "actor": {
-                "user_id": source_module,
+                "id": source_module,
                 "display_name": source_module,
                 "role": "admin",
                 "is_admin": true
@@ -4583,7 +4825,39 @@ fn enqueue_web_stack_auth_assist_request(
         "created_at_ms": now,
         "updated_at_ms": now
     });
-    let stored = crate::business_os::enqueue_business_command_document(root, document)?;
+    let stored = if accept_as_trusted_local {
+        let accepted =
+            crate::business_os::store::accept_rxdb_business_command(root, document.clone())?;
+        let mut projection = document;
+        if let Some(object) = projection.as_object_mut() {
+            for key in [
+                "status",
+                "execution_mode",
+                "execution_task_id",
+                "target_task_id",
+                "target_record_id",
+                "task_id",
+                "task_status",
+                "result",
+            ] {
+                if let Some(value) = accepted.get(key) {
+                    object.insert(key.to_string(), value.clone());
+                }
+            }
+            object.insert(
+                "updated_at_ms".to_string(),
+                serde_json::Value::from(now_ms()),
+            );
+        }
+        crate::business_os::enqueue_business_command_document(root, projection)?;
+        accepted
+    } else {
+        crate::business_os::enqueue_business_command_document(root, document)?
+    };
+    let status = stored
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("pending_sync");
     Ok(serde_json::json!({
         "ok": true,
         "command_id": stored.get("command_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
@@ -4602,7 +4876,10 @@ fn enqueue_web_stack_auth_assist_request(
         "deduped_by_command_id": deterministic_for_task,
         "browser_stream": "rxdb",
         "secret_value_in_payload": false,
-        "status": "pending_sync"
+        "status": status,
+        "task_id": stored.get("task_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "execution_task_id": stored.get("execution_task_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "trusted_local_intake": accept_as_trusted_local
     }))
 }
 
@@ -4791,7 +5068,7 @@ const browserCandidateFields = async (kind) => page.evaluate(({ kind }) => {
     }
     let score = 0;
     if (type === "email") score += 100;
-    if (/(email|e-mail|mail|username|user name|login|account|benutzer|nutzer)/.test(tokens)) score += 80;
+    if (/(email|e-mail|mail|username|user name|login|logon|account|benutzer|nutzer)/.test(tokens)) score += 80;
     if (type === "password" || /(password|passwort|passwd|pwd|kennwort)/.test(tokens)) score -= 100;
     if (/(search|query|filter)/.test(tokens)) score -= 50;
     return score;
@@ -5094,6 +5371,7 @@ const gotoTargetWithRetry = async () => {
 };
 const before = await gotoTargetWithRetry();
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
+const consentTransition = await dismissConsent();
 const beforeSignals = await pageSignals();
 let loginField = null;
 if (loginHint) {
@@ -5137,6 +5415,7 @@ if (!credentialField) {
       ? { url: afterLoginEntrySignals.url, title: afterLoginEntrySignals.title, form_state: afterLoginEntrySignals.form_state, auth_signals: afterLoginEntrySignals.auth_signals }
       : null,
     login_transition: loginTransition,
+    consent_transition: consentTransition,
     mfa_required: missingFieldSignals.auth_signals?.mfa_required === true,
     login_error_detected: missingFieldSignals.auth_signals?.login_error_detected === true,
     auth_signals: missingFieldSignals.auth_signals,
@@ -5198,6 +5477,7 @@ const loginOutcome = {
   credential_ref: credentialRef,
   login_hint_present: !!loginHint,
   login_transition: loginTransition,
+  consent_transition: consentTransition,
   mfa_required: mfaRequired,
   login_error_detected: loginErrorDetected,
   auth_signals: authSignals,
@@ -5995,6 +6275,20 @@ mod tests {
         assert!(source.contains("task_type: 'same-origin-api-map'"));
         assert!(source.contains("post_auth_result: postAuthResult"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_authenticated_capture_is_source_scoped_and_secret_free() -> anyhow::Result<()> {
+        let source =
+            build_web_stack_authenticated_source_capture("dnbhoovers.com", "WITTENSTEIN SE", "DE")?;
+
+        assert!(source.contains("app.dnbhoovers.com"));
+        assert!(source.contains("hostAllowed"));
+        assert!(source.contains("wrong_origin"));
+        assert!(source.contains("authenticated search result"));
+        assert!(!source.contains("credentialValue"));
+        assert!(!source.contains("password"));
         Ok(())
     }
 
@@ -6850,6 +7144,18 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .is_empty());
+        assert!(!invite
+            .pointer("/session/capability_token")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .is_empty());
+        assert!(
+            invite
+                .pointer("/session/capability_expires_at_ms")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or_default()
+                > 0
+        );
 
         let desktop_link = invite
             .get("desktop_link")
@@ -6870,6 +7176,9 @@ mod tests {
             Some("ctox-business-os-invite")
         );
         assert!(decoded_invite.get("native_peer_id").is_some());
+        assert!(decoded_invite
+            .pointer("/session/capability_token")
+            .is_some());
         assert_eq!(decoded_invite.get("desktop_link"), None);
     }
 

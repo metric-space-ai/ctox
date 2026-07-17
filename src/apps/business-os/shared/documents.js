@@ -26,12 +26,18 @@ export function createDocumentsFacade({
     },
 
     async createDocx(input = {}) {
-      const normalized = await normalizeCreateDocxInput(input, cryptoProvider);
+      const normalized = await normalizeCreateDocxInput(
+        input,
+        cryptoProvider,
+        resolveFacadeAppId(appId),
+      );
       const fingerprint = canonicalJson({
         filename: normalized.filename,
         title: normalized.title,
         ownerId: normalized.ownerId,
         sha256: normalized.sha256,
+        indexText: normalized.indexText,
+        tags: normalized.tags,
         linkedRecords: normalized.linkedRecords,
         templateRef: normalized.templateRef,
         provenance: normalized.provenance,
@@ -63,6 +69,60 @@ export function createDocumentsFacade({
       }
     },
 
+    async createMailMerge(input = {}) {
+      const normalized = await normalizeCreateMailMergeInput(
+        input,
+        cryptoProvider,
+        resolveFacadeAppId(appId),
+      );
+      const fingerprint = canonicalJson({
+        filename: normalized.filename,
+        title: normalized.title,
+        ownerId: normalized.ownerId,
+        indexText: normalized.indexText,
+        tags: normalized.tags,
+        linkedRecords: normalized.linkedRecords,
+        templateRef: normalized.templateRef,
+        provenance: normalized.provenance,
+        failures: normalized.failures,
+        variants: normalized.variants.map((variant) => ({
+          recipientId: variant.recipientId,
+          recipientLabel: variant.recipientLabel,
+          filename: variant.filename,
+          sha256: variant.sha256,
+          indexText: variant.indexText,
+          linkedRecords: variant.linkedRecords,
+          provenance: variant.provenance,
+        })),
+      });
+      const pendingKey = `mail-merge:${normalized.idempotencyKey}`;
+      const pending = pendingCreates.get(pendingKey);
+      if (pending) {
+        if (pending.fingerprint !== fingerprint) {
+          throw documentsError(
+            'DOCUMENTS_IDEMPOTENCY_CONFLICT',
+            'idempotencyKey is already in use for a different mail merge payload.',
+          );
+        }
+        return pending.promise;
+      }
+
+      const promise = withChunkSyncLease(sync, () => createStoredMailMerge({
+        collections: requireDocumentCollections(db, { write: true }),
+        input: normalized,
+        cryptoProvider,
+        now,
+      }));
+      pendingCreates.set(pendingKey, { fingerprint, promise });
+      try {
+        return await promise;
+      } finally {
+        if (pendingCreates.get(pendingKey)?.promise === promise) {
+          pendingCreates.delete(pendingKey);
+        }
+      }
+    },
+
     async open({ documentId, versionId } = {}) {
       const record = requireId(documentId, 'documentId');
       const version = versionId == null || versionId === ''
@@ -90,6 +150,234 @@ export function createDocumentsFacade({
       return launched;
     },
   });
+}
+
+async function createStoredMailMerge({ collections, input, cryptoProvider, now }) {
+  const idHash = await sha256Hex(
+    new TextEncoder().encode(`ctox-documents:create-mail-merge:${input.idempotencyKey}`),
+    cryptoProvider,
+  );
+  const documentId = `doc_${idHash.slice(0, 40)}`;
+  const createdAtMs = finiteTimestamp(now());
+  const versions = input.variants.map((variant, index) => {
+    const versionId = `${documentId}_v${index + 1}`;
+    const blobId = `${versionId}_blob`;
+    const base64 = bytesToBase64(variant.bytes);
+    const totalChunks = Math.ceil(base64.length / DOCUMENT_BLOB_CHUNK_BASE64_SIZE) || 1;
+    return {
+      recipientId: variant.recipientId,
+      recipientLabel: variant.recipientLabel,
+      version: {
+        id: versionId,
+        document_id: documentId,
+        version: index + 1,
+        source_kind: 'mail_merge_recipient',
+        blob_id: blobId,
+        source_sha256: variant.sha256,
+        filename: variant.filename,
+        mime_type: DOCX_MIME_TYPE,
+        idempotency_key: `${input.idempotencyKey}:recipient:${variant.recipientId}`,
+        linked_records: cloneJson(variant.linkedRecords),
+        template_ref: cloneJson(input.templateRef),
+        provenance: cloneJson(variant.provenance),
+        mail_merge_recipient: {
+          id: variant.recipientId,
+          label: variant.recipientLabel,
+          index,
+          total: input.variants.length,
+        },
+        model_json: {},
+        diagnostics: [],
+        created_at_ms: createdAtMs,
+        updated_at_ms: createdAtMs,
+      },
+      chunks: Array.from({ length: totalChunks }, (_, chunkIndex) => ({
+        id: `${blobId}_${chunkIndex}`,
+        blob_id: blobId,
+        document_id: documentId,
+        version_id: versionId,
+        idx: chunkIndex,
+        total: totalChunks,
+        mime_type: DOCX_MIME_TYPE,
+        encoding: 'base64',
+        data: base64.slice(
+          chunkIndex * DOCUMENT_BLOB_CHUNK_BASE64_SIZE,
+          (chunkIndex + 1) * DOCUMENT_BLOB_CHUNK_BASE64_SIZE,
+        ),
+        created_at_ms: createdAtMs,
+      })),
+    };
+  });
+  const firstVersion = versions[0].version;
+  const document = {
+    id: documentId,
+    title: input.title,
+    filename: input.filename,
+    mime_type: DOCX_MIME_TYPE,
+    status: input.failures.length ? 'CreatedWithWarnings' : 'Created',
+    document_type: 'mail_merge',
+    owner_id: input.ownerId,
+    current_version_id: firstVersion.id,
+    source_sha256: firstVersion.source_sha256,
+    page_count: 0,
+    diagnostics_count: input.failures.length,
+    tags: cloneJson(input.tags),
+    linked_records: cloneJson(input.linkedRecords),
+    template_ref: cloneJson(input.templateRef),
+    provenance: cloneJson(input.provenance),
+    idempotency_key: input.idempotencyKey,
+    mail_merge: {
+      recipient_count: versions.length,
+      requested_count: versions.length + input.failures.length,
+      failed_count: input.failures.length,
+      failures: cloneJson(input.failures),
+    },
+    display_cache: {},
+    index_text: [
+      input.indexText,
+      input.title,
+      ...input.variants.flatMap((variant) => [variant.recipientLabel, variant.indexText]),
+    ].filter(Boolean).join(' '),
+    is_deleted: false,
+    created_at_ms: createdAtMs,
+    updated_at_ms: createdAtMs,
+  };
+
+  const existingDocumentDoc = await findOne(collections.documents, documentId);
+  if (existingDocumentDoc) {
+    const existingDocument = documentJson(existingDocumentDoc);
+    assertEquivalentFields(existingDocument, document, [
+      'id',
+      'current_version_id',
+      'filename',
+      'mime_type',
+      'document_type',
+      'idempotency_key',
+      'linked_records',
+      'template_ref',
+      'provenance',
+      'mail_merge',
+      'tags',
+      'index_text',
+    ]);
+    const storedVersions = [];
+    const repaired = { chunks: [], versions: [], document: false };
+    try {
+      for (const expected of versions) {
+        let versionDoc = await findOne(collections.document_versions, expected.version.id);
+        if (versionDoc) {
+          const version = documentJson(versionDoc);
+          assertIdempotentVersion(version, expected.version);
+          assertEquivalentFields(version, expected.version, ['mail_merge_recipient']);
+        }
+        let chunks = (await findChunks(
+          collections.document_blob_chunks,
+          expected.version.blob_id,
+        )).map(documentJson);
+        if (chunks.length) {
+          const sorted = assertChunkSet(chunks, {
+            blobId: expected.version.blob_id,
+            documentId,
+            versionId: expected.version.id,
+            expectedTotal: expected.chunks.length,
+          });
+          if (canonicalJson(sorted.map((chunk) => chunk.data))
+              !== canonicalJson(expected.chunks.map((chunk) => chunk.data))) {
+            throw documentsError(
+              'DOCUMENTS_IDEMPOTENCY_CONFLICT',
+              'Stored mail merge chunks differ from the payload for this idempotencyKey.',
+            );
+          }
+          chunks = sorted;
+        } else {
+          await insertChunks(collections.document_blob_chunks, expected.chunks);
+          repaired.chunks.push(...expected.chunks);
+          chunks = expected.chunks;
+        }
+        if (!versionDoc) {
+          versionDoc = await collections.document_versions.insert(expected.version);
+          repaired.versions.push(expected.version);
+        }
+        const version = documentJson(versionDoc);
+        await verifyStoredBytes(
+          { document: existingDocument, version, chunks },
+          expected.version.source_sha256,
+          cryptoProvider,
+        );
+        await requeueStoredChunks(collections.document_blob_chunks, chunks);
+        storedVersions.push(version);
+      }
+    } catch (error) {
+      await cleanupFailedMailMerge(collections, document, repaired).catch(() => {});
+      throw error;
+    }
+    return mailMergeCreationResult(existingDocument, storedVersions, true);
+  }
+
+  const created = { chunks: [], versions: [], document: false };
+  try {
+    for (const expected of versions) {
+      let versionDoc = await findOne(collections.document_versions, expected.version.id);
+      if (versionDoc) {
+        const storedVersion = documentJson(versionDoc);
+        assertIdempotentVersion(storedVersion, expected.version);
+        assertEquivalentFields(storedVersion, expected.version, ['mail_merge_recipient']);
+      }
+      let existingChunks = (await findChunks(
+        collections.document_blob_chunks,
+        expected.version.blob_id,
+      )).map(documentJson);
+      if (existingChunks.length) {
+        existingChunks = assertChunkSet(existingChunks, {
+          blobId: expected.version.blob_id,
+          documentId,
+          versionId: expected.version.id,
+          expectedTotal: expected.chunks.length,
+        });
+        if (canonicalJson(existingChunks.map((chunk) => chunk.data))
+            !== canonicalJson(expected.chunks.map((chunk) => chunk.data))) {
+          throw documentsError(
+            'DOCUMENTS_IDEMPOTENCY_CONFLICT',
+            'Stored mail merge chunks differ from the payload for this idempotencyKey.',
+          );
+        }
+      } else {
+        await insertChunks(collections.document_blob_chunks, expected.chunks);
+        created.chunks.push(...expected.chunks);
+      }
+      if (!versionDoc) {
+        versionDoc = await collections.document_versions.insert(expected.version);
+        created.versions.push(expected.version);
+      }
+      await verifyStoredBytes(
+        {
+          document,
+          version: documentJson(versionDoc),
+          chunks: existingChunks.length ? existingChunks : expected.chunks,
+        },
+        expected.version.source_sha256,
+        cryptoProvider,
+      );
+    }
+    await collections.documents.insert(document);
+    created.document = true;
+  } catch (error) {
+    await cleanupFailedMailMerge(collections, document, created).catch(() => {});
+    throw error;
+  }
+
+  for (const expected of versions) {
+    await verifyStoredBytes(
+      {
+        document,
+        version: expected.version,
+        chunks: expected.chunks,
+      },
+      expected.version.source_sha256,
+      cryptoProvider,
+    );
+  }
+  return mailMergeCreationResult(document, versions.map(({ version }) => version), false);
 }
 
 async function createStoredDocx({ collections, input, cryptoProvider, now }) {
@@ -148,12 +436,13 @@ async function createStoredDocx({ collections, input, cryptoProvider, now }) {
     source_sha256: input.sha256,
     page_count: 0,
     diagnostics_count: 0,
+    tags: cloneJson(input.tags),
     linked_records: cloneJson(input.linkedRecords),
     template_ref: cloneJson(input.templateRef),
     provenance: cloneJson(input.provenance),
     idempotency_key: input.idempotencyKey,
     display_cache: {},
-    index_text: '',
+    index_text: input.indexText,
     is_deleted: false,
     created_at_ms: createdAtMs,
     updated_at_ms: createdAtMs,
@@ -273,6 +562,8 @@ function assertIdempotentDocument(actual, expected, { allowSourceHashMismatch = 
     'linked_records',
     'template_ref',
     'provenance',
+    'tags',
+    'index_text',
   ]);
 }
 
@@ -439,7 +730,7 @@ function assertChunkSet(chunks, { blobId, documentId, versionId, expectedTotal }
   return sorted;
 }
 
-async function normalizeCreateDocxInput(input, cryptoProvider) {
+async function normalizeCreateDocxInput(input, cryptoProvider, facadeAppId) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw documentsError('DOCUMENTS_INVALID_INPUT', 'createDocx input must be an object.');
   }
@@ -465,9 +756,16 @@ async function normalizeCreateDocxInput(input, cryptoProvider) {
   const templateRef = input.templateRef == null
     ? null
     : cloneJsonField(input.templateRef, 'templateRef');
-  const provenance = input.provenance == null
+  const provenanceInput = input.provenance == null
     ? {}
     : cloneJsonField(input.provenance, 'provenance');
+  const provenance = {
+    ...provenanceInput,
+    app_id: requireId(
+      input.creatorAppId || provenanceInput.app_id || facadeAppId,
+      'creatorAppId',
+    ),
+  };
   return {
     bytes,
     filename,
@@ -477,7 +775,112 @@ async function normalizeCreateDocxInput(input, cryptoProvider) {
     linkedRecords,
     templateRef,
     provenance,
+    indexText: normalizeIndexText(input.indexText),
+    tags: normalizeTags(input.tags),
     sha256: await sha256Hex(bytes, cryptoProvider),
+  };
+}
+
+async function normalizeCreateMailMergeInput(input, cryptoProvider, facadeAppId) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', 'createMailMerge input must be an object.');
+  }
+  if (input.mimeType !== DOCX_MIME_TYPE) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', `mimeType must be ${DOCX_MIME_TYPE}.`);
+  }
+  if (!Array.isArray(input.variants) || input.variants.length === 0) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', 'variants must contain at least one recipient.');
+  }
+  const filename = validateFilename(input.filename);
+  const idempotencyKey = requireText(input.idempotencyKey, 'idempotencyKey', 512);
+  const title = input.title == null || input.title === ''
+    ? filename.replace(/\.docx$/i, '')
+    : requireText(input.title, 'title', 512);
+  const ownerId = input.ownerId == null
+    ? ''
+    : requireText(input.ownerId, 'ownerId', 256, { allowEmpty: true });
+  const linkedRecords = input.linkedRecords == null
+    ? []
+    : cloneJsonField(input.linkedRecords, 'linkedRecords');
+  if (!Array.isArray(linkedRecords) || linkedRecords.some((entry) => !isPlainObject(entry))) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', 'linkedRecords must be an array of objects.');
+  }
+  const templateRef = input.templateRef == null
+    ? null
+    : cloneJsonField(input.templateRef, 'templateRef');
+  const provenanceInput = input.provenance == null
+    ? {}
+    : cloneJsonField(input.provenance, 'provenance');
+  const creatorAppId = requireId(
+    input.creatorAppId || provenanceInput.app_id || facadeAppId,
+    'creatorAppId',
+  );
+  const provenance = { ...provenanceInput, app_id: creatorAppId };
+  const failures = input.failures == null
+    ? []
+    : cloneJsonField(input.failures, 'failures');
+  if (!Array.isArray(failures) || failures.some((entry) => !isPlainObject(entry))) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', 'failures must be an array of objects.');
+  }
+
+  const seenRecipients = new Set();
+  const variants = [];
+  for (let index = 0; index < input.variants.length; index += 1) {
+    const variant = input.variants[index];
+    if (!isPlainObject(variant)) {
+      throw documentsError('DOCUMENTS_INVALID_INPUT', `variants[${index}] must be an object.`);
+    }
+    const recipientId = requireId(variant.recipientId, `variants[${index}].recipientId`);
+    if (seenRecipients.has(recipientId)) {
+      throw documentsError('DOCUMENTS_INVALID_INPUT', `Duplicate mail merge recipient: ${recipientId}.`);
+    }
+    seenRecipients.add(recipientId);
+    const bytes = await normalizeBytes(variant.bytes);
+    if (!bytes.length) {
+      throw documentsError('DOCUMENTS_INVALID_INPUT', `variants[${index}].bytes must not be empty.`);
+    }
+    const variantLinkedRecords = variant.linkedRecords == null
+      ? []
+      : cloneJsonField(variant.linkedRecords, `variants[${index}].linkedRecords`);
+    if (!Array.isArray(variantLinkedRecords)
+        || variantLinkedRecords.some((entry) => !isPlainObject(entry))) {
+      throw documentsError(
+        'DOCUMENTS_INVALID_INPUT',
+        `variants[${index}].linkedRecords must be an array of objects.`,
+      );
+    }
+    variants.push({
+      recipientId,
+      recipientLabel: requireText(
+        variant.recipientLabel,
+        `variants[${index}].recipientLabel`,
+        512,
+      ),
+      filename: validateFilename(variant.filename),
+      bytes,
+      linkedRecords: variantLinkedRecords,
+      provenance: {
+        ...(variant.provenance == null
+          ? {}
+          : cloneJsonField(variant.provenance, `variants[${index}].provenance`)),
+        app_id: creatorAppId,
+      },
+      indexText: normalizeIndexText(variant.indexText),
+      sha256: await sha256Hex(bytes, cryptoProvider),
+    });
+  }
+  return {
+    filename,
+    title,
+    ownerId,
+    idempotencyKey,
+    linkedRecords,
+    templateRef,
+    provenance,
+    indexText: normalizeIndexText(input.indexText),
+    tags: normalizeTags(input.tags),
+    failures,
+    variants,
   };
 }
 
@@ -714,6 +1117,24 @@ async function cleanupFailedCreate(collections, expected, created = {}) {
   }
 }
 
+async function cleanupFailedMailMerge(collections, document, created) {
+  if (created.document) {
+    await removeMatchingDocument(collections.documents, document.id, (stored) => (
+      stored.idempotency_key === document.idempotency_key
+    ));
+  }
+  for (const version of created.versions) {
+    await removeMatchingDocument(collections.document_versions, version.id, (stored) => (
+      stored.idempotency_key === version.idempotency_key
+    ));
+  }
+  for (const chunk of created.chunks) {
+    await removeMatchingDocument(collections.document_blob_chunks, chunk.id, (stored) => (
+      stored.blob_id === chunk.blob_id && stored.data === chunk.data
+    ));
+  }
+}
+
 async function removeMatchingDocument(collection, id, matches) {
   const doc = await findOne(collection, id);
   if (!doc || !matches(documentJson(doc)) || typeof doc.remove !== 'function') return;
@@ -727,6 +1148,22 @@ function creationResult(stored, idempotent) {
     sha256: stored.version.source_sha256 || stored.document.source_sha256,
     document: cloneJson(stored.document),
     version: cloneJson(stored.version),
+    idempotent,
+  };
+}
+
+function mailMergeCreationResult(document, versions, idempotent) {
+  return {
+    documentId: document.id,
+    versionId: versions[0].id,
+    recipientCount: versions.length,
+    document: cloneJson(document),
+    versions: versions.map((version) => ({
+      versionId: version.id,
+      recipientId: version.mail_merge_recipient?.id || '',
+      recipientLabel: version.mail_merge_recipient?.label || '',
+      sha256: version.source_sha256,
+    })),
     idempotent,
   };
 }
@@ -755,6 +1192,30 @@ function validateFilename(value) {
     throw documentsError('DOCUMENTS_INVALID_INPUT', 'filename must be a safe .docx filename.');
   }
   return filename;
+}
+
+function resolveFacadeAppId(appId) {
+  return requireId(typeof appId === 'function' ? appId() : appId, 'appId');
+}
+
+function normalizeIndexText(value) {
+  if (value == null || value === '') return '';
+  if (typeof value !== 'string' || value.length > 200_000) {
+    throw documentsError(
+      'DOCUMENTS_INVALID_INPUT',
+      'indexText must be a string with at most 200000 characters.',
+    );
+  }
+  return value.trim();
+}
+
+function normalizeTags(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw documentsError('DOCUMENTS_INVALID_INPUT', 'tags must be an array of strings.');
+  }
+  const tags = value.map((tag, index) => requireText(tag, `tags[${index}]`, 80));
+  return [...new Set(tags)].slice(0, 50);
 }
 
 function requireId(value, field) {

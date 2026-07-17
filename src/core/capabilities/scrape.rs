@@ -375,8 +375,9 @@ struct CommandExecution {
     stderr_text: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FailureStatus {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScrapeRunStatus {
     Succeeded,
     TemporaryUnreachable,
     PortalDrift,
@@ -384,8 +385,8 @@ enum FailureStatus {
     PartialOutput,
 }
 
-impl FailureStatus {
-    fn as_str(self) -> &'static str {
+impl ScrapeRunStatus {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
             Self::TemporaryUnreachable => "temporary_unreachable",
@@ -396,11 +397,39 @@ impl FailureStatus {
     }
 }
 
+fn repair_skill_for_status(status: ScrapeRunStatus) -> &'static str {
+    if status == ScrapeRunStatus::Blocked {
+        "web-unlock"
+    } else {
+        DEFAULT_REPAIR_SKILL
+    }
+}
+
 #[derive(Debug)]
 struct Classification {
-    status: FailureStatus,
+    status: ScrapeRunStatus,
     should_queue_repair: bool,
     reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ScrapeExecutionOutcome {
+    pub(crate) ok: bool,
+    pub(crate) target_key: String,
+    pub(crate) run_id: String,
+    pub(crate) status: ScrapeRunStatus,
+    pub(crate) records_found: i64,
+    pub(crate) fields_extracted: Vec<String>,
+    pub(crate) latency_ms: u64,
+    pub(crate) reason: String,
+    pub(crate) error: Option<String>,
+    probe: Value,
+    should_queue_repair: bool,
+    repair_request_path: Option<String>,
+    repair_queue_task: Option<Value>,
+    template_event: Option<Value>,
+    materialization: Option<Value>,
+    run_manifest_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -599,6 +628,15 @@ pub fn handle_scrape_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
+    let outcome = execute_scrape_with_outcome(root, args)?;
+    print_json(&serde_json::to_value(outcome)?)
+}
+
+pub(crate) fn execute_scrape_with_outcome(
+    root: &Path,
+    args: &[String],
+) -> Result<ScrapeExecutionOutcome> {
+    let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
         .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]")?;
     let trigger_kind = find_flag_value(args, "--trigger-kind").unwrap_or("manual");
@@ -707,7 +745,7 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
         .get("schema_key")
         .and_then(Value::as_str);
     let enrichment = match records.as_deref() {
-        Some(items) if classification.status == FailureStatus::Succeeded => {
+        Some(items) if classification.status == ScrapeRunStatus::Succeeded => {
             Some(maybe_run_llm_enrichment(root, &target, items, &output_dir)?)
         }
         _ => None,
@@ -716,7 +754,7 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
         .as_ref()
         .map(|outcome| outcome.records.as_slice())
         .or(records.as_deref());
-    let materialization = if classification.status == FailureStatus::Succeeded {
+    let materialization = if classification.status == ScrapeRunStatus::Succeeded {
         materialized_records
             .map(|items| {
                 materialize_latest_records(
@@ -805,7 +843,7 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
         },
     )?;
 
-    let template_event = if classification.status == FailureStatus::Succeeded {
+    let template_event = if classification.status == ScrapeRunStatus::Succeeded {
         maybe_record_template_from_target(root, &target, records_found)?
     } else {
         None
@@ -824,6 +862,7 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
             records_found,
             repair_request_path.as_ref(),
         );
+        let suggested_skill = repair_skill_for_status(classification.status);
         Some(channels::create_queue_task(
             root,
             channels::QueueTaskCreateRequest {
@@ -832,7 +871,7 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
                 thread_key,
                 workspace_root: None,
                 priority: priority.to_string(),
-                suggested_skill: Some(DEFAULT_REPAIR_SKILL.to_string()),
+                suggested_skill: Some(suggested_skill.to_string()),
                 parent_message_key: None,
                 extra_metadata: None,
             },
@@ -841,21 +880,34 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
         None
     };
 
-    print_json(&json!({
-        "ok": true,
-        "target_key": target.view.target_key,
-        "run_id": run_id,
-        "status": classification.status.as_str(),
-        "records_found": records_found,
-        "reason": classification.reason,
-        "probe": probe_to_json(&probe),
-        "should_queue_repair": classification.should_queue_repair,
-        "repair_request_path": repair_request_path.as_ref().map(|path| path.to_string_lossy().to_string()),
-        "repair_queue_task": repair_queue_task,
-        "template_event": template_event,
-        "materialization": materialization.as_ref().map(|item| item.summary.clone()),
-        "run_manifest_path": run_dir.join("run.json"),
-    }))
+    let fields_extracted = extracted_record_fields(records.as_deref());
+    let error = scrape_error_diagnostic(&classification, &payload, &probe, &execution);
+    Ok(ScrapeExecutionOutcome {
+        ok: true,
+        target_key: target.view.target_key,
+        run_id,
+        status: classification.status,
+        records_found,
+        fields_extracted,
+        latency_ms: execution_started
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+        reason: classification.reason,
+        error,
+        probe: probe_to_json(&probe),
+        should_queue_repair: classification.should_queue_repair,
+        repair_request_path: repair_request_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        repair_queue_task: repair_queue_task
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()?,
+        template_event,
+        materialization: materialization.as_ref().map(|item| item.summary.clone()),
+        run_manifest_path: run_dir.join("run.json"),
+    })
 }
 
 fn summary_payload(root: &Path) -> Result<Value> {
@@ -1752,13 +1804,50 @@ fn register_script(
         )
         .optional()?
     {
+        let revision_path = PathBuf::from(&script_path);
+        let workspace_dir = ensure_target_workspace(
+            &resolve_runtime_root(root, runtime_root_arg),
+            &target.target_key,
+        )?;
+        let extension = revision_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| script_extension(language, &source_path));
+        let current_path = workspace_dir
+            .join("scripts")
+            .join(format!("current{extension}"));
+        fs::copy(&revision_path, &current_path).with_context(|| {
+            format!(
+                "failed to reactivate script revision {} -> {}",
+                revision_path.display(),
+                current_path.display()
+            )
+        })?;
+        let activated_at = now_iso_string();
+        conn.execute(
+            r#"
+            UPDATE scrape_target
+            SET latest_script_revision_no = ?2,
+                latest_script_sha256 = ?3,
+                updated_at = ?4
+            WHERE target_id = ?1
+            "#,
+            params![target.target_id, revision_no, script_sha256, activated_at],
+        )?;
+        let updated_target = load_target_view(&conn, target_key)?
+            .context("failed to reload target after script reactivation")?;
+        write_target_manifest(root, &updated_target)?;
         return Ok(json!({
-            "target_key": target.target_key,
-            "target_id": target.target_id,
+            "target_key": updated_target.target_key,
+            "target_id": updated_target.target_id,
             "revision_no": revision_no,
             "script_path": script_path,
+            "current_path": current_path,
             "script_sha256": script_sha256,
             "deduplicated": true,
+            "reactivated": true,
+            "activated_at": activated_at,
             "created_at": created_at,
         }));
     }
@@ -1883,14 +1972,51 @@ fn register_source_module(
         )
         .optional()?
     {
+        let revision_path = PathBuf::from(&module_path);
+        let workspace_dir = ensure_target_workspace(
+            &resolve_runtime_root(root, runtime_root_arg),
+            &target.target_key,
+        )?;
+        let extension = revision_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| script_extension(language, &source_path));
+        let source_dir = workspace_dir.join("sources").join(&source.source_key);
+        fs::create_dir_all(&source_dir)?;
+        let current_path = source_dir.join(format!("current{extension}"));
+        let configured_path = workspace_dir.join(&source.extraction_module);
+        if let Some(parent) = configured_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&revision_path, &current_path).with_context(|| {
+            format!(
+                "failed to reactivate source module revision {} -> {}",
+                revision_path.display(),
+                current_path.display()
+            )
+        })?;
+        if configured_path != current_path {
+            fs::copy(&revision_path, &configured_path).with_context(|| {
+                format!(
+                    "failed to reactivate configured source module {} -> {}",
+                    revision_path.display(),
+                    configured_path.display()
+                )
+            })?;
+        }
+        write_target_manifest(root, &target)?;
         return Ok(json!({
             "target_key": target.target_key,
             "target_id": target.target_id,
             "source_key": source.source_key,
             "revision_no": revision_no,
             "module_path": module_path,
+            "current_path": current_path,
+            "configured_path": configured_path,
             "module_sha256": module_sha256,
             "deduplicated": true,
+            "reactivated": true,
             "created_at": created_at,
         }));
     }
@@ -2561,7 +2687,7 @@ fn build_repair_prompt(
     root: &Path,
     target: &RegisteredTarget,
     run_id: &str,
-    status: FailureStatus,
+    status: ScrapeRunStatus,
     records_found: i64,
     repair_request_path: Option<&PathBuf>,
 ) -> String {
@@ -2826,6 +2952,63 @@ fn normalize_records(payload: &Value) -> Option<Vec<Value>> {
     None
 }
 
+fn extracted_record_fields(records: Option<&[Value]>) -> Vec<String> {
+    let mut fields = records
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|record| {
+            let object = record.as_object()?;
+            let field = object.get("field")?.as_str()?.trim();
+            let value = object.get("value")?;
+            (!field.is_empty() && has_extracted_value(value)).then(|| field.to_string())
+        })
+        .collect::<Vec<_>>();
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+fn has_extracted_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(values) => !values.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
+fn scrape_error_diagnostic(
+    classification: &Classification,
+    payload: &Value,
+    probe: &ProbeResult,
+    execution: &CommandExecution,
+) -> Option<String> {
+    if classification.status == ScrapeRunStatus::Succeeded {
+        return None;
+    }
+    let mut details = vec![format!(
+        "status={}; reason={}",
+        classification.status.as_str(),
+        classification.reason
+    )];
+    for detail in [
+        payload.get("detail").and_then(Value::as_str),
+        payload.get("error").and_then(Value::as_str),
+        probe.error.as_deref(),
+        (!execution.stderr_text.trim().is_empty()).then_some(execution.stderr_text.trim()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let detail = detail.trim();
+        if !detail.is_empty() && !details.iter().any(|current| current.contains(detail)) {
+            details.push(detail.to_string());
+        }
+    }
+    Some(tail_excerpt(&details.join(" | "), 4000))
+}
+
 fn classify_outcome(
     payload: &Value,
     probe: &ProbeResult,
@@ -2840,30 +3023,37 @@ fn classify_outcome(
         .unwrap_or("");
     if explicit_failure == "temporary_unreachable" {
         return Classification {
-            status: FailureStatus::TemporaryUnreachable,
+            status: ScrapeRunStatus::TemporaryUnreachable,
             should_queue_repair: false,
             reason: "explicit_failure_mode_temporary_unreachable".to_string(),
         };
     }
     if explicit_failure == "portal_drift" {
         return Classification {
-            status: FailureStatus::PortalDrift,
+            status: ScrapeRunStatus::PortalDrift,
             should_queue_repair: true,
             reason: "explicit_failure_mode_portal_drift".to_string(),
         };
     }
     if explicit_failure == "blocked" {
         return Classification {
-            status: FailureStatus::Blocked,
-            should_queue_repair: false,
+            status: ScrapeRunStatus::Blocked,
+            should_queue_repair: true,
             reason: "explicit_failure_mode_blocked".to_string(),
+        };
+    }
+    if explicit_failure == "auth_required" {
+        return Classification {
+            status: ScrapeRunStatus::Blocked,
+            should_queue_repair: true,
+            reason: "explicit_failure_mode_auth_required".to_string(),
         };
     }
     if explicit_failure == "partial_output"
         || payload.get("partial_output") == Some(&Value::Bool(true))
     {
         return Classification {
-            status: FailureStatus::PartialOutput,
+            status: ScrapeRunStatus::PartialOutput,
             should_queue_repair: true,
             reason: "payload_marked_partial_output".to_string(),
         };
@@ -2877,8 +3067,8 @@ fn classify_outcome(
     .to_lowercase();
     if probe.human_verification || matches!(probe.status_code, Some(401 | 403)) {
         return Classification {
-            status: FailureStatus::Blocked,
-            should_queue_repair: false,
+            status: ScrapeRunStatus::Blocked,
+            should_queue_repair: true,
             reason: probe
                 .error
                 .clone()
@@ -2887,7 +3077,7 @@ fn classify_outcome(
     }
     if probe.status_code == Some(404) {
         return Classification {
-            status: FailureStatus::PortalDrift,
+            status: ScrapeRunStatus::PortalDrift,
             should_queue_repair: true,
             reason: "http_404".to_string(),
         };
@@ -2896,14 +3086,14 @@ fn classify_outcome(
         || probe.status_code.map(|code| code >= 500).unwrap_or(false)
     {
         return Classification {
-            status: FailureStatus::TemporaryUnreachable,
+            status: ScrapeRunStatus::TemporaryUnreachable,
             should_queue_repair: false,
             reason: format!("http_{}", probe.status_code.unwrap_or_default()),
         };
     }
     if !probe.reachable {
         return Classification {
-            status: FailureStatus::TemporaryUnreachable,
+            status: ScrapeRunStatus::TemporaryUnreachable,
             should_queue_repair: false,
             reason: probe
                 .error
@@ -2913,7 +3103,7 @@ fn classify_outcome(
     }
     if execution.timed_out || contains_transient_hint(&lower) {
         return Classification {
-            status: FailureStatus::TemporaryUnreachable,
+            status: ScrapeRunStatus::TemporaryUnreachable,
             should_queue_repair: false,
             reason: if execution.timed_out {
                 "command_timed_out".to_string()
@@ -2924,7 +3114,7 @@ fn classify_outcome(
     }
     if expected_min_records > 0 && records_found > 0 && records_found < expected_min_records {
         return Classification {
-            status: FailureStatus::PartialOutput,
+            status: ScrapeRunStatus::PartialOutput,
             should_queue_repair: true,
             reason: format!(
                 "records_found_below_expected_min:{}<{}",
@@ -2934,20 +3124,20 @@ fn classify_outcome(
     }
     if execution.exit_code.unwrap_or(0) != 0 {
         return Classification {
-            status: FailureStatus::PortalDrift,
+            status: ScrapeRunStatus::PortalDrift,
             should_queue_repair: true,
             reason: format!("command_failed_exit_{:?}", execution.exit_code),
         };
     }
     if records_found == 0 {
         return Classification {
-            status: FailureStatus::PortalDrift,
+            status: ScrapeRunStatus::PortalDrift,
             should_queue_repair: true,
             reason: "empty_record_set_on_reachable_portal".to_string(),
         };
     }
     Classification {
-        status: FailureStatus::Succeeded,
+        status: ScrapeRunStatus::Succeeded,
         should_queue_repair: false,
         reason: "ok".to_string(),
     }
@@ -3616,7 +3806,7 @@ fn write_repair_request(
     conn: &Connection,
     run_dir: &Path,
     target: &RegisteredTarget,
-    status: FailureStatus,
+    status: ScrapeRunStatus,
     reason: &str,
     probe: &ProbeResult,
     execution: &CommandExecution,
@@ -4889,6 +5079,148 @@ mod tests {
     }
 
     #[test]
+    fn deduplicated_script_registration_reactivates_the_requested_revision() {
+        let root = temp_root("reactivate-script");
+        let target = upsert_target(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            json!({
+                "target_key": "reactivate-script",
+                "display_name": "Reactivate Script",
+                "start_url": "https://example.com",
+                "target_kind": "company",
+                "config": {"skip_probe": true},
+                "output_schema": {"schema_key": "company.v1"}
+            }),
+        )
+        .unwrap();
+        let script = root.join("adapter.js");
+        fs::write(&script, "process.stdout.write('A');\n").unwrap();
+        let first = register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            script.to_str().unwrap(),
+            "javascript",
+            Some("first"),
+            None,
+        )
+        .unwrap();
+        fs::write(&script, "process.stdout.write('B');\n").unwrap();
+        register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            script.to_str().unwrap(),
+            "javascript",
+            Some("second"),
+            None,
+        )
+        .unwrap();
+        fs::write(&script, "process.stdout.write('A');\n").unwrap();
+        let reactivated = register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            script.to_str().unwrap(),
+            "javascript",
+            Some("rollback"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(reactivated["deduplicated"], json!(true));
+        assert_eq!(reactivated["reactivated"], json!(true));
+        assert_eq!(reactivated["revision_no"], first["revision_no"]);
+        let current_path = PathBuf::from(reactivated["current_path"].as_str().unwrap());
+        assert_eq!(
+            fs::read_to_string(current_path).unwrap(),
+            "process.stdout.write('A');\n"
+        );
+        let active = load_target_view(&open_db(&root).unwrap(), &target.target_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            active.latest_script_sha256.as_deref(),
+            first["script_sha256"].as_str()
+        );
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn deduplicated_source_registration_reactivates_current_and_configured_module() {
+        let root = temp_root("reactivate-source");
+        let target = upsert_target(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            json!({
+                "target_key": "reactivate-source",
+                "display_name": "Reactivate Source",
+                "start_url": "https://example.com",
+                "target_kind": "company",
+                "config": {
+                    "skip_probe": true,
+                    "sources": [{
+                        "source_key": "primary",
+                        "display_name": "Primary",
+                        "start_url": "https://example.com",
+                        "source_kind": "html",
+                        "extraction_module": "sources/primary/extractor.js"
+                    }]
+                },
+                "output_schema": {"schema_key": "company.v1"}
+            }),
+        )
+        .unwrap();
+        let module = root.join("extractor.js");
+        fs::write(&module, "module.exports = 'A';\n").unwrap();
+        let first = register_source_module(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            "primary",
+            module.to_str().unwrap(),
+            "javascript",
+            Some("first"),
+            None,
+        )
+        .unwrap();
+        fs::write(&module, "module.exports = 'B';\n").unwrap();
+        register_source_module(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            "primary",
+            module.to_str().unwrap(),
+            "javascript",
+            Some("second"),
+            None,
+        )
+        .unwrap();
+        fs::write(&module, "module.exports = 'A';\n").unwrap();
+        let reactivated = register_source_module(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            "primary",
+            module.to_str().unwrap(),
+            "javascript",
+            Some("rollback"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(reactivated["deduplicated"], json!(true));
+        assert_eq!(reactivated["reactivated"], json!(true));
+        assert_eq!(reactivated["revision_no"], first["revision_no"]);
+        for key in ["current_path", "configured_path"] {
+            let path = PathBuf::from(reactivated[key].as_str().unwrap());
+            assert_eq!(fs::read_to_string(path).unwrap(), "module.exports = 'A';\n");
+        }
+        cleanup_test_root(&root);
+    }
+
+    #[test]
     fn upsert_target_normalizes_multi_source_config() {
         let root = temp_root("multi-source");
         let payload = json!({
@@ -5294,6 +5626,10 @@ module.exports = async function extractSource(context) {
             .prompt
             .contains("ctox scrape register-source-module"));
         assert!(tasks[0].thread_key.contains("repair-fixture"));
+        assert_eq!(
+            tasks[0].suggested_skill.as_deref(),
+            Some(DEFAULT_REPAIR_SKILL)
+        );
 
         let workspace = resolve_workspace_dir(&root, &target.workspace_dir).join("runs");
         let mut repair_request_found = false;
@@ -5328,8 +5664,53 @@ module.exports = async function extractSource(context) {
             stderr_text: String::new(),
         };
         let classification = classify_outcome(&payload, &probe, &execution, 0, 0);
-        assert_eq!(classification.status, FailureStatus::PortalDrift);
+        assert_eq!(classification.status, ScrapeRunStatus::PortalDrift);
         assert!(classification.should_queue_repair);
+    }
+
+    #[test]
+    fn classify_browser_challenge_for_web_unlock_repair() {
+        let payload = json!({"failure_mode": "blocked"});
+        let probe = ProbeResult {
+            reachable: true,
+            status_code: Some(200),
+            final_url: "https://example.com/".to_string(),
+            human_verification: false,
+            error: None,
+        };
+        let execution = CommandExecution {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout_text: String::new(),
+            stderr_text: String::new(),
+        };
+        let classification = classify_outcome(&payload, &probe, &execution, 0, 1);
+        assert_eq!(classification.status, ScrapeRunStatus::Blocked);
+        assert!(classification.should_queue_repair);
+        assert_eq!(repair_skill_for_status(classification.status), "web-unlock");
+    }
+
+    #[test]
+    fn classify_authenticated_source_without_session_for_web_unlock_repair() {
+        let payload = json!({"failure_mode": "auth_required"});
+        let probe = ProbeResult {
+            reachable: true,
+            status_code: Some(200),
+            final_url: "https://app.example.com/".to_string(),
+            human_verification: false,
+            error: None,
+        };
+        let execution = CommandExecution {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout_text: String::new(),
+            stderr_text: String::new(),
+        };
+        let classification = classify_outcome(&payload, &probe, &execution, 0, 1);
+        assert_eq!(classification.status, ScrapeRunStatus::Blocked);
+        assert!(classification.should_queue_repair);
+        assert_eq!(classification.reason, "explicit_failure_mode_auth_required");
+        assert_eq!(repair_skill_for_status(classification.status), "web-unlock");
     }
 
     #[test]
@@ -5349,7 +5730,7 @@ module.exports = async function extractSource(context) {
             stderr_text: "Connection refused".to_string(),
         };
         let classification = classify_outcome(&payload, &probe, &execution, 0, 0);
-        assert_eq!(classification.status, FailureStatus::TemporaryUnreachable);
+        assert_eq!(classification.status, ScrapeRunStatus::TemporaryUnreachable);
         assert!(!classification.should_queue_repair);
     }
 
@@ -5378,7 +5759,7 @@ module.exports = async function extractSource(context) {
             stderr_text: String::new(),
         };
         let classification = classify_outcome(&payload, &probe, &execution, 1, 0);
-        assert_eq!(classification.status, FailureStatus::Succeeded);
+        assert_eq!(classification.status, ScrapeRunStatus::Succeeded);
         assert!(!classification.should_queue_repair);
     }
 
@@ -5650,6 +6031,64 @@ module.exports = async function extractSource(context) {
             preserved.get("enabled").and_then(Value::as_bool),
             Some(true)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn execute_with_blocked_failure_queues_web_unlock_task() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let root = temp_root("blocked-repair-flow");
+        let payload = json!({
+            "target_key": "blocked-fixture",
+            "display_name": "Blocked Fixture",
+            "start_url": "https://example.com/blocked",
+            "target_kind": "company_research",
+            "config": {
+                "skip_probe": true,
+                "expected_min_records": 1,
+                "record_key_fields": ["id"]
+            },
+            "output_schema": {
+                "schema_key": "company_research.v1",
+                "record_key_fields": ["id"]
+            }
+        });
+        let target = upsert_target(&root, DEFAULT_RUNTIME_ROOT, payload).unwrap();
+
+        let script = root.join("blocked.js");
+        fs::write(
+            &script,
+            "process.stdout.write(JSON.stringify({ records: [], failure_mode: 'blocked' }));\n",
+        )
+        .unwrap();
+        register_script(
+            &root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            script.to_str().unwrap(),
+            "javascript",
+            Some("blocked_fixture"),
+            None,
+        )
+        .unwrap();
+
+        execute_scrape(
+            &root,
+            &[
+                "execute".to_string(),
+                "--target-key".to_string(),
+                target.target_key.clone(),
+                "--allow-heal".to_string(),
+                "--timeout-seconds".to_string(),
+                "30".to_string(),
+            ],
+        )
+        .unwrap();
+
+        let tasks = crate::channels::list_queue_tasks(&root, &["pending".to_string()], 10).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].suggested_skill.as_deref(), Some("web-unlock"));
+        assert!(tasks[0].thread_key.contains("blocked-fixture"));
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -11,7 +11,7 @@ einen Recherche-Plan zu bauen.
 
 ## Wann ist ein Modul „authoritative" für ein Feld?
 
-Genau dann, wenn die Quelle in der Thesen-Quellenmatrix
+Genau dann, wenn die Quelle in der DACH-Recherchematrix
 ([`EXCEL_MATRIX.md`](./EXCEL_MATRIX.md)) für mindestens einen
 (`mode`, `country`) für dieses Feld gelistet ist. `authoritative_for()`
 ist also nicht „beste Quelle", sondern „darf laut Matrix dieses Feld

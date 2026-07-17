@@ -21,13 +21,16 @@ async function importBrowserBundle(relativePath) {
 const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
+  aggregateFlowMetrics,
   clampMetric,
   deriveHarnessHealth,
+  eventToNodeId,
   flowSourceView,
   formatRelativeAge,
   friendlyWebStackStatus,
   labels,
   normalizeFocusTask,
+  observedDetailsFromFlow,
   progressPercent,
   resolveSelectedTaskId,
   safeTaskDisplayText,
@@ -188,6 +191,68 @@ test('Queued work without a lease becomes critical after the stall grace window'
 
 test('Empty CTOX task selection does not crash task step rendering', () => {
   assert.deepEqual(taskSteps(null, { model: { timeline: [] } }), []);
+});
+
+test('Task-bound worker telemetry activates the running node with live tool details', () => {
+  const flow = {
+    ok: true,
+    flow: {
+      blocks: [],
+      ledger_events: [
+        {
+          event_kind: 'worker.turn_started',
+          title: 'Agent turn started',
+          body_text: '',
+          created_at: '2026-07-17T08:00:00Z',
+          metadata_json: JSON.stringify({
+            runtime: { seconds: 0 },
+            tool_call_count: 0,
+            metrics_mode: 'cumulative',
+          }),
+        },
+        {
+          event_kind: 'worker.token_usage',
+          title: 'Model usage updated',
+          body_text: '',
+          created_at: '2026-07-17T08:00:10Z',
+          metadata_json: JSON.stringify({
+            usage: { input_tokens: 1200, output_tokens: 340 },
+            runtime: { seconds: 10 },
+            tool_call_count: 1,
+            metrics_mode: 'cumulative',
+          }),
+        },
+        {
+          event_kind: 'worker.tool_started',
+          title: 'Tool started: web.search',
+          body_text: '',
+          created_at: '2026-07-17T08:00:12Z',
+          metadata_json: JSON.stringify({
+            runtime: { seconds: 12 },
+            tool_call_count: 2,
+            metrics_mode: 'cumulative',
+            tool: { type: 'mcp', name: 'web.search', call_id: 'call-2' },
+          }),
+        },
+      ],
+    },
+  };
+
+  assert.equal(eventToNodeId('worker.tool_started', ''), 'running');
+  const details = observedDetailsFromFlow(flow, 'de').get('running');
+  assert.equal(details.inputTokens, 1200);
+  assert.equal(details.outputTokens, 340);
+  assert.equal(details.toolCalls, 2);
+  assert.equal(details.seconds, 12);
+  assert.deepEqual(details.tools, ['web.search']);
+  assert.match(details.lines.at(-1), /Werkzeug gestartet: web\.search/);
+
+  assert.deepEqual(aggregateFlowMetrics(flow), {
+    inputTokens: 1200,
+    outputTokens: 340,
+    toolCalls: 2,
+    seconds: 12,
+  });
 });
 
 test('Flow zoom is symmetric and clamped', () => {

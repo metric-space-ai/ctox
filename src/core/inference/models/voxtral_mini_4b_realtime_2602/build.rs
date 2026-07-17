@@ -4,6 +4,7 @@ use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=GGML_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_GGML_BLAS");
     println!("cargo:rustc-check-cfg=cfg(ctox_ggml_blas)");
@@ -11,6 +12,13 @@ fn main() {
 
     if let Ok(dir) = env::var("GGML_LIB_DIR") {
         link_ggml(&PathBuf::from(dir));
+        return;
+    }
+
+    if env_flag("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS") {
+        disable_ggml_runtime(
+            "GGML_LIB_DIR unset; vendored ggml build skipped by CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS",
+        );
         return;
     }
 

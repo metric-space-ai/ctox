@@ -21,6 +21,7 @@ use std::path::Path;
 
 pub mod bundesanzeiger;
 pub mod companyhouse;
+pub mod directory;
 pub mod dnbhoovers;
 pub mod firmenabc;
 pub mod handelsregister;
@@ -37,7 +38,7 @@ pub mod zefix;
 // ---------------------------------------------------------------------------
 
 /// Countries the CTOX person-research workflow currently supports.
-/// Driven by the Thesen Nachrecherche source matrix (DE / AT / CH).
+/// Driven by the DACH prospect-research source matrix (DE / AT / CH).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Country {
     De,
@@ -64,9 +65,9 @@ impl Country {
     }
 }
 
-/// The research-mode classification per row, taken from the Thesen Abstimmungs-Excel.
+/// The research-mode classification used by periodic CRM refresh imports.
 ///
-/// * `HaveData` — Sheet A. Stammdaten sind in Excel oder Sellify hinterlegt,
+/// * `HaveData` — source CRM data is already complete,
 ///   keine Recherche-Aktion.
 /// * `UpdateInventoryGeneral` — Nach-Recherche Block B. Datensatz im Bestand,
 ///   keine Sonderursache; Quellen-Spalten leer → kein Plan-Eintrag pro Feld.
@@ -127,7 +128,7 @@ pub enum Tier {
 
 /// Every typed field a source module may write.
 ///
-/// The vocabulary is taken from the Thesen Excel
+/// The vocabulary is shared by generic CRM and spreadsheet imports.
 /// (`Person oder Ansprechpartner.xlsx` and `Abstimmung … final.xlsx`),
 /// not from any internal CTOX entity model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -138,10 +139,11 @@ pub enum FieldKey {
     FirmaOrt,
     FirmaEmail,
     FirmaDomain,
+    FirmaTelefon,
     WzCode,
     Umsatz,
     Mitarbeiter,
-    SellifyNummer,
+    CrmRecordNumber,
     PersonGeschlecht,
     PersonTitel,
     PersonVorname,
@@ -149,6 +151,7 @@ pub enum FieldKey {
     PersonFunktion,
     PersonPosition,
     PersonEmail,
+    PersonEmailValidation,
     PersonTelefon,
     PersonLinkedin,
     PersonXing,
@@ -163,10 +166,11 @@ impl FieldKey {
             FieldKey::FirmaOrt => "firma_ort",
             FieldKey::FirmaEmail => "firma_email",
             FieldKey::FirmaDomain => "firma_domain",
+            FieldKey::FirmaTelefon => "firma_telefon",
             FieldKey::WzCode => "wz_code",
             FieldKey::Umsatz => "umsatz",
             FieldKey::Mitarbeiter => "mitarbeiter",
-            FieldKey::SellifyNummer => "sellify_nummer",
+            FieldKey::CrmRecordNumber => "crm_record_number",
             FieldKey::PersonGeschlecht => "person_geschlecht",
             FieldKey::PersonTitel => "person_titel",
             FieldKey::PersonVorname => "person_vorname",
@@ -174,6 +178,7 @@ impl FieldKey {
             FieldKey::PersonFunktion => "person_funktion",
             FieldKey::PersonPosition => "person_position",
             FieldKey::PersonEmail => "person_email",
+            FieldKey::PersonEmailValidation => "person_email_validation",
             FieldKey::PersonTelefon => "person_telefon",
             FieldKey::PersonLinkedin => "person_linkedin",
             FieldKey::PersonXing => "person_xing",
@@ -188,10 +193,11 @@ impl FieldKey {
             "firma_ort" | "ort" => Some(Self::FirmaOrt),
             "firma_email" | "firmen_email" => Some(Self::FirmaEmail),
             "firma_domain" | "domain" => Some(Self::FirmaDomain),
+            "firma_telefon" | "firmen_telefon" => Some(Self::FirmaTelefon),
             "wz_code" | "wz" => Some(Self::WzCode),
             "umsatz" => Some(Self::Umsatz),
             "mitarbeiter" | "anzahl_mitarbeiter" => Some(Self::Mitarbeiter),
-            "sellify_nummer" => Some(Self::SellifyNummer),
+            "crm_record_number" | "crm_nummer" => Some(Self::CrmRecordNumber),
             "person_geschlecht" | "geschlecht" => Some(Self::PersonGeschlecht),
             "person_titel" | "titel" => Some(Self::PersonTitel),
             "person_vorname" | "vorname" => Some(Self::PersonVorname),
@@ -199,6 +205,7 @@ impl FieldKey {
             "person_funktion" | "funktion" => Some(Self::PersonFunktion),
             "person_position" | "position" => Some(Self::PersonPosition),
             "person_email" => Some(Self::PersonEmail),
+            "person_email_validation" | "email_validation" => Some(Self::PersonEmailValidation),
             "person_telefon" | "telefon" | "telefonnummer" => Some(Self::PersonTelefon),
             "person_linkedin" | "linkedin" => Some(Self::PersonLinkedin),
             "person_xing" | "xing" => Some(Self::PersonXing),
@@ -545,12 +552,17 @@ pub static REGISTRY: &[fn() -> &'static dyn SourceModule] = &[
     bundesanzeiger::module,
     companyhouse::module,
     dnbhoovers::module,
+    directory::experte,
     firmenabc::module,
+    directory::google,
+    directory::google_maps,
     handelsregister::module,
     leadfeeder::module,
     linkedin::module,
+    directory::moneyhouse,
     northdata::module,
     person_discovery::module,
+    directory::rocketreach,
     xing::module,
     zefix::module,
 ];
@@ -625,17 +637,22 @@ mod tests {
     #[test]
     fn registry_has_all_expected_sources() {
         let ids: Vec<_> = list().map(|m| m.id()).collect();
-        assert_eq!(ids.len(), 11, "expected exactly 11 registered sources");
+        assert_eq!(ids.len(), 16, "expected exactly 16 registered sources");
         for expected in [
             "bundesanzeiger.de",
             "companyhouse.de",
             "dnbhoovers.com",
+            "experte.de",
             "firmenabc.at",
+            "google.de",
+            "maps.google.com",
             "handelsregister.de",
             "leadfeeder.com",
             "linkedin.com",
+            "moneyhouse.ch",
             "northdata.de",
             "person-discovery",
+            "rocketreach.com",
             "xing.com",
             "zefix.ch",
         ] {
@@ -695,8 +712,10 @@ mod tests {
     fn field_key_round_trip() {
         for key in [
             FieldKey::FirmaName,
+            FieldKey::FirmaTelefon,
             FieldKey::Umsatz,
             FieldKey::PersonFunktion,
+            FieldKey::PersonEmailValidation,
             FieldKey::PersonLinkedin,
         ] {
             assert_eq!(FieldKey::from_str(key.as_str()), Some(key));

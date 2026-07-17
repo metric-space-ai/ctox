@@ -155,6 +155,13 @@ pub fn refresh_budget_snapshot(conversation_id: i64) -> RefreshBudgetSnapshot {
 
 const COMMUNICATION_REFRESH_TURN_LIMIT: i64 = 8;
 
+fn open_turn_state_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure turn-state SQLite busy_timeout")?;
+    Ok(conn)
+}
+
 fn record_durable_refresh_demand(
     db_path: &Path,
     conversation_id: i64,
@@ -163,7 +170,7 @@ fn record_durable_refresh_demand(
     reply_output_chars: u64,
     source_ref: &str,
 ) -> Result<HashSet<String>> {
-    let conn = rusqlite::Connection::open(db_path)?;
+    let mut conn = open_turn_state_connection(db_path)?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS continuity_refresh_status (
@@ -196,9 +203,10 @@ fn record_durable_refresh_demand(
             "ALTER TABLE continuity_refresh_status ADD COLUMN output_chars_since_refresh INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = current_rfc3339_timestamp();
     for kind in ["narrative", "anchors", "focus"] {
-        conn.execute(
+        tx.execute(
             r#"
             INSERT INTO continuity_refresh_status (
                 conversation_id, continuity_kind, status, successful_turn_count,
@@ -210,13 +218,13 @@ fn record_durable_refresh_demand(
             "#,
             rusqlite::params![conversation_id, kind, now],
         )?;
-        let previous_turns: i64 = conn.query_row(
+        let previous_turns: i64 = tx.query_row(
             "SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
             rusqlite::params![conversation_id, kind],
             |row| row.get(0),
         )?;
         let turns = previous_turns.saturating_add(1);
-        let previous_output_chars: i64 = conn.query_row(
+        let previous_output_chars: i64 = tx.query_row(
             "SELECT output_chars_since_refresh FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
             rusqlite::params![conversation_id, kind],
             |row| row.get(0),
@@ -228,7 +236,7 @@ fn record_durable_refresh_demand(
         let communication_boundary =
             matches!(kind, "narrative" | "anchors") && turns >= COMMUNICATION_REFRESH_TURN_LIMIT;
         let pending = force_boundary || interval_boundary || communication_boundary;
-        conn.execute(
+        tx.execute(
             r#"
             UPDATE continuity_refresh_status
             SET successful_turn_count=?3,
@@ -250,7 +258,9 @@ fn record_durable_refresh_demand(
             ],
         )?;
     }
-    due_refresh_kinds(&conn, conversation_id, &now)
+    let due = due_refresh_kinds(&tx, conversation_id, &now)?;
+    tx.commit()?;
+    Ok(due)
 }
 
 fn due_refresh_kinds(
@@ -285,7 +295,7 @@ fn mark_durable_refresh_consumed(
         !head_after.is_empty() && head_after != head_before,
         "continuity head did not advance"
     );
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = open_turn_state_connection(db_path)?;
     conn.execute(
         r#"
         UPDATE continuity_refresh_status
@@ -313,8 +323,9 @@ fn mark_durable_refresh_failed(
     kind: &str,
     error: &str,
 ) -> Result<()> {
-    let conn = rusqlite::Connection::open(db_path)?;
-    let previous: i64 = conn.query_row(
+    let mut conn = open_turn_state_connection(db_path)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let previous: i64 = tx.query_row(
         "SELECT failure_attempt_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
         rusqlite::params![conversation_id, kind],
         |row| row.get(0),
@@ -327,7 +338,7 @@ fn mark_durable_refresh_failed(
         .saturating_mul(2_i64.saturating_pow(exponent))
         .min(3_600);
     let retry_not_before = (chrono::Utc::now() + chrono::Duration::seconds(delay)).to_rfc3339();
-    conn.execute(
+    tx.execute(
         r#"
         UPDATE continuity_refresh_status
         SET status='pending', failure_attempt_count=?3, retry_not_before=?4,
@@ -343,6 +354,7 @@ fn mark_durable_refresh_failed(
             current_rfc3339_timestamp()
         ],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -813,19 +825,26 @@ where
             }
         }
         emit("invoke-model");
+        let mut emit_progress = |event: &serde_json::Value| {
+            emit(&format!("worker-progress {}", event));
+        };
         let reply = match session.as_deref_mut() {
-            Some(sess) => sess.run_turn_inner(
+            Some(sess) => sess.run_turn_inner_with_context_and_progress(
                 prompt,
+                None,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 None,
+                &mut emit_progress,
             )?,
             None => owned_session
                 .as_mut()
                 .expect("owned persistent session should exist when no session was supplied")
-                .run_turn_inner(
+                .run_turn_inner_with_context_and_progress(
                     prompt,
+                    None,
                     Some(Duration::from_secs(config.turn_timeout_secs)),
                     None,
+                    &mut emit_progress,
                 )?,
         };
         emit("persist-assistant-turn");
@@ -1082,21 +1101,26 @@ where
     }
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
+    let mut emit_progress = |event: &serde_json::Value| {
+        emit(&format!("worker-progress {}", event));
+    };
     let reply = match session.as_deref_mut() {
-        Some(sess) => sess.run_turn_inner_with_context(
+        Some(sess) => sess.run_turn_inner_with_context_and_progress(
             &rendered_prompt.latest_user_prompt,
             Some(&rendered_prompt.context_instructions),
             Some(Duration::from_secs(config.turn_timeout_secs)),
             exact_prompt_preflight.clone(),
+            &mut emit_progress,
         )?,
         None => owned_session
             .as_mut()
             .expect("owned persistent session should exist when no session was supplied")
-            .run_turn_inner_with_context(
+            .run_turn_inner_with_context_and_progress(
                 &rendered_prompt.latest_user_prompt,
                 Some(&rendered_prompt.context_instructions),
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 exact_prompt_preflight.clone(),
+                &mut emit_progress,
             )?,
     };
     emit("persist-assistant-turn");
@@ -1724,6 +1748,12 @@ pub(crate) fn resolve_api_model_provider_spec(
                 "responses",
                 false,
             ),
+            "ctox_proxy" => (
+                runtime_state::CTOX_LLM_PROXY_API_KEY_ENV,
+                "ctox_proxy",
+                "responses",
+                false,
+            ),
             "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses", false),
             _ => return None,
         };
@@ -2066,6 +2096,25 @@ mod tests {
     }
 
     #[test]
+    fn kimi_k3_proxy_settings_resolve_core_api_provider() {
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_API_PROVIDER".to_string(), "ctox_proxy".to_string());
+        settings.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_string(),
+            "https://llm.ctox.dev".to_string(),
+        );
+
+        let spec =
+            resolve_api_model_provider_spec("kimi-k3", &settings, None).expect("provider spec");
+
+        assert_eq!(spec.provider_id, "ctox_core_api");
+        assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
+        assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
+        assert_eq!(spec.wire_api, "responses");
+        assert!(!spec.requires_full_responses_history);
+    }
+
+    #[test]
     fn remote_api_provider_uses_remote_timeout_even_behind_local_process() {
         assert_eq!(
             default_chat_turn_timeout_secs(true, true),
@@ -2138,6 +2187,45 @@ mod tests {
             mark_durable_refresh_consumed(&db_path, 77, "narrative", "head-a", "head-a").is_err()
         );
 
+        drop(conn);
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn durable_refresh_waits_for_a_short_parallel_writer() -> Result<()> {
+        let db_path = std::env::temp_dir().join(format!(
+            "ctox-refresh-lock-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+        record_durable_refresh_demand(&db_path, 91, false, 0, 10, "initial")?;
+
+        let holder = rusqlite::Connection::open(&db_path)?;
+        holder.execute_batch("BEGIN IMMEDIATE")?;
+        let worker_path = db_path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal refresh worker start");
+            record_durable_refresh_demand(&worker_path, 91, false, 0, 10, "parallel")
+        });
+        started_rx.recv()?;
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !worker.is_finished(),
+            "refresh accounting must wait for a short writer instead of failing immediately"
+        );
+        holder.execute_batch("COMMIT")?;
+        worker.join().expect("refresh worker panicked")?;
+
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let turns: i64 = conn.query_row(
+            "SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=91 AND continuity_kind='narrative'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(turns, 2);
         drop(conn);
         let _ = std::fs::remove_file(db_path);
         Ok(())

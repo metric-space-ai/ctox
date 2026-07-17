@@ -1,0 +1,8 @@
+{
+  "input": { "source_id": "xing.com", "company": "WITTENSTEIN SE", "country": "DE" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "person_xing": "https://www.xing.com/profile/Anna_Wittenstein" },
+  "capture": { "ok": true, "company": "WITTENSTEIN SE", "source_status": "succeeded", "records": [{ "field": "firma_name", "value": "WITTENSTEIN SE", "confidence": "medium", "source_url": "https://www.xing.com/pages/wittensteinse/about_us", "note": "authenticated search result" }, { "field": "person_xing", "value": "https://www.xing.com/profile/Anna_Wittenstein", "confidence": "high", "source_url": "https://www.xing.com/profile/Anna_Wittenstein", "note": "profile URL" }] },
+  "browser": { "ok": true, "result": { "ok": true, "url": "https://www.xing.com/pages/wittensteinse/about_us", "title": "WITTENSTEIN SE | XING", "page_text_excerpt": "WITTENSTEIN SE Unternehmensprofil" } },
+  "search": { "results": [{ "title": "WITTENSTEIN SE", "url": "https://www.xing.com/pages/wittensteinse/about_us", "summary": "Unternehmensprofil" }] },
+  "read": { "ok": true, "url": "https://www.xing.com/pages/wittensteinse/about_us", "title": "WITTENSTEIN SE | XING", "page_text_excerpt": "WITTENSTEIN SE Unternehmensprofil" }
+}

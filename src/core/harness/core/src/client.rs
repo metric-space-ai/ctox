@@ -771,7 +771,12 @@ impl ModelClientSession {
                     None
                 }
             });
-        let include = if reasoning.is_some() && model_info.supports_reasoning_summaries {
+        let include = if reasoning.is_some()
+            && model_info.supports_reasoning_summaries
+            && provider_accepts_reasoning_encrypted_content(
+                &self.client.state.provider,
+                &model_info.slug,
+            ) {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             Vec::new()
@@ -2789,6 +2794,27 @@ fn provider_requires_full_responses_history(provider: &ModelProviderInfo) -> boo
 fn is_stateless_chat_adapter_responses_base_url(base_url: &str) -> bool {
     let normalized = base_url.trim().to_ascii_lowercase();
     normalized.contains("api.minimax.io") || normalized.contains("api.minimaxi.com")
+}
+
+fn provider_accepts_reasoning_encrypted_content(
+    provider: &ModelProviderInfo,
+    model_slug: &str,
+) -> bool {
+    let normalized_model = model_slug.trim().to_ascii_lowercase();
+    if !normalized_model.contains("minimax-m3") {
+        return true;
+    }
+
+    provider
+        .base_url
+        .as_deref()
+        .map(|base_url| {
+            let normalized = base_url.trim().to_ascii_lowercase();
+            !normalized.contains("llm.ctox.dev")
+                && !normalized.contains("api.minimax.io")
+                && !normalized.contains("api.minimaxi.com")
+        })
+        .unwrap_or(true)
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.

@@ -1,6 +1,7 @@
 import { OfficeRpcPeer } from './rpc.mjs';
 
 const root = document.querySelector('#ctox-office-frame-root');
+const OFFICE_OPERATION_TIMEOUT_MS = 120000;
 let connected = false;
 
 window.addEventListener('message', async (event) => {
@@ -58,10 +59,10 @@ async function loadRuntime(config, peer) {
       permissions: config.permissions,
       launchArgs: config.launchArgs,
       bridge: {
-        loadVersion: (request) => peer.call('bridge.loadVersion', request),
-        prepare: (request) => peer.call('bridge.prepare', request),
-        commit: (request, transfer = []) => peer.call('bridge.commit', request, { transfer, timeoutMs: 120000 }),
-        export: (request) => peer.call('bridge.export', request, { timeoutMs: 120000 }),
+        loadVersion: (request) => peer.call('bridge.loadVersion', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
+        prepare: (request) => peer.call('bridge.prepare', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
+        commit: (request, transfer = []) => peer.call('bridge.commit', request, { transfer, timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
+        export: (request) => peer.call('bridge.export', request, { timeoutMs: OFFICE_OPERATION_TIMEOUT_MS }),
         reportIntegrityError: (request) => peer.call('bridge.reportIntegrityError', request),
       },
       emit: (name, detail) => peer.emit('editor.event', { name, detail }),

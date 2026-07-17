@@ -13,6 +13,24 @@ globalThis.document = {
   },
 };
 
+test('CTOX proxy model options follow the discovered proxy catalog', () => {
+  assert.deepEqual(
+    hooks.runtimeModelOptions('ctox_proxy', 'kimi-k3', ['MiniMax-M3', 'kimi-k3']),
+    [
+      ['MiniMax-M3', 'MiniMax-M3'],
+      ['kimi-k3', 'kimi-k3'],
+    ],
+  );
+  assert.deepEqual(
+    hooks.runtimeModelOptions('ctox_proxy', '', []),
+    [
+      ['', 'Nicht gesetzt'],
+      ['MiniMax-M3', 'MiniMax-M3'],
+      ['kimi-k3', 'kimi-k3'],
+    ],
+  );
+});
+
 function baseTemplate(overrides = {}) {
   return hooks.settingsTemplate({
     modules: [{ id: 'inventory', title: 'Inventory', description: '', entry: 'index.html' }],

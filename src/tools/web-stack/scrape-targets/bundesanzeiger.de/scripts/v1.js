@@ -32,6 +32,8 @@
 const { execFileSync } = require("child_process");
 
 const MAX_HITS = 5;
+const ALLOWED_HOST = "bundesanzeiger.de";
+const BROWSER_TIMEOUT_MS = 45_000;
 
 function readInput() {
   const raw = process.env.CTOX_SCRAPE_INPUT_JSON;
@@ -50,11 +52,13 @@ function ctoxBin() {
   return process.env.CTOX_BIN || "ctox";
 }
 
-function runCtox(args) {
+function runCtox(args, input) {
   try {
     const out = execFileSync(ctoxBin(), args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      input,
+      timeout: BROWSER_TIMEOUT_MS + 5_000,
       maxBuffer: 32 * 1024 * 1024,
     });
     return JSON.parse(out);
@@ -67,6 +71,56 @@ function runCtox(args) {
     // fatal failures bubble to stderr from main().
     return null;
   }
+}
+
+function allowedSourceUrl(raw) {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (host !== ALLOWED_HOST && !host.endsWith(`.${ALLOWED_HOST}`)) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function browserRead(rawUrl) {
+  const safeUrl = allowedSourceUrl(rawUrl);
+  if (!safeUrl) return null;
+  const source = `// ctox-browser: timeout_ms=${BROWSER_TIMEOUT_MS}
+const targetUrl = ${JSON.stringify(safeUrl.href)};
+const allowedHost = ${JSON.stringify(ALLOWED_HOST)};
+await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
+await page.waitForTimeout(1800);
+const finalUrl = page.url();
+const parsed = new URL(finalUrl);
+const host = parsed.hostname.toLowerCase().replace(/\\.$/, "");
+const originOk = parsed.protocol === "https:"
+  && !parsed.username && !parsed.password
+  && (host === allowedHost || host.endsWith("." + allowedHost));
+const title = await page.title();
+const text = (await page.locator("body").innerText({ timeout: 5000 }).catch(() => "")).slice(0, 160000);
+const html = (await page.content()).slice(0, 500000);
+const corpus = (title + " " + text + " " + html.slice(0, 64000)).toLowerCase();
+const blocked = /schutzma(?:ß|ss)nahme|to_nlp_start|captcha|verify (?:that )?you are human|access denied|request blocked|just a moment/.test(corpus);
+return { url: finalUrl, title, text, html, origin_ok: originOk, blocked };
+`;
+  const payload = runCtox(
+    ["web", "browser-automation", "--timeout-ms", String(BROWSER_TIMEOUT_MS)],
+    source,
+  );
+  const result = payload && payload.ok === true ? payload.result : null;
+  if (!result || result.origin_ok !== true || !allowedSourceUrl(result.url)) return null;
+  return {
+    ok: true,
+    url: result.url,
+    title: result.title,
+    page_text_excerpt: result.text,
+    raw_html: result.html,
+    blocked: result.blocked === true || /(?:^|[-|:]\s*)(?:login|anmeldung|anmelden|portal)\b/i.test(String(result.title || "")),
+    transport: "browser",
+  };
 }
 
 function searchHits(query, country) {
@@ -87,7 +141,7 @@ function searchHits(query, country) {
     return [];
   }
   return payload.results
-    .filter((hit) => typeof hit.url === "string" && hit.url.includes("bundesanzeiger.de"))
+    .filter((hit) => typeof hit.url === "string" && allowedSourceUrl(hit.url))
     .slice(0, MAX_HITS);
 }
 
@@ -97,6 +151,21 @@ function readPage(url, country) {
     args.push("--country", country);
   }
   return runCtox(args);
+}
+
+function pageMatchesCompany(company, page) {
+  const title = String(page?.title || "").replace(/\s+/g, " ").trim();
+  if (/\b(?:log[ -]?in|sign[ -]?in|anmeld(?:en|ung)|authentication|authentifizierung|kundenportal|customer portal)\b/i.test(title)
+      || /^(?:portal|startseite|home|willkommen)(?:\s*[-|:]\s*.*)?$/i.test(title)) {
+    return false;
+  }
+  const legalForms = new Set(["ag", "gmbh", "mbh", "se", "kg", "kgaa", "ohg", "ug", "sa", "sarl"]);
+  const tokens = String(company || "").toLocaleLowerCase("de-DE").normalize("NFKD")
+    .replace(/\p{M}/gu, "").replace(/[^a-z0-9äöüß]+/gi, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !legalForms.has(token));
+  const corpus = [page?.title, page?.summary, page?.page_text_excerpt, page?.raw_html_excerpt, page?.raw_html]
+    .filter(Boolean).join(" ").toLocaleLowerCase("de-DE").normalize("NFKD").replace(/\p{M}/gu, "");
+  return tokens.length > 0 && tokens.every((token) => corpus.includes(token));
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +180,7 @@ function looksLikeAntiBotWall(html) {
   // in the body (the JS challenge bootstraps via `to_nlp_start(…)`; the
   // user-facing label is "Schutzmaßnahme"). Either presence means we
   // never reached a real results page.
-  return html.includes("Schutzmaßnahme") || html.includes("to_nlp_start");
+  return /schutzma(?:ß|ss)nahme|to_nlp_start|captcha|verify (?:that )?you are human|access denied|request blocked|just a moment/i.test(html);
 }
 
 function parseFirstHitName(html) {
@@ -205,27 +274,54 @@ function extractRecords(url, html) {
   }
 
   const aggregated = [];
+  let blockedSeen = false;
+  let matchingPageSeen = false;
   for (const hit of hits) {
-    const page = readPage(hit.url, country);
-    if (!page || !page.ok) {
-      continue;
+    const safeHit = allowedSourceUrl(hit.url);
+    if (!safeHit) continue;
+    let page = readPage(safeHit.href, country);
+    let html = page && page.ok
+      ? page.raw_html_excerpt || page.raw_html || page.page_text_excerpt || ""
+      : "";
+    if (!page || !page.ok || !html || looksLikeAntiBotWall(html)) {
+      if (html && looksLikeAntiBotWall(html)) blockedSeen = true;
+      const browserPage = browserRead(safeHit.href);
+      if (browserPage) {
+        page = browserPage;
+        html = page.raw_html || page.page_text_excerpt || "";
+        blockedSeen = page.blocked || looksLikeAntiBotWall(html);
+      }
     }
+    if (!page || !page.ok || !html || page.blocked || looksLikeAntiBotWall(html)) continue;
+    const evidenceUrl = allowedSourceUrl(page.url || safeHit.href);
+    if (!evidenceUrl) continue;
+    if (!pageMatchesCompany(company, page)) continue;
     // PDF Jahresabschluss is owned by the Rust adapter
     // (extract_from_pdf_text). Skip silently so we neither double-emit
     // records nor trigger a portal_drift classification.
     if (page.is_pdf === true) {
       continue;
     }
-    const html =
-      page.raw_html_excerpt || page.raw_html || page.page_text_excerpt || "";
-    if (!html) continue;
-    if (looksLikeAntiBotWall(html)) {
-      // Reached the Schutzmaßnahme / to_nlp_start interstitial — page
-      // technically loaded, but it isn't a real results page. Skip.
+    matchingPageSeen = true;
+    const records = extractRecords(evidenceUrl.href, html);
+    const names = records.filter((record) => record.field === "firma_name");
+    if (names.length > 0 && !names.some((record) => pageMatchesCompany(company, { raw_html: record.value }))) {
       continue;
     }
-    aggregated.push(...extractRecords(page.url || hit.url, html));
+    aggregated.push(...records);
   }
 
-  process.stdout.write(JSON.stringify({ records: aggregated }));
+  if (aggregated.length > 0) {
+    process.stdout.write(JSON.stringify({ records: aggregated }));
+    return;
+  }
+  process.stdout.write(JSON.stringify({
+    records: [],
+    failure_mode: blockedSeen ? "blocked" : matchingPageSeen ? "portal_drift" : "temporary_unreachable",
+    detail: blockedSeen
+      ? "bundesanzeiger.de remained blocked after CTOX browser fallback"
+      : matchingPageSeen
+        ? "company-matching bundesanzeiger.de evidence did not match known result selectors"
+        : "bundesanzeiger.de returned no readable evidence for the requested company",
+  }));
 })();

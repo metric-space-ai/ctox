@@ -26,6 +26,11 @@ use super::webrtc_types::{
     WEBRTC_BUFFERED_HIGH_WATER,
 };
 
+// Browser and tunnel data channels may advertise a larger SCTP message size
+// than they reliably deliver through all production hops. Keep encoded JSON
+// frames below that boundary; the receiver reassembles them by sequence.
+const CTOX_FILE_TRANSPORT_SAFE_BYTES_PER_FRAME: usize = 8 * 1024;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FileFetchRequest {
     #[serde(rename = "requestId")]
@@ -363,46 +368,57 @@ async fn stream_file<H: WebRTCConnectionHandler>(
             });
 
             while let Some(bytes) = chunk_rx.recv().await {
-                if cancel_flag.load(Ordering::SeqCst) {
-                    producer_stop.store(true, Ordering::SeqCst);
-                    send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
-                    stream_cancelled = true;
-                    break;
-                }
-                if Instant::now() >= runtime_deadline {
-                    producer_stop.store(true, Ordering::SeqCst);
-                    stop_with_error = Some("timeout");
-                    break;
-                }
-
-                if !known.contains(&sequence) {
-                    let mut backoff_ms = 4u64;
-                    while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
-                        if cancel_flag.load(Ordering::SeqCst) {
-                            producer_stop.store(true, Ordering::SeqCst);
-                            send_file_chunk(handler, peer, request, sequence, &[], true, true)
-                                .await;
-                            stream_cancelled = true;
-                            break;
-                        }
-                        if Instant::now() >= runtime_deadline {
-                            producer_stop.store(true, Ordering::SeqCst);
-                            stop_with_error = Some("timeout-backpressure");
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                        backoff_ms = (backoff_ms * 2).min(64);
-                    }
-                    if stream_cancelled || stop_with_error.is_some() {
+                for frame_bytes in bytes.chunks(CTOX_FILE_TRANSPORT_SAFE_BYTES_PER_FRAME) {
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        producer_stop.store(true, Ordering::SeqCst);
+                        send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
+                        stream_cancelled = true;
                         break;
                     }
-                    // The closure may pass a smaller slice than chunk_size,
-                    // which is fine: chunk_size is a max, not a min. The
-                    // sequence number advances per emitted chunk.
-                    send_file_chunk(handler, peer, request, sequence, &bytes, false, false).await;
-                    sent_any = true;
+                    if Instant::now() >= runtime_deadline {
+                        producer_stop.store(true, Ordering::SeqCst);
+                        stop_with_error = Some("timeout");
+                        break;
+                    }
+
+                    if !known.contains(&sequence) {
+                        let mut backoff_ms = 4u64;
+                        while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
+                            if cancel_flag.load(Ordering::SeqCst) {
+                                producer_stop.store(true, Ordering::SeqCst);
+                                send_file_chunk(handler, peer, request, sequence, &[], true, true)
+                                    .await;
+                                stream_cancelled = true;
+                                break;
+                            }
+                            if Instant::now() >= runtime_deadline {
+                                producer_stop.store(true, Ordering::SeqCst);
+                                stop_with_error = Some("timeout-backpressure");
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                            backoff_ms = (backoff_ms * 2).min(64);
+                        }
+                        if stream_cancelled || stop_with_error.is_some() {
+                            break;
+                        }
+                        send_file_chunk(
+                            handler,
+                            peer,
+                            request,
+                            sequence,
+                            frame_bytes,
+                            false,
+                            false,
+                        )
+                        .await;
+                        sent_any = true;
+                    }
+                    sequence += 1;
                 }
-                sequence += 1;
+                if stream_cancelled || stop_with_error.is_some() {
+                    break;
+                }
             }
             drop(chunk_rx);
 
@@ -923,13 +939,18 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // N_CHUNKS payload frames + 1 terminal complete frame
+        let frames_per_source_chunk = chunk_size.div_ceil(CTOX_FILE_TRANSPORT_SAFE_BYTES_PER_FRAME);
+        // Transport-safe payload frames + 1 terminal complete frame.
         assert_eq!(
             chunks.len(),
-            N_CHUNKS + 1,
-            "expected {} payload + 1 terminal chunk",
-            N_CHUNKS
+            N_CHUNKS * frames_per_source_chunk + 1,
+            "expected transport-safe payload frames + 1 terminal chunk"
         );
+        assert!(chunks.iter().filter(|chunk| !chunk.complete).all(|chunk| {
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.bytes_base64.as_bytes())
+                .is_ok_and(|bytes| bytes.len() <= CTOX_FILE_TRANSPORT_SAFE_BYTES_PER_FRAME)
+        }));
         assert!(
             chunks.last().unwrap().complete,
             "terminal chunk must be complete"

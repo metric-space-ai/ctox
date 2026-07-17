@@ -165,6 +165,8 @@ export const replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
+  shouldAttachFileDemandLoader,
+  shouldPersistFetchedFileChunks,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -2018,7 +2020,11 @@ function primaryValue(doc = {}, primaryPath = 'id') {
 }
 
 function shouldPersistFetchedFileChunks(collectionName = '') {
-  return String(collectionName || '').endsWith('_chunks');
+  // File-fetch streams expose reconstructed raw bytes. Document/spreadsheet
+  // chunk collections use a different structured schema (blob_id/idx/data),
+  // so materializing generic file_id/sequence/bytes_base64 rows would corrupt
+  // their browser cache. The consumer verifies and uses the returned stream.
+  return String(collectionName || '') === 'desktop_file_chunks';
 }
 
 function shouldAttachQueryDemandLoader(collectionName = '') {

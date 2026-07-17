@@ -1,0 +1,6 @@
+{
+  "input": { "source_id": "zefix.ch", "company": "WITTENSTEIN SE", "country": "CH" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "firma_ort": "Igersheim" },
+  "search": { "results": [{ "title": "WITTENSTEIN SE", "url": "https://www.zefix.ch/de/search/entity/list/firm/fixture", "summary": "WITTENSTEIN SE register record" }] },
+  "read": { "ok": true, "url": "https://www.zefix.ch/de/search/entity/list/firm/fixture", "title": "WITTENSTEIN SE | Zefix", "page_text_excerpt": "WITTENSTEIN SE 97999 Igersheim", "extracted_fields": { "fields": [{ "field": "firma_name", "value": "WITTENSTEIN SE", "confidence": "high" }, { "field": "firma_ort", "value": "Igersheim", "confidence": "high" }] } }
+}

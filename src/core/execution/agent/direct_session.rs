@@ -729,6 +729,24 @@ impl PersistentSession {
         timeout: Option<Duration>,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
+        let mut ignore_progress = |_event: &JsonValue| {};
+        self.run_turn_inner_with_context_and_progress(
+            prompt,
+            developer_instructions,
+            timeout,
+            exact_prompt_preflight,
+            &mut ignore_progress,
+        )
+    }
+
+    pub(crate) fn run_turn_inner_with_context_and_progress(
+        &mut self,
+        prompt: &str,
+        developer_instructions: Option<&str>,
+        timeout: Option<Duration>,
+        exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        progress: &mut dyn FnMut(&JsonValue),
+    ) -> Result<String> {
         anyhow::ensure!(
             !self.poisoned,
             "session is poisoned by an earlier ambiguous turn outcome; rebuild the session"
@@ -782,6 +800,7 @@ impl PersistentSession {
                 read_only_sandbox,
                 persistent_worker,
                 exact_prompt_preflight,
+                progress,
             )
             .await
         });
@@ -1205,6 +1224,7 @@ impl PersistentSession {
         read_only_sandbox: bool,
         persistent_worker: bool,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
+        progress: &mut dyn FnMut(&JsonValue),
     ) -> Result<String> {
         // Reuse the session's thread across turns. The previous fresh-thread-
         // per-turn workaround ("the thread may not accept new TurnStart
@@ -1428,6 +1448,7 @@ impl PersistentSession {
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
         let mut pending_api_cost_records = Vec::new();
+        let mut tool_call_count = 0_u64;
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
 
         loop {
@@ -1435,6 +1456,18 @@ impl PersistentSession {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
+                        progress(&serde_json::json!({
+                            "event_kind": "worker.turn_timeout",
+                            "title": "Agent turn timed out",
+                            "body_text": "The configured turn deadline was reached.",
+                            "metadata": {
+                                "runtime": {
+                                    "seconds": turn_started_at.elapsed().as_secs(),
+                                },
+                                "tool_call_count": tool_call_count,
+                                "metrics_mode": "cumulative",
+                            },
+                        }));
                         // Interrupt the server-side turn before bailing, and
                         // KEEP DRAINING events while the interrupt request is
                         // in flight. A paused consumer is exactly what lets
@@ -1515,6 +1548,31 @@ impl PersistentSession {
                     }
                     if let Some(msg) = try_extract_event_msg(&notif) {
                         ctx_log.observe(&msg);
+                        if let EventMsg::TurnStarted(ts) = &msg {
+                            if ts.turn_id == turn_id {
+                                saw_our_turn_started = true;
+                                progress(&serde_json::json!({
+                                    "event_kind": "worker.turn_started",
+                                    "title": "Agent turn started",
+                                    "body_text": "The model runtime accepted the task.",
+                                    "metadata": {
+                                        "turn_id": turn_id.to_string(),
+                                        "runtime": { "seconds": 0 },
+                                        "tool_call_count": tool_call_count,
+                                        "metrics_mode": "cumulative",
+                                    },
+                                }));
+                            }
+                        } else if saw_our_turn_started {
+                            if let Some(event) = direct_session_progress_event(
+                                &msg,
+                                &turn_id,
+                                turn_started_at.elapsed(),
+                                &mut tool_call_count,
+                            ) {
+                                progress(&event);
+                            }
+                        }
                         if let (Some(provider), EventMsg::TokenCount(tc)) = (api_provider, &msg) {
                             if let Some(info) = tc.info.as_ref() {
                                 let usage = &info.last_token_usage;
@@ -1674,9 +1732,7 @@ impl PersistentSession {
                             }
                         }
                         match msg {
-                            EventMsg::TurnStarted(ref ts) if ts.turn_id == turn_id => {
-                                saw_our_turn_started = true;
-                            }
+                            EventMsg::TurnStarted(ref ts) if ts.turn_id == turn_id => {}
                             EventMsg::AgentMessage(am) => {
                                 // Ignore replies that arrive before our turn
                                 // has started — they belong to an earlier turn
@@ -2370,6 +2426,148 @@ fn tokens_per_second(tokens: i64, elapsed_ms: i64) -> Option<f64> {
         return None;
     }
     Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
+}
+
+fn direct_session_progress_event(
+    msg: &EventMsg,
+    turn_id: &str,
+    elapsed: Duration,
+    tool_call_count: &mut u64,
+) -> Option<JsonValue> {
+    let elapsed_seconds = elapsed.as_secs();
+    let cumulative_metadata = |extra: JsonValue| {
+        serde_json::json!({
+            "runtime": { "seconds": elapsed_seconds },
+            "tool_call_count": *tool_call_count,
+            "metrics_mode": "cumulative",
+            "detail": extra,
+        })
+    };
+    let tool_started =
+        |tool_type: &str, tool_name: &str, call_id: String, tool_call_count: &mut u64| {
+            *tool_call_count = tool_call_count.saturating_add(1);
+            serde_json::json!({
+                "event_kind": "worker.tool_started",
+                "title": format!("Tool started: {tool_name}"),
+                "body_text": "",
+                "metadata": {
+                    "runtime": { "seconds": elapsed_seconds },
+                    "tool_call_count": *tool_call_count,
+                    "metrics_mode": "cumulative",
+                    "tool": {
+                        "type": tool_type,
+                        "name": tool_name,
+                        "call_id": call_id,
+                    },
+                },
+            })
+        };
+    let tool_completed =
+        |tool_type: &str, tool_name: &str, call_id: String, success: Option<bool>| {
+            serde_json::json!({
+                "event_kind": "worker.tool_completed",
+                "title": format!("Tool finished: {tool_name}"),
+                "body_text": "",
+                "metadata": {
+                    "runtime": { "seconds": elapsed_seconds },
+                    "tool_call_count": *tool_call_count,
+                    "metrics_mode": "cumulative",
+                    "tool": {
+                        "type": tool_type,
+                        "name": tool_name,
+                        "call_id": call_id,
+                        "success": success,
+                    },
+                },
+            })
+        };
+
+    match msg {
+        EventMsg::TokenCount(tc) => {
+            let info = tc.info.as_ref()?;
+            Some(serde_json::json!({
+                "event_kind": "worker.token_usage",
+                "title": "Model usage updated",
+                "body_text": "",
+                "metadata": {
+                    "usage": {
+                        "input_tokens": info.total_token_usage.input_tokens,
+                        "output_tokens": info.total_token_usage.output_tokens,
+                        "last_input_tokens": info.last_token_usage.input_tokens,
+                        "last_output_tokens": info.last_token_usage.output_tokens,
+                        "total_tokens": info.total_token_usage.total_tokens,
+                    },
+                    "runtime": { "seconds": elapsed_seconds },
+                    "tool_call_count": *tool_call_count,
+                    "metrics_mode": "cumulative",
+                },
+            }))
+        }
+        EventMsg::ExecCommandBegin(ev) => Some(tool_started(
+            "exec_command",
+            "Terminal",
+            ev.call_id.to_string(),
+            tool_call_count,
+        )),
+        EventMsg::ExecCommandEnd(ev) => Some(tool_completed(
+            "exec_command",
+            "Terminal",
+            ev.call_id.to_string(),
+            Some(ev.exit_code == 0),
+        )),
+        EventMsg::McpToolCallBegin(ev) => Some(tool_started(
+            "mcp",
+            &format!("{}.{}", ev.invocation.server, ev.invocation.tool),
+            ev.call_id.to_string(),
+            tool_call_count,
+        )),
+        EventMsg::McpToolCallEnd(ev) => Some(tool_completed(
+            "mcp",
+            &format!("{}.{}", ev.invocation.server, ev.invocation.tool),
+            ev.call_id.to_string(),
+            Some(ev.is_success()),
+        )),
+        EventMsg::DynamicToolCallRequest(ev) => Some(tool_started(
+            "dynamic",
+            &ev.tool,
+            ev.call_id.to_string(),
+            tool_call_count,
+        )),
+        EventMsg::DynamicToolCallResponse(ev) => Some(tool_completed(
+            "dynamic",
+            &ev.tool,
+            ev.call_id.to_string(),
+            Some(ev.success),
+        )),
+        EventMsg::WebSearchBegin(ev) => Some(tool_started(
+            "web_search",
+            "Web search",
+            ev.call_id.to_string(),
+            tool_call_count,
+        )),
+        EventMsg::WebSearchEnd(ev) => Some(tool_completed(
+            "web_search",
+            "Web search",
+            ev.call_id.to_string(),
+            Some(true),
+        )),
+        EventMsg::ViewImageToolCall(ev) => Some(tool_started(
+            "view_image",
+            "Image viewer",
+            ev.call_id.to_string(),
+            tool_call_count,
+        )),
+        EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => Some(serde_json::json!({
+            "event_kind": "worker.turn_completed",
+            "title": "Agent turn completed",
+            "body_text": "",
+            "metadata": cumulative_metadata(serde_json::json!({
+                "turn_id": turn_id,
+                "has_last_message": tc.last_agent_message.is_some(),
+            })),
+        })),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

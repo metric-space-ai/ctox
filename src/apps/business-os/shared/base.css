@@ -39,7 +39,15 @@
   --warning: #7a4900;
   --warning-soft: color-mix(in srgb, var(--warning) 14%, var(--surface));
   --danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
-  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  /* Focus: one clear 2px accent ring for every control in the kit. */
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent);
+  /* Quiet fills derived from --text, so they read correctly in both themes:
+     resting fill for chips/buttons, a stronger step for hover, and a bare
+     hover wash for rows and ghost controls. These replace the old
+     "1px solid box around everything" language. */
+  --kit-fill: color-mix(in srgb, var(--text) 6%, transparent);
+  --kit-fill-strong: color-mix(in srgb, var(--text) 10%, transparent);
+  --kit-hover: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 :root[data-theme="dark"] {
@@ -98,9 +106,8 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
-  box-shadow: var(--panel-shadow);
   box-sizing: border-box;
 }
 
@@ -156,7 +163,7 @@
   width: 100%;
   min-width: 0;
   min-height: 32px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
@@ -189,7 +196,7 @@
 .ctox-textarea {
   width: 100%;
   min-height: 32px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
@@ -246,9 +253,9 @@
   gap: 7px;
   min-height: 32px;
   padding: 0 12px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
-  background: var(--surface);
+  background: var(--kit-fill);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -265,8 +272,7 @@
 
 .ctox-button:hover,
 .ctox-icon-button:hover {
-  background: var(--surface-2);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
+  background: var(--kit-fill-strong);
 }
 
 .ctox-button:focus-visible,
@@ -287,7 +293,6 @@
 }
 
 .ctox-button.is-danger {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
   color: var(--danger);
 }
 
@@ -309,7 +314,7 @@
 }
 
 .ctox-button--ghost:hover {
-  background: var(--surface-2);
+  background: var(--kit-hover);
   border-color: transparent;
   color: var(--text);
 }
@@ -331,14 +336,12 @@
 
 .ctox-icon-button.is-danger,
 .ctox-pane-icon.is-danger {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
   color: var(--danger);
 }
 
 .ctox-icon-button.is-danger:hover,
 .ctox-pane-icon.is-danger:hover {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
   color: var(--danger);
 }
 
@@ -351,9 +354,9 @@
   gap: 6px;
   min-height: 26px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--kit-fill);
   color: var(--muted);
   font: inherit;
   font-size: 12px;
@@ -363,21 +366,26 @@
 }
 
 .ctox-chip:hover {
-  border-color: var(--line-strong);
+  background: var(--kit-fill-strong);
   color: var(--text);
 }
 
 .ctox-chip.is-active,
 .ctox-chip[aria-pressed="true"] {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  color: var(--text);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 .ctox-chip-count {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctox-chip.is-active .ctox-chip-count,
+.ctox-chip[aria-pressed="true"] .ctox-chip-count {
+  color: color-mix(in srgb, var(--accent) 65%, var(--muted));
 }
 
 /* Modules clear the count text when it is zero — collapse the empty span so
@@ -390,9 +398,9 @@
    7. Cards (right-pane inspector sections)
    -------------------------------------------------------------------------- */
 .ctox-card {
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
-  background: var(--surface);
+  background: var(--surface-2);
   overflow: hidden;
 }
 
@@ -439,12 +447,13 @@
 }
 
 .ctox-list-item:hover {
-  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  background: var(--kit-hover);
 }
 
 .ctox-list-item.is-selected,
 .ctox-list-item[aria-selected="true"] {
   background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* ----------------------------------------------------------------------------
@@ -459,13 +468,21 @@
   min-height: 100%;
   padding: 24px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.55;
   text-align: center;
 }
 
+.ctox-empty > * {
+  max-width: 38ch;
+  margin-inline: auto;
+}
+
 .ctox-empty strong {
+  display: block;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* ----------------------------------------------------------------------------
@@ -477,37 +494,34 @@
   gap: 5px;
   min-height: 20px;
   padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--kit-fill);
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .ctox-badge.is-success {
   background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
   color: var(--success);
 }
 
 .ctox-badge.is-warning {
   background: var(--warning-soft);
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
   color: var(--warning);
 }
 
 .ctox-badge.is-danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
 }
 
 .ctox-badge.is-info {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   color: color-mix(in srgb, var(--accent) 80%, var(--text));
 }
 
@@ -555,9 +569,9 @@
   height: 30px;
   flex: 0 0 auto;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--control-radius);
-  background: var(--surface-2);
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -570,21 +584,19 @@
 }
 
 .ctox-pane-icon:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--kit-hover);
+  color: var(--text);
 }
 
 .ctox-pane-icon:focus-visible {
   outline: none;
-  border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
 .ctox-pane-icon.is-active,
 .ctox-pane-icon[aria-pressed="true"] {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  color: var(--text);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 .ctox-pane-icon:disabled {
@@ -610,7 +622,7 @@
   min-width: 0;
   min-height: 32px;
   flex: 0 1 auto;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: var(--surface-2);
   color: var(--text);
@@ -636,7 +648,7 @@
   gap: 2px;
   min-width: max-content;
   padding: 2px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: var(--surface-2);
 }
@@ -660,17 +672,21 @@
   cursor: pointer;
 }
 
+.ctox-pane-tab:hover {
+  color: var(--text);
+}
+
 .ctox-pane-tab.is-active,
 .ctox-pane-tab.active,
 .ctox-pane-tab[aria-selected="true"] {
-  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: transparent;
+  background: var(--surface-3, var(--surface));
+  box-shadow: var(--shadow-sm);
   color: var(--text);
 }
 
 .ctox-pane-tab:focus-visible {
   outline: none;
-  border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
@@ -702,7 +718,7 @@
   top: 0;
   z-index: 1;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
   background: var(--surface);
   color: var(--muted);
   font-size: 11px;
@@ -726,7 +742,7 @@
 }
 
 .ctox-table tbody tr:hover {
-  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  background: var(--kit-hover);
 }
 
 .ctox-table tbody tr.is-selected,
@@ -847,10 +863,10 @@
   width: min(560px, 100%);
   max-height: min(72vh, 640px);
   min-height: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
   background: var(--surface);
-  box-shadow: var(--panel-shadow);
+  box-shadow: var(--shadow-lg, var(--panel-shadow));
   overflow: hidden;
 }
 
@@ -906,7 +922,7 @@
   min-width: 0;
   min-height: 36px;
   padding: 4px 6px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline, var(--line));
   background: var(--surface);
 }
 
@@ -917,7 +933,7 @@
   min-width: 0;
   padding-right: 6px;
   margin-right: 2px;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--hairline, var(--line));
 }
 
 .ctox-action-strip__group:last-child {
@@ -1046,7 +1062,7 @@
   gap: 6px;
   min-width: 0;
   padding: 7px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
   background: var(--surface);
 }
@@ -1186,8 +1202,8 @@
    -------------------------------------------------------------------------- */
 .ctox-callout {
   padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--kit-radius, 6px);
   background: var(--surface-2);
   color: var(--text);
   font-size: 12.5px;
@@ -1198,25 +1214,25 @@
 
 .ctox-callout.is-success {
   background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
 }
 
 .ctox-callout.is-warning {
   background: var(--warning-soft);
-  border-color: color-mix(in srgb, var(--warning) 40%, var(--line));
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
 }
 
 .ctox-callout.is-danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 /* Data/code dump block (exports, logs, JSON previews). */
 .ctox-pre {
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--kit-radius, 6px);
   background: var(--surface-2);
   color: var(--text);
   font-family: var(--font-mono);

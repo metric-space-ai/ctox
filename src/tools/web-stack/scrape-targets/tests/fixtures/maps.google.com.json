@@ -1,0 +1,7 @@
+{
+  "input": { "source_id": "maps.google.com", "company": "WITTENSTEIN SE", "country": "DE" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "firma_telefon": "+49 7931 4930", "firma_plz": "97999" },
+  "browser": { "ok": true, "result": { "ok": true, "url": "https://www.google.com/maps/place/WITTENSTEIN+SE", "title": "WITTENSTEIN SE - Google Maps", "page_text_excerpt": "WITTENSTEIN SE Walter-Wittenstein-Strasse 1 97999 Igersheim", "extracted_fields": { "fields": [{ "field": "firma_telefon", "value": "+49 7931 4930", "confidence": "high", "note": "Google Maps detail panel" }, { "field": "firma_anschrift", "value": "Walter-Wittenstein-Strasse 1, 97999 Igersheim", "confidence": "high", "note": "Google Maps detail panel" }] } } },
+  "search": { "results": [{ "title": "WITTENSTEIN SE", "url": "https://www.google.com/maps/place/WITTENSTEIN+SE", "summary": "97999 Igersheim" }] },
+  "read": { "ok": true, "url": "https://www.google.com/maps/place/WITTENSTEIN+SE", "title": "WITTENSTEIN SE - Google Maps", "page_text_excerpt": "WITTENSTEIN SE 97999 Igersheim +49 7931 4930" }
+}

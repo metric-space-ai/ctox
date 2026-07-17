@@ -1,0 +1,36 @@
+{
+  "input": {
+    "source_id": "companyhouse.de",
+    "company": "WITTENSTEIN SE",
+    "country": "DE"
+  },
+  "expected": {
+    "firma_name": "WITTENSTEIN SE"
+  },
+  "search": {
+    "results": [
+      {
+        "title": "WITTENSTEIN SE",
+        "url": "https://www.companyhouse.de/WITTENSTEIN-SE-Igersheim",
+        "summary": "Firmenprofil"
+      }
+    ]
+  },
+  "read": {
+    "ok": true,
+    "url": "https://www.companyhouse.de/WITTENSTEIN-SE-Igersheim",
+    "title": "Nur einen Moment...",
+    "raw_html": "<main>Cloudflare - Noch einen Schritt, natürlicher Zugriff erforderlich</main>"
+  },
+  "browser": {
+    "ok": true,
+    "result": {
+      "url": "https://www.companyhouse.de/WITTENSTEIN-SE-Igersheim",
+      "title": "WITTENSTEIN SE | CompanyHouse",
+      "text": "WITTENSTEIN SE Unternehmensprofil Igersheim",
+      "html": "<main><h1>WITTENSTEIN SE</h1><p>Unternehmensprofil Igersheim</p></main>",
+      "origin_ok": true,
+      "blocked": false
+    }
+  }
+}

@@ -186,12 +186,12 @@ test('native release projection, not SemVer, controls team visibility', () => {
 
 test('tenant-local module is private instead of packaged system UI', () => {
   const local = {
-    id: 'thesen-outbound',
-    title: 'THESEN Outbound',
+    id: 'private-outbound',
+    title: 'Private Outbound',
     version: '0.3.12',
     source: 'local',
     install_scope: 'local',
-    entry: 'local-modules/thesen-outbound/index.html',
+    entry: 'local-modules/private-outbound/index.html',
     lifecycle: {
       source: 'native_catalog_projection',
       runtime_installed: false,

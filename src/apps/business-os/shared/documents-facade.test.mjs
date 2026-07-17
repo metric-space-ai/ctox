@@ -127,6 +127,167 @@ test('createDocx and loadVersion roundtrip bytes and generic provenance', async 
   assert.deepEqual(loaded.version.provenance, createInput().provenance);
 });
 
+test('createMailMerge stores one document with navigable recipient versions', async () => {
+  const db = createMemoryDb();
+  const documents = createDocumentsFacade({ db, now: () => 123456 });
+  const input = {
+    filename: 'sommeraktion-serienbrief.docx',
+    title: 'Sommeraktion Serienbrief',
+    mimeType: DOCX_MIME_TYPE,
+    idempotencyKey: 'summer-mail-merge:v1',
+    indexText: 'Kosten senken Beschaffung',
+    tags: ['kampagne', 'brief'],
+    linkedRecords: [{ collection: 'campaigns', id: 'campaign-7' }],
+    templateRef: { template_id: 'letter-standard', version: 2 },
+    provenance: { app_id: 'crm', source: 'campaign-mail-merge' },
+    variants: [
+      {
+        recipientId: 'person-1',
+        recipientLabel: 'Ada Lovelace',
+        filename: 'sommeraktion-ada-lovelace.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 1]),
+        indexText: 'Persönlicher Brief an Ada',
+        linkedRecords: [{ collection: 'people', id: 'person-1' }],
+        provenance: { merged_fields: ['name'] },
+      },
+      {
+        recipientId: 'person-2',
+        recipientLabel: 'Grace Hopper',
+        filename: 'sommeraktion-grace-hopper.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 2]),
+        linkedRecords: [{ collection: 'people', id: 'person-2' }],
+        provenance: { merged_fields: ['name'] },
+      },
+    ],
+  };
+
+  const created = await documents.createMailMerge(input);
+  const retry = await documents.createMailMerge(input);
+  const second = await documents.loadVersion({
+    documentId: created.documentId,
+    versionId: created.versions[1].versionId,
+    expectedSha256: created.versions[1].sha256,
+  });
+
+  assert.equal(db.collections.documents.rows.size, 1);
+  assert.equal(db.collections.document_versions.rows.size, 2);
+  assert.equal(created.recipientCount, 2);
+  assert.equal(created.document.document_type, 'mail_merge');
+  assert.equal(created.document.mail_merge.recipient_count, 2);
+  assert.deepEqual(created.document.tags, ['kampagne', 'brief']);
+  assert.match(created.document.index_text, /Kosten senken Beschaffung/);
+  assert.match(created.document.index_text, /Persönlicher Brief an Ada/);
+  assert.equal(created.document.provenance.app_id, 'crm');
+  assert.deepEqual(created.versions.map(({ recipientLabel }) => recipientLabel), [
+    'Ada Lovelace',
+    'Grace Hopper',
+  ]);
+  assert.deepEqual(second.bytes, input.variants[1].bytes);
+  assert.equal(second.version.mail_merge_recipient.label, 'Grace Hopper');
+  assert.equal(retry.idempotent, true);
+  assert.equal(db.collections.documents.rows.size, 1);
+  assert.equal(db.collections.document_versions.rows.size, 2);
+});
+
+test('createMailMerge rejects duplicate recipients and empty variant sets', async () => {
+  const documents = createDocumentsFacade({ db: createMemoryDb() });
+  const base = {
+    filename: 'mail-merge.docx',
+    mimeType: DOCX_MIME_TYPE,
+    idempotencyKey: 'mail-merge-invalid',
+  };
+  await assert.rejects(
+    documents.createMailMerge({ ...base, variants: [] }),
+    (error) => error.code === 'DOCUMENTS_INVALID_INPUT',
+  );
+  await assert.rejects(
+    documents.createMailMerge({
+      ...base,
+      variants: [
+        {
+          recipientId: 'person-1',
+          recipientLabel: 'First',
+          filename: 'first.docx',
+          bytes: new Uint8Array([1]),
+        },
+        {
+          recipientId: 'person-1',
+          recipientLabel: 'Duplicate',
+          filename: 'duplicate.docx',
+          bytes: new Uint8Array([2]),
+        },
+      ],
+    }),
+    (error) => error.code === 'DOCUMENTS_INVALID_INPUT',
+  );
+});
+
+test('createMailMerge repairs a missing recipient version without duplicating the parent', async () => {
+  const db = createMemoryDb();
+  const documents = createDocumentsFacade({ db });
+  const input = {
+    filename: 'repair-mail-merge.docx',
+    mimeType: DOCX_MIME_TYPE,
+    idempotencyKey: 'repair-mail-merge:v1',
+    variants: [
+      {
+        recipientId: 'person-1',
+        recipientLabel: 'Ada Lovelace',
+        filename: 'ada.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 1]),
+      },
+      {
+        recipientId: 'person-2',
+        recipientLabel: 'Grace Hopper',
+        filename: 'grace.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 2]),
+      },
+    ],
+  };
+  const created = await documents.createMailMerge(input);
+  db.collections.document_versions.rows.delete(created.versions[1].versionId);
+
+  const repaired = await documents.createMailMerge(input);
+
+  assert.equal(repaired.idempotent, true);
+  assert.equal(db.collections.documents.rows.size, 1);
+  assert.equal(db.collections.document_versions.rows.size, 2);
+});
+
+test('createMailMerge resumes partial recipient data when the parent was not stored', async () => {
+  const db = createMemoryDb();
+  const documents = createDocumentsFacade({ db });
+  const input = {
+    filename: 'resume-mail-merge.docx',
+    mimeType: DOCX_MIME_TYPE,
+    idempotencyKey: 'resume-mail-merge:v1',
+    creatorAppId: 'crm',
+    variants: [
+      {
+        recipientId: 'person-1',
+        recipientLabel: 'Ada Lovelace',
+        filename: 'ada.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 1]),
+      },
+      {
+        recipientId: 'person-2',
+        recipientLabel: 'Grace Hopper',
+        filename: 'grace.docx',
+        bytes: new Uint8Array([0x50, 0x4b, 2]),
+      },
+    ],
+  };
+  const created = await documents.createMailMerge(input);
+  db.collections.documents.rows.delete(created.documentId);
+
+  const resumed = await documents.createMailMerge(input);
+
+  assert.equal(resumed.idempotent, false);
+  assert.equal(resumed.document.provenance.app_id, 'crm');
+  assert.equal(db.collections.documents.rows.size, 1);
+  assert.equal(db.collections.document_versions.rows.size, 2);
+});
+
 test('createDocx answers repeated idempotencyKey calls without duplicates', async () => {
   const db = createMemoryDb();
   const documents = createDocumentsFacade({ db, now: () => 123456 });

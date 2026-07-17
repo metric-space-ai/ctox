@@ -1,0 +1,6 @@
+{
+  "input": { "source_id": "google.de", "company": "WITTENSTEIN SE", "country": "DE" },
+  "expected": { "firma_name": "WITTENSTEIN SE", "firma_domain": "wittenstein.de" },
+  "search": { "results": [{ "title": "WITTENSTEIN SE | Mechatronik", "url": "https://www.wittenstein.de/de-de/", "summary": "WITTENSTEIN SE in Igersheim" }] },
+  "read": { "ok": true, "url": "https://www.wittenstein.de/de-de/", "title": "WITTENSTEIN SE | Mechatronik", "page_text_excerpt": "WITTENSTEIN SE entwickelt mechatronische Antriebssysteme." }
+}

@@ -1,7 +1,8 @@
-# Thesen-Nachrecherche — Quellenmatrix
+# DACH-Prospektrecherche — Quellenmatrix
 
 Diese Datei übersetzt die Quellenmatrix aus
-`/Users/you/Downloads/Thesen_Nachrecherche/Abstimmung 12.05.2026 - Nach- und Neurecherche - final.xlsx`
+Die Matrix ist aus einem realen CRM-Aktualisierungsworkflow abgeleitet und für
+beliebige Mandanten normalisiert.
 in eine maschinenlesbare Form. Jede Quelle im CTOX-Webstack-Source-Registry
 (`tools/web-stack/src/sources/<id>.rs`) leitet ihre `authoritative_for()`-,
 `countries()`- und (für `person-research`) Prioritätsentscheidungen aus
@@ -105,6 +106,7 @@ gilt die Excel-Ordnung. Discovery-Muster sind kursiv: sie laufen über
 | `firma_ort`         | `northdata.de`, *Impressum*                                                                      |
 | `firma_email`       | *Impressum*, `leadfeeder.com`, `dnbhoovers.com`                                                  |
 | `firma_domain`      | *Google*, `dnbhoovers.com`, `leadfeeder.com`                                                     |
+| `firma_telefon`     | *Google Maps*, *Impressum*, *Unternehmensseite*                                                 |
 | `person_geschlecht` | *Unternehmensseite*, `linkedin.com`, `xing.com`                                                  |
 | `person_titel`      | *Impressum*, `companyhouse.de`, *Unternehmensseite*                                              |
 | `person_vorname`    | *Impressum*, `northdata.de`, *Unternehmensseite*                                                 |
@@ -114,7 +116,7 @@ gilt die Excel-Ordnung. Discovery-Muster sind kursiv: sie laufen über
 | `person_email`      | `leadfeeder.com`                                                                                 |
 | `person_linkedin`   | `linkedin.com`                                                                                   |
 | `person_xing`       | `xing.com`                                                                                       |
-| `wz_code`, `umsatz`, `mitarbeiter`, `sellify_nummer` | *(in der Excel-B2-Person-Sektion ohne Quelle — werden nur in B/Neu rezugriffen, s. u.)* |
+| `wz_code`, `umsatz`, `mitarbeiter`, `crm_record_number` | *(in der Excel-B2-Person-Sektion ohne Quelle — werden nur in B/Neu recherchiert, s. u.)* |
 
 #### Österreich
 | FieldKey            | Source-Priorität                                                                                                          |

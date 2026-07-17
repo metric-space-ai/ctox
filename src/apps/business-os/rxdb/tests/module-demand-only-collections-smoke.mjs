@@ -184,6 +184,15 @@ function createMockSyncRuntime({ emitProtocolCallback = true } = {}) {
 }
 
 {
+  const { runtime, starts } = createMockSyncRuntime();
+  const restarted = await runtime.restartCollections(['document_blob_chunks']);
+  assert.deepEqual(restarted, [], 'batch repair skips an unleased demand-only collection');
+  assert.equal(starts.length, 0, 'batch repair must not start demand-only replication without a lease');
+  assert.equal(runtime.diagnostics.collections.document_blob_chunks.connectionStatus, 'demand-only');
+  await runtime.stop();
+}
+
+{
   const { runtime, starts, cancels } = createMockSyncRuntime();
   const lease = await runtime.leaseCollection('desktop_file_chunks', 'module-demand-only-restart-smoke');
   await runtime.restartCollection('desktop_file_chunks');

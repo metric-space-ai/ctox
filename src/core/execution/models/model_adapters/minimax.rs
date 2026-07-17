@@ -171,7 +171,13 @@ pub fn rewrite_success_response(
                 .map(str::to_string)
                 .filter(|text| !text.is_empty())
             {
-                builder.push_message_text(text);
+                let (reasoning, content) = split_embedded_thinking(&text);
+                if let Some(reasoning) = reasoning {
+                    builder.push_reasoning(reasoning);
+                }
+                if !content.is_empty() {
+                    builder.push_message_text(content);
+                }
             }
             // MiniMax uses reasoning_content for thinking output
             if let Some(reasoning) = message
@@ -218,6 +224,25 @@ pub fn rewrite_success_response(
     }
     let response_payload = builder.build();
     serde_json::to_vec(&response_payload).context("failed to encode MiniMax responses payload")
+}
+
+fn split_embedded_thinking(text: &str) -> (Option<String>, String) {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("<think>") else {
+        return (None, trimmed.to_string());
+    };
+    let Some((reasoning, content)) = rest.split_once("</think>") else {
+        let reasoning = rest.trim();
+        return (
+            (!reasoning.is_empty()).then(|| reasoning.to_string()),
+            String::new(),
+        );
+    };
+    let reasoning = reasoning.trim();
+    (
+        (!reasoning.is_empty()).then(|| reasoning.to_string()),
+        content.trim().to_string(),
+    )
 }
 
 fn build_request_parts(payload: &Value, messages: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
@@ -373,5 +398,46 @@ fn rewrite_tool(tool: Value) -> Vec<Value> {
             })
             .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_think_block_becomes_reasoning_not_user_visible_text() {
+        let payload = serde_json::json!({
+            "id": "minimax-response-1",
+            "created": 42,
+            "model": "MiniMax-M3",
+            "choices": [{
+                "message": {
+                    "content": "<think>internal task analysis</think>\nRecherche abgeschlossen."
+                }
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}
+        });
+        let rewritten = rewrite_success_response(
+            &serde_json::to_vec(&payload).expect("encode fixture"),
+            None,
+            None,
+        )
+        .expect("rewrite MiniMax response");
+        let value: Value = serde_json::from_slice(&rewritten).expect("decode response");
+
+        assert_eq!(value["output_text"], "Recherche abgeschlossen.");
+        assert_eq!(value["reasoning"], "internal task analysis");
+        assert!(!value["output_text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("<think>"));
+    }
+
+    #[test]
+    fn unterminated_think_block_never_becomes_user_visible_text() {
+        let (reasoning, content) = split_embedded_thinking("<think>still reasoning");
+        assert_eq!(reasoning.as_deref(), Some("still reasoning"));
+        assert!(content.is_empty());
     }
 }
