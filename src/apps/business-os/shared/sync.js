@@ -326,7 +326,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   emitDiagnostic({ phase: 'ready' });
   const ensureMultiTabCoordinator = async () => {
     if (multiTabCoordinator) return multiTabCoordinator;
-    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260717-mem-gc-v67');
+    const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260717-resilience-v68');
     if (typeof rxdb?.getMultiTabSyncCoordinator !== 'function') return null;
     multiTabCoordinator = rxdb.getMultiTabSyncCoordinator({
       databaseName: db?.name || db?.raw?.name || 'ctox_business_os_js_v1',
@@ -1025,7 +1025,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260717-mem-gc-v67');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260717-resilience-v68');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1058,9 +1058,23 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     initialReplicationAt: null,
   });
   let stopped = false;
+  // SYNC-30: the native peer mints ephemeral coturn TURN credentials with a ~1h
+  // TTL and advertises `ice_servers_refresh_url` (the control-plane sync-config
+  // endpoint). Before a relay-dependent reconnect whose current credential is
+  // near expiry, the WebRTC peer calls this callback to obtain freshly-minted
+  // ICE servers WITHOUT a page reload. The fetch is a CONTROL-PLANE refresh
+  // (like subscription-auth / release-check) — it returns bootstrap sync config,
+  // never Business OS records — so it lives here in the shell, not inside the
+  // WebRTC-only rxdb runtime (which the data-plane guard keeps fetch-free).
+  const iceServersRefreshUrl = String(config?.ice_servers_refresh_url || config?.iceServersRefreshUrl || '').trim();
+  const refreshIceServers = iceServersRefreshUrl
+    ? () => refreshIceServersFromControlPlane(iceServersRefreshUrl)
+    : null;
   const connectionHandlerCreator = rxdb.getConnectionHandlerSimplePeer({
     signalingServerUrl,
-    config: iceServers.length ? { iceServers } : undefined,
+    config: (iceServers.length || refreshIceServers)
+      ? { iceServers, iceServersRefreshUrl, refreshIceServers }
+      : undefined,
   });
   const subscriptions = [];
   const unregisterSignalingErrorHandler = registerSignalingErrorHandler(signalingServerUrl, (error) => {
@@ -2453,6 +2467,28 @@ async function signalingTokenFromRoomPassword(roomPassword) {
   const bytes = Array.from(new Uint8Array(digest));
   const base64 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   return base64.slice(0, 32);
+}
+
+// SYNC-30: fetch a fresh ICE server list (incl. newly-minted ephemeral TURN
+// credentials) from the control-plane sync-config endpoint. This is the
+// mechanism the daemon already intends: `sync_config_for_browser` mints TURN
+// creds per request and the config advertises `ice_servers_refresh_url`
+// (server.rs allowlists `/api/business-os/sync/config` on the control plane —
+// it carries bootstrap/config, never Business OS records, exactly like
+// subscription-auth or release-check). The WebRTC runtime stays fetch-free; this
+// shell helper is the only refresh caller.
+async function refreshIceServersFromControlPlane(url) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { accept: 'application/json' },
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`ICE server refresh failed: HTTP ${response.status}`);
+  }
+  const fresh = await response.json();
+  return iceServersFromConfig(fresh);
 }
 
 function iceServersFromConfig(config) {

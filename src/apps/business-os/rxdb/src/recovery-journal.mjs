@@ -91,6 +91,35 @@ export class CtoxRecoveryJournal {
     await this.publishStatus();
   }
 
+  // SYNC-40: force-acknowledge local writes the native peer terminally REJECTED
+  // (authz/schema), not ones it accepted. `markMasterAcknowledged` only clears a
+  // WAL entry when the master row acknowledges the local content — a denied
+  // write never round-trips, so without this its batch stays pending and
+  // replays as a fresh pushable write on every restart (re-push → re-deny →
+  // re-journal). The rejected version is preserved in the conflict store; here
+  // we drop it from the pending write-ahead log so it stops being re-pushed.
+  async markReconciled(collection, ids = []) {
+    const idSet = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id)));
+    if (!idSet.size) return;
+    const batches = await this.listBatches('pending', collection);
+    for (const batch of batches) {
+      if (batch.collection !== collection) continue;
+      const relevant = (batch.documentIds || []).filter((id) => idSet.has(String(id)));
+      if (!relevant.length) continue;
+      const acked = new Set(batch.ackedIds || []);
+      for (const id of relevant) acked.add(id);
+      const complete = (batch.documentIds || []).every((id) => acked.has(id));
+      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
+        ...current,
+        ackedIds: [...acked],
+        state: complete ? 'master_acked' : 'pending',
+        masterAckedAtMs: complete ? Date.now() : (current.masterAckedAtMs || 0),
+      }));
+    }
+    await this.gc();
+    await this.publishStatus();
+  }
+
   async replayRegisteredCollections(collection = null) {
     const batches = await this.listBatches('pending', collection);
     const outcomes = [];

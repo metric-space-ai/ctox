@@ -162,6 +162,7 @@ function stableSignalingUrlKey(signalingUrl) {
 
 export const replicationWebRtcTestInternals = Object.freeze({
   changeEventHasOnlyReplicationOriginWrites,
+  terminalPushRejection,
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
@@ -183,11 +184,16 @@ function isTransientSharedPeerError(error) {
 }
 
 class SharedRoomPeer {
-  constructor({ key, signalingUrl, room, iceServers, expectedNativePeerId }) {
+  constructor({ key, signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId }) {
     this.key = key;
     this.signalingUrl = signalingUrl;
     this.room = room;
     this.iceServers = iceServers;
+    // SYNC-30: control-plane ICE/TURN-credential refresh (supplied by the shell,
+    // see sync.js). The peer calls it before a reconnect when the current TURN
+    // credential is near expiry; a null callback keeps the pre-SYNC-30 behavior.
+    this.iceServersRefreshUrl = iceServersRefreshUrl || '';
+    this.refreshIceServers = typeof refreshIceServers === 'function' ? refreshIceServers : null;
     this.expectedNativePeerId = expectedNativePeerId;
     // collection name -> registration { collection, state }
     this.collections = new Map();
@@ -343,6 +349,8 @@ class SharedRoomPeer {
       role: 'browser',
       capabilities: BROWSER_CAPABILITIES,
       iceServers: this.iceServers,
+      iceServersRefreshUrl: this.iceServersRefreshUrl,
+      refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || '',
       protocolPayload: async ({ collection } = {}) => this.buildProtocolPayload(collection),
       requestHandlers: {
@@ -764,11 +772,11 @@ class SharedRoomPeer {
   }
 }
 
-function getOrCreateSharedRoomPeer({ signalingUrl, room, iceServers, expectedNativePeerId }) {
+function getOrCreateSharedRoomPeer({ signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId }) {
   const key = sharedRoomPeerKey(signalingUrl, room);
   let shared = SHARED_ROOM_PEERS.get(key);
   if (!shared) {
-    shared = new SharedRoomPeer({ key, signalingUrl, room, iceServers, expectedNativePeerId });
+    shared = new SharedRoomPeer({ key, signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId });
     SHARED_ROOM_PEERS.set(key, shared);
   }
   return shared;
@@ -847,6 +855,8 @@ class CtoxWebRtcReplicationState {
       signalingUrl,
       room: this.topic,
       iceServers,
+      iceServersRefreshUrl: connectionHandlerCreator?.config?.iceServersRefreshUrl || '',
+      refreshIceServers: connectionHandlerCreator?.config?.refreshIceServers || null,
       expectedNativePeerId: this.ctox?.expectedNativePeerId || '',
     });
     this.shared.register(this.collection.name, {
@@ -1227,14 +1237,26 @@ class CtoxWebRtcReplicationState {
         newDocumentState: doc,
         assumedMasterState: null,
       }));
+      let terminalRejection = null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const conflicts = await this.peer.request(
+        const masterWriteResult = await this.peer.request(
           peerId,
           'masterWrite',
           [rows],
           this.requestTimeoutMsFor('masterWrite'),
           this.collection.name,
         );
+        // SYNC-40: a TERMINAL authz/schema rejection arrives as a
+        // replication-scope `ctoxError` VALUE (not a thrown transport error and
+        // not a conflict array). Retrying it forever leaves a permanently
+        // divergent local mirror; reconcile it instead. A transient transport
+        // error still throws out of `request` and keeps the existing retry.
+        terminalRejection = terminalPushRejection(masterWriteResult);
+        if (terminalRejection) {
+          rows = [];
+          break;
+        }
+        const conflicts = masterWriteResult;
         const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
         if (!conflictMap.size) {
           rows = [];
@@ -1256,6 +1278,19 @@ class CtoxWebRtcReplicationState {
         // the retry rows instead of force-overwriting it whole-doc (the
         // default LWW retry keeps its local-wins semantics unchanged).
         rows = await this.absorbMasterStateIntoConflictRows(rows);
+      }
+      if (terminalRejection) {
+        // Reconcile the denied batch: roll each still-pending local write back
+        // to master + journal it as a conflict, then advance past the batch so
+        // it is never re-pushed. The reconciled docs are now origin-stamped
+        // (non-pushable), so re-reading from the same checkpoint will not
+        // surface them again.
+        await this.reconcileTerminalPushRejection(documents, peerId, terminalRejection);
+        checkpoint = result?.checkpoint || checkpoint;
+        this.pushCheckpointsByPeer.set(peerId, checkpoint);
+        await this.persistCheckpointsForPeer(peerId);
+        if (documents.length < batchSize) break;
+        continue;
       }
       if (rows.length) {
         rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
@@ -1396,6 +1431,42 @@ class CtoxWebRtcReplicationState {
     });
     await this.invalidateDemandCacheForRemoteWrite(masterDocs);
     return unresolvedRows;
+  }
+
+  // SYNC-40: reconcile a batch the native peer terminally rejected on push.
+  // The rejection is non-retryable (authz/schema), so we roll the local mirror
+  // back to master + journal the rejected version, surface a non-fatal sync
+  // signal, and pull-and-replace any newer authoritative state. This does NOT
+  // throw — throwing would re-arm the infinite push retry the finding is about.
+  async reconcileTerminalPushRejection(documents, peerId, rejection) {
+    const origin = this.replicationOriginForPeer(peerId)
+      || { role: 'ctox_instance', peerId, sessionId: '', collection: this.collection.name };
+    let reconciledIds = [];
+    try {
+      reconciledIds = await this.collection.storageCollection.reconcileRejectedLocalWrites(documents, {
+        origin,
+        code: rejection.code,
+        message: rejection.message,
+      });
+    } catch (error) {
+      this.error$.next(error);
+    }
+    // Surface as sync status (like a conflict), not a fatal wedge.
+    this.error$.next({
+      code: 'ctox_replication_push_rejected',
+      phase: 'replication-io',
+      direction: 'push',
+      terminal: true,
+      collection: this.collection.name,
+      rejectionKind: rejection.kind,
+      rejectionCode: rejection.code,
+      reconciledCount: reconciledIds.length,
+      message: rejection.message,
+    });
+    // pull-and-replace: bring any newer authoritative master state now that the
+    // reconciled rows no longer veto the LWW gate.
+    this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+    return reconciledIds;
   }
 
   // ----- master handler (when CTOX picks the browser as fork's master) ----
@@ -1970,6 +2041,34 @@ function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
     if (id) map.set(id, doc);
   }
   return map;
+}
+
+// SYNC-40: classify a `masterWrite` RESULT as a TERMINAL authz/schema rejection.
+// The native side returns these as a replication-scope `ctoxError` VALUE (the
+// response frame's `error` is null, so `peer.request` RESOLVES with this object
+// rather than throwing) — see index_mod.rs `replication_error_result`. A normal
+// masterWrite conflict is a docs ARRAY, and a transient transport failure THROWS
+// out of `peer.request`; neither reaches here. Only messages/codes that are
+// non-retryable (authz denial, schema/422 rejection) are terminal — a transient
+// replication-io result such as "no master handler registered" is NOT, so the
+// existing push retry still handles it.
+function terminalPushRejection(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  if (result.type !== 'ctoxError' || result.scope !== 'replication') return null;
+  const message = String(result.message || '');
+  const code = String(result.code || '');
+  const status = String(result.status ?? '');
+  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code);
+  const isSchema = /schema/i.test(message) || /schema/i.test(code)
+    || status === '422' || /\b422\b/.test(message) || /422/.test(code);
+  if (!isAuthz && !isSchema) return null;
+  return {
+    kind: isAuthz ? 'authz' : 'schema',
+    code: code || 'RC_WEBRTC_PEER',
+    direction: String(result.direction || 'push'),
+    collection: String(result.collection || ''),
+    message: message || code || 'terminal replication rejection',
+  };
 }
 
 function changeEventHasOnlyReplicationOriginWrites(event) {

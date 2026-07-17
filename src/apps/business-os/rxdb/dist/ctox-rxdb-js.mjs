@@ -965,6 +965,34 @@ var CtoxRecoveryJournal = class {
     await this.gc();
     await this.publishStatus();
   }
+  // SYNC-40: force-acknowledge local writes the native peer terminally REJECTED
+  // (authz/schema), not ones it accepted. `markMasterAcknowledged` only clears a
+  // WAL entry when the master row acknowledges the local content — a denied
+  // write never round-trips, so without this its batch stays pending and
+  // replays as a fresh pushable write on every restart (re-push → re-deny →
+  // re-journal). The rejected version is preserved in the conflict store; here
+  // we drop it from the pending write-ahead log so it stops being re-pushed.
+  async markReconciled(collection, ids = []) {
+    const idSet = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id)));
+    if (!idSet.size) return;
+    const batches = await this.listBatches("pending", collection);
+    for (const batch of batches) {
+      if (batch.collection !== collection) continue;
+      const relevant = (batch.documentIds || []).filter((id) => idSet.has(String(id)));
+      if (!relevant.length) continue;
+      const acked = new Set(batch.ackedIds || []);
+      for (const id of relevant) acked.add(id);
+      const complete = (batch.documentIds || []).every((id) => acked.has(id));
+      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
+        ...current,
+        ackedIds: [...acked],
+        state: complete ? "master_acked" : "pending",
+        masterAckedAtMs: complete ? Date.now() : current.masterAckedAtMs || 0
+      }));
+    }
+    await this.gc();
+    await this.publishStatus();
+  }
   async replayRegisteredCollections(collection = null) {
     const batches = await this.listBatches("pending", collection);
     const outcomes = [];
@@ -2405,7 +2433,8 @@ var CtoxIndexedDbCollection = class {
     replicationOrigin = null,
     baseById = null,
     skipJournal = false,
-    recoveryReplay = false
+    recoveryReplay = false,
+    force = false
   } = {}) {
     await this.initializeRecovery();
     const journalWrite = Boolean(this.recoveryJournal) && !skipJournal && !replicationOrigin?.role && Array.isArray(rows);
@@ -2425,7 +2454,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById }),
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
       );
     } catch (error) {
@@ -2437,7 +2466,7 @@ var CtoxIndexedDbCollection = class {
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -2465,10 +2494,10 @@ var CtoxIndexedDbCollection = class {
           localWriteLwtFloor = lwt + 1;
         }
         const previous = await idbRequest(store.get([this.name, id]));
-        if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+        if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
           continue;
         }
-        const overwriteConflict = lwwOverwriteConflict({
+        const overwriteConflict = force ? null : lwwOverwriteConflict({
           previous,
           incomingDocument: doc,
           collectionName: this.name,
@@ -2553,6 +2582,7 @@ var CtoxIndexedDbCollection = class {
   }
   async persistDeleteUpdateConflicts(rows, replicationOrigin) {
     if (!replicationOrigin?.role || !Array.isArray(rows)) return;
+    if (replicationOrigin?.reconciled) return;
     for (const row of rows) {
       const master = row?.document || row;
       if (!master?._deleted) continue;
@@ -2582,6 +2612,59 @@ var CtoxIndexedDbCollection = class {
     for (const conflict of conflicts) {
       await this.recoveryJournal?.recordConflict?.(conflict);
     }
+  }
+  // SYNC-40: reconcile local writes the native peer TERMINALLY rejected
+  // (authz/schema) — not a conflict, not a transient transport error. Commands
+  // already do native-authoritative accept-master rollback; ordinary data
+  // writes used to leave the denied doc in the store, re-pushed and re-denied
+  // forever (a silently divergent local mirror). For each still-pending local
+  // write in the rejected batch we:
+  //   1. journal the rejected local version into the conflict store so the
+  //      user's data stays recoverable and surfaced (like delete_vs_update /
+  //      update_vs_update), then
+  //   2. roll the local mirror back to the master's last-confirmed state — the
+  //      stored merge base if we have one, else a tombstone (the doc was never
+  //      accepted by the master) — as a FORCED origin write that clears the
+  //      pushable flag and overrides the LWW gate, and
+  //   3. drop the write from the recovery WAL so it stops being re-pushed.
+  // Already-synced/origin rows (a concurrent master pull won the id) are skipped.
+  async reconcileRejectedLocalWrites(documents = [], { origin = null, code = "authz_rejected", message = "" } = {}) {
+    await this.initializeRecovery();
+    const role = String(origin?.role || "ctox_instance").slice(0, 64) || "ctox_instance";
+    const reconciledOrigin = { role, peerId: origin?.peerId || "", sessionId: origin?.sessionId || "", reconciled: true };
+    const rollbackRows = [];
+    const reconciledIds = [];
+    for (const doc of Array.isArray(documents) ? documents : []) {
+      const source = doc?.newDocumentState || doc?.document || doc;
+      const id = documentId2(source);
+      if (!id) continue;
+      const record = await this.getStoredRecord(id);
+      if (!record || record.replicationOriginRole || !record.doc) continue;
+      await this.recoveryJournal?.recordConflict?.({
+        code: "structured_conflict_requires_resolution",
+        conflictType: "authz_rejected",
+        collection: this.name,
+        base: record.base || null,
+        local: record.doc,
+        master: record.base || null,
+        message: message || "The native peer refused this write (authorization/schema). The rejected local version remains recoverable here.",
+        rejectionCode: String(code || "authz_rejected")
+      });
+      const masterState = record.base ? record.base : { ...record.doc, _deleted: true };
+      rollbackRows.push({ document: masterState });
+      reconciledIds.push(id);
+    }
+    if (rollbackRows.length) {
+      await this.bulkWrite(rollbackRows, {
+        replicationOrigin: reconciledOrigin,
+        force: true,
+        skipJournal: true
+      });
+    }
+    if (reconciledIds.length) {
+      await this.recoveryJournal?.markReconciled?.(this.name, reconciledIds);
+    }
+    return reconciledIds;
   }
   async prepareJournalRows(rows) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
@@ -3698,6 +3781,8 @@ var RETRYABLE_SIGNALING_REJECTION_CODES = /* @__PURE__ */ new Set([
 var ICE_DISCONNECTED_GRACE_MS = 3e4;
 var SIGNALING_RECONNECT_BASE_MS = 1e3;
 var SIGNALING_RECONNECT_MAX_MS = 3e4;
+var ICE_SERVERS_REFRESH_SKEW_MS = 12e4;
+var ICE_SERVERS_REFRESH_MIN_INTERVAL_MS = 6e4;
 var TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS = 250;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "ctox_runtime_settings",
@@ -3725,6 +3810,8 @@ var CtoxWebRtcNativePeer = class {
     instanceId = "",
     capabilities = [],
     iceServers = [],
+    iceServersRefreshUrl = "",
+    refreshIceServers = null,
     storageToken = randomId("storage"),
     expectedNativePeerId = "",
     protocolPayload = null,
@@ -3748,11 +3835,15 @@ var CtoxWebRtcNativePeer = class {
       instanceId,
       capabilities,
       iceServers,
+      iceServersRefreshUrl,
+      refreshIceServers: typeof refreshIceServers === "function" ? refreshIceServers : null,
       storageToken,
       expectedNativePeerId,
       protocolPayload,
       requestHandlers
     };
+    this.iceServersRefreshInFlight = null;
+    this.lastIceServersRefreshAtMs = 0;
     this.events = new CtoxEventEmitter();
     this.socket = null;
     this.connections = /* @__PURE__ */ new Map();
@@ -4295,6 +4386,74 @@ var CtoxWebRtcNativePeer = class {
       });
     }
   }
+  // SYNC-30: whether a (re)connect should first refresh the ICE server list.
+  // True only when a refresh callback exists, the current TURN credential is
+  // within the skew of its expiry, and we have not just attempted a refresh —
+  // the min-interval guard is what lets a deferred connect re-drive exactly
+  // once (a failed refresh advances `lastIceServersRefreshAtMs`, so the retry
+  // sees `false` here and proceeds with the existing servers instead of
+  // deferring forever).
+  shouldRefreshIceServersBeforeConnect() {
+    if (typeof this.options.refreshIceServers !== "function") return false;
+    if (!this.turnCredentialsNearExpiry(ICE_SERVERS_REFRESH_SKEW_MS)) return false;
+    return Date.now() - this.lastIceServersRefreshAtMs >= ICE_SERVERS_REFRESH_MIN_INTERVAL_MS;
+  }
+  turnCredentialsNearExpiry(skewMs = 0) {
+    const expiresAt = Number(this.transportStats.turnCredentialExpiresAtMs || 0);
+    if (!(expiresAt > 0)) return false;
+    return Date.now() >= expiresAt - Math.max(0, Number(skewMs) || 0);
+  }
+  // Refresh the ICE server list (fresh minted TURN credentials) from the
+  // shell-supplied control-plane callback. Deduplicates concurrent calls; on
+  // failure keeps the existing servers so sync degrades rather than wedges.
+  refreshIceServersIfExpiring() {
+    if (this.iceServersRefreshInFlight) return this.iceServersRefreshInFlight;
+    if (typeof this.options.refreshIceServers !== "function") return Promise.resolve(false);
+    if (!this.turnCredentialsNearExpiry(ICE_SERVERS_REFRESH_SKEW_MS)) return Promise.resolve(false);
+    const attempt = (async () => {
+      try {
+        const fresh = await this.options.refreshIceServers();
+        if (Array.isArray(fresh) && fresh.length) {
+          this.options.iceServers = fresh;
+          this.recordTransportStatus({ turnCredentialExpiresAtMs: turnCredentialExpiryMs(fresh) });
+          this.events.emit("ice-servers-refreshed", {
+            iceServersConfigured: fresh.length,
+            turnCredentialExpiresAtMs: turnCredentialExpiryMs(fresh)
+          });
+          return true;
+        }
+        this.events.emit("error", { code: "ctox_ice_servers_refresh_empty", phase: "signaling-control-plane" });
+        return false;
+      } catch (error) {
+        this.events.emit("error", {
+          code: "ctox_ice_servers_refresh_failed",
+          phase: "signaling-control-plane",
+          message: error?.message || String(error)
+        });
+        return false;
+      } finally {
+        this.lastIceServersRefreshAtMs = Date.now();
+        this.iceServersRefreshInFlight = null;
+      }
+    })();
+    this.iceServersRefreshInFlight = attempt;
+    return attempt;
+  }
+  // Defer a peer (re)connect until an ICE refresh completes, then re-drive
+  // exactly once. A failed refresh still re-drives (with the existing servers),
+  // so the connection is never wedged waiting on the control plane.
+  deferConnectForIceRefresh(remotePeerId) {
+    this.refreshIceServersIfExpiring().catch(() => {
+    }).then(() => {
+      if (this.closed || this.connections.has(remotePeerId)) return;
+      if (!this.shouldConnectToRemotePeer(remotePeerId)) return;
+      try {
+        this.ensureConnection(remotePeerId);
+      } catch (error) {
+        this.events.emit("error", normalizePeerSignalError(error, remotePeerId));
+      }
+    });
+  }
   ensureConnection(remotePeerId) {
     if (remotePeerId === this.options.clientId) {
       return this.connections.get(remotePeerId);
@@ -4305,6 +4464,10 @@ var CtoxWebRtcNativePeer = class {
     let connection = this.connections.get(remotePeerId);
     if (connection) {
       return connection;
+    }
+    if (this.shouldRefreshIceServersBeforeConnect()) {
+      this.deferConnectForIceRefresh(remotePeerId);
+      return void 0;
     }
     const slot = tryAcquireRtcPeerConnectionSlot(this, remotePeerId);
     if (!slot) {
@@ -8203,6 +8366,7 @@ function stableSignalingUrlKey(signalingUrl) {
 }
 var replicationWebRtcTestInternals = Object.freeze({
   changeEventHasOnlyReplicationOriginWrites,
+  terminalPushRejection,
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
@@ -8217,11 +8381,13 @@ function isTransientSharedPeerError(error) {
   return message.includes(" is not open") || message.includes("WebRTC peer") || message.includes("Peer closed") || message.includes("peer closed") || message.includes("channel-close") || message.includes("Timed out waiting for WebRTC response ctoxProtocol");
 }
 var SharedRoomPeer = class {
-  constructor({ key, signalingUrl, room, iceServers, expectedNativePeerId }) {
+  constructor({ key, signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId }) {
     this.key = key;
     this.signalingUrl = signalingUrl;
     this.room = room;
     this.iceServers = iceServers;
+    this.iceServersRefreshUrl = iceServersRefreshUrl || "";
+    this.refreshIceServers = typeof refreshIceServers === "function" ? refreshIceServers : null;
     this.expectedNativePeerId = expectedNativePeerId;
     this.collections = /* @__PURE__ */ new Map();
     this.refCount = 0;
@@ -8348,6 +8514,8 @@ var SharedRoomPeer = class {
       role: "browser",
       capabilities: BROWSER_CAPABILITIES,
       iceServers: this.iceServers,
+      iceServersRefreshUrl: this.iceServersRefreshUrl,
+      refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || "",
       protocolPayload: async ({ collection } = {}) => this.buildProtocolPayload(collection),
       requestHandlers: {
@@ -8718,11 +8886,11 @@ var SharedRoomPeer = class {
     };
   }
 };
-function getOrCreateSharedRoomPeer({ signalingUrl, room, iceServers, expectedNativePeerId }) {
+function getOrCreateSharedRoomPeer({ signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId }) {
   const key = sharedRoomPeerKey(signalingUrl, room);
   let shared = SHARED_ROOM_PEERS.get(key);
   if (!shared) {
-    shared = new SharedRoomPeer({ key, signalingUrl, room, iceServers, expectedNativePeerId });
+    shared = new SharedRoomPeer({ key, signalingUrl, room, iceServers, iceServersRefreshUrl, refreshIceServers, expectedNativePeerId });
     SHARED_ROOM_PEERS.set(key, shared);
   }
   return shared;
@@ -8793,6 +8961,8 @@ var CtoxWebRtcReplicationState = class {
       signalingUrl,
       room: this.topic,
       iceServers,
+      iceServersRefreshUrl: connectionHandlerCreator?.config?.iceServersRefreshUrl || "",
+      refreshIceServers: connectionHandlerCreator?.config?.refreshIceServers || null,
       expectedNativePeerId: this.ctox?.expectedNativePeerId || ""
     });
     this.shared.register(this.collection.name, {
@@ -9113,14 +9283,21 @@ var CtoxWebRtcReplicationState = class {
         newDocumentState: doc,
         assumedMasterState: null
       }));
+      let terminalRejection = null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const conflicts = await this.peer.request(
+        const masterWriteResult = await this.peer.request(
           peerId,
           "masterWrite",
           [rows],
           this.requestTimeoutMsFor("masterWrite"),
           this.collection.name
         );
+        terminalRejection = terminalPushRejection(masterWriteResult);
+        if (terminalRejection) {
+          rows = [];
+          break;
+        }
+        const conflicts = masterWriteResult;
         const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
         if (!conflictMap.size) {
           rows = [];
@@ -9137,6 +9314,14 @@ var CtoxWebRtcReplicationState = class {
           if (!rows.length) break;
         }
         rows = await this.absorbMasterStateIntoConflictRows(rows);
+      }
+      if (terminalRejection) {
+        await this.reconcileTerminalPushRejection(documents, peerId, terminalRejection);
+        checkpoint = result?.checkpoint || checkpoint;
+        this.pushCheckpointsByPeer.set(peerId, checkpoint);
+        await this.persistCheckpointsForPeer(peerId);
+        if (documents.length < batchSize) break;
+        continue;
       }
       if (rows.length) {
         rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
@@ -9262,6 +9447,37 @@ var CtoxWebRtcReplicationState = class {
     });
     await this.invalidateDemandCacheForRemoteWrite(masterDocs);
     return unresolvedRows;
+  }
+  // SYNC-40: reconcile a batch the native peer terminally rejected on push.
+  // The rejection is non-retryable (authz/schema), so we roll the local mirror
+  // back to master + journal the rejected version, surface a non-fatal sync
+  // signal, and pull-and-replace any newer authoritative state. This does NOT
+  // throw — throwing would re-arm the infinite push retry the finding is about.
+  async reconcileTerminalPushRejection(documents, peerId, rejection) {
+    const origin = this.replicationOriginForPeer(peerId) || { role: "ctox_instance", peerId, sessionId: "", collection: this.collection.name };
+    let reconciledIds = [];
+    try {
+      reconciledIds = await this.collection.storageCollection.reconcileRejectedLocalWrites(documents, {
+        origin,
+        code: rejection.code,
+        message: rejection.message
+      });
+    } catch (error) {
+      this.error$.next(error);
+    }
+    this.error$.next({
+      code: "ctox_replication_push_rejected",
+      phase: "replication-io",
+      direction: "push",
+      terminal: true,
+      collection: this.collection.name,
+      rejectionKind: rejection.kind,
+      rejectionCode: rejection.code,
+      reconciledCount: reconciledIds.length,
+      message: rejection.message
+    });
+    this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+    return reconciledIds;
   }
   // ----- master handler (when CTOX picks the browser as fork's master) ----
   async masterChangesSince(params, peerId = "") {
@@ -9774,6 +9990,23 @@ function documentsByPrimaryPath(documents = [], primaryPath = "id") {
     if (id) map.set(id, doc);
   }
   return map;
+}
+function terminalPushRejection(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  if (result.type !== "ctoxError" || result.scope !== "replication") return null;
+  const message = String(result.message || "");
+  const code = String(result.code || "");
+  const status = String(result.status ?? "");
+  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code);
+  const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || /\b422\b/.test(message) || /422/.test(code);
+  if (!isAuthz && !isSchema) return null;
+  return {
+    kind: isAuthz ? "authz" : "schema",
+    code: code || "RC_WEBRTC_PEER",
+    direction: String(result.direction || "push"),
+    collection: String(result.collection || ""),
+    message: message || code || "terminal replication rejection"
+  };
 }
 function changeEventHasOnlyReplicationOriginWrites(event) {
   const docs = Object.values(event?.success || {});

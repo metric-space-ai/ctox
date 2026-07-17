@@ -87,6 +87,19 @@ const ICE_DISCONNECTED_GRACE_MS = 30_000;
 // sync.js's higher-level restart engine.
 const SIGNALING_RECONNECT_BASE_MS = 1_000;
 const SIGNALING_RECONNECT_MAX_MS = 30_000;
+// SYNC-30: TURN credential refresh before a (re)connect. The native peer mints
+// ephemeral coturn credentials with a ~1h TTL and advertises a control-plane
+// refresh URL; a relay-dependent session that drops after >1h reconnected with
+// EXPIRED creds and could only recover via a full page reload. Before building a
+// new RTCPeerConnection we refresh the ICE server list from the shell-supplied
+// control-plane callback (NOT a data path — the fetch lives in shared/sync.js
+// against the allowlisted sync-config endpoint) when the current credential is
+// within the skew of its expiry. A failed refresh degrades to reconnecting with
+// the existing (possibly STUN-only) servers rather than wedging. The min-interval
+// guard bounds refresh attempts and, critically, guarantees a deferred connect
+// re-drives exactly once so a failing refresh cannot loop.
+const ICE_SERVERS_REFRESH_SKEW_MS = 120_000;
+const ICE_SERVERS_REFRESH_MIN_INTERVAL_MS = 60_000;
 const TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS = 250;
 // Single source of truth for the shell-critical collection set. app.js derives
 // its CRITICAL_SYNC_COLLECTIONS from this exported list so the two lists cannot
@@ -121,6 +134,8 @@ export class CtoxWebRtcNativePeer {
     instanceId = '',
     capabilities = [],
     iceServers = [],
+    iceServersRefreshUrl = '',
+    refreshIceServers = null,
     storageToken = randomId('storage'),
     expectedNativePeerId = '',
     protocolPayload = null,
@@ -144,11 +159,18 @@ export class CtoxWebRtcNativePeer {
       instanceId,
       capabilities,
       iceServers,
+      iceServersRefreshUrl,
+      refreshIceServers: typeof refreshIceServers === 'function' ? refreshIceServers : null,
       storageToken,
       expectedNativePeerId,
       protocolPayload,
       requestHandlers,
     };
+    // SYNC-30: TURN-credential refresh bookkeeping. `lastIceServersRefreshAtMs`
+    // advances on every attempt (success OR failure) so a deferred connect
+    // re-drives exactly once and never loops on a failing refresh.
+    this.iceServersRefreshInFlight = null;
+    this.lastIceServersRefreshAtMs = 0;
     this.events = new CtoxEventEmitter();
     this.socket = null;
     this.connections = new Map();
@@ -737,6 +759,81 @@ export class CtoxWebRtcNativePeer {
     }
   }
 
+  // SYNC-30: whether a (re)connect should first refresh the ICE server list.
+  // True only when a refresh callback exists, the current TURN credential is
+  // within the skew of its expiry, and we have not just attempted a refresh —
+  // the min-interval guard is what lets a deferred connect re-drive exactly
+  // once (a failed refresh advances `lastIceServersRefreshAtMs`, so the retry
+  // sees `false` here and proceeds with the existing servers instead of
+  // deferring forever).
+  shouldRefreshIceServersBeforeConnect() {
+    if (typeof this.options.refreshIceServers !== 'function') return false;
+    if (!this.turnCredentialsNearExpiry(ICE_SERVERS_REFRESH_SKEW_MS)) return false;
+    return (Date.now() - this.lastIceServersRefreshAtMs) >= ICE_SERVERS_REFRESH_MIN_INTERVAL_MS;
+  }
+
+  turnCredentialsNearExpiry(skewMs = 0) {
+    const expiresAt = Number(this.transportStats.turnCredentialExpiresAtMs || 0);
+    if (!(expiresAt > 0)) return false;
+    return Date.now() >= expiresAt - Math.max(0, Number(skewMs) || 0);
+  }
+
+  // Refresh the ICE server list (fresh minted TURN credentials) from the
+  // shell-supplied control-plane callback. Deduplicates concurrent calls; on
+  // failure keeps the existing servers so sync degrades rather than wedges.
+  refreshIceServersIfExpiring() {
+    if (this.iceServersRefreshInFlight) return this.iceServersRefreshInFlight;
+    if (typeof this.options.refreshIceServers !== 'function') return Promise.resolve(false);
+    if (!this.turnCredentialsNearExpiry(ICE_SERVERS_REFRESH_SKEW_MS)) return Promise.resolve(false);
+    const attempt = (async () => {
+      try {
+        const fresh = await this.options.refreshIceServers();
+        if (Array.isArray(fresh) && fresh.length) {
+          this.options.iceServers = fresh;
+          this.recordTransportStatus({ turnCredentialExpiresAtMs: turnCredentialExpiryMs(fresh) });
+          this.events.emit('ice-servers-refreshed', {
+            iceServersConfigured: fresh.length,
+            turnCredentialExpiresAtMs: turnCredentialExpiryMs(fresh),
+          });
+          return true;
+        }
+        this.events.emit('error', { code: 'ctox_ice_servers_refresh_empty', phase: 'signaling-control-plane' });
+        return false;
+      } catch (error) {
+        // Degrade, do not wedge: fall back to the existing (possibly expired /
+        // STUN-only) servers on the next connect attempt.
+        this.events.emit('error', {
+          code: 'ctox_ice_servers_refresh_failed',
+          phase: 'signaling-control-plane',
+          message: error?.message || String(error),
+        });
+        return false;
+      } finally {
+        this.lastIceServersRefreshAtMs = Date.now();
+        this.iceServersRefreshInFlight = null;
+      }
+    })();
+    this.iceServersRefreshInFlight = attempt;
+    return attempt;
+  }
+
+  // Defer a peer (re)connect until an ICE refresh completes, then re-drive
+  // exactly once. A failed refresh still re-drives (with the existing servers),
+  // so the connection is never wedged waiting on the control plane.
+  deferConnectForIceRefresh(remotePeerId) {
+    this.refreshIceServersIfExpiring()
+      .catch(() => {})
+      .then(() => {
+        if (this.closed || this.connections.has(remotePeerId)) return;
+        if (!this.shouldConnectToRemotePeer(remotePeerId)) return;
+        try {
+          this.ensureConnection(remotePeerId);
+        } catch (error) {
+          this.events.emit('error', normalizePeerSignalError(error, remotePeerId));
+        }
+      });
+  }
+
   ensureConnection(remotePeerId) {
     if (remotePeerId === this.options.clientId) {
       return this.connections.get(remotePeerId);
@@ -747,6 +844,14 @@ export class CtoxWebRtcNativePeer {
     let connection = this.connections.get(remotePeerId);
     if (connection) {
       return connection;
+    }
+    if (this.shouldRefreshIceServersBeforeConnect()) {
+      // SYNC-30: expiring TURN credentials — refresh before minting the new
+      // RTCPeerConnection so a relay-dependent reconnect uses fresh creds
+      // (no page reload). The re-driven ensureConnection proceeds regardless
+      // of refresh success.
+      this.deferConnectForIceRefresh(remotePeerId);
+      return undefined;
     }
     const slot = tryAcquireRtcPeerConnectionSlot(this, remotePeerId);
     if (!slot) {

@@ -374,6 +374,7 @@ export class CtoxIndexedDbCollection {
     baseById = null,
     skipJournal = false,
     recoveryReplay = false,
+    force = false,
   } = {}) {
     await this.initializeRecovery();
     const journalWrite = Boolean(this.recoveryJournal)
@@ -398,7 +399,7 @@ export class CtoxIndexedDbCollection {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById }),
+        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force }),
         { source: recoveryReplay ? 'recovery-replay' : 'bulk-write' },
       );
     } catch (error) {
@@ -411,7 +412,7 @@ export class CtoxIndexedDbCollection {
     return result;
   }
 
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError('bulkWrite rows must be an array');
     }
@@ -440,10 +441,15 @@ export class CtoxIndexedDbCollection {
         localWriteLwtFloor = lwt + 1;
       }
       const previous = await idbRequest(store.get([this.name, id]));
-      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
+      // SYNC-40: a forced authoritative write (rejected-push rollback) bypasses
+      // the LWW gate. The master's last-confirmed state (the merge base) is
+      // OLDER than the rejected local edit, so the normal origin-write gate
+      // would veto the rollback; the conflict is journaled separately by the
+      // reconcile path, so no overwrite-conflict record is minted here.
+      if (!force && !shouldAcceptDocumentWrite(previous, lwt, replicationOrigin, doc, this.name, this.conflictStrategy)) {
         continue;
       }
-      const overwriteConflict = lwwOverwriteConflict({
+      const overwriteConflict = force ? null : lwwOverwriteConflict({
         previous,
         incomingDocument: doc,
         collectionName: this.name,
@@ -531,6 +537,10 @@ export class CtoxIndexedDbCollection {
 
   async persistDeleteUpdateConflicts(rows, replicationOrigin) {
     if (!replicationOrigin?.role || !Array.isArray(rows)) return;
+    // SYNC-40: the rejected-push rollback already journals the losing local
+    // version as an `authz_rejected` conflict; its tombstone/base rollback write
+    // must not additionally mint a `delete_vs_update` record.
+    if (replicationOrigin?.reconciled) return;
     for (const row of rows) {
       const master = row?.document || row;
       if (!master?._deleted) continue;
@@ -561,6 +571,66 @@ export class CtoxIndexedDbCollection {
     for (const conflict of conflicts) {
       await this.recoveryJournal?.recordConflict?.(conflict);
     }
+  }
+
+  // SYNC-40: reconcile local writes the native peer TERMINALLY rejected
+  // (authz/schema) — not a conflict, not a transient transport error. Commands
+  // already do native-authoritative accept-master rollback; ordinary data
+  // writes used to leave the denied doc in the store, re-pushed and re-denied
+  // forever (a silently divergent local mirror). For each still-pending local
+  // write in the rejected batch we:
+  //   1. journal the rejected local version into the conflict store so the
+  //      user's data stays recoverable and surfaced (like delete_vs_update /
+  //      update_vs_update), then
+  //   2. roll the local mirror back to the master's last-confirmed state — the
+  //      stored merge base if we have one, else a tombstone (the doc was never
+  //      accepted by the master) — as a FORCED origin write that clears the
+  //      pushable flag and overrides the LWW gate, and
+  //   3. drop the write from the recovery WAL so it stops being re-pushed.
+  // Already-synced/origin rows (a concurrent master pull won the id) are skipped.
+  async reconcileRejectedLocalWrites(documents = [], { origin = null, code = 'authz_rejected', message = '' } = {}) {
+    await this.initializeRecovery();
+    const role = String(origin?.role || 'ctox_instance').slice(0, 64) || 'ctox_instance';
+    const reconciledOrigin = { role, peerId: origin?.peerId || '', sessionId: origin?.sessionId || '', reconciled: true };
+    const rollbackRows = [];
+    const reconciledIds = [];
+    for (const doc of Array.isArray(documents) ? documents : []) {
+      const source = doc?.newDocumentState || doc?.document || doc;
+      const id = documentId(source);
+      if (!id) continue;
+      const record = await this.getStoredRecord(id);
+      // Only a still-pending LOCAL write needs rollback. If it is already
+      // origin-stamped (a master pull materialised the authoritative state),
+      // there is nothing divergent left to reconcile.
+      if (!record || record.replicationOriginRole || !record.doc) continue;
+      await this.recoveryJournal?.recordConflict?.({
+        code: 'structured_conflict_requires_resolution',
+        conflictType: 'authz_rejected',
+        collection: this.name,
+        base: record.base || null,
+        local: record.doc,
+        master: record.base || null,
+        message: message
+          || 'The native peer refused this write (authorization/schema). The rejected local version remains recoverable here.',
+        rejectionCode: String(code || 'authz_rejected'),
+      });
+      const masterState = record.base
+        ? record.base
+        : { ...record.doc, _deleted: true };
+      rollbackRows.push({ document: masterState });
+      reconciledIds.push(id);
+    }
+    if (rollbackRows.length) {
+      await this.bulkWrite(rollbackRows, {
+        replicationOrigin: reconciledOrigin,
+        force: true,
+        skipJournal: true,
+      });
+    }
+    if (reconciledIds.length) {
+      await this.recoveryJournal?.markReconciled?.(this.name, reconciledIds);
+    }
+    return reconciledIds;
   }
 
   async prepareJournalRows(rows) {
