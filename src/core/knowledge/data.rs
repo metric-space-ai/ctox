@@ -1057,6 +1057,37 @@ const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
 /// logical table in the browser.
 const KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS: usize = 200;
 
+/// Maximum combined JSON bytes of source rows assigned to one chunk.
+///
+/// Rows are mirrored at the document root and under `payload`, so the final
+/// serialized document is roughly twice this size plus metadata. Keeping the
+/// row budget below the 256 KiB demand-fetch frame budget also leaves ample
+/// room below the 8 MiB WebRTC transfer ceiling.
+const KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES: usize = 192 * 1024;
+
+fn knowledge_table_chunk_ranges(rows: &[Value]) -> Vec<(usize, usize)> {
+    if rows.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut chunk_bytes: usize = 0;
+    for (index, row) in rows.iter().enumerate() {
+        let row_bytes = serde_json::to_vec(row).map_or(0, |value| value.len());
+        let row_limit_reached = index.saturating_sub(start) >= KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS;
+        let byte_limit_reached = index > start
+            && chunk_bytes.saturating_add(row_bytes) > KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES;
+        if row_limit_reached || byte_limit_reached {
+            ranges.push((start, index));
+            start = index;
+            chunk_bytes = 0;
+        }
+        chunk_bytes = chunk_bytes.saturating_add(row_bytes);
+    }
+    ranges.push((start, rows.len()));
+    ranges
+}
+
 /// Build the `knowledge_tables` RxDB documents that carry record-shape
 /// knowledge to the Business OS browser surfaces (Web Research + Knowledge).
 ///
@@ -1162,16 +1193,13 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
             rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
         let content_hash = knowledge_file_content_hash(&resolved_path);
         let projected_row_count = rows.len();
-        let chunk_count = projected_row_count
-            .max(1)
-            .div_ceil(KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS);
+        let chunk_ranges = knowledge_table_chunk_ranges(&rows);
+        let chunk_count = chunk_ranges.len();
         let rows_complete = projected_row_count as i64 == resolved_row_count;
 
         // (4) Mirror each row chunk at payload.rows and top-level rows. The
         // logical row_count remains the complete parquet count on every chunk.
-        for chunk_index in 0..chunk_count {
-            let start = chunk_index * KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS;
-            let end = (start + KNOWLEDGE_TABLE_RXDB_CHUNK_ROWS).min(projected_row_count);
+        for (chunk_index, (start, end)) in chunk_ranges.into_iter().enumerate() {
             let chunk_rows = if start < end {
                 rows[start..end].to_vec()
             } else {
@@ -1902,6 +1930,32 @@ mod tests {
         assert_eq!(projected_source_rows.len(), row_total);
         assert_eq!(projected_source_rows[0], 0);
         assert_eq!(projected_source_rows[row_total - 1], row_total as i64 - 1);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_tables_projection_limits_serialized_chunk_size() -> anyhow::Result<()> {
+        let rows = (0..120)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index,
+                    "provenance": "x".repeat(8_192),
+                })
+            })
+            .collect::<Vec<_>>();
+        let ranges = knowledge_table_chunk_ranges(&rows);
+        assert!(ranges.len() > 1);
+        assert_eq!(ranges.first().map(|range| range.0), Some(0));
+        assert_eq!(ranges.last().map(|range| range.1), Some(rows.len()));
+        assert!(ranges.windows(2).all(|pair| pair[0].1 == pair[1].0));
+        assert!(ranges.iter().all(|(start, end)| {
+            rows[*start..*end]
+                .iter()
+                .map(|row| serde_json::to_vec(row).expect("serialize row").len())
+                .sum::<usize>()
+                <= KNOWLEDGE_TABLE_RXDB_CHUNK_ROW_JSON_BYTES
+        }));
         Ok(())
     }
 
