@@ -2,7 +2,7 @@ import {
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260708-canonical-rechunk2';
 
-const BUILD = '20260711-responsive-pane-grid-v28';
+const BUILD = '20260717-kit-migration-v29';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
@@ -685,7 +685,7 @@ function renderCandidateCard(state, item) {
       ${selected ? `
         <div class="cv-card-controls">
           <div class="cv-flow-row">
-            <button class="cv-icon-btn is-primary" type="button" title="${escapeHtml(action.title)}" aria-label="${escapeHtml(action.title)}" data-cv-action ${phase === 'parsing' ? 'disabled' : ''}>
+            <button class="ctox-pane-icon is-primary" type="button" title="${escapeHtml(action.title)}" aria-label="${escapeHtml(action.title)}" data-cv-action ${phase === 'parsing' ? 'disabled' : ''}>
               ${action.icon}
             </button>
             <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttr(tr('Ansicht', 'View'))}">
@@ -747,12 +747,14 @@ function renderStage(state) {
 function renderOriginalPane(state, item) {
   return `
     <section class="cv-pane" data-cv-original-pane>
-      <header class="cv-pane-head">
-        <strong>${escapeHtml(tr('Original PDF', 'Original PDF'))}</strong>
-        <span>${escapeHtml(item.model.source?.filename || item.record.filename || '')}</span>
+      <header class="ctox-pane-header cv-pane-head">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-title">${escapeHtml(tr('Original PDF', 'Original PDF'))}</span>
+          <span class="cv-pane-sub">${escapeHtml(item.model.source?.filename || item.record.filename || '')}</span>
+        </div>
       </header>
       <div class="cv-pane-body" data-cv-original-body>
-        <div class="cv-original-placeholder">${escapeHtml(tr('PDF wird geladen.', 'Loading PDF.'))}</div>
+        <div class="ctox-empty">${escapeHtml(tr('PDF wird geladen.', 'Loading PDF.'))}</div>
       </div>
     </section>
   `;
@@ -765,16 +767,18 @@ function renderOriginalFrame(state, item) {
   const error = state.originalErrors.get(fileId);
   if (error) {
     body.innerHTML = `
-      <div class="cv-original-placeholder">
-        <strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong>
-        <span>${escapeHtml(error)}</span>
+      <div class="ctox-empty">
+        <div>
+          <strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong>
+          <div>${escapeHtml(error)}</div>
+        </div>
       </div>
     `;
     return;
   }
   const url = state.originalUrls.get(fileId);
   if (!url) {
-    body.innerHTML = '<div class="cv-original-placeholder">' + escapeHtml(tr('Original-PDF ist noch nicht lokal materialisiert.', 'Original PDF has not been materialized locally yet.')) + '</div>';
+    body.innerHTML = '<div class="ctox-empty">' + escapeHtml(tr('Original-PDF ist noch nicht lokal materialisiert.', 'Original PDF has not been materialized locally yet.')) + '</div>';
     return;
   }
   body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`;
@@ -786,9 +790,11 @@ function renderPrintPane(item) {
   const editor = workflowPhase(model) === 'review' ? renderFieldEditor(model) : '';
   return `
     <section class="cv-pane">
-      <header class="cv-pane-head">
-        <strong>${escapeHtml(tr('Druckansicht', 'Print preview'))}</strong>
-        <span>${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · ' + escapeHtml(tr('Korrekturmodus', 'Review mode')) : ''}</span>
+      <header class="ctox-pane-header cv-pane-head">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-title">${escapeHtml(tr('Druckansicht', 'Print preview'))}</span>
+          <span class="cv-pane-sub">${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · ' + escapeHtml(tr('Korrekturmodus', 'Review mode')) : ''}</span>
+        </div>
       </header>
       <div class="cv-pane-body">
         <div class="cv-print-workarea${editor ? ' has-editor' : ''}">
@@ -1049,12 +1055,14 @@ function renderFieldEditor(model) {
   const cv = getCvEditorData(model);
   return `
     <aside class="cv-field-editor" data-cv-field-editor>
-      <header>
-        <strong>${escapeHtml(tr('Felder', 'Fields'))}</strong>
-        <span>${escapeHtml(tr('Ninja CV-Profil', 'Ninja CV profile'))}</span>
+      <header class="ctox-pane-header cv-field-editor-head">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-title">${escapeHtml(tr('Felder', 'Fields'))}</span>
+          <span class="cv-pane-sub">${escapeHtml(tr('Ninja CV-Profil', 'Ninja CV profile'))}</span>
+        </div>
       </header>
       <section class="cv-editor-block">
-        <h4>${escapeHtml(tr('Stammdaten', 'Core data'))}</h4>
+        <h4 class="ctox-field-label">${escapeHtml(tr('Stammdaten', 'Core data'))}</h4>
         <div class="cv-editor-grid">
           ${renderEditorInput('Name', 'candidate.name', displayCandidateName(model))}
           ${renderEditorInput(tr('Rolle', 'Role'), 'candidate.currentRole', candidate.currentRole || '')}
@@ -1068,8 +1076,8 @@ function renderFieldEditor(model) {
       </section>
       <section class="cv-editor-block">
         <div class="cv-editor-title-row">
-          <h4>${escapeHtml(tr('Beruflicher Werdegang', 'Professional experience'))}</h4>
-          <button type="button" data-cv-editor-action="add-experience">+</button>
+          <h4 class="ctox-field-label">${escapeHtml(tr('Beruflicher Werdegang', 'Professional experience'))}</h4>
+          <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-cv-editor-action="add-experience" aria-label="${escapeAttr(tr('Station hinzufügen', 'Add entry'))}">+</button>
         </div>
         <div data-cv-editor-list="experience">
           ${renderExperienceEditorRows(cv.experience)}
@@ -1077,15 +1085,15 @@ function renderFieldEditor(model) {
       </section>
       <section class="cv-editor-block">
         <div class="cv-editor-title-row">
-          <h4>${escapeHtml(tr('Ausbildung', 'Education'))}</h4>
-          <button type="button" data-cv-editor-action="add-education">+</button>
+          <h4 class="ctox-field-label">${escapeHtml(tr('Ausbildung', 'Education'))}</h4>
+          <button class="ctox-icon-button ctox-icon-button--sm" type="button" data-cv-editor-action="add-education" aria-label="${escapeAttr(tr('Ausbildung hinzufügen', 'Add education'))}">+</button>
         </div>
         <div data-cv-editor-list="education">
           ${renderEducationEditorRows(cv.education)}
         </div>
       </section>
       <section class="cv-editor-block">
-        <h4>Skills</h4>
+        <h4 class="ctox-field-label">Skills</h4>
         ${renderSkillEditor('Fachkenntnisse', cv.skills.Fachkenntnisse || cv.skills.skills || [])}
         ${renderSkillEditor('Sprachkenntnisse', cv.skills.Sprachkenntnisse || cv.skills.languages || [])}
         ${renderSkillEditor('Weitere Fähigkeiten', cv.skills['Weitere Fähigkeiten'] || cv.skills['Weitere Faehigkeiten'] || cv.skills.other_skills || [])}
@@ -1096,9 +1104,9 @@ function renderFieldEditor(model) {
 
 function renderEditorInput(label, path, value) {
   return `
-    <label>
+    <label class="ctox-compact-field">
       <span>${escapeHtml(label)}</span>
-      <input data-cv-field-path="${escapeAttr(path)}" value="${escapeAttr(value || '')}" />
+      <input class="ctox-input" data-cv-field-path="${escapeAttr(path)}" value="${escapeAttr(value || '')}" />
     </label>
   `;
 }
@@ -1107,12 +1115,12 @@ function renderExperienceEditorRows(items) {
   if (!items.length) return '<div class="cv-editor-empty">Keine Stationen.</div>';
   return items.map((item, index) => `
     <article class="cv-editor-row" data-cv-entry-kind="experience" data-cv-index="${index}">
-      <button type="button" data-cv-editor-action="remove-experience" data-cv-index="${index}" aria-label="Station entfernen">x</button>
-      <input data-cv-entry-field="job_title" value="${escapeAttr(firstNonEmpty(item.job_title, item.title, item.role, item.jobTitle))}" placeholder="Position" />
-      <input data-cv-entry-field="employer" value="${escapeAttr(firstNonEmpty(item.employer, item.company, item.companyName))}" placeholder="Arbeitgeber" />
-      <input data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
-      <input data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
-      <textarea data-cv-entry-field="job_description" rows="2" placeholder="Aufgaben / Erfolge">${escapeHtml(valueToLines(item.job_description || item.description || item.summary).join('\n'))}</textarea>
+      <button class="ctox-icon-button ctox-icon-button--sm is-danger" type="button" data-cv-editor-action="remove-experience" data-cv-index="${index}" aria-label="Station entfernen">×</button>
+      <input class="ctox-input" data-cv-entry-field="job_title" value="${escapeAttr(firstNonEmpty(item.job_title, item.title, item.role, item.jobTitle))}" placeholder="Position" />
+      <input class="ctox-input" data-cv-entry-field="employer" value="${escapeAttr(firstNonEmpty(item.employer, item.company, item.companyName))}" placeholder="Arbeitgeber" />
+      <input class="ctox-input" data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
+      <input class="ctox-input" data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
+      <textarea class="ctox-textarea" data-cv-entry-field="job_description" rows="2" placeholder="Aufgaben / Erfolge">${escapeHtml(valueToLines(item.job_description || item.description || item.summary).join('\n'))}</textarea>
     </article>
   `).join('');
 }
@@ -1121,23 +1129,23 @@ function renderEducationEditorRows(items) {
   if (!items.length) return '<div class="cv-editor-empty">Keine Ausbildung.</div>';
   return items.map((item, index) => `
     <article class="cv-editor-row" data-cv-entry-kind="education" data-cv-index="${index}">
-      <button type="button" data-cv-editor-action="remove-education" data-cv-index="${index}" aria-label="Ausbildung entfernen">x</button>
-      <input data-cv-entry-field="degree" value="${escapeAttr(firstNonEmpty(item.degree, item.title, item.program))}" placeholder="Abschluss" />
-      <input data-cv-entry-field="institution" value="${escapeAttr(firstNonEmpty(item.institution, item.school, item.university, item.provider))}" placeholder="Institution" />
-      <input data-cv-entry-field="major" value="${escapeAttr(item.major || '')}" placeholder="Hauptfach" />
-      <input data-cv-entry-field="specialization" value="${escapeAttr(item.specialization || '')}" placeholder="Schwerpunkt" />
-      <input data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
-      <input data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
-      <textarea data-cv-entry-field="details" rows="2" placeholder="Details">${escapeHtml(valueToLines(item.details || item.description || item.summary).join('\n'))}</textarea>
+      <button class="ctox-icon-button ctox-icon-button--sm is-danger" type="button" data-cv-editor-action="remove-education" data-cv-index="${index}" aria-label="Ausbildung entfernen">×</button>
+      <input class="ctox-input" data-cv-entry-field="degree" value="${escapeAttr(firstNonEmpty(item.degree, item.title, item.program))}" placeholder="Abschluss" />
+      <input class="ctox-input" data-cv-entry-field="institution" value="${escapeAttr(firstNonEmpty(item.institution, item.school, item.university, item.provider))}" placeholder="Institution" />
+      <input class="ctox-input" data-cv-entry-field="major" value="${escapeAttr(item.major || '')}" placeholder="Hauptfach" />
+      <input class="ctox-input" data-cv-entry-field="specialization" value="${escapeAttr(item.specialization || '')}" placeholder="Schwerpunkt" />
+      <input class="ctox-input" data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
+      <input class="ctox-input" data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
+      <textarea class="ctox-textarea" data-cv-entry-field="details" rows="2" placeholder="Details">${escapeHtml(valueToLines(item.details || item.description || item.summary).join('\n'))}</textarea>
     </article>
   `).join('');
 }
 
 function renderSkillEditor(label, value) {
   return `
-    <label class="cv-editor-skill">
+    <label class="ctox-compact-field cv-editor-skill">
       <span>${escapeHtml(label)}</span>
-      <textarea data-cv-skill-group="${escapeAttr(label)}" rows="2">${escapeHtml(valueToLines(value).join('\n'))}</textarea>
+      <textarea class="ctox-textarea" data-cv-skill-group="${escapeAttr(label)}" rows="2">${escapeHtml(valueToLines(value).join('\n'))}</textarea>
     </label>
   `;
 }

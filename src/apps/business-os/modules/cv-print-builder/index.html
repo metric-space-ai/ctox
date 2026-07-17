@@ -11,7 +11,7 @@
         </div>
         <span class="ctox-badge" data-cv-count>0 CVs</span>
       </div>
-      <div class="ctox-pane-tools">
+      <div class="ctox-pane-tools cv-tools">
         <input type="search" class="ctox-pane-search" data-cv-search placeholder="Suchen" autocomplete="off" aria-label="Kandidaten suchen" />
         <select class="ctox-pane-filter" data-cv-sort aria-label="Kandidaten sortieren">
           <option value="updated_desc">Neueste</option>
@@ -19,11 +19,11 @@
           <option value="phase_asc">Status</option>
           <option value="template_asc">Template</option>
         </select>
-        <button class="cv-bulk-parse" type="button" data-cv-reparse-all>Alle reparsen</button>
+        <button class="ctox-button" type="button" data-cv-reparse-all>Alle reparsen</button>
       </div>
     </header>
     <div class="ctox-pane-body">
-      <div class="cv-candidate-list" data-cv-list></div>
+      <div class="ctox-pane-scroll cv-candidate-list" data-cv-list></div>
     </div>
     <button class="cv-new-card" type="button" data-cv-new>
       <span class="cv-new-icon" aria-hidden="true">+</span>
@@ -34,7 +34,7 @@
     </button>
   </aside>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--cv-left-width" data-resizer-min="260" data-resizer-max="420" aria-label="Kandidatenspalte anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="420" aria-label="Kandidatenspalte anpassen"></button>
 
   <section class="ctox-pane cv-workbench" aria-label="CV Arbeitsbereich">
     <div class="cv-stage" data-cv-stage></div>

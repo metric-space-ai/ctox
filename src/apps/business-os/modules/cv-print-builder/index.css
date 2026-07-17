@@ -1,79 +1,41 @@
-.cv-print-builder {
-  --cv-ink: color-mix(in oklab, var(--text) 94%, black);
-  --cv-muted: var(--muted);
-  --cv-line: var(--line);
-  --cv-line-strong: var(--line-strong);
-  --cv-panel: var(--surface);
-  --cv-panel-soft: var(--surface-2);
-  --cv-accent: var(--accent);
-  --cv-accent-soft: var(--accent-soft);
-  --cv-warn: var(--warning);
-  --cv-radius: 8px;
-  --ctox-left-width: var(--cv-left-width, 332px);
-  color: var(--text);
-  font: 14px/1.35 var(--font-sans);
-  padding: 8px;
-}
+/* cv-print-builder — module CSS.
+   Standard chrome (workspace, panes, pane headers, tools, search, filter,
+   buttons, badges, tabs, fields, empty states) comes from shared/base.css +
+   app.css. This file only keeps what the kit cannot express: the candidate
+   record card, the dashed "new CV" affordance, the original/print split
+   stage, and the printable qualification-profile document. */
 
-.cv-print-builder * {
-  box-sizing: border-box;
+.cv-print-builder {
+  --ctox-left-width: 332px;
 }
 
 .cv-hidden-input {
   display: none;
 }
 
+/* Sidebar gets a third grid row for the "Neuer CV" footer button. */
 .cv-sidebar {
-  grid-column: 1;
-  grid-row: 1;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.cv-print-builder > .ctox-column-resizer {
-  display: block;
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.cv-print-builder .ctox-pane-tools {
+/* Tools row: search + sort side by side, bulk action on its own line. */
+.cv-tools {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(86px, 0.62fr);
-  gap: 6px;
 }
 
-.cv-bulk-parse {
+.cv-tools > .ctox-button {
   grid-column: 1 / -1;
-  min-width: 0;
-  height: 32px;
-  border: 1px solid color-mix(in oklab, var(--cv-accent) 50%, var(--cv-line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--cv-accent) 12%, transparent);
-  color: var(--cv-accent);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 860;
-  letter-spacing: 0;
 }
 
-.cv-bulk-parse:hover,
-.cv-bulk-parse:focus-visible {
-  background: color-mix(in srgb, var(--cv-accent) 18%, transparent);
-  outline: none;
-}
-
-.cv-bulk-parse:disabled {
-  cursor: default;
-  opacity: 0.46;
-}
-
+/* custom: candidate record card — avatar, multi-line identity, status badge
+   and (when selected) an inline workflow control cluster. Richer than
+   .ctox-list-item, so it stays a module component on kit tokens. */
 .cv-candidate-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 6px;
   display: grid;
   align-content: start;
   gap: 6px;
+  padding: 6px;
 }
 
 .cv-card {
@@ -81,17 +43,23 @@
   display: grid;
   gap: 7px;
   padding: 9px;
-  border: 1px solid var(--cv-line);
-  border-radius: var(--cv-radius);
-  background: var(--cv-panel);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface);
   color: inherit;
+  font: inherit;
   text-align: left;
-  box-shadow: none;
+  cursor: pointer;
+}
+
+.cv-card:hover {
+  background: var(--kit-hover);
 }
 
 .cv-card.is-selected {
-  border-color: color-mix(in oklab, var(--cv-accent) 62%, var(--cv-line));
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--cv-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .cv-card-main {
@@ -109,10 +77,10 @@
 .cv-card-name {
   margin: 0;
   overflow: hidden;
-  color: var(--cv-ink);
-  font-size: 15px;
-  font-weight: 860;
-  line-height: 1.1;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -121,15 +89,10 @@
 .cv-card-file {
   margin-top: 2px;
   overflow: hidden;
-  color: var(--cv-muted);
-  font-size: 12px;
-  font-weight: 650;
+  color: var(--muted);
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.cv-card-role {
-  color: color-mix(in oklab, var(--cv-muted) 88%, var(--cv-ink));
 }
 
 .cv-card-controls {
@@ -139,49 +102,9 @@
 
 .cv-flow-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 6px;
   align-items: center;
-}
-
-.cv-icon-btn,
-.cv-new-card {
-  min-width: 0;
-  border: 1px solid var(--cv-line);
-  border-radius: 8px;
-  background: var(--cv-panel);
-  color: var(--cv-ink);
-  font: inherit;
-  font-weight: 790;
-}
-
-.cv-icon-btn {
-  width: 34px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-
-.cv-icon-btn svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.cv-icon-btn.is-primary {
-  border-color: var(--cv-accent);
-  background: var(--cv-accent);
-  color: var(--surface);
-}
-
-.cv-icon-btn:disabled {
-  cursor: default;
-  opacity: 0.42;
 }
 
 .cv-flow-row .ctox-pane-tabs {
@@ -197,14 +120,9 @@
   text-overflow: ellipsis;
 }
 
-.cv-flow-row .ctox-pane-tab:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
 .cv-template-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(2, 34px);
+  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
   gap: 5px;
 }
 
@@ -213,18 +131,19 @@
   align-items: center;
   gap: 5px;
   overflow: hidden;
-  color: var(--cv-muted);
+  color: var(--muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* custom: inline pill linking a parsing card to its CTOX flow task. */
 .cv-task-link {
   min-width: 0;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--cv-accent) 12%, transparent);
-  color: var(--cv-accent);
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -234,7 +153,7 @@
   padding: 0 8px;
   font: inherit;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .cv-task-link span {
@@ -245,15 +164,16 @@
 
 .cv-task-link:hover,
 .cv-task-link:focus-visible {
-  background: color-mix(in srgb, var(--cv-accent) 20%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   outline: none;
 }
 
 .cv-task-link.is-error {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
+/* custom: dashed "create from PDF" affordance pinned under the list. */
 .cv-new-card {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
@@ -261,9 +181,22 @@
   align-items: center;
   margin: 8px;
   padding: 8px;
-  border-style: dashed;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
   cursor: pointer;
   text-align: left;
+}
+
+.cv-new-card:hover {
+  background: var(--kit-hover);
+}
+
+.cv-new-card:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .cv-new-card strong,
@@ -275,9 +208,8 @@
 }
 
 .cv-new-card small {
-  color: var(--cv-muted);
-  font-size: 12px;
-  font-weight: 650;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
 .cv-new-icon {
@@ -285,21 +217,17 @@
   height: 38px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--cv-line);
-  border-radius: 8px;
-  color: var(--cv-accent);
-  font-size: 25px;
-  font-weight: 420;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 400;
 }
 
+/* Workbench pane holds only the stage (no pane header), so it collapses
+   the kit's auto header row. */
 .cv-workbench {
-  grid-column: 3;
-  grid-row: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
   grid-template-rows: minmax(0, 1fr);
-  background: var(--cv-panel);
 }
 
 .cv-stage {
@@ -308,12 +236,12 @@
   overflow: hidden;
 }
 
+/* custom: original/print split stage inside the workbench pane. The inner
+   panes are document surfaces, not app panels — they reuse the kit pane
+   header typography via .ctox-pane-header/.ctox-pane-title. */
 .cv-view-grid {
   height: 100%;
   min-height: 0;
-}
-
-.cv-view-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
@@ -328,56 +256,39 @@
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-rows: 38px minmax(0, 1fr);
-  border-left: 0;
-  background: var(--cv-panel);
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--surface);
 }
 
 .cv-view-grid.is-split .cv-pane + .cv-pane {
-  border-left: 1px solid var(--cv-line);
+  border-left: 1px solid var(--hairline, var(--line));
 }
 
 .cv-pane-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
+  min-height: 40px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--cv-line);
-}
-
-.cv-view-grid.is-split .cv-pane {
-  grid-template-rows: 32px minmax(0, 1fr);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 .cv-view-grid.is-split .cv-pane-head {
+  min-height: 34px;
   padding: 0 10px;
 }
 
-.cv-pane-head strong,
-.cv-pane-head span {
+.cv-pane-sub {
   overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.cv-pane-head strong {
-  color: var(--cv-ink);
-  font-size: 14px;
-  font-weight: 860;
-}
-
-.cv-pane-head span {
-  color: var(--cv-muted);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .cv-pane-body {
   min-height: 0;
   overflow: auto;
-  background: color-mix(in oklab, var(--cv-panel-soft) 84%, var(--cv-panel));
+  background: var(--surface-2);
 }
 
 .cv-original-frame {
@@ -390,25 +301,6 @@
 
 .cv-view-grid.is-split .cv-original-frame {
   min-height: 0;
-}
-
-.cv-original-placeholder,
-.cv-processing {
-  height: 100%;
-  min-height: 380px;
-  display: grid;
-  place-items: center;
-  color: var(--cv-muted);
-  text-align: center;
-  padding: 22px;
-}
-
-.cv-original-placeholder span {
-  display: block;
-  max-width: 42ch;
-  margin-top: 6px;
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .cv-print-wrap {
@@ -428,6 +320,8 @@
   grid-template-columns: minmax(286px, 330px) minmax(0, 1fr);
 }
 
+/* custom: sticky correction-field editor rail inside the print workarea.
+   Fields/labels/inputs themselves are kit classes in the markup. */
 .cv-field-editor {
   position: sticky;
   top: 0;
@@ -435,49 +329,29 @@
   max-height: calc(100vh - 80px);
   min-width: 0;
   overflow: auto;
-  border-right: 1px solid var(--cv-line);
-  background: var(--cv-panel);
+  border-right: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
 }
 
-.cv-field-editor header {
+.cv-field-editor-head {
   position: sticky;
   top: 0;
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
+  min-height: 40px;
   padding: 0 10px;
-  border-bottom: 1px solid var(--cv-line);
-  background: var(--cv-panel);
-}
-
-.cv-field-editor header strong {
-  color: var(--cv-ink);
-  font-size: 13px;
-  font-weight: 860;
-}
-
-.cv-field-editor header span {
-  color: var(--cv-muted);
-  font-size: 11px;
-  font-weight: 720;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: var(--surface);
 }
 
 .cv-editor-block {
   padding: 8px 10px;
-  border-bottom: 1px solid var(--cv-line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.cv-editor-block h4,
-.cv-editor-title-row h4 {
+.cv-editor-block > h4 {
   margin: 0 0 7px;
-  color: var(--cv-ink);
-  font-size: 11px;
-  font-weight: 860;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .cv-editor-title-row {
@@ -485,23 +359,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-bottom: 7px;
 }
 
-.cv-editor-title-row button,
-.cv-editor-row > button {
-  border: 1px solid var(--cv-line);
-  border-radius: 7px;
-  background: var(--cv-panel);
-  color: var(--cv-accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 860;
-  cursor: pointer;
-}
-
-.cv-editor-title-row button {
-  width: 26px;
-  height: 24px;
+.cv-editor-title-row > h4 {
+  margin: 0;
 }
 
 .cv-editor-grid {
@@ -510,70 +372,20 @@
   gap: 6px;
 }
 
-.cv-editor-grid label,
-.cv-editor-skill {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.cv-editor-grid span,
-.cv-editor-skill span {
-  overflow: hidden;
-  color: var(--cv-muted);
-  font-size: 10px;
-  font-weight: 760;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cv-field-editor input,
-.cv-field-editor textarea {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--cv-line);
-  border-radius: 7px;
-  background: color-mix(in oklab, var(--cv-panel-soft) 70%, var(--cv-panel));
-  color: var(--cv-ink);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 680;
-  outline: none;
-}
-
-.cv-field-editor input {
-  height: 27px;
-  padding: 0 7px;
-}
-
-.cv-field-editor textarea {
-  resize: vertical;
-  padding: 6px 7px;
-  line-height: 1.28;
-}
-
-.cv-field-editor input:focus,
-.cv-field-editor textarea:focus {
-  border-color: color-mix(in oklab, var(--cv-accent) 70%, var(--cv-line));
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--cv-accent-soft) 70%, transparent);
-}
-
 .cv-editor-row {
   display: grid;
   grid-template-columns: 24px repeat(2, minmax(0, 1fr));
   gap: 5px;
+  align-items: start;
   margin-bottom: 6px;
   padding: 6px;
-  border: 1px solid var(--cv-line);
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--cv-panel-soft) 55%, var(--cv-panel));
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface-2);
 }
 
-.cv-editor-row > button {
+.cv-editor-row > .ctox-icon-button {
   grid-row: span 3;
-  width: 24px;
-  min-height: 27px;
-  color: var(--cv-muted);
 }
 
 .cv-editor-row textarea {
@@ -585,9 +397,8 @@
 }
 
 .cv-editor-empty {
-  color: var(--cv-muted);
+  color: var(--muted);
   font-size: 11px;
-  font-weight: 720;
   padding: 4px 0;
 }
 
@@ -604,9 +415,14 @@
   position: relative;
   max-height: 240px;
   border-right: 0;
-  border-bottom: 1px solid var(--cv-line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
+/* --------------------------------------------------------------------------
+   custom: printable qualification-profile document. Fixed ink/paper colors
+   and mm-based rhythm are deliberate — this is the rendered A4 artifact,
+   not app chrome, and it must print identically in both themes.
+   -------------------------------------------------------------------------- */
 .cv-print-sheet {
   width: min(100%, 760px);
   min-height: 980px;
@@ -1197,6 +1013,7 @@
   font-size: 12px;
 }
 
+/* Inline correction directly on the document (contenteditable). */
 .cv-editable[contenteditable="true"] {
   outline: 1px dashed transparent;
   outline-offset: 2px;
@@ -1207,6 +1024,8 @@
   background: #eef8f5;
 }
 
+/* custom: narrow windows stack sidebar (horizontal card strip) above the
+   stage; the kit resizer disappears and the split view goes vertical. */
 @container business-app-window (max-width: 920px) {
   .cv-print-builder {
     grid-template-columns: minmax(0, 1fr);
@@ -1217,8 +1036,7 @@
     grid-column: 1;
     grid-row: 1;
     max-height: 244px;
-    border-right: 0;
-    border-bottom: 1px solid var(--cv-line);
+    border-bottom: 1px solid var(--hairline, var(--line));
   }
 
   .cv-workbench {
@@ -1244,6 +1062,11 @@
   .cv-view-grid.is-split {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .cv-view-grid.is-split .cv-pane + .cv-pane {
+    border-left: 0;
+    border-top: 1px solid var(--hairline, var(--line));
   }
 
   .cv-modern-body,
