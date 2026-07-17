@@ -6,21 +6,38 @@ let fabButton = null;
 let bugActor = null;
 
 let eggState = {
-  state: 'sleeping', // 'sleeping' | 'awakening' | 'crawling' | 'scurrying'
+  state: 'sleeping', // 'sleeping' | 'awakening' | 'crawling' | 'startled' | 'scurrying'
   x: 0,
   y: 0,
   angle: 0,
+  speed: 0,
+  targetSpeed: 0,
   animationFrameId: null,
   currentTarget: null,
   pauseUntil: 0,
+  startleUntil: 0,
   wakeUpStartTime: 0,
   scurryStartTime: 0,
   scurryStartPos: null,
   scurryStartAngle: 0,
   lastTime: 0,
+  pointerX: -1e4,
+  pointerY: -1e4,
 };
 let idleTimeout = null;
 const IDLE_TIME = 300000; // 5 minutes of inactivity
+let idleDelay = IDLE_TIME;
+const CRUISE_SPEED_MIN = 55; // px/s — a calm stroll
+const CRUISE_SPEED_MAX = 95;
+const STARTLE_SPEED = 220;
+const STARTLE_RADIUS = 140; // cursor closer than this spooks a crawling bug
+const FLEE_RADIUS = 60; // cursor this close sends it home
+
+function setBugMotionClasses({ walking, pausing }) {
+  if (!bugActor) return;
+  bugActor.classList.toggle('is-walking', Boolean(walking));
+  bugActor.classList.toggle('is-pausing', Boolean(pausing));
+}
 
 function shouldEnableIdleAnimation() {
   return !globalThis.ctoxBusinessOsDesktop;
@@ -60,11 +77,11 @@ function getNextTarget() {
 function startEasterEgg() {
   if (!fabButton) return;
   if (window.innerWidth < 1024) {
-    idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    idleTimeout = setTimeout(startEasterEgg, idleDelay);
     return;
   }
   if (reporterState && (reporterState.modal || reporterState.markupMode !== 'idle')) {
-    idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    idleTimeout = setTimeout(startEasterEgg, idleDelay);
     return;
   }
 
@@ -83,7 +100,10 @@ function startEasterEgg() {
   eggState.state = 'awakening';
   eggState.x = rect.left;
   eggState.y = rect.top;
-  eggState.angle = 0;
+  eggState.angle = -45; // facing up-left, away from its corner home
+  eggState.speed = 0;
+  eggState.targetSpeed = 0;
+  eggState.startleUntil = 0;
   eggState.wakeUpStartTime = performance.now();
   eggState.lastTime = performance.now();
 
@@ -98,7 +118,10 @@ function startEasterEgg() {
   bugActor.style.display = 'inline-flex';
   bugActor.style.left = `${eggState.x}px`;
   bugActor.style.top = `${eggState.y}px`;
-  bugActor.style.transform = 'rotate(0deg)';
+  bugActor.style.transform = `rotate(${eggState.angle}deg)`;
+  bugActor.classList.add('is-appearing');
+  setBugMotionClasses({ walking: false, pausing: false });
+  requestAnimationFrame(() => bugActor?.classList.remove('is-appearing'));
 
   if (eggState.animationFrameId) {
     cancelAnimationFrame(eggState.animationFrameId);
@@ -147,7 +170,7 @@ function stopEasterEggInstantly() {
   eggState.angle = 0;
   eggState.lastTime = 0;
 
-  idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+  idleTimeout = setTimeout(startEasterEgg, idleDelay);
 }
 
 function animLoop(timestamp) {
@@ -155,22 +178,52 @@ function animLoop(timestamp) {
 
   if (eggState.state === 'awakening') {
     const elapsed = timestamp - eggState.wakeUpStartTime;
-    if (elapsed < 600) {
-      const wiggleAngle = Math.sin(timestamp * 0.05) * 15;
-      bugActor.style.transform = `rotate(${wiggleAngle}deg)`;
+    if (elapsed < 700) {
+      // Stretch: a slow antenna sweep instead of frantic shaking.
+      const stretch = Math.sin(elapsed / 700 * Math.PI) * 6;
+      bugActor.style.transform = `rotate(${eggState.angle + stretch}deg)`;
+      bugActor.classList.add('is-pausing');
       eggState.animationFrameId = requestAnimationFrame(animLoop);
       return;
     } else {
       eggState.state = 'crawling';
       eggState.currentTarget = getNextTarget();
       eggState.pauseUntil = 0;
+      eggState.targetSpeed = CRUISE_SPEED_MIN + Math.random() * (CRUISE_SPEED_MAX - CRUISE_SPEED_MIN);
       eggState.lastTime = timestamp;
+      bugActor.classList.remove('is-pausing');
     }
   }
 
-  if (eggState.state === 'crawling') {
-    if (timestamp < eggState.pauseUntil) {
-      const lookAngle = eggState.angle + Math.sin(timestamp * 0.01) * 8;
+  if (eggState.state === 'crawling' || eggState.state === 'startled') {
+    if (!eggState.lastTime) eggState.lastTime = timestamp;
+    const dt = Math.min((timestamp - eggState.lastTime) / 1000, 0.1);
+    eggState.lastTime = timestamp;
+
+    // A crawling bug notices a nearby cursor and darts away from it.
+    const pdx = eggState.x + 22 - eggState.pointerX;
+    const pdy = eggState.y + 22 - eggState.pointerY;
+    const pointerDist = Math.hypot(pdx, pdy);
+    if (eggState.state === 'crawling' && pointerDist < STARTLE_RADIUS) {
+      eggState.state = 'startled';
+      eggState.startleUntil = timestamp + 380 + Math.random() * 240;
+      eggState.pauseUntil = 0;
+      const away = Math.atan2(pdy, pdx);
+      eggState.currentTarget = {
+        x: Math.max(30, Math.min(window.innerWidth - 74, eggState.x + Math.cos(away) * 260)),
+        y: Math.max(30, Math.min(window.innerHeight - 74, eggState.y + Math.sin(away) * 260)),
+      };
+    }
+    if (eggState.state === 'startled' && timestamp > eggState.startleUntil && pointerDist > STARTLE_RADIUS) {
+      eggState.state = 'crawling';
+      eggState.targetSpeed = CRUISE_SPEED_MIN + Math.random() * (CRUISE_SPEED_MAX - CRUISE_SPEED_MIN);
+    }
+
+    if (eggState.state === 'crawling' && timestamp < eggState.pauseUntil) {
+      // Resting: decelerate to zero, twitch antennae, glance around.
+      eggState.speed = Math.max(0, eggState.speed - 300 * dt);
+      setBugMotionClasses({ walking: false, pausing: true });
+      const lookAngle = eggState.angle + Math.sin(timestamp * 0.004) * 7;
       bugActor.style.transform = `rotate(${lookAngle}deg)`;
       eggState.animationFrameId = requestAnimationFrame(animLoop);
       return;
@@ -187,35 +240,38 @@ function animLoop(timestamp) {
     const dy = target.y - eggState.y;
     const distance = Math.hypot(dx, dy);
 
-    if (distance < 10) {
-      eggState.x = target.x;
-      eggState.y = target.y;
-      eggState.pauseUntil = timestamp + 1000 + Math.random() * 1500;
+    if (distance < 12) {
+      if (eggState.state === 'startled') {
+        eggState.state = 'crawling';
+      }
+      eggState.pauseUntil = timestamp + 900 + Math.random() * 1900;
       eggState.currentTarget = getNextTarget();
-      eggState.lastTime = timestamp;
+      eggState.targetSpeed = CRUISE_SPEED_MIN + Math.random() * (CRUISE_SPEED_MAX - CRUISE_SPEED_MIN);
     } else {
-      const speed = 75; // px per second
-      if (!eggState.lastTime) eggState.lastTime = timestamp;
-      const dt = (timestamp - eggState.lastTime) / 1000;
-      eggState.lastTime = timestamp;
+      // Accelerate/decelerate toward the situational cruise speed; darting
+      // when startled, easing out as it approaches a waypoint.
+      const desired = eggState.state === 'startled'
+        ? STARTLE_SPEED
+        : Math.min(eggState.targetSpeed, Math.max(24, distance * 1.4));
+      const accel = eggState.state === 'startled' ? 900 : 220;
+      eggState.speed += Math.max(-accel * dt, Math.min(accel * dt, desired - eggState.speed));
 
-      const step = speed * Math.min(dt, 0.1);
-      const moveX = (dx / distance) * step;
-      const moveY = (dy / distance) * step;
+      // Steer: heading eases toward the waypoint, so paths bend naturally
+      // instead of snapping onto straight rails. A slow sway adds wander.
+      const targetAngleDeg = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+      const steer = eggState.state === 'startled' ? 0.28 : 0.06;
+      eggState.angle = interpolateAngle(eggState.angle, targetAngleDeg, steer);
+      const sway = eggState.state === 'startled' ? 0 : Math.sin(timestamp * 0.0011) * 14;
+      const headingRad = (eggState.angle + sway - 90) * Math.PI / 180;
 
-      eggState.x += moveX;
-      eggState.y += moveY;
+      eggState.x += Math.cos(headingRad) * eggState.speed * dt;
+      eggState.y += Math.sin(headingRad) * eggState.speed * dt;
 
       bugActor.style.left = `${eggState.x}px`;
       bugActor.style.top = `${eggState.y}px`;
-
-      const targetAngleRad = Math.atan2(dy, dx);
-      const targetAngleDeg = (targetAngleRad * 180 / Math.PI) + 90;
-
-      eggState.angle = interpolateAngle(eggState.angle, targetAngleDeg, 0.08);
-
-      const walkingWiggle = Math.sin(timestamp * 0.02) * 10;
-      bugActor.style.transform = `rotate(${eggState.angle + walkingWiggle}deg)`;
+      bugActor.style.transform = `rotate(${eggState.angle + sway}deg)`;
+      setBugMotionClasses({ walking: eggState.speed > 8, pausing: false });
+      bugActor.style.setProperty('--bug-gait-ms', `${Math.max(120, Math.round(26000 / Math.max(eggState.speed, 30)))}ms`);
     }
 
     eggState.animationFrameId = requestAnimationFrame(animLoop);
@@ -223,8 +279,11 @@ function animLoop(timestamp) {
   }
 
   if (eggState.state === 'scurrying') {
-    const elapsed = timestamp - eggState.scurryStartTime;
-    const duration = 350; // ms
+    // Sprint home on foot — same locomotion, higher speed — instead of the
+    // old teleport-glide. Reads as fleeing, not as a canceled animation.
+    if (!eggState.lastTime) eggState.lastTime = timestamp;
+    const dt = Math.min((timestamp - eggState.lastTime) / 1000, 0.1);
+    eggState.lastTime = timestamp;
 
     let homeX = window.innerWidth - 62;
     let homeY = window.innerHeight - 62;
@@ -234,25 +293,24 @@ function animLoop(timestamp) {
       homeY = rect.top;
     }
 
-    const t = Math.min(elapsed / duration, 1);
-    const easeOutCubic = 1 - Math.pow(1 - t, 3);
-
-    eggState.x = eggState.scurryStartPos.x + (homeX - eggState.scurryStartPos.x) * easeOutCubic;
-    eggState.y = eggState.scurryStartPos.y + (homeY - eggState.scurryStartPos.y) * easeOutCubic;
+    const dx = homeX - eggState.x;
+    const dy = homeY - eggState.y;
+    const distance = Math.hypot(dx, dy);
+    eggState.speed = Math.min(eggState.speed + 1200 * dt, 340);
+    const homeAngleDeg = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+    eggState.angle = interpolateAngle(eggState.angle, homeAngleDeg, 0.35);
+    const headingRad = (eggState.angle - 90) * Math.PI / 180;
+    const step = Math.min(eggState.speed * dt, distance);
+    eggState.x += Math.cos(headingRad) * step;
+    eggState.y += Math.sin(headingRad) * step;
 
     bugActor.style.left = `${eggState.x}px`;
     bugActor.style.top = `${eggState.y}px`;
+    bugActor.style.transform = `rotate(${eggState.angle}deg)`;
+    setBugMotionClasses({ walking: true, pausing: false });
+    bugActor.style.setProperty('--bug-gait-ms', '110ms');
 
-    const dx = homeX - eggState.scurryStartPos.x;
-    const dy = homeY - eggState.scurryStartPos.y;
-    const homeAngleRad = Math.atan2(dy, dx);
-    const homeAngleDeg = (homeAngleRad * 180 / Math.PI) + 90;
-
-    eggState.angle = interpolateAngle(eggState.scurryStartAngle, homeAngleDeg, t * 2);
-    const panicWiggle = Math.sin(timestamp * 0.08) * 18;
-    bugActor.style.transform = `rotate(${eggState.angle + panicWiggle}deg)`;
-
-    if (t >= 1) {
+    if (distance < 14) {
       eggState.state = 'sleeping';
 
       if (fabButton) {
@@ -276,7 +334,7 @@ function animLoop(timestamp) {
       eggState.angle = 0;
       eggState.lastTime = 0;
 
-      idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+      idleTimeout = setTimeout(startEasterEgg, idleDelay);
     } else {
       eggState.animationFrameId = requestAnimationFrame(animLoop);
     }
@@ -290,8 +348,10 @@ export function initBusinessReporter({
   commandBus,
   db = null,
   sync = null,
+  idleMs = IDLE_TIME,
 }) {
   if (!session?.authenticated || document.querySelector('[data-ctox-reporter]')) return;
+  idleDelay = Math.max(1000, Number(idleMs) || IDLE_TIME);
   installReporterStyles();
   reporterState = {
     session,
@@ -335,6 +395,21 @@ export function initBusinessReporter({
       }
       return;
     }
+    // Pointer movement alone no longer panics the bug into despawning: it
+    // tracks the cursor, sidesteps when it comes near (startle logic in the
+    // anim loop), and only flees home when the cursor gets really close.
+    // Real work signals (click, typing, scroll, touch) still end the stroll.
+    if (event.type === 'mousemove' || event.type === 'pointermove') {
+      eggState.pointerX = event.clientX ?? eggState.pointerX;
+      eggState.pointerY = event.clientY ?? eggState.pointerY;
+      if (eggState.state === 'sleeping') {
+        resetIdleTimer();
+        return;
+      }
+      const dist = Math.hypot(eggState.x + 22 - eggState.pointerX, eggState.y + 22 - eggState.pointerY);
+      if (dist < FLEE_RADIUS) scurryBack();
+      return;
+    }
     resetIdleTimer();
   };
 
@@ -343,10 +418,10 @@ export function initBusinessReporter({
       clearTimeout(idleTimeout);
       idleTimeout = null;
     }
-    if (eggState.state === 'awakening' || eggState.state === 'crawling') {
+    if (eggState.state === 'awakening' || eggState.state === 'crawling' || eggState.state === 'startled') {
       scurryBack();
     } else if (eggState.state === 'sleeping') {
-      idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+      idleTimeout = setTimeout(startEasterEgg, idleDelay);
     }
   }
 
@@ -357,7 +432,7 @@ export function initBusinessReporter({
   window.addEventListener('touchstart', handleActivity, { passive: true });
   window.addEventListener('pointermove', handleActivity, { passive: true });
 
-  idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+  idleTimeout = setTimeout(startEasterEgg, idleDelay);
 }
 
 function openReporterDialog(state) {
@@ -1146,9 +1221,32 @@ function waitForVideoFrame(video) {
 }
 
 function bugIconSvg() {
+  // Top-down beetle drawn as a real little creature: two antennae, six legs
+  // in two gait groups, head, pronotum and seamed elytra. Line work follows
+  // the shell icon language (round caps, currentColor), so it themes.
   return `
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-      <path d="M12 2.5a3.5 3.5 0 0 1 3.5 3.5h-7A3.5 3.5 0 0 1 12 2.5Zm-7 8a1 1 0 0 1 1-1h1.2A6 6 0 0 1 8 9V8h8v1a6 6 0 0 1 .8.5H18a1 1 0 1 1 0 2h-1.06A6 6 0 0 1 17 13h2a1 1 0 1 1 0 2h-2a6 6 0 0 1-.27 1.37L18.7 17.3a1 1 0 1 1-1.4 1.4l-1.7-1.7A6 6 0 0 1 13 18.94V12h-2v6.94A6 6 0 0 1 8.4 17l-1.7 1.7a1 1 0 1 1-1.4-1.4l1.97-1.96A6 6 0 0 1 7 15H5a1 1 0 1 1 0-2h2a6 6 0 0 1 .06-1.5H6a1 1 0 0 1-1-1Z" fill="currentColor"/>
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <g class="ctox-bug-antennae">
+        <path d="M10.5 4.9C9.8 3.9 9 3.2 8 2.8" />
+        <path d="M13.5 4.9c.7-1 1.5-1.7 2.5-2.1" />
+      </g>
+      <g class="ctox-bug-legs ctox-bug-legs-a">
+        <path d="M7.5 9.4 4.6 7.9" />
+        <path d="M7 13.2H3.8" />
+        <path d="M7.6 16.6l-2.7 2.1" />
+      </g>
+      <g class="ctox-bug-legs ctox-bug-legs-b">
+        <path d="m16.5 9.4 2.9-1.5" />
+        <path d="M17 13.2h3.2" />
+        <path d="m16.4 16.6 2.7 2.1" />
+      </g>
+      <g class="ctox-bug-body">
+        <circle cx="12" cy="6.2" r="1.7" fill="currentColor" stroke="none" opacity=".9" />
+        <path d="M9.4 8.6c0-.7 1.1-1.3 2.6-1.3s2.6.6 2.6 1.3" fill="currentColor" stroke="none" opacity=".75" />
+        <path d="M12 8.9c2.6 0 4.3 1.9 4.3 4.8 0 3.4-1.9 5.8-4.3 5.8s-4.3-2.4-4.3-5.8c0-2.9 1.7-4.8 4.3-4.8Z" fill="currentColor" stroke="none" opacity=".62" />
+        <path d="M12 8.9c2.6 0 4.3 1.9 4.3 4.8 0 3.4-1.9 5.8-4.3 5.8s-4.3-2.4-4.3-5.8c0-2.9 1.7-4.8 4.3-4.8Z" />
+        <path d="M12 9v10.4" stroke-width="1" opacity=".65" />
+      </g>
     </svg>`;
 }
 
@@ -1279,9 +1377,11 @@ function installReporterStyles() {
       visibility: hidden !important;
       display: none !important;
     }
+    /* The strolling beetle lives BELOW windows/taskbar/topbar (z-index 30):
+       a desktop creature that never walks over the user's work. */
     .ctox-bug-actor {
       position: fixed;
-      z-index: 999999;
+      z-index: 30;
       pointer-events: auto;
       cursor: pointer;
       width: 44px;
@@ -1291,7 +1391,45 @@ function installReporterStyles() {
       justify-content: center;
       background: transparent;
       color: var(--accent, #72b8aa);
-      transition: none;
+      opacity: 1;
+      transition: opacity 260ms ease;
+      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+    }
+    .ctox-bug-actor.is-appearing { opacity: 0; }
+    .ctox-bug-actor svg { width: 26px; height: 26px; overflow: visible; }
+    .ctox-bug-actor .ctox-bug-legs,
+    .ctox-bug-actor .ctox-bug-antennae {
+      transform-origin: 12px 12px;
+    }
+    .ctox-bug-actor.is-walking .ctox-bug-legs-a {
+      animation: ctox-bug-gait var(--bug-gait-ms, 240ms) ease-in-out infinite;
+    }
+    .ctox-bug-actor.is-walking .ctox-bug-legs-b {
+      animation: ctox-bug-gait var(--bug-gait-ms, 240ms) ease-in-out infinite reverse;
+    }
+    .ctox-bug-actor.is-walking .ctox-bug-body {
+      animation: ctox-bug-bob calc(var(--bug-gait-ms, 240ms) * 2) ease-in-out infinite;
+    }
+    .ctox-bug-actor.is-pausing .ctox-bug-antennae {
+      animation: ctox-bug-twitch 1.6s ease-in-out infinite;
+    }
+    @keyframes ctox-bug-gait {
+      0%, 100% { transform: rotate(5deg); }
+      50% { transform: rotate(-5deg); }
+    }
+    @keyframes ctox-bug-bob {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+    @keyframes ctox-bug-twitch {
+      0%, 62%, 100% { transform: rotate(0deg); }
+      70% { transform: rotate(4deg); }
+      82% { transform: rotate(-3deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ctox-bug-actor .ctox-bug-legs,
+      .ctox-bug-actor .ctox-bug-body,
+      .ctox-bug-actor .ctox-bug-antennae { animation: none !important; }
     }
     .ctox-report-backdrop {
       position: fixed;
