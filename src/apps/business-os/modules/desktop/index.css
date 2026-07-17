@@ -61,7 +61,10 @@
 .desktop-icon {
   position: absolute;
   width: 96px;
-  height: 112px;
+  /* 2-line labels need headroom for descenders (g, p, y) — 112px clipped
+     the second line's baseline box. Grid cell is 120px, so 116px still
+     leaves row spacing. */
+  height: 116px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
