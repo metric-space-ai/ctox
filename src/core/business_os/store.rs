@@ -13013,6 +13013,10 @@ fn validate_catalog_source_module(root: &Path, module_id: &str) -> anyhow::Resul
     .arg(&script)
     .arg(module_id)
     .arg("--source")
+    // Release images intentionally omit source-only dev dependencies. The
+    // catalog source tests run before publishing; runtime updates still run
+    // the complete static, manifest, ESM, and syntax validation below.
+    .arg("--skip-tests")
     .arg("--workspace")
     .arg(root)
     .output()
