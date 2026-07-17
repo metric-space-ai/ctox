@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-chatdock-i18n-v123';
+const APP_BUILD = '20260717-startmenu-locale-v124';
 
 ensureShellStylesheets();
 
@@ -4242,6 +4242,9 @@ function applyShellLanguage(lang, options = {}) {
 // re-reads the freshly-applied locale. Windowed desktop apps receive the
 // preference event dispatched by postCurrentPreferencesToModule() instead.
 function remountActiveModuleForLocale() {
+  // The start menu panel is built once and cached; drop it so the next open
+  // rebuilds with the new language.
+  document.querySelector('.shell-start-menu-panel')?.remove();
   const active = state.activeModule;
   if (!active?.id) return;
   openModule(active.id, { force: true, isNavHistory: true }).catch((error) => {
@@ -10867,7 +10870,9 @@ const LAUNCHER_CATEGORIES = [
   },
   {
     id: 'productivity',
-    name: shellLang() === 'de' ? '⚡ Produktivität' : '⚡ Productivity',
+    // Resolved lazily: module-level evaluation would freeze the boot-time
+    // language and keep stale labels after a live language switch.
+    get name() { return shellLang() === 'de' ? '⚡ Produktivität' : '⚡ Productivity'; },
     matchIds: ['explorer', 'notizen', 'notes', 'spreadsheets', 'documents', 'calendar', 'conversations']
   },
   {
@@ -10877,12 +10882,12 @@ const LAUNCHER_CATEGORIES = [
   },
   {
     id: 'recherche',
-    name: shellLang() === 'de' ? '🔍 Recherche & Daten' : '🔍 Web & Data',
+    get name() { return shellLang() === 'de' ? '🔍 Recherche & Daten' : '🔍 Web & Data'; },
     matchIds: ['research', 'matching', 'knowledge']
   },
   {
     id: 'development',
-    name: shellLang() === 'de' ? '🛠️ Entwicklung' : '🛠️ Development',
+    get name() { return shellLang() === 'de' ? '🛠️ Entwicklung' : '🛠️ Development'; },
     matchIds: ['code-editor', 'creator']
   }
 ];
