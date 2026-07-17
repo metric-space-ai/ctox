@@ -8,6 +8,7 @@ const {
   crashReporter,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   session,
   shell,
@@ -42,6 +43,7 @@ const {
   openCtoxDevLoginWindow,
 } = require("./ctox-dev-login.cjs");
 const { installNativeFileDragBridge } = require("./file-drag.cjs");
+const { buildApplicationMenuTemplate } = require("./app-menu.cjs");
 
 let mainWindow;
 let sourceManager;
@@ -168,6 +170,7 @@ async function createWindow() {
   });
   lockDownPrivilegedWindowNavigation(mainWindow);
   mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  installApplicationMenu();
   mainWindow.on("resize", layoutActiveView);
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -223,9 +226,78 @@ function setChromeOverlayVisible(visible) {
 }
 
 function openInstanceSwitcherOverlay() {
+  focusMainWindow();
   setChromeOverlayVisible(true);
   mainWindow?.webContents?.send?.("desktop:switcher-open");
   return { ok: true };
+}
+
+function openInstanceConnectionOverlay() {
+  focusMainWindow();
+  setChromeOverlayVisible(true);
+  mainWindow?.webContents?.send?.("desktop:connection-open");
+  return { ok: true };
+}
+
+async function refreshActiveInstance() {
+  if (!activeViewId) return openInstanceSwitcherOverlay();
+  const instances = await sourceManager.listInstances();
+  const instance = instances.find((entry) => entry.id === activeViewId);
+  if (!instance) return openInstanceSwitcherOverlay();
+  destroyInstanceView(instance.id);
+  return activateInstance(instance);
+}
+
+function installApplicationMenu() {
+  if (!Menu?.buildFromTemplate || !Menu?.setApplicationMenu) return false;
+  const appName = app.getName();
+  const version = app.getVersion();
+  app.setAboutPanelOptions?.({
+    applicationName: appName,
+    applicationVersion: version,
+    version,
+    copyright: "© 2026 Michael Welsch · metric-space.ai",
+    website: "https://ctox.dev",
+  });
+  const showAbout = () => {
+    if (process.platform === "darwin" && typeof app.showAboutPanel === "function") {
+      app.showAboutPanel();
+      return;
+    }
+    dialog.showMessageBox(mainWindow ?? undefined, {
+      type: "info",
+      title: `Über ${appName}`,
+      message: appName,
+      detail: `Version ${version}\n${process.platform} ${process.arch}\nhttps://ctox.dev`,
+      buttons: ["OK"],
+    }).catch(() => undefined);
+  };
+  const openExternal = (url) => {
+    if (isSafeExternalUrl(url)) shell.openExternal(url);
+  };
+  const template = buildApplicationMenuTemplate({
+    appName,
+    version,
+    platform: process.platform,
+    handlers: {
+      showAbout,
+      openSwitcher: openInstanceSwitcherOverlay,
+      openConnection: openInstanceConnectionOverlay,
+      refreshActiveInstance: () => {
+        refreshActiveInstance().catch((error) => {
+          console.error("Active instance refresh failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
+      openDocumentation: () => openExternal("https://github.com/metric-space-ai/ctox#readme"),
+      openReleaseNotes: () => openExternal(
+        `https://github.com/metric-space-ai/ctox/releases/tag/business-os-desktop-v${version}`,
+      ),
+    },
+  });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  return true;
 }
 
 function showAppShell() {

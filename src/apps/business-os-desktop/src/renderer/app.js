@@ -77,6 +77,9 @@ const appVersion = document.getElementById("app-version");
 window.ctoxDesktop.onOpenSwitcher?.(() => {
   openSwitcher({ focus: true }).catch((error) => console.error("open switcher failed", error));
 });
+window.ctoxDesktop.onOpenConnection?.(() => {
+  openConnection("ctox_dev");
+});
 openSwitcherButton.addEventListener("click", () => openSwitcher());
 connectInstanceButton.addEventListener("click", () => openConnection("ctox_dev"));
 emptyConnectInstanceButton.addEventListener("click", () => openConnection("ctox_dev"));
