@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260717-kit2';
 const MODULE_ID = 'esign';
 const PRIMARY = 'signature_requests';
 const TITLE = 'esign';
@@ -36,9 +36,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate feedback renders in the kit callout; kinds map onto its variants.
+  const GATE_VARIANTS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] ? ' ' + GATE_VARIANTS[kind] : '');
     gateEl.innerHTML = html || '';
   }
 
@@ -189,13 +191,13 @@ function signatureRow(r) {
   const completed = status === 'completed' || status === 'declined' || status === 'expired';
   const actions = completed ? '' : signers
     .filter((s) => s && s.id && s.state !== 'signed' && s.state !== 'declined')
-    .map((s) => '<button type="button" class="ctox-button" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">' + esc(text.sign) + ': ' + esc(s.id) + '</button>')
+    .map((s) => '<button type="button" class="ctox-button ctox-button--sm" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">' + esc(text.sign) + ': ' + esc(s.id) + '</button>')
     .join('');
 
   const badgeClass = ('ctox-badge ' + statusBadgeClass(status)).trim();
   const recordId = r.id || r.document_id || '';
   const recordLabel = r.document_id || r.id || '—';
-  return '<div class="ats-item ats-item--rich"'
+  return '<div class="ats-item"'
     + ' data-context-record-id="' + esc(recordId) + '"'
     + ' data-context-record-type="esign_document"'
     + ' data-context-label="' + esc(recordLabel) + '">'
