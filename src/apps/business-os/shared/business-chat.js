@@ -856,17 +856,17 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 
   root.innerHTML = `
     <section class="ctox-chat-dock ${dockStateClass}" data-chat-dock>
-      <button class="ctox-chat-fab" type="button" data-chat-open aria-label="${dockCollapsed ? 'Chat öffnen' : 'Chat einklappen'}">
+      <button class="ctox-chat-fab" type="button" data-chat-open aria-label="${dockCollapsed ? (chatUiIsGerman() ? 'Chat öffnen' : 'Open chat') : (chatUiIsGerman() ? 'Chat einklappen' : 'Collapse chat')}">
         <span>Chat</span><b>${openChats.length || ''}</b>
       </button>
 
       <div class="ctox-chat-date-pill">
-        <button class="ctox-date-nav-btn" type="button" data-chat-date-prev aria-label="Vorheriger Tag">
+        <button class="ctox-date-nav-btn" type="button" data-chat-date-prev aria-label="${chatUiIsGerman() ? 'Vorheriger Tag' : 'Previous day'}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
         <div class="ctox-date-picker-trigger" role="button" tabindex="0" aria-label="${escapeAttr(chatDateAriaLabel(selectedDate, workload.total))}" title="${escapeAttr(chatDateAriaLabel(selectedDate, workload.total))}">
           <span class="ctox-date-copy">
-            <span class="ctox-date-scope">Verlauf</span>
+            <span class="ctox-date-scope">${chatUiIsGerman() ? 'Verlauf' : 'History'}</span>
             <span class="ctox-date-row">
               <span class="ctox-date-label">${formatGermanDateLabel(selectedDate)}</span>
               ${workload.total > 0 ? `<span class="ctox-date-workload-badge" title="${escapeAttr(workload.total)} Tasks">${formatCompactCount(workload.total)}</span>` : ''}
@@ -875,7 +875,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
           <input type="date" class="ctox-date-native-picker" data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" tabindex="-1" aria-hidden="true" />
         </div>
-        <button class="ctox-date-nav-btn" type="button" data-chat-date-next aria-label="Nächster Tag">
+        <button class="ctox-date-nav-btn" type="button" data-chat-date-next aria-label="${chatUiIsGerman() ? 'Nächster Tag' : 'Next day'}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
         </button>
       </div>
@@ -2878,23 +2878,27 @@ function formatGermanDateLabel(dateStr) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = getLocalDateString(tomorrow);
   
-  if (dateStr === todayStr) return 'Heute';
-  if (dateStr === yesterdayStr) return 'Gestern';
-  if (dateStr === tomorrowStr) return 'Morgen';
+  if (dateStr === todayStr) return chatUiIsGerman() ? 'Heute' : 'Today';
+  if (dateStr === yesterdayStr) return chatUiIsGerman() ? 'Gestern' : 'Yesterday';
+  if (dateStr === tomorrowStr) return chatUiIsGerman() ? 'Morgen' : 'Tomorrow';
   
   const [y, m, d] = dateStr.split('-').map(Number);
-  const shortMonths = [
-    'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'
-  ];
+  const shortMonths = chatUiIsGerman()
+    ? ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+    : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${d}. ${shortMonths[m - 1]} '${String(y).slice(-2)}`;
+}
+
+
+function chatUiIsGerman() {
+  return (document.documentElement.lang || 'de').toLowerCase().startsWith('de');
 }
 
 function chatDateAriaLabel(dateStr, total = 0) {
   const label = formatGermanDateLabel(dateStr);
   const count = Number(total) || 0;
   const countLabel = count === 1 ? '1 Task' : `${formatCompactCount(count)} Tasks`;
-  return `Chat-Verlauf: ${label}, ${countLabel}`;
+  return `${chatUiIsGerman() ? 'Chat-Verlauf' : 'Chat history'}: ${label}, ${countLabel}`;
 }
 
 function shiftSelectedDate(state, days) {
