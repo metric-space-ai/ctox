@@ -7,7 +7,7 @@ import {
   deriveShellChatInsets,
 } from './shell-chat-composition.js';
 
-test('expanded chat remains an overlay and reserves only the visible dock', () => {
+test('expanded chat is a pure overlay and reserves no app work area', () => {
   assert.deepEqual(deriveShellChatInsets({
     detail: { present: true, expanded: true, top: 304, dock_top: 640 },
     viewport: { w: 1280, h: 668 },
@@ -17,17 +17,17 @@ test('expanded chat remains an overlay and reserves only the visible dock', () =
     compact: false,
     top: 0,
     right: 0,
-    bottom: 36,
+    bottom: 0,
     left: 0,
   });
 });
 
-test('chat never reserves its expanded conversation height', () => {
+test('chat geometry never becomes a window-manager inset', () => {
   const clamped = deriveShellChatInsets({
     detail: { present: true, expanded: true, top: -100, dock_top: 450 },
     viewport: { w: 800, h: 500 },
   });
-  assert.equal(clamped.bottom, 58);
+  assert.equal(clamped.bottom, 0);
   assert.equal(clamped.right, 0);
 
   const collapsed = deriveShellChatInsets({
@@ -45,7 +45,7 @@ test('chat never reserves its expanded conversation height', () => {
   });
 });
 
-test('collapsed chat reserves only its visible dock instead of the full chat root', () => {
+test('collapsed chat dock remains an overlay too', () => {
   assert.deepEqual(deriveShellChatInsets({
     detail: { present: true, expanded: false, top: 430, dock_top: 778 },
     viewport: { w: 390, h: 844 },
@@ -55,12 +55,12 @@ test('collapsed chat reserves only its visible dock instead of the full chat roo
     compact: false,
     top: 0,
     right: 0,
-    bottom: 74,
+    bottom: 0,
     left: 0,
   });
 });
 
-test('large minimum-height windows never move chat into a side rail', () => {
+test('minimum app dimensions do not couple chat and app geometry', () => {
   const wide = deriveShellChatInsets({
     detail: { present: true, expanded: true, top: 304, height: 398, dock_top: 620 },
     viewport: { w: 1280, h: 668 },
@@ -73,7 +73,7 @@ test('large minimum-height windows never move chat into a side rail', () => {
     compact: false,
     top: 0,
     right: 0,
-    bottom: 56,
+    bottom: 0,
     left: 0,
   });
 
@@ -86,10 +86,10 @@ test('large minimum-height windows never move chat into a side rail', () => {
   assert.equal(narrow.side, false);
   assert.equal(narrow.compact, false);
   assert.equal(narrow.right, 0);
-  assert.equal(narrow.bottom, 56);
+  assert.equal(narrow.bottom, 0);
 });
 
-test('composition controller owns event lifecycle, shell state, and transient window insets', () => {
+test('composition controller owns event lifecycle without changing app geometry', () => {
   const listeners = new Map();
   const calls = [];
   const attributes = new Set();
@@ -118,9 +118,9 @@ test('composition controller owns event lifecycle, shell state, and transient wi
   listeners.get(SHELL_CHAT_LAYOUT_EVENT)({ detail: { present: true, expanded: true, top: 304, dock_top: 640 } });
   assert.equal(attributes.has('data-shell-chat-dock-expanded'), true);
   assert.equal(attributes.has('data-shell-chat-dock-side'), false);
-  assert.equal(properties.get('--shell-chat-dock-inset-bottom'), '36px');
+  assert.equal(properties.get('--shell-chat-dock-inset-bottom'), '0px');
   assert.deepEqual(calls.at(-1), [
-    { top: 0, right: 0, bottom: 36, left: 0 },
+    { top: 0, right: 0, bottom: 0, left: 0 },
     { affectNormal: false, transient: false },
   ]);
 

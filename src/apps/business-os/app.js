@@ -37,7 +37,7 @@ import {
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260715-responsive-shell-v78';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260717-chat-overlay-v126';
 import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v11';
 import {
   CTOX_MAINTENANCE_MESSAGE,
@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260716-maintenance-session-v119';
+const APP_BUILD = '20260717-chat-overlay-v126';
 
 ensureShellStylesheets();
 

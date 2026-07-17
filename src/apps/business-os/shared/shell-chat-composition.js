@@ -1,39 +1,19 @@
 export const SHELL_CHAT_LAYOUT_EVENT = 'ctox-business-os-chat-layout';
 
-const DEFAULTS = Object.freeze({
-  chatDockGap: 8,
-  minWindowHeight: 220,
-});
-
-export function deriveShellChatInsets({
-  detail,
-  viewport,
-  minimumWorkArea,
-  options = {},
-} = {}) {
-  const config = { ...DEFAULTS, ...options };
+export function deriveShellChatInsets({ detail } = {}) {
   const payload = detail || {};
   const expanded = payload.present !== false && payload.expanded === true;
-  const viewportHeight = Math.max(0, Number(viewport?.h) || 0);
-  const dockTop = Number(payload.dock_top);
-  const dockTopInWindowSpace = Number.isFinite(dockTop)
-    ? dockTop - (Number(viewport?.originTop) || 0)
-    : dockTop;
-  const baseBottom = payload.present !== false && Number.isFinite(dockTop)
-    ? Math.max(0, viewportHeight - dockTopInWindowSpace + config.chatDockGap)
-    : 0;
-  const minimumHeight = Math.max(config.minWindowHeight, Number(minimumWorkArea?.height) || 0);
-  const maxBottom = Math.max(baseBottom, viewportHeight - minimumHeight);
   return {
     expanded,
     side: false,
     compact: false,
     top: 0,
     right: 0,
-    // Chat windows are overlays. Only the persistent bottom dock is a shell
-    // work-area inset; expanding a conversation must never move or resize app
-    // windows, nor turn the dock into a right-hand rail.
-    bottom: Math.min(baseBottom, maxBottom),
+    // The complete chat composition, including the persistent dock, floats
+    // above the desktop. It must never participate in window work-area
+    // geometry: opening, collapsing, or adding chats cannot reflow maximized,
+    // snapped, mobile-sheet, or floating app windows.
+    bottom: 0,
     left: 0,
   };
 }
@@ -72,8 +52,8 @@ export function createShellChatCompositionController({
       bottom: next.bottom,
       left: next.left,
     }, {
-      // The dock must constrain maximized/snapped windows, but a floating
-      // desktop window remains freely movable beneath the chat overlay.
+      // Chat is viewport chrome layered above every app. Keep the window
+      // manager's geometry independent from all chat state changes.
       affectNormal: false,
       transient: false,
     });
