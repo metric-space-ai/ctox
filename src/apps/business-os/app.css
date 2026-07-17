@@ -4474,7 +4474,7 @@ body[data-auth-state="locked"] .topbar {
    default; macOS variant is scoped through :root[data-shell-style="macos"]. */
 
 :root {
-  --shell-window-radius: 8px;
+  --shell-window-radius: 6px;
   --shell-window-header-height: 32px;
 }
 
@@ -4525,7 +4525,7 @@ body[data-auth-state="locked"] .topbar {
 .shell-window-header:active { cursor: grabbing; }
 .shell-window-title {
   flex: 1;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--text);
@@ -4554,7 +4554,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: 12px;
   transition: background-color 100ms ease, color 100ms ease, transform 100ms ease;
 }
-.shell-window-control:hover { color: var(--text); background: var(--surface-2); }
+.shell-window-control:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .shell-window-control:active { transform: scale(0.95); }
 .shell-window-control--close:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 
@@ -4680,9 +4680,12 @@ body[data-auth-state="locked"] .topbar {
   width: 14px;
   height: 14px;
   cursor: nwse-resize;
+  opacity: 0.55;
+  transition: opacity 120ms ease;
   background:
-    linear-gradient(135deg, transparent 50%, var(--line) 50%, var(--line) 60%, transparent 60%, transparent 70%, var(--line) 70%, var(--line) 80%, transparent 80%);
+    linear-gradient(135deg, transparent 56%, var(--hairline, var(--line)) 56%, var(--hairline, var(--line)) 64%, transparent 64%, transparent 74%, var(--hairline, var(--line)) 74%, var(--hairline, var(--line)) 82%, transparent 82%);
 }
+.shell-window-resize--se:hover { opacity: 1; }
 .shell-window.is-snapped > .shell-window-resize,
 .shell-window[data-snap-zone] > .shell-window-resize {
   pointer-events: none;
@@ -5221,44 +5224,75 @@ body[data-auth-state="locked"] .topbar {
 
 /* macOS-style window chrome: traffic-light controls on the LEFT, rounded corners.
    The window manager renders the controls in mode-specific DOM order, so we only
-   restyle here — no flex reordering needed. */
+   restyle here — no flex reordering needed. The accessible hit area is a 20x22px
+   transparent button; the 12px light itself is a centered ::before dot so the
+   hover glyph renders on the light, not beside it. */
 :root[data-shell-style="macos"] {
-  --shell-window-radius: 12px;
-  --shell-window-header-height: 28px;
+  --shell-window-radius: 10px;
+  --shell-window-header-height: 30px;
 }
 :root[data-shell-style="macos"] .shell-window-header {
-  padding-left: 12px;
-  padding-right: 12px;
+  padding-left: 10px;
+  padding-right: 10px;
+  gap: 6px;
   flex-direction: row-reverse;
 }
 :root[data-shell-style="macos"] .shell-window-title {
+  margin-inline: auto;
   text-align: center;
 }
+:root[data-shell-style="macos"] .shell-window-header-meta,
+:root[data-shell-style="macos"] .shell-window-header-action {
+  border-radius: 6px;
+}
 :root[data-shell-style="macos"] .shell-window-controls {
-  gap: 8px;
+  gap: 6px;
 }
 :root[data-shell-style="macos"] .shell-window-control {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  position: relative;
+  width: 20px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   font-size: 0;
   padding: 0;
 }
+:root[data-shell-style="macos"] .shell-window-control::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--mac-light, color-mix(in srgb, var(--muted) 55%, transparent));
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
 :root[data-shell-style="macos"] .shell-window-control:hover {
-  font-size: 9px;
+  background: transparent;
+  font-size: 8px;
+  font-weight: 700;
   line-height: 1;
+  color: rgba(0, 0, 0, 0.55);
+}
+/* Unfocused windows dim their lights to neutral gray, like real macOS chrome. */
+:root[data-shell-style="macos"] .shell-window:not(.is-focused) .shell-window-control::before {
+  background: color-mix(in srgb, var(--muted) 38%, transparent);
 }
 :root[data-shell-style="macos"] .shell-window-control--close {
-  background: #ff5f57;
-  border-color: color-mix(in srgb, #ff5f57 70%, var(--line));
+  --mac-light: #ff5f57;
 }
 :root[data-shell-style="macos"] .shell-window-control--minimize {
-  background: #ffbd2e;
-  border-color: color-mix(in srgb, #ffbd2e 70%, var(--line));
+  --mac-light: #febc2e;
 }
 :root[data-shell-style="macos"] .shell-window-control--maximize {
-  background: #28c940;
-  border-color: color-mix(in srgb, #28c940 70%, var(--line));
+  --mac-light: #28c840;
+}
+:root[data-shell-style="macos"] .shell-window-control--close:hover {
+  background: transparent;
+  color: rgba(0, 0, 0, 0.55);
 }
 
 /* Shell taskbar — live list of open windows, grouped by ownerId. Bottom-anchored
@@ -6906,8 +6940,8 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
 }
 
 .shell-window {
-  border: 1px solid var(--line) !important;
-  border-radius: var(--panel-radius) !important;
+  border: 1px solid var(--hairline, var(--line)) !important;
+  border-radius: var(--shell-window-radius) !important;
   background: var(--surface) !important;
   box-shadow: var(--shadow-md) !important;
   transition: border-color 100ms ease, box-shadow 100ms ease !important;
@@ -6916,17 +6950,18 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
 }
 
 .shell-window.is-focused {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--line)) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line)) !important;
   box-shadow: var(--shadow-lg) !important;
 }
 
 .shell-window-header {
-  height: 32px !important;
-  min-height: 32px;
+  height: var(--shell-window-header-height) !important;
+  min-height: var(--shell-window-header-height);
   position: relative;
   z-index: 2;
-  padding: 0 6px !important;
-  border-bottom: 1px solid var(--line) !important;
+  gap: 6px;
+  padding: 0 8px !important;
+  border-bottom: 1px solid var(--hairline, var(--line)) !important;
   background: var(--surface-2) !important;
 }
 
@@ -6937,7 +6972,7 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
   min-width: 56px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .shell-window-title-icon {
@@ -6957,7 +6992,7 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 3px;
+  gap: 4px;
 }
 
 .shell-window-meta {
@@ -6970,11 +7005,11 @@ body.is-resizing-horizontal * { cursor: row-resize !important; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   height: 22px;
-  padding: 0 5px;
-  border: 1px solid var(--line);
+  padding: 0 6px;
+  border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
   background: transparent;
   color: var(--muted);
@@ -7007,6 +7042,15 @@ button.shell-window-header-meta:focus-visible,
   color: var(--warning, #d8a657);
 }
 
+/* The version chip is read-mostly metadata: no frame, mono digits, one step
+   quieter than the actionable chips so the title owns the header. */
+.shell-window-header-meta[data-state="version"] {
+  border-color: transparent;
+  padding-inline: 2px;
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .shell-window-header-item-icon {
   flex: 0 0 auto;
   font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -7018,12 +7062,16 @@ button.shell-window-header-meta:focus-visible,
 
 .shell-window-controls {
   flex: 0 0 auto;
-  gap: 3px;
+  gap: 2px;
 }
 
+/* Windows-style caption buttons: flat hit areas, no stamped boxes. The fill
+   only appears on hover (base rule), which keeps the header on one line. */
 .shell-window-control {
-  width: 27px;
-  height: 22px;
+  width: 30px;
+  height: 24px;
+  border-color: transparent;
+  background: transparent;
 }
 
 .shell-window-content {
@@ -7746,15 +7794,16 @@ button.shell-window-header-meta:focus-visible,
   color: var(--muted);
 }
 
-/* Header: taller (38px) and modelled — a top-lit vertical gradient, a
-   bright inner light edge and a soft shade line where it meets the content.
-   The focused window gets a whisper of accent in the gradient plus an
-   accent hairline underneath so focus reads in the header, not only in the
-   border. */
+/* Header: 36px and modelled — a top-lit vertical gradient, a bright inner
+   light edge and a soft shade line where it meets the content. All chrome on
+   the row shares one 24px control height on a 4px grid. The focused window
+   gets a whisper of accent in the gradient plus an accent hairline underneath
+   so focus reads in the header, not only in the border. */
 :root[data-shell-style="ctox"] .shell-window-header {
-  height: 38px !important;
-  min-height: 38px;
-  padding: 0 10px !important;
+  height: 36px !important;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 12px !important;
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--surface-2) 96%, var(--surface)) 0%,
@@ -7794,13 +7843,19 @@ button.shell-window-header-meta:focus-visible,
   width: 30px;
   height: 24px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
   transition:
     background-color 120ms ease,
     color 120ms ease,
     transform 120ms ease;
+}
+
+:root[data-shell-style="ctox"] .shell-window-controls {
+  gap: 4px;
 }
 
 :root[data-shell-style="ctox"] .shell-window-control:hover {
@@ -7822,6 +7877,12 @@ button.shell-window-header-meta:focus-visible,
 :root[data-shell-style="ctox"] .shell-window-header-action {
   border-radius: 999px;
   border-color: var(--hairline, var(--line));
+  padding: 0 8px;
+}
+
+:root[data-shell-style="ctox"] .shell-window-header-meta[data-state="version"] {
+  border-color: transparent;
+  padding-inline: 2px;
 }
 
 /* --- Topbar: a floating glass island, not a full-width bar --------------
