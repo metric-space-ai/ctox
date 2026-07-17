@@ -1,3 +1,18 @@
+/* ============================================================================
+   Browser-Modul — nur Spezialfälle.
+   Alle normalen Elemente kommen aus dem Kit (shared/base.css + app.css):
+   Buttons (.ctox-button/.ctox-icon-button), Eingaben (.ctox-input), Tabs
+   (.ctox-pane-tabs/.ctox-pane-tab), Statusanzeige (.ctox-badge), Hinweise
+   (.ctox-callout), Toolbar (.ctox-toolbar), Leerzustand (.ctox-empty),
+   Kicker (.ctox-pane-kicker), Aktionszeilen (.ctox-pane-tools).
+   Diese Datei enthält nur, was das Kit nicht ausdrücken kann: den
+   Remote-Viewport (Canvas), die Browser-Chrome-Struktur (Tab-Leiste,
+   Adresszeile, Status-/Download-Leiste) und die versteckte Diagnose-Ansicht.
+   ========================================================================== */
+
+/* custom: App-Grundstruktur — Browser-Chrome oben, Remote-Viewport füllt den
+   Rest. Kein 3-Spalten-Workspace, weil die App eine einzelne Live-Ansicht
+   statt Record-Listen/Inspektor-Spalten hat. */
 .browser-module {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -16,58 +31,32 @@
 
 .browser-chrome {
   display: grid;
-  grid-template-rows: auto auto auto;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   overflow: hidden;
 }
 
-.browser-tabbar,
-.browser-toolbar {
+/* custom: Fenster-Tab-Leiste — die Kit-Tabs (.ctox-pane-tabs im
+   Session-Container) sitzen in einer Chrome-ähnlichen Leiste über der
+   Adresszeile; das Kit kennt keinen solchen zweizeiligen Browser-Chrome. */
+.browser-tabbar {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.browser-tabbar {
   min-height: 34px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--hairline);
+  padding: 4px 8px;
   background: var(--surface-2);
 }
 
 .browser-new-window {
   flex: 0 0 auto;
-  margin-bottom: 3px;
 }
 
-.browser-session-item {
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text);
-  border-radius: 7px;
-  min-height: 32px;
-  padding: 0 10px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.browser-auth-assist {
-  display: grid;
-  gap: 6px;
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
-  padding: 8px;
-}
-
-.browser-auth-assist[hidden] {
-  display: none;
-}
-
-.browser-auth-assist strong,
-.browser-auth-assist small {
+/* custom: Auth-Assist-Inhalt in der Kit-Callout — Titel und Hinweiszeilen
+   werden gekürzt, damit lange Origins/Realms die Tab-Leiste nicht sprengen. */
+[data-browser-auth-assist] strong,
+[data-browser-auth-assist] small {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -75,32 +64,9 @@
   white-space: nowrap;
 }
 
-.browser-auth-assist strong {
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.browser-auth-assist small {
+[data-browser-auth-assist] small {
   color: var(--muted);
-  font-size: 11px;
   margin-top: 3px;
-}
-
-.browser-auth-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.browser-kicker {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-bottom: 2px;
 }
 
 .browser-muted {
@@ -114,103 +80,37 @@
 }
 
 .browser-session-list {
-  display: flex;
-  align-items: end;
-  gap: 6px;
+  flex: 1 1 auto;
   min-width: 0;
-  flex: 1;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
-.browser-session-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: min(220px, 30vw);
-  min-height: 30px;
-  padding: 0 9px;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  text-align: left;
-}
-
-.browser-session-item strong,
-.browser-command-row strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.browser-session-item span,
-.browser-command-row span {
-  color: var(--muted);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.browser-session-item span:not(.browser-pill) {
-  display: none;
-}
-
-.browser-session-item[aria-current="true"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  border-bottom-color: color-mix(in srgb, var(--accent) 20%, var(--surface));
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
-}
-
-.browser-pill {
-  flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 10px;
-  padding: 2px 7px;
-}
-
-.browser-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.browser-mode-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.browser-viewport {
-  width: auto;
-  min-width: 108px;
-}
-
-.browser-tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 120px;
+/* custom: Browser-Tabs kürzen lange Seitentitel — Kit-Tabs tragen feste,
+   kurze View-Namen und haben deshalb keine Breitenbegrenzung. */
+.browser-tab {
+  justify-content: space-between;
+  gap: 4px;
   max-width: 220px;
-  padding: 4px 6px;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
 }
 
-.browser-tab-item[aria-current="true"] {
-  border-bottom-color: var(--ctox-accent, #2563eb);
+.browser-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* custom: Download-Leiste — horizontale, scrollbare Liste freizugebender
+   Dateien mit Aktionen je Eintrag. */
 .browser-download-strip {
   display: flex;
   gap: 12px;
   padding: 6px 10px;
   overflow-x: auto;
-  font-size: 12px;
-  border-top: 1px solid var(--ctox-border, #d1d5db);
+  border-top: 1px solid var(--hairline);
+}
+
+.browser-download-strip[hidden] {
+  display: none;
 }
 
 .browser-download-item {
@@ -218,35 +118,7 @@
   align-items: center;
   gap: 6px;
   white-space: nowrap;
-}
-
-.browser-actions button[data-browser-start] {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-  background: color-mix(in srgb, var(--accent) 24%, var(--surface-2));
-  font-weight: 800;
-}
-
-.browser-dev-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  border-bottom: 1px solid var(--line);
-  padding: 6px 8px;
-  background: var(--surface);
-}
-
-.browser-dev-actions[hidden] {
-  display: none;
-}
-
-.browser-notice {
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
-  color: var(--text);
   font-size: 12px;
-  line-height: 1.4;
-  padding: 8px;
 }
 
 .browser-workbench {
@@ -256,39 +128,37 @@
 }
 
 .browser-toolbar {
-  min-height: 40px;
-  border-bottom: 1px solid var(--line);
-  padding: 6px 8px;
-  background: var(--surface);
+  /* Optik kommt von .ctox-toolbar; die Klasse bleibt als Layout-Hook für
+     die Container-Queries unten. */
 }
 
+/* custom: Adresszeilen-Layout — Navigationsgruppe plus wachsende
+   URL-Eingabe; die Optik der Leiste selbst kommt von .ctox-toolbar. */
 .browser-nav-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
 }
 
 .browser-address-form {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) auto;
   gap: 6px;
-  flex: 1;
-}
-
-.browser-address-form input {
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 32px;
 }
 
+/* custom: Statusleiste unter der Adresszeile — Kit-Badge plus gekürzter
+   Seitentitel; eine solche durchgehende Statuszeile hat das Kit nicht. */
 .browser-status-strip {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   min-height: 28px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline);
   background: var(--surface-2);
-  padding: 0 8px;
+  padding: 2px 8px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -300,45 +170,14 @@
   white-space: nowrap;
 }
 
-.browser-status-chip {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-}
-
-.browser-status-chip[data-state="active"],
-.browser-status-chip[data-state="running"],
-.browser-status-chip[data-state="capturing"],
-.browser-status-chip[data-state="ready"],
-.browser-status-chip[data-state="synthetic"] {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
-  color: var(--success);
-}
-
-.browser-status-chip[data-state="starting"],
-.browser-status-chip[data-state="loading"],
-.browser-status-chip[data-state="waiting"] {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
-  color: var(--warning);
-}
-
-.browser-status-chip[data-state="failed"],
-.browser-status-chip[data-state="error"] {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
-  color: var(--danger);
-}
-
+/* custom: Remote-Viewport — der Canvas zeigt den gestreamten Browser-Inhalt
+   und ist die zentrale Spezialansicht dieser App. */
 .browser-frame-shell {
   position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
   place-items: center;
-  padding: 0;
   background: var(--bg);
 }
 
@@ -347,10 +186,8 @@
   height: 100%;
   aspect-ratio: 16 / 9;
   border: 0;
-  border-radius: 0;
   object-fit: contain;
   background: #fff;
-  box-shadow: none;
 }
 
 .browser-frame-shell canvas:focus-visible {
@@ -358,13 +195,11 @@
   outline-offset: 3px;
 }
 
+/* custom: Der Kit-Leerzustand (.ctox-empty) liegt als nicht-interaktives
+   Overlay über dem Canvas, bis der erste Frame eintrifft. */
 .browser-empty {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  font-size: 14px;
   pointer-events: none;
 }
 
@@ -372,12 +207,14 @@
   display: none;
 }
 
+/* custom: versteckte Diagnose-Ansicht (Command-/Handoff-Verlauf, nur über
+   den aria-hidden Diagnose-Block erreichbar). */
 .browser-command-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 8px;
   padding: 7px 8px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline);
   font-size: 12px;
 }
 
@@ -385,55 +222,28 @@
   border-bottom: 0;
 }
 
-@container business-app-window (max-width: 980px) {
-  .browser-module {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
+.browser-command-row strong,
+.browser-command-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
+.browser-command-row span {
+  color: var(--muted);
+}
+
+@container business-app-window (max-width: 980px) {
   .browser-tabbar {
     flex-wrap: wrap;
-  }
-
-  .browser-actions {
-    flex-wrap: wrap;
-    align-self: center;
-  }
-
-  .browser-address-form {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .browser-session-item {
-    width: min(220px, 60vw);
   }
 }
 
 @container business-app-window (max-width: 640px) {
-  .browser-chrome {
-    grid-template-rows: auto auto auto;
-  }
-
   .browser-tabbar,
   .browser-toolbar {
     align-items: stretch;
-  }
-
-  .browser-session-list {
-    overflow-x: auto;
-    scrollbar-width: thin;
-  }
-
-  .browser-actions,
-  .browser-nav-actions {
-    flex: 0 0 auto;
-  }
-
-  .browser-session-item {
-    width: min(190px, 74vw);
-  }
-
-  .browser-address-form {
-    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .browser-status-strip {

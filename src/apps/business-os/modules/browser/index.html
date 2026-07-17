@@ -1,8 +1,8 @@
 <main class="browser-module" data-browser-root>
   <section class="browser-chrome" aria-label="Browser Steuerung">
     <div class="browser-tabbar">
-      <div class="browser-auth-assist" data-browser-auth-assist hidden></div>
-      <div class="browser-session-list" data-browser-session-list aria-label="Browser Fenster"></div>
+      <div class="ctox-callout" data-browser-auth-assist hidden></div>
+      <div class="browser-session-list ctox-pane-tabs" data-browser-session-list aria-label="Browser Fenster"></div>
       <button type="button" class="ctox-icon-button browser-new-window" data-browser-start aria-label="Neues Browserfenster" title="Neues Browserfenster">+</button>
     </div>
     <div hidden aria-hidden="true">
@@ -20,8 +20,8 @@
       <button type="button" data-browser-send-to-ctox></button>
       <button type="button" data-browser-stop></button>
     </div>
-    <div class="browser-notice" data-browser-notice hidden></div>
-    <header class="browser-toolbar">
+    <div class="ctox-callout" data-browser-notice hidden></div>
+    <header class="browser-toolbar ctox-toolbar">
       <div class="browser-nav-actions" aria-label="Navigation">
         <button type="button" class="ctox-icon-button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
         <button type="button" class="ctox-icon-button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
@@ -29,11 +29,11 @@
       </div>
       <form class="browser-address-form" data-browser-address-form>
         <input class="ctox-input" data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
-        <button type="submit" class="ctox-button" data-browser-go data-t="go">Los</button>
+        <button type="submit" class="ctox-button is-primary" data-browser-go data-t="go">Los</button>
       </form>
     </header>
     <div class="browser-status-strip" aria-label="Browser Status">
-      <span class="browser-status-chip" data-browser-status-chip data-t="statusDisconnected">Nicht verbunden</span>
+      <span class="ctox-badge" data-browser-status-chip data-t="statusDisconnected">Nicht verbunden</span>
       <span data-browser-status-title data-t="noWindowOpen">Kein Browser-Fenster geoeffnet</span>
     </div>
     <div class="browser-download-strip" data-browser-downloads hidden></div>
@@ -43,7 +43,7 @@
   <section class="browser-workbench" aria-label="Browser Inhalt">
     <div class="browser-frame-shell" data-browser-frame-shell>
       <canvas data-browser-canvas width="1280" height="720" tabindex="0" aria-label="Remote browser frame"></canvas>
-      <div class="browser-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
+      <div class="browser-empty ctox-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
     </div>
   </section>
 

@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const STYLE_BUILD = '20260715-browser-working-ui-v82';
+const STYLE_BUILD = '20260717-browser-kit-migration-v83';
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
@@ -1082,9 +1082,9 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
     .filter((tab) => tab.session_id === activeSession?.id && tab.status !== 'closed')
     .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0));
   const tabMarkup = activeTabs.map((tab) => `
-    <span class="browser-tab-item" data-browser-tab-id="${escapeHtml(tab.id)}" aria-current="${tab.id === activeSession?.current_tab_id ? 'true' : 'false'}">
-      <span>${escapeHtml(tab.title || tab.url || 'Tab')}</span>
-      <button type="button" class="ctox-icon-button" data-browser-tab-close aria-label="Tab schließen">×</button>
+    <span class="ctox-pane-tab browser-tab" data-browser-tab-id="${escapeHtml(tab.id)}" aria-selected="${tab.id === activeSession?.current_tab_id ? 'true' : 'false'}">
+      <span class="browser-tab-title">${escapeHtml(tab.title || tab.url || 'Tab')}</span>
+      <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-browser-tab-close aria-label="Tab schließen">×</button>
     </span>
   `).join('');
   refs.sessionList.innerHTML = tabMarkup;
@@ -1146,11 +1146,11 @@ function renderAuthAssist(refs, session) {
     refs.authAssist.hidden = false;
     refs.authAssist.innerHTML = `
       <div>
-        <span class="browser-kicker">Website-Berechtigung</span>
+        <span class="ctox-pane-kicker">Website-Berechtigung</span>
         <strong>${escapeHtml(titleCase(permission.kind || 'permission'))}</strong>
         <small>${escapeHtml(permission.origin || '')}</small>
       </div>
-      <div class="browser-auth-actions">
+      <div class="ctox-pane-tools">
         <button type="button" class="ctox-button" data-browser-permission-response="dismiss">Blockieren</button>
         <button type="button" class="ctox-button" data-browser-permission-response="accept">Einmal erlauben</button>
       </div>`;
@@ -1161,11 +1161,11 @@ function renderAuthAssist(refs, session) {
     refs.authAssist.hidden = false;
     refs.authAssist.innerHTML = `
       <div>
-        <span class="browser-kicker">HTTP ${escapeHtml(httpAuth.scheme || 'Basic')} Authentifizierung</span>
+        <span class="ctox-pane-kicker">HTTP ${escapeHtml(httpAuth.scheme || 'Basic')} Authentifizierung</span>
         <strong>${escapeHtml(httpAuth.realm || httpAuth.origin || 'Geschützter Bereich')}</strong>
         <small>Zugangsdaten werden ausschließlich über eine CTOX Secret-Referenz eingesetzt.</small>
       </div>
-      <div class="browser-auth-actions">
+      <div class="ctox-pane-tools">
         <button type="button" class="ctox-button" data-browser-http-auth-response="dismiss">Abbrechen</button>
         <button type="button" class="ctox-button" data-browser-http-auth-response="accept">Secret verwenden</button>
       </div>`;
@@ -1176,11 +1176,11 @@ function renderAuthAssist(refs, session) {
     refs.authAssist.hidden = false;
     refs.authAssist.innerHTML = `
       <div>
-        <span class="browser-kicker">Passkey ${escapeHtml(webAuthn.type === 'create' ? 'registrieren' : 'verwenden')}</span>
+        <span class="ctox-pane-kicker">Passkey ${escapeHtml(webAuthn.type === 'create' ? 'registrieren' : 'verwenden')}</span>
         <strong>${escapeHtml(webAuthn.rp_id || 'Unbekannte Website')}</strong>
         <small>CTOX verwendet den verschlüsselten serverseitigen Passkey erst nach Ihrer Bestätigung.</small>
       </div>
-      <div class="browser-auth-actions">
+      <div class="ctox-pane-tools">
         <button type="button" class="ctox-button" data-browser-webauthn-response="dismiss">Ablehnen</button>
         <button type="button" class="ctox-button" data-browser-webauthn-response="accept">Bestätigen</button>
       </div>`;
@@ -1191,10 +1191,10 @@ function renderAuthAssist(refs, session) {
     refs.authAssist.hidden = false;
     refs.authAssist.innerHTML = `
       <div>
-        <span class="browser-kicker">${escapeHtml(titleCase(dialog.type || 'dialog'))}</span>
+        <span class="ctox-pane-kicker">${escapeHtml(titleCase(dialog.type || 'dialog'))}</span>
         <strong>${escapeHtml(dialog.message || 'Die Webseite wartet auf eine Entscheidung.')}</strong>
       </div>
-      <div class="browser-auth-actions">
+      <div class="ctox-pane-tools">
         <button type="button" class="ctox-button" data-browser-dialog-response="dismiss">Abbrechen</button>
         <button type="button" class="ctox-button" data-browser-dialog-response="accept">Bestätigen</button>
       </div>`;
@@ -1215,13 +1215,13 @@ function renderAuthAssist(refs, session) {
   const domains = Array.isArray(payload.allowed_domains) ? payload.allowed_domains.join(', ') : '';
   refs.authAssist.innerHTML = `
     <div>
-      <span class="browser-kicker">Web Stack Anmeldung</span>
+      <span class="ctox-pane-kicker">Web Stack Anmeldung</span>
       <strong>${escapeHtml(payload.source_id || 'Anmeldung erforderlich')}</strong>
       <small>${escapeHtml(domains || payload.target_url || '')}</small>
       ${fillStatus ? `<small>${escapeHtml(authAssistStatusLabel(fillStatus, 'Zugangsdaten werden eingesetzt'))}</small>` : ''}
       ${extractStatus ? `<small>${escapeHtml(authAssistStatusLabel(extractStatus, 'Seitenauswertung laeuft'))}</small>` : ''}
     </div>
-    <div class="browser-auth-actions">
+    <div class="ctox-pane-tools">
       <button type="button" class="ctox-button" data-browser-credential-fill ${canFill ? '' : 'disabled'}>
         Zugangsdaten einsetzen
       </button>
@@ -1251,6 +1251,9 @@ function renderStatus(refs, session, tab, frame, command) {
   if (refs.statusChip) {
     refs.statusChip.textContent = session ? browserStatusLabel(session) : t('statusDisconnected', 'Nicht verbunden');
     refs.statusChip.dataset.state = state;
+    refs.statusChip.classList.toggle('is-success', state === 'ready');
+    refs.statusChip.classList.toggle('is-warning', state === 'starting' || state === 'waiting');
+    refs.statusChip.classList.toggle('is-danger', state === 'error');
   }
   const url = tab?.url || session?.current_url || '';
   if (refs.statusTitle) {
@@ -1274,9 +1277,9 @@ function renderDownloads(refs, session) {
       <strong>${escapeHtml(download.filename || 'Download')}</strong>
       · ${escapeHtml(download.status || 'Unbekannt')}
       · ${escapeHtml(formatBytes(download.size_bytes || 0))}
-      <button type="button" class="ctox-button" data-browser-download-action="release" data-browser-download-id="${escapeHtml(download.id || '')}" ${download.status === 'clean' ? '' : 'disabled'}>Freigeben</button>
-      <button type="button" class="ctox-button" data-browser-download-action="rescan" data-browser-download-id="${escapeHtml(download.id || '')}" ${['infected', 'discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Neu prüfen</button>
-      <button type="button" class="ctox-button" data-browser-download-action="discard" data-browser-download-id="${escapeHtml(download.id || '')}" ${['discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Verwerfen</button>
+      <button type="button" class="ctox-button ctox-button--sm" data-browser-download-action="release" data-browser-download-id="${escapeHtml(download.id || '')}" ${download.status === 'clean' ? '' : 'disabled'}>Freigeben</button>
+      <button type="button" class="ctox-button ctox-button--sm" data-browser-download-action="rescan" data-browser-download-id="${escapeHtml(download.id || '')}" ${['infected', 'discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Neu prüfen</button>
+      <button type="button" class="ctox-button ctox-button--sm" data-browser-download-action="discard" data-browser-download-id="${escapeHtml(download.id || '')}" ${['discarded', 'released'].includes(download.status) ? 'disabled' : ''}>Verwerfen</button>
     </span>
   `).join('');
 }
