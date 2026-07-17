@@ -6,12 +6,15 @@ use super::store::{
     self, BusinessCommand, BusinessOsSession, BusinessOsSessionUser, CommandOrigin,
 };
 use anyhow::Context;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use uuid::Uuid;
@@ -271,10 +274,20 @@ pub(super) fn may_accept_peer_document_write(
     collection: &str,
     document: &Value,
 ) -> bool {
-    let Some((user_id, _role)) = store::verify_capability_actor(root, token) else {
+    let Some((user_id, role)) = store::verify_capability_actor(root, token) else {
         return false;
     };
     if !is_browser_collection(collection) {
+        if let Some(owner_field) = per_user_owner_field(collection) {
+            return per_user_document_write_allowed(
+                root,
+                collection,
+                owner_field,
+                document,
+                &user_id,
+                &role,
+            );
+        }
         return true;
     }
     if collection != "browser_input_events" {
@@ -299,6 +312,190 @@ fn is_browser_collection(collection: &str) -> bool {
         collection,
         "browser_sessions" | "browser_tabs" | "browser_frames" | "browser_input_events"
     )
+}
+
+/// Personal-by-design collections whose replicated documents belong to exactly
+/// one user, mapped to the top-level field that names the owning user.
+///
+/// Peer writes into these collections must carry the verified token user in
+/// the owner field (no authorship forging) and may not rewrite or tombstone a
+/// live record that a different user currently owns (no takeover by
+/// re-stamping the owner field). Chef/Admin roles keep their override.
+///
+/// Deliberately NOT listed: collaboratively edited business records
+/// (customers/CRM, documents, spreadsheets, outbound campaigns, support
+/// conversations, ...) where cross-user edits are a legitimate workflow, and
+/// collections whose owner-ish field is not a Business OS user id (e.g.
+/// `desktop_windows.owner_id` is a window slug, `calendar_calendars.
+/// owner_user_id` is a hardcoded placeholder).
+const PER_USER_OWNED_COLLECTIONS: &[(&str, &str)] = &[
+    // shared/business-chat.js — the personal CTOX chat dock; the browser
+    // stamps owner_user_id from the authenticated session user on every write.
+    ("business_chats", "owner_user_id"),
+    // modules/support — internal notes authored via support.note.create; the
+    // author is the acting user and peers never legitimately rewrite foreign
+    // notes through replication.
+    ("support_notes", "author_id"),
+    // modules/threads — per-user projections owned by the native threads
+    // engine. Collection-level peer writes are already denied outright by
+    // `may_accept_peer_write`; these entries are defense in depth in case the
+    // collection gate is ever loosened.
+    ("user_notifications", "user_id"),
+    ("user_thread_states", "user_id"),
+];
+
+fn per_user_owner_field(collection: &str) -> Option<&'static str> {
+    PER_USER_OWNED_COLLECTIONS
+        .iter()
+        .find(|(name, _)| *name == collection)
+        .map(|(_, owner_field)| *owner_field)
+}
+
+fn per_user_document_write_allowed(
+    root: &Path,
+    collection: &str,
+    owner_field: &str,
+    document: &Value,
+    user_id: &str,
+    role: &str,
+) -> bool {
+    // Chef/Admin keep their override; scoping admin writes is a separate
+    // concern.
+    if matches!(
+        super::policy::parse_role(role),
+        BusinessOsRole::Chef | BusinessOsRole::Admin
+    ) {
+        return true;
+    }
+    // The incoming document (including tombstones) must be stamped with the
+    // verified token user. Anything else is authorship forging.
+    if value_string(document, owner_field) != user_id {
+        return false;
+    }
+    let record_id = value_string(document, "id");
+    if record_id.is_empty() {
+        return false;
+    }
+    match current_rxdb_document_owner(root, collection, owner_field, &record_id) {
+        // Store, collection table, or live row does not exist yet: nothing to
+        // take over, the incoming-document binding above is the only
+        // enforceable rule.
+        Ok(None) => true,
+        // Live rows without an owner stamp are legacy/unowned records; the
+        // incoming write claims them for the verified user (mirrors the
+        // browser-side `isOwnedChat` semantics).
+        Ok(Some(current_owner)) => current_owner.is_empty() || current_owner == user_id,
+        // Malformed rows or store errors fail closed for owner-bound
+        // collections.
+        Err(_) => false,
+    }
+}
+
+/// Native RxDB SQLite database name; mirrors `RXDB_SQLITE_DATABASE_NAME` in
+/// `rxdb_peer.rs` and the table naming scheme in
+/// `src/core/rxdb/src/storage/sqlite/sql.rs::table_name`
+/// (`{database}__{collection}__v{schema_version}`).
+const RXDB_OWNERSHIP_DATABASE_NAME: &str = "ctox_business_os";
+
+fn rxdb_ownership_connections() -> &'static Mutex<BTreeMap<PathBuf, Connection>> {
+    static CONNECTIONS: OnceLock<Mutex<BTreeMap<PathBuf, Connection>>> = OnceLock::new();
+    CONNECTIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Reads the current owner field of the live master document `record_id` in
+/// `collection` from the native RxDB SQLite store.
+///
+/// Returns `Ok(None)` when the store file, the collection table, or a live
+/// (non-tombstoned) row does not exist. Read-only connections are cached per
+/// store path because the peer-write hook runs per incoming document.
+fn current_rxdb_document_owner(
+    root: &Path,
+    collection: &str,
+    owner_field: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let path = store::rxdb_store_path(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut connections = rxdb_ownership_connections()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("rxdb ownership connection lock is poisoned"))?;
+    if !connections.contains_key(&path) {
+        let connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("open native RxDB store {} read-only", path.display()))?;
+        let _ = connection.busy_timeout(Duration::from_secs(5));
+        connections.insert(path.clone(), connection);
+    }
+    let connection = connections
+        .get(&path)
+        .expect("rxdb ownership connection was just inserted");
+    let Some(table) = latest_rxdb_collection_table(connection, collection)? else {
+        return Ok(None);
+    };
+    let row: Option<(i64, String)> = connection
+        .query_row(
+            &format!(
+                "SELECT deleted, data FROM \"{}\" WHERE id = ?1",
+                table.replace('"', "\"\"")
+            ),
+            params![record_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .with_context(|| format!("read RxDB row {record_id} from {table}"))?;
+    let Some((deleted, data)) = row else {
+        return Ok(None);
+    };
+    if deleted != 0 {
+        return Ok(None);
+    }
+    let document: Value = serde_json::from_str(&data)
+        .with_context(|| format!("malformed RxDB document row {record_id} in {table}"))?;
+    Ok(Some(value_string(&document, owner_field)))
+}
+
+/// Resolves the highest schema-version table for `collection`
+/// (`ctox_business_os__{collection}__v{N}`). Schema migrations leave the
+/// newest version table as the replication target.
+fn latest_rxdb_collection_table(
+    connection: &Connection,
+    collection: &str,
+) -> anyhow::Result<Option<String>> {
+    let prefix: String = format!("{RXDB_OWNERSHIP_DATABASE_NAME}__{collection}__v")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1")?;
+    let names = statement
+        .query_map(params![format!("{prefix}%")], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut best: Option<(i64, String)> = None;
+    for name in names {
+        let Some(suffix) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(version) = suffix.parse::<i64>() else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(latest, _)| version > *latest) {
+            best = Some((version, name));
+        }
+    }
+    Ok(best.map(|(_, name)| name))
 }
 
 fn browser_document_visible_to_actor(
@@ -5227,6 +5424,307 @@ mod tests {
             &alice_session,
         ));
 
+        Ok(())
+    }
+
+    #[test]
+    fn peer_document_writes_bind_personal_collections_to_token_user() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let now = now_ms();
+        let (admin_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "admin",
+            "Admin",
+            "admin",
+            now,
+        )?;
+        let (chef_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "chef",
+            "Chef",
+            "chef",
+            now,
+        )?;
+        let (alice_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "alice",
+            "Alice",
+            "user",
+            now,
+        )?;
+
+        // No RxDB store exists in this root: the incoming-document binding is
+        // the only enforceable rule (missing infra falls through).
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-own", "owner_user_id": "alice", "title": "Meins" }),
+        ));
+        // Foreign owner stamp on create/update is authorship forging.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-forged", "owner_user_id": "bob", "title": "Fremd" }),
+        ));
+        // Missing owner stamp is denied for owner-bound collections.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-unowned", "title": "Ohne Owner" }),
+        ));
+        // A record id is required for owner-bound collections.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "owner_user_id": "alice", "title": "Ohne Id" }),
+        ));
+        // Tombstones follow the same binding.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-own", "owner_user_id": "alice", "_deleted": true }),
+        ));
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-forged", "owner_user_id": "bob", "_deleted": true }),
+        ));
+        // support_notes bind the author field.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "support_notes",
+            &json!({ "id": "note-own", "author_id": "alice", "body": "ok" }),
+        ));
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "support_notes",
+            &json!({ "id": "note-forged", "author_id": "bob", "body": "forged" }),
+        ));
+        // Thread-adjacent personal projections stay bound even if the
+        // collection-level gate is ever loosened.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "user_notifications",
+            &json!({ "id": "n-own", "user_id": "alice" }),
+        ));
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "user_notifications",
+            &json!({ "id": "n-forged", "user_id": "bob" }),
+        ));
+        // Chef and Admin keep their override.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &admin_token,
+            "business_chats",
+            &json!({ "id": "chat-admin", "owner_user_id": "bob" }),
+        ));
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &chef_token,
+            "business_chats",
+            &json!({ "id": "chat-chef", "owner_user_id": "bob" }),
+        ));
+        // Unmapped, non-browser collections keep the previous behavior.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "notes",
+            &json!({ "id": "note-1", "title": "frei" }),
+        ));
+        // An invalid token still fails closed.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            "not-a-token",
+            "business_chats",
+            &json!({ "id": "chat-own", "owner_user_id": "alice" }),
+        ));
+        Ok(())
+    }
+
+    fn create_rxdb_ownership_table(conn: &Connection, table: &str) -> anyhow::Result<()> {
+        // Mirrors src/core/rxdb/src/storage/sqlite/sql.rs::ensure_collection_table.
+        conn.execute_batch(&format!(
+            r#"
+            CREATE TABLE IF NOT EXISTS "{table}"(
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#
+        ))?;
+        Ok(())
+    }
+
+    fn insert_rxdb_ownership_row(
+        conn: &Connection,
+        table: &str,
+        id: &str,
+        deleted: i64,
+        data: &str,
+    ) -> anyhow::Result<()> {
+        conn.execute(
+            &format!(
+                "INSERT INTO \"{table}\" (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-test', ?2, 1.0, ?3)"
+            ),
+            params![id, deleted, data],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn peer_document_writes_deny_takeover_of_foreign_records() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let now = now_ms();
+        let (admin_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "admin",
+            "Admin",
+            "admin",
+            now,
+        )?;
+        let (alice_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "alice",
+            "Alice",
+            "user",
+            now,
+        )?;
+
+        let store_path = store::rxdb_store_path(temp.path());
+        fs::create_dir_all(store_path.parent().context("store parent")?)?;
+        let conn = Connection::open(&store_path)?;
+        let chats_v0 = "ctox_business_os__business_chats__v0";
+        create_rxdb_ownership_table(&conn, chats_v0)?;
+        insert_rxdb_ownership_row(
+            &conn,
+            chats_v0,
+            "chat-bob",
+            0,
+            r#"{"id":"chat-bob","owner_user_id":"bob","title":"Bobs Chat"}"#,
+        )?;
+        insert_rxdb_ownership_row(
+            &conn,
+            chats_v0,
+            "chat-alice",
+            0,
+            r#"{"id":"chat-alice","owner_user_id":"alice","title":"Alices Chat"}"#,
+        )?;
+        insert_rxdb_ownership_row(
+            &conn,
+            chats_v0,
+            "chat-legacy",
+            0,
+            r#"{"id":"chat-legacy","title":"Ohne Owner"}"#,
+        )?;
+        insert_rxdb_ownership_row(
+            &conn,
+            chats_v0,
+            "chat-tombstoned",
+            1,
+            r#"{"id":"chat-tombstoned","owner_user_id":"bob","_deleted":true}"#,
+        )?;
+        insert_rxdb_ownership_row(&conn, chats_v0, "chat-broken", 0, "not-json{")?;
+        drop(conn);
+
+        // Takeover attempt: the incoming doc is re-stamped owner=alice, but
+        // the live master row belongs to bob.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-bob", "owner_user_id": "alice", "title": "Gekapert" }),
+        ));
+        // Tombstone takeover is denied the same way.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-bob", "owner_user_id": "alice", "_deleted": true }),
+        ));
+        // Updating an own live record stays accepted.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-alice", "owner_user_id": "alice", "title": "Update" }),
+        ));
+        // Legacy rows without an owner stamp are claimable.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-legacy", "owner_user_id": "alice", "title": "Übernommen" }),
+        ));
+        // A tombstoned master row no longer blocks re-creation.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-tombstoned", "owner_user_id": "alice", "title": "Neu" }),
+        ));
+        // Malformed master rows fail closed.
+        assert!(!may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-broken", "owner_user_id": "alice" }),
+        ));
+        // New record ids fall through to the incoming binding.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-new", "owner_user_id": "alice" }),
+        ));
+        // Admin keeps the override even against foreign live rows.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &admin_token,
+            "business_chats",
+            &json!({ "id": "chat-bob", "owner_user_id": "admin" }),
+        ));
+        // A collection without its table in the store falls through to the
+        // incoming binding.
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "support_notes",
+            &json!({ "id": "note-new", "author_id": "alice", "body": "ok" }),
+        ));
+
+        // Schema migrations leave a higher-version table as the replication
+        // target; the ownership lookup must follow it.
+        let conn = Connection::open(&store_path)?;
+        let chats_v1 = "ctox_business_os__business_chats__v1";
+        create_rxdb_ownership_table(&conn, chats_v1)?;
+        insert_rxdb_ownership_row(
+            &conn,
+            chats_v1,
+            "chat-bob",
+            0,
+            r#"{"id":"chat-bob","owner_user_id":"alice","title":"Migriert zu Alice"}"#,
+        )?;
+        drop(conn);
+        assert!(may_accept_peer_document_write(
+            temp.path(),
+            &alice_token,
+            "business_chats",
+            &json!({ "id": "chat-bob", "owner_user_id": "alice", "title": "Jetzt meins" }),
+        ));
         Ok(())
     }
 
