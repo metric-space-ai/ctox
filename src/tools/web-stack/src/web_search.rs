@@ -959,6 +959,19 @@ fn evidence_doc_is_admitted_for_read(doc: &EvidenceDoc) -> bool {
     doc.evidence_eligible && evidence_doc_has_meaningful_content(doc)
 }
 
+fn evidence_doc_has_immutable_response(doc: &EvidenceDoc) -> bool {
+    let Some(body) = doc.response_body.as_deref() else {
+        return false;
+    };
+    let Some(receipt) = doc.response_receipt.as_ref() else {
+        return false;
+    };
+    let body_hash = snapshot_hash(body);
+    doc.snapshot_hash.as_deref() == Some(body_hash.as_str())
+        && receipt.sha256.as_deref() == Some(body_hash.as_str())
+        && receipt.byte_count == body.len()
+}
+
 fn meaningful_extracted_page_text(text: &str) -> bool {
     let normalized = normalize_ws(text);
     !normalized.is_empty()
@@ -1854,7 +1867,9 @@ impl<'a> WebSearchSession<'a> {
         // Never let a duplicated cache envelope promote a document whose own
         // admission bit is false. Older cache entries may have recorded
         // transport success without extracted content.
-        doc.evidence_eligible = doc.evidence_eligible && entry.evidence_eligible;
+        doc.evidence_eligible = doc.evidence_eligible
+            && entry.evidence_eligible
+            && evidence_doc_has_immutable_response(&doc);
         Some(doc)
     }
 
@@ -3060,6 +3075,7 @@ fn rebuild_cached_evidence_doc(
     let find_results =
         build_find_in_page_results(query, &page_text, &cached.page_sections, &excerpts);
     let evidence_eligible = cached.evidence_eligible
+        && evidence_doc_has_immutable_response(cached)
         && evidence_doc_has_meaningful_content(&EvidenceDoc {
             page_text: page_text.clone(),
             ..cached.clone()
@@ -9778,6 +9794,115 @@ mod tests {
             !(evidence_doc_has_meaningful_content(&doc)
                 && evidence_content_kind(&doc) == "page_content")
         );
+    }
+
+    #[test]
+    fn legacy_page_cache_evidence_requires_immutable_body_receipt_and_matching_sha() {
+        let config = test_config(ProviderKind::Mock);
+        let hit = SearchHit {
+            title: "Cached source".to_string(),
+            url: "https://example.com/cached-source".to_string(),
+            snippet: "Discovery snippet".to_string(),
+            source: "mock".to_string(),
+            rank: 1,
+        };
+        let body =
+            b"Persisted source content with enough terms to count as meaningful evidence.".to_vec();
+        let fetched = FetchedPageContent {
+            body: body.clone(),
+            content_type: Some("text/plain".to_string()),
+            final_url: hit.url.clone(),
+            http_status: 200,
+        };
+        let body_hash = snapshot_hash(&body);
+        let receipt = response_receipt(&hit, &fetched, None);
+        let mut mismatched_receipt = receipt.clone();
+        mismatched_receipt.sha256 = Some(snapshot_hash(b"different body"));
+        let base_doc = || EvidenceDoc {
+            url: hit.url.clone(),
+            canonical_url: hit.url.clone(),
+            title: hit.title.clone(),
+            summary: "Cached source summary".to_string(),
+            verification_status: "verified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some(body_hash.clone()),
+            source_tier: Some("primary".to_string()),
+            evidence_eligible: true,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: vec!["Persisted source excerpt".to_string()],
+            page_text: String::from_utf8(body.clone()).expect("fixture text"),
+            find_results: Vec::new(),
+            raw_html: None,
+            response_body: Some(body.clone()),
+            response_receipt: Some(receipt.clone()),
+        };
+        let cases = [
+            (
+                "missing_body",
+                None,
+                Some(receipt.clone()),
+                Some(body_hash.clone()),
+            ),
+            (
+                "missing_receipt",
+                Some(body.clone()),
+                None,
+                Some(body_hash.clone()),
+            ),
+            (
+                "mismatched_receipt_sha",
+                Some(body.clone()),
+                Some(mismatched_receipt),
+                Some(body_hash.clone()),
+            ),
+            (
+                "mismatched_snapshot_sha",
+                Some(body.clone()),
+                Some(receipt.clone()),
+                Some(snapshot_hash(b"different body")),
+            ),
+        ];
+
+        let root = unique_test_root("legacy_page_cache");
+        let mut session = WebSearchSession::new(&root, &config).expect("session");
+        for (label, response_body, response_receipt, snapshot_hash) in cases {
+            let mut doc = base_doc();
+            doc.snapshot_hash = snapshot_hash;
+            doc.response_body = response_body;
+            doc.response_receipt = response_receipt;
+            let key = normalize_url_cache_key(&hit.url);
+            session.page_cache.entries.insert(
+                key,
+                PageCacheEntry {
+                    created_at_epoch: unix_ts(),
+                    original_url: hit.url.clone(),
+                    final_url: hit.url.clone(),
+                    content_type: Some("text/plain".to_string()),
+                    canonical_url: hit.url.clone(),
+                    verification_status: "verified".to_string(),
+                    checked_at: 1,
+                    http_status: Some(200),
+                    snapshot_hash: Some(body_hash.clone()),
+                    source_tier: Some("primary".to_string()),
+                    evidence_eligible: true,
+                    doc,
+                },
+            );
+
+            let loaded = session
+                .load_cached_page_doc(&hit.url)
+                .expect("legacy cache entry");
+            assert!(!loaded.evidence_eligible, "{label} must fail closed");
+            let rebuilt = rebuild_cached_evidence_doc(&config, "source content", &hit, &loaded);
+            assert!(
+                !rebuilt.evidence_eligible,
+                "{label} rebuild must fail closed"
+            );
+            assert!(!evidence_doc_is_admitted_for_read(&rebuilt));
+        }
     }
 
     #[test]

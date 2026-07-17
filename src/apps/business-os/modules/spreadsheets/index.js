@@ -10,6 +10,7 @@ const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
 const USER_IMPORT_KIND = 'user_import';
 const RESEARCH_GENERATED_KIND = 'research_generated';
+const UNRESOLVED_SOURCE_KIND = 'unresolved_source';
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -171,6 +172,7 @@ async function openSpreadsheetFile(state, input) {
   const validation = validateImportInput({ file });
   if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
   const ingestion = await resolveSpreadsheetIngestion(state, input);
+  assertSpreadsheetIngestionAllowed(ingestion);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
   await refreshSpreadsheets(state);
@@ -184,7 +186,6 @@ async function openSpreadsheetFile(state, input) {
     renderCenter(state);
     return existing;
   }
-  assertSpreadsheetIngestionAllowed(ingestion);
   await importSpreadsheetFile(state, file, [], ingestion);
   return selectedRecord(state);
 }
@@ -497,14 +498,20 @@ async function resolveSpreadsheetIngestion(state, input = {}) {
   const sourceFileId = String(input.sourceFileId || input.source_file_id || '').trim();
   if (sourceFileId) {
     const sourceFile = await readSpreadsheetSourceRecord(state.ctx, 'desktop_files', sourceFileId);
-    if (sourceFile) {
-      candidates.push(sourceFile);
-      const linkedCollection = String(sourceFile.linked_collection || '').trim();
-      const linkedRecordId = String(sourceFile.linked_record_id || '').trim();
-      if (linkedCollection && linkedRecordId && linkedCollection !== 'desktop_files') {
-        const linkedRecord = await readSpreadsheetSourceRecord(state.ctx, linkedCollection, linkedRecordId);
-        if (linkedRecord) candidates.push(linkedRecord);
-      }
+    if (!sourceFile) {
+      return {
+        ...normalizeSpreadsheetIngestion({ candidates }),
+        kind: UNRESOLVED_SOURCE_KIND,
+        valid: false,
+        message: `Spreadsheet source file "${sourceFileId}" could not be resolved.`,
+      };
+    }
+    candidates.push(sourceFile);
+    const linkedCollection = String(sourceFile.linked_collection || '').trim();
+    const linkedRecordId = String(sourceFile.linked_record_id || '').trim();
+    if (linkedCollection && linkedRecordId && linkedCollection !== 'desktop_files') {
+      const linkedRecord = await readSpreadsheetSourceRecord(state.ctx, linkedCollection, linkedRecordId);
+      if (linkedRecord) candidates.push(linkedRecord);
     }
   }
   return normalizeSpreadsheetIngestion({ candidates });
@@ -2019,6 +2026,7 @@ async function withTimeout(promise, ms, message) {
 
 export const __spreadsheetsTestHooks = {
   ensureSpreadsheetRuntimeReady,
+  openSpreadsheetFile,
   hasActiveListFilters,
   isActiveSpreadsheetRecord,
   normalizeSpreadsheetRecord,

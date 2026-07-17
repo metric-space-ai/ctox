@@ -117,6 +117,12 @@ the same regardless of which output mode you pick.
    receipts, not evidence. Library and decision-report mode may read only
    rows whose `evidence_eligible` field is `true`. Build and verify the catalog
    before drafting the actual library schema or report blueprint.
+   For a Business OS research command, copy the exact `Research Run ID` and
+   `Research Command ID` from the task into `research_run_id` and
+   `research_command_id` on every row created or updated in `source_catalog`,
+   `evidence_points`, `evaluation_matrix`, and semantic-graph tables. Never
+   substitute a previous run's IDs or omit them. Native completion hashes and
+   admits only the rows bound to that exact run/command pair.
 4. **Schema/blueprint inference**: only after the source set is solid,
    decide what columns the library row needs (or which report-type
    blueprint fits). The schema is shaped by what the sources actually
@@ -328,6 +334,11 @@ After persisting a candidate batch, read each new canonical source and update
 its verification fields before another phase consumes it. A batch is not
 complete while any candidate lacks an explicit `eligible` or `rejected`
 decision.
+
+Before claiming the Business OS task complete, re-read every output table and
+verify that all rows attributed to this run carry the exact immutable
+`research_run_id` and `research_command_id` from the command. Missing or mixed
+lineage is a failed run, not a partial success.
 
 Before closing discovery, run three independent reviews over the persisted
 receipts. They must be distinct, passing reviews, not three labels on one

@@ -1148,12 +1148,12 @@ function sourceReceiptLineage(source) {
     'receipt_url',
     'receipt_link',
     'snapshot_url',
-  ]) || canonicalUrl;
+  ]);
   const receiptId = firstString(row, ['source_receipt_id', 'evidence_receipt_id', 'receipt_id']);
   const evidenceId = firstString(row, ['evidence_id']);
   const valid = Boolean(sourceIdValue)
     && Boolean(canonicalUrl)
-    && Boolean(receiptUrl)
+    && Boolean(receiptUrl || receiptId)
     && Boolean(snapshotId)
     && /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
   return {
@@ -1803,6 +1803,8 @@ async function dispatchGraphAiAction(action) {
 }
 
 async function dispatchTargetedGraphResearch(task) {
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const researchRunId = `research_run_${crypto.randomUUID()}`;
   const selectedNode = state.graphProjection?.nodes?.find((node) => node.id === state.selectedGraphNodeId) || null;
   const graphFocusSourceIds = eligibleGraphFocusSourceIds(selectedNode, state.sourceModels);
   const focus = selectedNode?.label || task.title;
@@ -1818,6 +1820,8 @@ async function dispatchTargetedGraphResearch(task) {
     : [];
   const instruction = [
     `Führe eine gezielte Nachrecherche für den Research-Graph "${task.title}" durch.`,
+    `Research Run ID: ${researchRunId}`,
+    `Research Command ID: ${commandId}`,
     `Fokusbegriff: ${focus}`,
     related.length ? `Benachbarte Begriffe: ${related.join(', ')}` : '',
     `Knowledge domain: ${task.knowledge_domain}`,
@@ -1825,9 +1829,9 @@ async function dispatchTargetedGraphResearch(task) {
     task.prompt || '',
     '',
     'Nutze systematic-research und die CTOX Web-Research-Tools. Prüfe die vorhandenen Belege, schließe erkennbare Lücken und schreibe neue Quellen und Belege sofort in die bestehenden Knowledge-Tabellen.',
+    `Schreibe auf jede erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}.`,
     'Aktualisiere semantic_graph_nodes und semantic_graph_edges inkrementell. Erzeuge Kanten aus gemeinsamer Nennung in einem 4-Token-Fenster, behalte Provenienz und Source-IDs und überschreibe keine belegten Daten ohne neuen Nachweis.',
   ].filter(Boolean).join('\n');
-  const commandId = `cmd_${crypto.randomUUID()}`;
   const now = Date.now();
   const result = await state.ctx.commandBus.dispatch({
     id: commandId,
@@ -1843,6 +1847,8 @@ async function dispatchTargetedGraphResearch(task) {
       required_skills: ['systematic-research'],
       research_mode: 'targeted_graph_gap',
       thread_key: `business-os/research/${task.id}`,
+      research_run_id: researchRunId,
+      research_command_id: commandId,
       knowledge_domain: task.knowledge_domain,
       graph_focus: {
         node_id: selectedNode?.id || '',
@@ -1854,6 +1860,10 @@ async function dispatchTargetedGraphResearch(task) {
         domain: task.knowledge_domain,
         tables: task.payload?.table_contract || RESEARCH_TABLE_CONTRACT,
         provenance_required: true,
+        row_lineage_required: {
+          research_run_id: researchRunId,
+          research_command_id: commandId,
+        },
       },
       graph_contract: semanticGraphContract(),
       writeback_contract: {
@@ -1867,11 +1877,13 @@ async function dispatchTargetedGraphResearch(task) {
       source_module: 'research',
       inbound_channel: 'business_os.research',
       knowledge_domain: task.knowledge_domain,
+      research_run_id: researchRunId,
+      research_command_id: commandId,
       graph_node_id: selectedNode?.id || '',
     },
   });
   const run = {
-    id: `research_run_${now}`,
+    id: researchRunId,
     task_id: task.id,
     status: result?.task_status || result?.status || 'queued',
     command_id: commandId,
@@ -3092,6 +3104,8 @@ async function runSelectedResearch() {
   }
   const base = knowledgeBaseForTask(task);
   const now = Date.now();
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const researchRunId = `research_run_${crypto.randomUUID()}`;
   const scoringDimensions = scoringDimensionsForTask(task).filter((axis) => axis.id !== 'portfolio_priority');
   const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
@@ -3099,6 +3113,8 @@ async function runSelectedResearch() {
   const instruction = [
     `Führe systematic-research für das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
+    `Research Run ID: ${researchRunId}`,
+    `Research Command ID: ${commandId}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
     `Evaluation matrix: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key || 'evaluation_matrix'}`,
@@ -3114,10 +3130,10 @@ async function runSelectedResearch() {
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
     'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
+    `Schreibe auf jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=${researchRunId} und research_command_id=${commandId}. Ohne beide exakten IDs gilt die Zeile nicht als Ergebnis dieses Laufs.`,
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
-  const commandId = `cmd_${crypto.randomUUID()}`;
   const title = `Research · ${task.title}`;
   const threadKey = `business-os/research/${task.id}`;
   const payload = {
@@ -3128,6 +3144,8 @@ async function runSelectedResearch() {
     required_skills: ['systematic-research'],
     research_mode: 'library+living_dashboard',
     thread_key: threadKey,
+    research_run_id: researchRunId,
+    research_command_id: commandId,
     knowledge_domain: task.knowledge_domain,
     source_catalog_key: task.source_catalog_key,
     curated_table_key: task.curated_table_key,
@@ -3145,6 +3163,10 @@ async function runSelectedResearch() {
       tables: tableContract,
       create_missing_tables: missingTables,
       provenance_required: true,
+      row_lineage_required: {
+        research_run_id: researchRunId,
+        research_command_id: commandId,
+      },
     },
     graph_contract: semanticGraphContract(),
     scoring_contract: researchScoringContract(scoringDimensions),
@@ -3172,6 +3194,8 @@ async function runSelectedResearch() {
         source_module: 'research',
         inbound_channel: 'business_os.research',
         knowledge_domain: task.knowledge_domain,
+        research_run_id: researchRunId,
+        research_command_id: commandId,
         knowledge_tables: base?.tables || [],
       },
   });
@@ -3186,7 +3210,7 @@ async function runSelectedResearch() {
     transport: 'business-chat',
   };
   const run = {
-    id: `research_run_${now}`,
+    id: researchRunId,
     task_id: task.id,
     status: result.task_status,
     command_id: commandId,
@@ -3329,12 +3353,13 @@ function knowledgeLineageForPayload(base, latestRun = null, sourceModels = []) {
     const runReceipts = runLineage.flatMap((lineage) => firstArray(lineage.source_receipts, lineage.source_lineage, lineage.sources))
       .map((receipt) => ({
         ...receipt,
-        receipt_url: firstString(receipt, ['receipt_url', 'source_receipt_url', 'receipt_link', 'url', 'canonical_url']),
+        receipt_url: firstString(receipt, ['receipt_url', 'source_receipt_url', 'receipt_link', 'url']),
+        receipt_id: firstString(receipt, ['source_receipt_id', 'evidence_receipt_id', 'receipt_id']),
         canonical_url: firstString(receipt, ['canonical_url', 'source_url']),
         snapshot_id: firstString(receipt, ['snapshot_id', 'source_snapshot_id']),
         snapshot_hash: firstString(receipt, ['snapshot_hash', 'snapshot_sha256']),
       }))
-      .filter((receipt) => receipt.source_id && receipt.receipt_url && receipt.canonical_url && receipt.snapshot_id && /^sha256:[0-9a-f]{64}$/i.test(receipt.snapshot_hash));
+      .filter((receipt) => receipt.source_id && (receipt.receipt_url || receipt.receipt_id) && receipt.canonical_url && receipt.snapshot_id && /^sha256:[0-9a-f]{64}$/i.test(receipt.snapshot_hash));
     sourceReceipts = [...sourceReceipts, ...runReceipts].filter((receipt, index, all) => all.findIndex((candidate) => candidate.source_id === receipt.source_id && candidate.snapshot_hash === receipt.snapshot_hash) === index);
     sourceById = new Map(sourceReceipts.map((receipt) => [receipt.source_id, receipt]));
     for (const lineage of runLineage) {

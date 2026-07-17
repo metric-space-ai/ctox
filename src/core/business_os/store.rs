@@ -30487,7 +30487,7 @@ fn process_systematic_research_command(
     reply_text: &str,
 ) -> anyhow::Result<CommandAccepted> {
     let completed_at_ms = now_ms() as i64;
-    let evidence = match systematic_research_evidence_snapshot(root, command) {
+    let evidence = match systematic_research_evidence_snapshot(root, command_id, command) {
         Ok(evidence) => evidence,
         Err(error) => {
             persist_systematic_research_failure(
@@ -31908,11 +31908,15 @@ struct SystematicResearchEvidence {
 
 fn systematic_research_evidence_snapshot(
     root: &Path,
+    command_id: &str,
     command: &BusinessCommand,
 ) -> anyhow::Result<SystematicResearchEvidence> {
     let domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
         .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
         .context("systematic research completion requires a Knowledge domain")?;
+    let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
+        .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
+        .context("systematic research completion requires an immutable research_run_id")?;
     let path = rxdb_store_path(root);
     anyhow::ensure!(
         path.is_file(),
@@ -31947,18 +31951,43 @@ fn systematic_research_evidence_snapshot(
     let mut identified_count = 0_i64;
     let mut source_receipt_links = Vec::new();
     let mut snapshot_hashes = Vec::new();
+    let mut run_manifest = Vec::new();
     for document in &domain_tables {
         let source = document
             .get("payload")
             .filter(|value| value.is_object())
             .unwrap_or(document);
-        if first_string_field(source, &["table_key"]).as_deref() != Some("source_catalog") {
-            continue;
-        }
+        let table_key = first_string_field(source, &["table_key"]).unwrap_or_default();
         let table_id = first_string_field(source, &["id", "table_id"])
             .or_else(|| first_string_field(document, &["id", "table_id"]))
             .unwrap_or_default();
-        for receipt in document_knowledge_table_rows(document) {
+        let run_rows = document_knowledge_table_rows(document)
+            .into_iter()
+            .filter(|row| {
+                first_string_field(row, &["research_run_id", "run_id"]).as_deref()
+                    == Some(run_id.as_str())
+                    && first_string_field(row, &["research_command_id", "command_id"]).as_deref()
+                        == Some(command_id)
+            })
+            .collect::<Vec<_>>();
+        if run_rows.is_empty() {
+            continue;
+        }
+        run_manifest.push(serde_json::json!({
+            "table_id": table_id,
+            "table_key": table_key,
+            "rows": run_rows,
+        }));
+        if table_key != "source_catalog" {
+            continue;
+        }
+        for receipt in run_manifest
+            .last()
+            .and_then(|entry| entry.get("rows"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
             identified_count += 1;
             if !document_source_receipt_is_eligible(&receipt)
                 || !document_source_receipt_snapshot_matches(root, &receipt)?
@@ -31978,6 +32007,8 @@ fn systematic_research_evidence_snapshot(
                 "snapshot_id": first_string_field(&receipt, &["snapshot_id"]),
                 "snapshot_hash": snapshot_hash,
                 "table_id": table_id,
+                "research_run_id": run_id,
+                "research_command_id": command_id,
             }));
             if !snapshot_hashes.contains(&snapshot_hash) {
                 snapshot_hashes.push(snapshot_hash);
@@ -31988,16 +32019,18 @@ fn systematic_research_evidence_snapshot(
         !source_receipt_links.is_empty(),
         "systematic research completion requires at least one persisted, eligible source receipt"
     );
-    let table_ids = domain_tables
+    let table_ids = run_manifest
         .iter()
-        .filter_map(|document| first_string_field(document, &["id", "table_id"]))
+        .filter_map(|entry| first_string_field(entry, &["table_id"]))
         .collect::<Vec<_>>();
-    let version_bytes = serde_json::to_vec(&domain_tables)?;
+    let version_bytes = serde_json::to_vec(&run_manifest)?;
     let content_hash = format!("sha256:{}", hex_sha256(&version_bytes));
     let knowledge_version = serde_json::json!({
         "version_id": content_hash,
         "content_hash": content_hash,
         "domain": domain,
+        "research_run_id": run_id,
+        "research_command_id": command_id,
         "table_ids": table_ids,
     });
     let accepted_count = source_receipt_links.len() as i64;
@@ -32054,6 +32087,77 @@ fn persist_systematic_research_failure(
         failed_at_ms,
         payload,
     )?;
+    let task_id = command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| first_string_field(&command.payload, &["task_id", "research_task_id"]))
+        .unwrap_or_default();
+    if !task_id.is_empty() {
+        if let Some(mut task) = load_rxdb_collection_record(root, "research_tasks", &task_id)? {
+            if let Some(object) = task.as_object_mut() {
+                object.insert("status".to_string(), Value::String("failed".to_string()));
+                object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
+                let task_payload = object
+                    .entry("payload".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(payload_object) = task_payload.as_object_mut() {
+                    payload_object.insert(
+                        "last_error".to_string(),
+                        serde_json::json!({
+                            "command_id": command_id,
+                            "message": error.to_string(),
+                            "failed_at_ms": failed_at_ms,
+                        }),
+                    );
+                }
+            }
+            upsert_business_record(conn, "research_tasks", &task_id, failed_at_ms, task.clone())?;
+            upsert_rxdb_collection_record_cached(
+                root,
+                Some(&mut writers),
+                "research_tasks",
+                &task_id,
+                failed_at_ms,
+                task,
+            )?;
+        }
+    }
+    if let Some((run_id, mut run)) = find_rxdb_collection_record_by_string_field(
+        root,
+        "research_runs",
+        "command_id",
+        command_id,
+    )? {
+        if let Some(object) = run.as_object_mut() {
+            object.insert("status".to_string(), Value::String("failed".to_string()));
+            object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
+            let run_payload = object
+                .entry("payload".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(payload_object) = run_payload.as_object_mut() {
+                payload_object.insert(
+                    "error".to_string(),
+                    serde_json::json!({
+                        "command_id": command_id,
+                        "message": error.to_string(),
+                        "failed_at_ms": failed_at_ms,
+                    }),
+                );
+            }
+        }
+        upsert_business_record(conn, "research_runs", &run_id, failed_at_ms, run.clone())?;
+        upsert_rxdb_collection_record_cached(
+            root,
+            Some(&mut writers),
+            "research_runs",
+            &run_id,
+            failed_at_ms,
+            run,
+        )?;
+    }
     refresh_queue_task_projection(
         root,
         conn,
@@ -52010,7 +52114,8 @@ mod tests {
                     "title": "Research - Drone bearings",
                     "instruction": "Continue systematic research.",
                     "prompt": "Continue systematic research.",
-                    "knowledge_domain": "drone_bearing_design"
+                    "knowledge_domain": "drone_bearing_design",
+                    "research_run_id": "research_run_1"
                 },
                 "client_context": {
                     "source": "business-os-research",
@@ -52099,11 +52204,34 @@ mod tests {
                 "table_key": "source_catalog",
                 "rows": [{
                     "source_id": "source-1",
+                    "research_run_id": "research_run_1",
+                    "research_command_id": "cmd_research_completed",
                     "evidence_id": "evidence-1",
                     "snapshot_id": "snapshot-1",
                     "snapshot_path": "runtime/research/snapshots/source-1.html",
                     "snapshot_hash": snapshot_hash,
                     "canonical_url": "https://publisher.example/source-1",
+                    "url_role": "original_content",
+                    "content_scope": "full_text",
+                    "retrieved_at": "2026-07-17T00:00:00Z",
+                    "source_type": "publisher",
+                    "source_tier": "primary",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "evidence_eligible": true
+                }, {
+                    "source_id": "stale-source",
+                    "research_run_id": "research_run_stale",
+                    "research_command_id": "cmd_research_stale",
+                    "evidence_id": "stale-evidence",
+                    "snapshot_id": "snapshot-1",
+                    "snapshot_path": "runtime/research/snapshots/source-1.html",
+                    "snapshot_hash": snapshot_hash,
+                    "canonical_url": "https://publisher.example/stale",
                     "url_role": "original_content",
                     "content_scope": "full_text",
                     "retrieved_at": "2026-07-17T00:00:00Z",
@@ -52187,6 +52315,25 @@ mod tests {
         );
         assert_eq!(
             rxdb_run
+                .pointer("/payload/result/accepted_count")
+                .and_then(Value::as_i64),
+            Some(1),
+            "eligible evidence from another run must not enter this manifest"
+        );
+        assert_eq!(
+            rxdb_run
+                .pointer("/payload/result/knowledge_version/research_run_id")
+                .and_then(Value::as_str),
+            Some("research_run_1")
+        );
+        assert_eq!(
+            rxdb_run
+                .pointer("/payload/result/knowledge_version/research_command_id")
+                .and_then(Value::as_str),
+            Some("cmd_research_completed")
+        );
+        assert_eq!(
+            rxdb_run
                 .pointer("/payload/result/knowledge_domain")
                 .and_then(Value::as_str),
             Some("drone_bearing_design")
@@ -52212,6 +52359,79 @@ mod tests {
         assert_eq!(
             rxdb_queue.get("route_status").and_then(Value::as_str),
             Some("handled")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn systematic_research_failure_projects_to_run_and_task() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_tasks__v0",
+            "research_task_failed",
+            serde_json::json!({
+                "id": "research_task_failed",
+                "status": "collecting",
+                "payload": {},
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_runs__v0",
+            "research_run_failed",
+            serde_json::json!({
+                "id": "research_run_failed",
+                "task_id": "research_task_failed",
+                "status": "collecting",
+                "command_id": "cmd_research_failed",
+                "payload": {},
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let conn = open_store(root)?;
+        let command = BusinessCommand {
+            id: Some("cmd_research_failed".to_string()),
+            module: "research".to_string(),
+            command_type: "research.systematic.run".to_string(),
+            record_id: Some("research_task_failed".to_string()),
+            payload: serde_json::json!({
+                "knowledge_domain": "drone_bearing_design",
+                "research_run_id": "research_run_failed"
+            }),
+            client_context: Value::Null,
+            origin: CommandOrigin::TrustedLocal,
+        };
+        persist_systematic_research_failure(
+            root,
+            &conn,
+            "cmd_research_failed",
+            &command,
+            None,
+            &anyhow::anyhow!("verified evidence manifest is incomplete"),
+            42,
+        )?;
+
+        let run = load_rxdb_collection_record(root, "research_runs", "research_run_failed")?
+            .context("failed research run projection")?;
+        assert_eq!(run.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            run.pointer("/payload/error/message")
+                .and_then(Value::as_str),
+            Some("verified evidence manifest is incomplete")
+        );
+        let task = load_rxdb_collection_record(root, "research_tasks", "research_task_failed")?
+            .context("failed research task projection")?;
+        assert_eq!(task.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            task.pointer("/payload/last_error/command_id")
+                .and_then(Value::as_str),
+            Some("cmd_research_failed")
         );
         Ok(())
     }

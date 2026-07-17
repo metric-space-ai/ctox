@@ -90,6 +90,24 @@ test('run button validation requires a selected task with a loaded knowledge dom
   assert.equal(hooks.validateSelectedResearchTask({ id: 'task-1', title: 'Vendor Research', knowledge_domain: bases[0].domain }, bases).valid, true);
 });
 
+test('systematic research pins every write to one immutable run and command', () => {
+  assert.match(researchSource, /const researchRunId = `research_run_\$\{crypto\.randomUUID\(\)\}`/);
+  assert.match(researchSource, /research_run_id: researchRunId/);
+  assert.match(researchSource, /research_command_id: commandId/);
+  assert.match(researchSource, /jede in diesem Lauf erzeugte oder aktualisierte Knowledge-Zeile research_run_id=/);
+  assert.match(researchSource, /row_lineage_required/);
+
+  const targetedStart = researchSource.indexOf('async function dispatchTargetedGraphResearch');
+  const targetedEnd = researchSource.indexOf('function eligibleGraphFocusSourceIds', targetedStart);
+  const targetedSource = researchSource.slice(targetedStart, targetedEnd);
+  assert.ok(targetedStart >= 0 && targetedEnd > targetedStart);
+  assert.match(targetedSource, /const researchRunId = `research_run_\$\{crypto\.randomUUID\(\)\}`/);
+  assert.match(targetedSource, /research_run_id: researchRunId/);
+  assert.match(targetedSource, /research_command_id: commandId/);
+  assert.match(targetedSource, /row_lineage_required/);
+  assert.match(targetedSource, /id: researchRunId/);
+});
+
 test('knowledge refresh contract preserves living research lineage and source provenance', () => {
   const task = { id: 'task-1', title: 'Bearing loads', knowledge_domain: 'drone_bearing_design' };
   const snapshotHash = `sha256:${'a'.repeat(64)}`;
@@ -142,6 +160,43 @@ test('graph document lineage is native-contract-shaped and fail-closed', () => {
   assert.deepEqual(lineage.source_receipts.map((receipt) => receipt.source_id), ['source-1']);
   assert.equal(lineage.evidence_lineage.source_receipts[0].receipt_url, 'https://receipt.test/source-1');
   assert.equal(hooks.graphDocumentLineage({ id: 'task-1' }, { tables: [] }, null, [source]).ok, false);
+});
+
+test('graph document lineage requires a persisted receipt locator and never uses canonical URL', () => {
+  const snapshotHash = `sha256:${'c'.repeat(64)}`;
+  const base = {
+    knowledge_version_id: 'knowledge-v10',
+    knowledge_version: { version_id: 'knowledge-v10', status: 'current' },
+    tables: [],
+  };
+  const canonicalOnly = {
+    id: 'source-canonical-only',
+    evidenceEligible: true,
+    row: {
+      source_id: 'source-canonical-only',
+      canonical_url: 'https://example.test/canonical-only',
+      snapshot_id: 'snap-canonical-only',
+      snapshot_hash: snapshotHash,
+    },
+  };
+  const rejected = hooks.graphDocumentLineage({ id: 'task-1' }, base, null, [canonicalOnly]);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.reason, /receipt lineage/i);
+
+  const receiptIdOnly = {
+    ...canonicalOnly,
+    id: 'source-receipt-id-only',
+    row: {
+      ...canonicalOnly.row,
+      source_id: 'source-receipt-id-only',
+      source_receipt_id: 'receipt-10',
+    },
+  };
+  const accepted = hooks.graphDocumentLineage({ id: 'task-1' }, base, null, [receiptIdOnly]);
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.source_receipts[0].receipt_id, 'receipt-10');
+  assert.equal(accepted.source_receipts[0].receipt_url, '');
+  assert.notEqual(accepted.source_receipts[0].receipt_url, accepted.source_receipts[0].canonical_url);
 });
 
 test('systematic research scoring contract pins all source gates and independent audits', () => {

@@ -139,6 +139,63 @@ test('ordinary spreadsheet uploads remain explicit user imports', () => {
   assert.deepEqual(ingestion.linkedRecords, []);
 });
 
+test('unresolved sourceFileId fails closed instead of becoming a user import', async () => {
+  const sourceFiles = {
+    findOne(id) {
+      assert.equal(id, 'missing-source-file');
+      return { exec: async () => null };
+    },
+  };
+  const ingestion = await hooks.resolveSpreadsheetIngestion({
+    ctx: {
+      db: {
+        collection(name) {
+          assert.equal(name, 'desktop_files');
+          return sourceFiles;
+        },
+      },
+    },
+  }, {
+    sourceFileId: 'missing-source-file',
+    filename: 'budget.csv',
+  });
+
+  assert.equal(ingestion.valid, false);
+  assert.notEqual(ingestion.kind, 'user_import');
+  assert.match(ingestion.message, /source file.*could not be resolved/i);
+  assert.throws(() => hooks.assertSpreadsheetIngestionAllowed(ingestion), (error) => {
+    assert.equal(error.code, 'SPREADSHEET_LINEAGE_REQUIRED');
+    return true;
+  });
+});
+
+test('file opening validates requested provenance before same-hash deduplication', async () => {
+  const collectionCalls = [];
+  const state = {
+    spreadsheets: [{ id: 'existing-sheet', source_sha256: 'same-source-hash' }],
+    ctx: {
+      db: {
+        collection(name) {
+          collectionCalls.push(name);
+          throw new Error(`deduplication should not read ${name}`);
+        },
+      },
+    },
+  };
+
+  await assert.rejects(
+    hooks.openSpreadsheetFile(state, {
+      file: new File(['a,b\n1,2'], 'budget.csv', { type: 'text/csv' }),
+      source_kind: 'research_generated',
+    }),
+    (error) => {
+      assert.equal(error.code, 'SPREADSHEET_LINEAGE_REQUIRED');
+      return true;
+    },
+  );
+  assert.deepEqual(collectionCalls, []);
+});
+
 test('file-open deduplication reuses the imported spreadsheet with the same source hash', () => {
   const records = [
     { id: 'sheet_other', source_sha256: 'aaaa' },
