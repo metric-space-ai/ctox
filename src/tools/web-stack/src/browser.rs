@@ -1037,6 +1037,7 @@ fn find_playwright_chromium_executable_in(cache_root: &Path) -> Option<PathBuf> 
         }
         for relative in [
             "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
             "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
             "chrome-linux64/chrome",
             "chrome-linux/chrome",
@@ -2980,6 +2981,21 @@ mod tests {
     fn finds_playwright_chromium_win64_executable() {
         let dir = temp_path("win64-cache");
         let executable = dir.join("chromium-1217/chrome-win64/chrome.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_playwright_chromium_macos_x64_executable() {
+        let dir = temp_path("macos-x64-cache");
+        let executable = dir.join(
+            "chromium-1217/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        );
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"").unwrap();
         assert_eq!(
