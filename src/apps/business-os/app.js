@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-ctox-shell-chrome-v130';
+const APP_BUILD = '20260717-connect-grace-v131';
 
 ensureShellStylesheets();
 
@@ -8505,6 +8505,9 @@ async function refreshShellCtoxHealth() {
   try {
     const status = await loadShellCtoxHealth();
     state.ctoxHealth = status;
+    // A resolved, healthy runtime status ends the initial connect grace: from
+    // now on an absent/pending status is a real dropout, not first-load noise.
+    if (status && status.ok !== false) state.advancedStatusEverHealthy = true;
     renderShellCtoxWarning(status);
     renderShellCtoxVersion(status);
   } catch (error) {
@@ -8878,6 +8881,15 @@ async function fetchBusinessOsControlJson(url, options = {}) {
 }
 
 function shellCtoxHealthProblem(status) {
+  // During the initial connect window a missing or in-flight runtime status
+  // means "connecting", not "broken". Alarming there flashes a scary
+  // "CHECK CTOX CONNECTION" on every fresh load; stay quiet until we have
+  // either connected once or the data plane has definitively failed.
+  const stillConnecting = !state.advancedStatusEverHealthy
+    && state.dataPlaneReadyStatus !== 'failed';
+  if ((status?.pending || !status) && stillConnecting) {
+    return '';
+  }
   if (status?.pending) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
   }
