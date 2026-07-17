@@ -242,6 +242,10 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .and_then(Value::as_bool)
                             .unwrap_or(false);
                         let content_extracted = read_has_meaningful_evidence(&read_payload);
+                        let evidence_relevance_score =
+                            score_read_evidence_relevance(&read_payload, &search_query);
+                        let actual_full_text_or_data =
+                            read_has_actual_full_text_or_data(&source, &read_payload);
                         source["canonical_url"] = read_payload
                             .get("canonical_url")
                             .cloned()
@@ -252,6 +256,13 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .unwrap_or_else(|| Value::String("unverified".to_string()));
                         source["transport_verified"] = Value::Bool(transport_verified);
                         source["content_extracted"] = Value::Bool(content_extracted);
+                        source["evidence_relevance_score"] = evidence_relevance_score
+                            .map(|score| Value::Number(score.into()))
+                            .unwrap_or(Value::Null);
+                        source["actual_full_text_or_data"] = Value::Bool(actual_full_text_or_data);
+                        if let Some(receipt) = zenodo_archive_receipt(&source, &read_payload) {
+                            source["archive_receipt"] = receipt;
+                        }
                         let (evidence_eligible, rejection_reason) = assess_evidence_promotion(
                             &source,
                             transport_verified,
@@ -280,6 +291,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             "summary": read_payload.get("summary").cloned().unwrap_or(Value::Null),
                             "excerpts": read_payload.get("excerpts").cloned().unwrap_or_else(|| json!([])),
                             "find_results": read_payload.get("find_results").cloned().unwrap_or_else(|| json!([])),
+                            "page_sections": read_payload.get("page_sections").cloned().unwrap_or_else(|| json!([])),
+                            "page_text_excerpt": read_payload.get("page_text_excerpt").cloned().unwrap_or(Value::Null),
                             "is_pdf": read_payload.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
                             "pdf_total_pages": read_payload.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
                             "canonical_url": read_payload.get("canonical_url").cloned().unwrap_or_else(|| Value::String(url.clone())),
@@ -1140,14 +1153,143 @@ fn assess_evidence_promotion(
     if !content_extracted {
         return (false, Some("no_extracted_evidence"));
     }
-    if is_non_scoreable_source(source) {
+    if is_zenodo_record_metadata_source(source) {
+        return (false, Some("archive_metadata_requires_original_file_parse"));
+    }
+    let metadata_source_with_actual_file = source
+        .get("actual_full_text_or_data")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && is_metadata_source_kind(source);
+    if is_non_scoreable_source(source) && !metadata_source_with_actual_file {
         return (false, Some("metadata_or_aggregator"));
+    }
+    if source
+        .get("actual_full_text_or_data")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return (false, Some("no_full_text_or_data_file"));
+    }
+    match source
+        .get("evidence_relevance_score")
+        .and_then(Value::as_i64)
+    {
+        Some(score) if score >= 8 => {}
+        Some(_) => return (false, Some("extracted_evidence_off_topic")),
+        None => return (false, Some("extracted_evidence_relevance_not_scored")),
     }
     match source.get("discovery_score").and_then(Value::as_i64) {
         Some(score) if score >= 16 => (true, None),
         Some(_) => (false, Some("low_topic_relevance")),
         None => (false, Some("topic_relevance_not_scored")),
     }
+}
+
+fn score_read_evidence_relevance(read: &Value, query: &str) -> Option<i64> {
+    let evidence_text = read_body_evidence_text(read);
+    if !is_meaningful_evidence_text(&evidence_text) {
+        return None;
+    }
+
+    // Score only retrieved body evidence. Search titles, snippets and URLs are
+    // discovery hints and must not make an unrelated fetched page scoreable.
+    let body = evidence_text.to_ascii_lowercase();
+    let topical_terms = topical_query_terms(query);
+    if topical_terms.is_empty() {
+        return None;
+    }
+    let matched_terms = topical_terms
+        .iter()
+        .filter(|term| body.contains(term.as_str()))
+        .count();
+    Some((matched_terms as i64) * 16)
+}
+
+fn read_body_evidence_text(read: &Value) -> String {
+    let mut evidence_text = String::new();
+    append_json_text(&mut evidence_text, read.get("page_text_excerpt"));
+    append_json_text(&mut evidence_text, read.get("page_sections"));
+    if evidence_text.trim().is_empty() {
+        // Older cached reads do not carry page_text_excerpt/page_sections.
+        // Their excerpts and find matches are still extracted body evidence,
+        // but summary alone is deliberately not trusted for promotion.
+        append_json_text(&mut evidence_text, read.get("excerpts"));
+        append_json_text(&mut evidence_text, read.get("find_results"));
+    }
+    evidence_text
+}
+
+fn read_has_actual_full_text_or_data(source: &Value, read: &Value) -> bool {
+    let evidence_text = read_body_evidence_text(read);
+    if !is_meaningful_evidence_text(&evidence_text) {
+        return false;
+    }
+
+    let read_url = read
+        .get("url")
+        .and_then(Value::as_str)
+        .or_else(|| source.get("url").and_then(Value::as_str))
+        .unwrap_or_default();
+    let canonical_url = read
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if read.get("is_pdf").and_then(Value::as_bool) == Some(true)
+        && read
+            .get("pdf_total_pages")
+            .and_then(Value::as_u64)
+            .is_some_and(|pages| pages > 0)
+    {
+        return true;
+    }
+    if is_data_file_url(read_url) || is_data_file_url(canonical_url) {
+        return true;
+    }
+    if is_metadata_landing_source(source, read_url, canonical_url) {
+        return false;
+    }
+
+    let paragraph_count = evidence_text
+        .split("\n\n")
+        .filter(|paragraph| is_meaningful_evidence_text(paragraph))
+        .count();
+    evidence_text.chars().count() >= 400 && paragraph_count >= 2
+}
+
+fn is_metadata_landing_source(source: &Value, read_url: &str, canonical_url: &str) -> bool {
+    is_metadata_source_kind(source)
+        || is_doi_resolver_url(read_url)
+        || is_doi_resolver_url(canonical_url)
+        || is_zenodo_record_metadata_url(read_url)
+        || is_zenodo_record_metadata_url(canonical_url)
+}
+
+fn is_metadata_source_kind(source: &Value) -> bool {
+    let source_type = source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    source.get("metadata_only").and_then(Value::as_bool) == Some(true)
+        || source_type.contains("metadata")
+        || source
+            .get("source_tier")
+            .and_then(Value::as_str)
+            .is_some_and(|tier| tier.eq_ignore_ascii_case("metadata"))
+}
+
+fn is_data_file_url(raw: &str) -> bool {
+    let Some(path) = Url::parse(raw)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    [
+        ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls", ".parquet", ".txt",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
 }
 
 fn read_has_meaningful_evidence(read: &Value) -> bool {
@@ -1977,9 +2119,17 @@ fn fetch_text(url: &str) -> Result<String> {
 
 fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static str {
     let domain = domain_for_url(url);
-    if domain.contains("annas-archive.org") {
+    if is_data_file_url(url) {
+        "data_file"
+    } else if is_zenodo_record_metadata_url(url) {
+        "archive_metadata"
+    } else if domain.contains("annas-archive.org") {
         "annas_archive_metadata"
-    } else if domain.contains("semanticscholar.org") || domain.contains("crossref.org") {
+    } else if domain == "doi.org"
+        || domain.ends_with(".doi.org")
+        || domain.contains("semanticscholar.org")
+        || domain.contains("crossref.org")
+    {
         "paper_metadata"
     } else if domain.contains("arxiv.org")
         || domain.contains("pmc.ncbi.nlm.nih.gov")
@@ -2005,6 +2155,68 @@ fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static 
     } else {
         "web"
     }
+}
+
+fn is_doi_resolver_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    (host == "doi.org" || host == "dx.doi.org")
+        && url.path().trim_start_matches('/').starts_with("10.")
+}
+
+fn is_zenodo_record_metadata_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    if host != "zenodo.org" {
+        return false;
+    }
+    let path = url.path().to_ascii_lowercase();
+    (path.starts_with("/records/")
+        || path.starts_with("/record/")
+        || path.starts_with("/api/records/"))
+        && !path.contains("/files/")
+}
+
+fn is_zenodo_record_metadata_source(source: &Value) -> bool {
+    source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "archive_metadata")
+        || source
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(is_zenodo_record_metadata_url)
+}
+
+fn zenodo_archive_receipt(source: &Value, read: &Value) -> Option<Value> {
+    let record_url = source.get("url").and_then(Value::as_str)?;
+    if !is_zenodo_record_metadata_url(record_url) {
+        return None;
+    }
+    let verified = read.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && read
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| !hash.trim().is_empty());
+    Some(json!({
+        "kind": "zenodo_archive_metadata",
+        "record_url": record_url,
+        "canonical_url": read.get("canonical_url").cloned().unwrap_or_else(|| Value::String(record_url.to_string())),
+        "verified": verified,
+        "verification_status": read.get("verification_status").cloned().unwrap_or(Value::Null),
+        "checked_at": read.get("checked_at").cloned().unwrap_or(Value::Null),
+        "snapshot_hash": read.get("snapshot_hash").cloned().unwrap_or(Value::Null),
+        "file_manifest": read.get("extracted_fields").cloned().unwrap_or(Value::Null),
+        "use": "archive receipt only; parse the original file before using factual dataset rows",
+    }))
 }
 
 fn summarize_source_mix(sources: &[Value]) -> Value {
@@ -2526,6 +2738,8 @@ mod tests {
             "title": "Measured propeller thrust and torque dataset",
             "url": "https://example.edu/propeller-data",
             "discovery_score": 42,
+            "evidence_relevance_score": 42,
+            "actual_full_text_or_data": true,
         });
         assert_eq!(
             assess_evidence_promotion(&primary, true, true),
@@ -2578,6 +2792,7 @@ mod tests {
             "title": "UIUC Propeller Database",
             "url": "https://www.kaggle.com/datasets/example/uiuc-propeller-database",
             "discovery_score": 53,
+            "evidence_relevance_score": 53,
         });
         assert_eq!(
             assess_evidence_promotion(&kaggle_reupload, true, true),
@@ -2591,6 +2806,7 @@ mod tests {
             "title": "Predictive Maintenance and Vibration Resources",
             "url": "https://github.com/example/vibration-resources",
             "discovery_score": 44,
+            "evidence_relevance_score": 44,
         });
         assert_eq!(
             assess_evidence_promotion(&github_resources, true, true),
@@ -2606,6 +2822,8 @@ mod tests {
             "domain": "example.org",
             "title": "Unrelated reachable paper",
             "url": "https://example.org/paper",
+            "evidence_relevance_score": 24,
+            "actual_full_text_or_data": true,
         });
         assert_eq!(
             assess_evidence_promotion(&source, true, true),
@@ -2623,6 +2841,120 @@ mod tests {
         );
         source["discovery_score"] = Value::Number(16.into());
         assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn evidence_promotion_requires_relevance_in_retrieved_content() {
+        let query = "small UAV propeller thrust torque measured dataset";
+        let stuffed_discovery = json!({
+            "source_type": "scholarly",
+            "source_tier": "scholarly",
+            "title": "Small UAV propeller thrust torque measured dataset",
+            "url": "https://example.org/seo-result",
+            "discovery_score": 90,
+            "actual_full_text_or_data": true,
+        });
+        let unrelated_read = json!({
+            "summary": "Small UAV propeller thrust torque measured dataset (metadata title only).",
+            "excerpts": ["The record advertises a measured propeller dataset."],
+            "page_text_excerpt": "This article discusses tomato cultivation and home garden irrigation techniques. Seasonal planting schedules improve vegetable yields in temperate gardens. The body reports vegetable yields and soil moisture observations, unrelated to aircraft propulsion.",
+            "find_results": [],
+        });
+        let relevant_read = json!({
+            "summary": "Measured propeller thrust and torque values are reported for small UAV operating points.",
+            "excerpts": ["The dataset contains RPM, thrust, torque, and propeller diameter measurements."],
+            "page_text_excerpt": "The small UAV propeller was tested at multiple RPM operating points.\n\nMeasured thrust and torque were recorded for each propeller diameter, with the resulting dataset used to compare propulsion performance.",
+            "find_results": [],
+        });
+
+        let mut source = stuffed_discovery.clone();
+        source["evidence_relevance_score"] = score_read_evidence_relevance(&unrelated_read, query)
+            .map(|score| Value::Number(score.into()))
+            .unwrap_or(Value::Null);
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("extracted_evidence_off_topic"))
+        );
+
+        let mut source = stuffed_discovery;
+        source["evidence_relevance_score"] = score_read_evidence_relevance(&relevant_read, query)
+            .map(|score| Value::Number(score.into()))
+            .unwrap_or(Value::Null);
+        assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
+    }
+
+    #[test]
+    fn doi_landing_pages_are_metadata_not_promotable_full_text() {
+        let doi_url = "https://doi.org/10.1234/bearing-load-data";
+        assert_eq!(classify_source(doi_url, true, false), "paper_metadata");
+        let source = json!({
+            "source_type": "paper_metadata",
+            "source_tier": "metadata",
+            "metadata_only": true,
+            "url": doi_url,
+            "discovery_score": 90,
+            "evidence_relevance_score": 32,
+            "actual_full_text_or_data": false,
+        });
+        let landing_read = json!({
+            "url": doi_url,
+            "canonical_url": "https://publisher.example/article/bearing-load-data",
+            "summary": "Bearing load data abstract and citation metadata.",
+            "excerpts": ["Bearing load data abstract and citation metadata."],
+            "page_text_excerpt": "Title: Bearing load data. Abstract: This landing page provides citation metadata and an abstract, but no full text or downloadable data file.",
+            "is_pdf": false,
+            "find_results": [],
+        });
+        assert!(!read_has_actual_full_text_or_data(&source, &landing_read));
+        assert_eq!(
+            assess_evidence_promotion(&source, true, true),
+            (false, Some("metadata_or_aggregator"))
+        );
+    }
+
+    #[test]
+    fn zenodo_metadata_receipt_is_auditable_but_not_dataset_evidence() {
+        let record_url = "https://zenodo.org/records/123456";
+        assert_eq!(
+            classify_source(record_url, false, false),
+            "archive_metadata"
+        );
+        assert_eq!(
+            classify_source(
+                "https://zenodo.org/records/123456/files/bearing-load.csv",
+                false,
+                false
+            ),
+            "data_file"
+        );
+        let source = json!({
+            "source_type": "archive_metadata",
+            "source_tier": "metadata",
+            "url": record_url,
+            "discovery_score": 90,
+            "evidence_relevance_score": 32,
+            "actual_full_text_or_data": false,
+        });
+        let read = json!({
+            "canonical_url": "https://zenodo.org/api/records/123456",
+            "verification_status": "verified",
+            "checked_at": 123,
+            "snapshot_hash": "sha256:record-metadata",
+            "extracted_fields": {"files": [{"key": "bearing-load.csv", "size": 42}]},
+            "page_text_excerpt": "Bearing load dataset archive record.\n\nFile: bearing-load.csv; size_bytes: 42; checksum: sha256:file",
+            "is_pdf": false,
+        });
+        let receipt = zenodo_archive_receipt(&source, &read).expect("Zenodo receipt");
+        assert_eq!(receipt["kind"], "zenodo_archive_metadata");
+        assert_eq!(receipt["verified"], true);
+        assert_eq!(receipt["snapshot_hash"], "sha256:record-metadata");
+        assert!(!read_has_actual_full_text_or_data(&source, &read));
+        let mut source_with_receipt = source;
+        source_with_receipt["archive_receipt"] = receipt;
+        assert_eq!(
+            assess_evidence_promotion(&source_with_receipt, true, true),
+            (false, Some("archive_metadata_requires_original_file_parse"))
+        );
     }
 
     #[test]
@@ -2747,6 +3079,10 @@ mod tests {
         assert_eq!(
             classify_source("https://annas-archive.org/search?q=test", true, true),
             "annas_archive_metadata"
+        );
+        assert_eq!(
+            classify_source("https://doi.org/10.1234/example", true, false),
+            "paper_metadata"
         );
         assert_eq!(
             classify_source("https://patents.google.com/patent/US123", false, false),

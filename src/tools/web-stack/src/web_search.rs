@@ -655,6 +655,10 @@ pub fn execute_canonical_web_search(
                 citations: result
                     .hits
                     .iter()
+                    .filter(|hit| {
+                        find_matching_evidence_doc(&result.evidence, &hit.url)
+                            .is_some_and(|doc| evidence_doc_is_admitted(doc, hit))
+                    })
                     .take(3)
                     .map(|hit| SearchCitation {
                         title: hit.title.clone(),
@@ -818,30 +822,34 @@ fn render_direct_web_read_payload(
         find_results = doc.find_results.clone();
     }
 
-    // Phase 3: if the URL belongs to a registered source module, run its
-    // `extract_fields` post-processor and surface the typed evidence under
-    // `extracted_fields`. Country hint is forwarded if the caller set it.
-    let extracted = match_source_for_url(&url).map(|module| {
-        let read = evidence_doc_to_source_read(&doc);
-        let evidence = module.extract_fields(&read);
-        let payload: Vec<Value> = evidence
-            .into_iter()
-            .map(|(field, ev)| {
-                json!({
-                    "field": field.as_str(),
-                    "value": ev.value,
-                    "confidence": ev.confidence.as_str(),
-                    "note": ev.note,
-                    "source_url": ev.source_url,
+    // Phase 3: source modules may only turn admitted page content into typed
+    // fields. A successful transport or a shell/login response is not a
+    // source read and must not reach an extractor.
+    let extracted = if evidence_doc_is_admitted_for_read(&doc) {
+        match_source_for_url(&url).map(|module| {
+            let read = evidence_doc_to_source_read(&doc);
+            let evidence = module.extract_fields(&read);
+            let payload: Vec<Value> = evidence
+                .into_iter()
+                .map(|(field, ev)| {
+                    json!({
+                        "field": field.as_str(),
+                        "value": ev.value,
+                        "confidence": ev.confidence.as_str(),
+                        "note": ev.note,
+                        "source_url": ev.source_url,
+                    })
                 })
+                .collect();
+            json!({
+                "source_id": module.id(),
+                "tier": tier_label(module.tier()),
+                "fields": payload,
             })
-            .collect();
-        json!({
-            "source_id": module.id(),
-            "tier": tier_label(module.tier()),
-            "fields": payload,
         })
-    });
+    } else {
+        None
+    };
 
     json!({
         "ok": true,
@@ -862,7 +870,10 @@ fn render_direct_web_read_payload(
         "http_status": doc.http_status,
         "snapshot_hash": doc.snapshot_hash,
         "source_tier": doc.source_tier,
-        "evidence_eligible": doc.evidence_eligible,
+        "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
+        "evidence_content_kind": evidence_content_kind(&doc),
+        "dataset_content_extracted": evidence_doc_has_meaningful_content(&doc)
+            && evidence_content_kind(&doc) == "page_content",
         "context": render_direct_read_context(&read_query, &doc),
         "extracted_fields": extracted,
         // Raw HTML body for downstream parsers that need DOM access
@@ -873,23 +884,107 @@ fn render_direct_web_read_payload(
 }
 
 fn evidence_doc_has_meaningful_content(doc: &EvidenceDoc) -> bool {
-    is_meaningful_evidence_text(&doc.summary)
-        || doc
-            .excerpts
-            .iter()
-            .any(|excerpt| is_meaningful_evidence_text(excerpt))
-        || doc.find_results.iter().any(|result| {
-            result
-                .matches
-                .iter()
-                .any(|text| is_meaningful_evidence_text(text))
-        })
+    meaningful_extracted_page_text(&doc.page_text)
+}
+
+fn evidence_doc_is_admitted(doc: &EvidenceDoc, hit: &SearchHit) -> bool {
+    evidence_doc_is_admitted_for_read(doc)
+        // Old page-cache entries may have persisted a search snippet as the
+        // entire page body. It is discovery data, not extracted source text.
+        && normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet)
+}
+
+fn evidence_doc_is_admitted_for_read(doc: &EvidenceDoc) -> bool {
+    doc.evidence_eligible && evidence_doc_has_meaningful_content(doc)
+}
+
+fn meaningful_extracted_page_text(text: &str) -> bool {
+    let normalized = normalize_ws(text);
+    !normalized.is_empty()
+        && !is_boilerplate_evidence_text(&normalized)
+        && is_meaningful_evidence_text(&normalized)
+}
+
+fn is_boilerplate_evidence_text(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    [
+        "privacy policy",
+        "terms of service",
+        "cookie settings",
+        "we use cookies",
+        "all rights reserved",
+        "sign in",
+        "log in",
+        "login required",
+        "javascript is required",
+        "enable javascript",
+        "access denied",
+        "verify you are human",
+        "captcha",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+}
+
+fn evidence_content_kind(doc: &EvidenceDoc) -> &'static str {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        "none"
+    } else if is_zenodo_record_api_url(&doc.url) {
+        // Zenodo's record endpoint is a canonical archive receipt: it proves
+        // record identity and file checksum, but does not parse the archive.
+        "metadata_receipt"
+    } else {
+        "page_content"
+    }
+}
+
+fn is_zenodo_record_api_url(raw_url: &str) -> bool {
+    Url::parse(raw_url).ok().is_some_and(|url| {
+        url.host_str()
+            .is_some_and(|host| host.trim_start_matches("www.") == "zenodo.org")
+            && url.path().starts_with("/api/records/")
+    })
+}
+
+fn is_metadata_source(source: &str) -> bool {
+    let source = source.to_ascii_lowercase();
+    [
+        "metadata",
+        "crossref",
+        "openalex",
+        "semantic_scholar",
+        "annas_archive",
+    ]
+    .iter()
+    .any(|marker| source.contains(marker))
 }
 
 fn is_meaningful_evidence_text(text: &str) -> bool {
     let normalized = normalize_ws(text);
+    if normalized.is_empty() || is_evidence_boilerplate(&normalized) {
+        return false;
+    }
     normalized.chars().count() >= 32
         && normalized.chars().filter(|ch| ch.is_alphabetic()).count() >= 16
+}
+
+fn is_evidence_boilerplate(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    [
+        "javascript is required",
+        "please enable javascript",
+        "enable javascript to continue",
+        "cookie settings",
+        "accept cookies",
+        "we use cookies",
+        "please sign in",
+        "please log in",
+        "authentication required",
+        "privacy policy",
+        "terms of service",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
 }
 
 fn canonical_read_fallback_url(url: &str) -> Option<String> {
@@ -1025,7 +1120,13 @@ fn ctox_web_search_payload(
             let transport_verified = evidence
                 .is_some_and(|doc| doc.verification_status == "verified"
                     && doc.http_status.is_some_and(|status| (200..300).contains(&status)));
-            let content_extracted = evidence.is_some_and(evidence_doc_has_meaningful_content);
+            let content_extracted = evidence.is_some_and(|doc| {
+                evidence_doc_is_admitted(doc, hit)
+            });
+            let evidence_content_kind = evidence
+                .filter(|_| content_extracted)
+                .map(evidence_content_kind)
+                .unwrap_or("none");
             json!({
                 "title": hit.title,
                 "url": hit.url,
@@ -1038,14 +1139,16 @@ fn ctox_web_search_payload(
                 "discovery_score": discovery_score_for_hit(hit, query_text),
                 "transport_verified": transport_verified,
                 "content_extracted": content_extracted,
-                "evidence_eligible": evidence.map(|doc| doc.evidence_eligible).unwrap_or(false),
+                "evidence_eligible": content_extracted,
                 "checked_at": evidence.and_then(|doc| nonzero_checked_at(doc)),
                 "http_status": evidence.and_then(|doc| doc.http_status),
                 "snapshot_hash": evidence.and_then(|doc| doc.snapshot_hash.clone()),
                 "source_tier": evidence.and_then(|doc| doc.source_tier.clone()),
-                "summary": evidence.map(|doc| doc.summary.clone()),
-                "excerpts": evidence.map(|doc| doc.excerpts.clone()).unwrap_or_default(),
-                "find_results": evidence.map(|doc| doc.find_results.clone()).unwrap_or_default(),
+                "summary": evidence.filter(|_| content_extracted).map(|doc| doc.summary.clone()),
+                "excerpts": evidence.filter(|_| content_extracted).map(|doc| doc.excerpts.clone()).unwrap_or_default(),
+                "find_results": evidence.filter(|_| content_extracted).map(|doc| doc.find_results.clone()).unwrap_or_default(),
+                "evidence_content_kind": evidence_content_kind,
+                "dataset_content_extracted": content_extracted && evidence_content_kind == "page_content",
                 "is_pdf": evidence.map(|doc| doc.is_pdf).unwrap_or(false),
                 "pdf_total_pages": evidence.and_then(|doc| doc.pdf_total_pages),
             })
@@ -1082,7 +1185,7 @@ fn ctox_web_search_payload(
             .iter()
             .filter(|hit| {
                 find_matching_evidence_doc(&result.evidence, &hit.url)
-                    .is_some_and(|doc| doc.evidence_eligible)
+                    .is_some_and(|doc| evidence_doc_is_admitted(doc, hit))
             })
             .take(3)
             .map(|hit| json!({ "title": hit.title, "url": hit.url }))
@@ -1687,7 +1790,10 @@ impl<'a> WebSearchSession<'a> {
         if doc.verification_status == "unverified" && entry.verification_status != "unverified" {
             doc.verification_status = entry.verification_status;
         }
-        doc.evidence_eligible = doc.evidence_eligible || entry.evidence_eligible;
+        // Never let a duplicated cache envelope promote a document whose own
+        // admission bit is false. Older cache entries may have recorded
+        // transport success without extracted content.
+        doc.evidence_eligible = doc.evidence_eligible && entry.evidence_eligible;
         Some(doc)
     }
 
@@ -2529,9 +2635,22 @@ fn apply_evidence_gate(doc: &mut EvidenceDoc, hit: &SearchHit, fetched: &Fetched
     doc.http_status = Some(fetched.http_status);
     doc.snapshot_hash = content_hash;
     doc.source_tier = source_tier_for_hit(hit);
+    let metadata_receipt = is_zenodo_record_api_url(&doc.url);
+    let metadata_fallback = !metadata_receipt
+        && (is_metadata_source(&hit.source)
+            || (is_json_api_url(&hit.url)
+                || fetched.content_type.as_deref().is_some_and(|content_type| {
+                    content_type.to_ascii_lowercase().contains("json")
+                }))
+                && String::from_utf8_lossy(&fetched.body)
+                    .to_ascii_lowercase()
+                    .contains("\"metadata\""));
     doc.evidence_eligible = (200..300).contains(&fetched.http_status)
         && !fetched.body.is_empty()
-        && doc.snapshot_hash.is_some();
+        && doc.snapshot_hash.is_some()
+        && evidence_doc_has_meaningful_content(doc)
+        && normalize_ws(&doc.page_text) != normalize_ws(&hit.snippet)
+        && !metadata_fallback;
     doc.verification_status = if doc.evidence_eligible {
         "verified".to_string()
     } else {
@@ -2636,7 +2755,9 @@ fn rebuild_cached_evidence_doc(
         }
     };
     let summary = if excerpts.is_empty() {
-        if cached.summary.trim().is_empty() {
+        if !meaningful_extracted_page_text(&page_text) {
+            String::new()
+        } else if cached.summary.trim().is_empty() {
             fallback_summary(hit, &page_text)
         } else {
             trim_text(&cached.summary, 360)
@@ -2646,6 +2767,21 @@ fn rebuild_cached_evidence_doc(
     };
     let find_results =
         build_find_in_page_results(query, &page_text, &cached.page_sections, &excerpts);
+    let evidence_eligible = cached.evidence_eligible
+        && evidence_doc_has_meaningful_content(&EvidenceDoc {
+            page_text: page_text.clone(),
+            ..cached.clone()
+        })
+        && normalize_ws(&page_text) != normalize_ws(&hit.snippet)
+        && (!is_metadata_source(cached.source_tier.as_deref().unwrap_or_default())
+            || is_zenodo_record_api_url(&cached.url));
+    let verification_status = if evidence_eligible {
+        cached.verification_status.clone()
+    } else if cached.verification_status == "failed" {
+        "failed".to_string()
+    } else {
+        "unverified".to_string()
+    };
 
     EvidenceDoc {
         url: cached.url.clone(),
@@ -2656,12 +2792,12 @@ fn rebuild_cached_evidence_doc(
         },
         title: cached.title.clone(),
         summary,
-        verification_status: cached.verification_status.clone(),
+        verification_status,
         checked_at: cached.checked_at,
         http_status: cached.http_status,
         snapshot_hash: cached.snapshot_hash.clone(),
         source_tier: cached.source_tier.clone(),
-        evidence_eligible: cached.evidence_eligible,
+        evidence_eligible,
         is_pdf: cached.is_pdf,
         pdf_total_pages: cached.pdf_total_pages,
         page_sections: cached.page_sections.clone(),
@@ -4010,21 +4146,10 @@ fn detect_page_adapter(hit: &SearchHit, body: &str) -> PageAdapterKind {
 fn extract_html_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
     let doc = Html::parse_document(body);
     let title = select_text(&doc, "title, h1").unwrap_or_else(|| hit.title.clone());
-    let mut paragraphs = select_relevant_html_blocks(&doc);
-    if paragraphs.is_empty() {
-        paragraphs.push(hit.snippet.clone());
-    }
+    let paragraphs = select_relevant_html_blocks(&doc);
     let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
-    let summary = if excerpts.is_empty() {
-        hit.snippet.clone()
-    } else {
-        excerpts.join(" ")
-    };
-    let page_text = if paragraphs.is_empty() {
-        summary.clone()
-    } else {
-        paragraphs.join("\n\n")
-    };
+    let summary = excerpts.join(" ");
+    let page_text = paragraphs.join("\n\n");
     OpenedPage {
         title,
         summary,
@@ -4893,11 +5018,7 @@ fn best_github_tree_entries_for_query(query: &str, entries: &[String]) -> Vec<St
 fn extract_text_opened_page(query: &str, hit: &SearchHit, body: &str) -> OpenedPage {
     let paragraphs = clean_candidate_paragraphs(split_plaintext_paragraphs(body));
     let excerpts = best_paragraphs_for_query(query, &paragraphs, 3);
-    let summary = if excerpts.is_empty() {
-        hit.snippet.clone()
-    } else {
-        excerpts.join(" ")
-    };
+    let summary = excerpts.join(" ");
     OpenedPage {
         title: hit.title.clone(),
         summary,
@@ -5198,13 +5319,9 @@ fn fallback_candidate_paragraphs(paragraphs: Vec<String>) -> Vec<String> {
     }
 }
 
-fn fallback_summary(hit: &SearchHit, text: &str) -> String {
+fn fallback_summary(_hit: &SearchHit, text: &str) -> String {
     let cleaned = trim_text(text, 360);
-    if cleaned.is_empty() {
-        hit.snippet.clone()
-    } else {
-        cleaned
-    }
+    cleaned
 }
 
 fn clean_pdf_text_for_llm(text: &str) -> String {
@@ -7932,6 +8049,58 @@ mod tests {
     }
 
     #[test]
+    fn search_payload_withholds_transport_only_evidence_and_citations() {
+        let url = "https://example.com/shell".to_string();
+        let result = SearchResponse {
+            provider: "mock".to_string(),
+            hits: vec![SearchHit {
+                title: "Shell source".to_string(),
+                url: url.clone(),
+                snippet: "A long search snippet with plausible source claims that were not read
+                    from the page."
+                    .repeat(4),
+                source: "mock".to_string(),
+                rank: 1,
+            }],
+            evidence: vec![EvidenceDoc {
+                url: url.clone(),
+                canonical_url: url.clone(),
+                title: "Shell source".to_string(),
+                summary: "A long fallback summary that came from discovery metadata.".to_string(),
+                verification_status: "verified".to_string(),
+                checked_at: 1,
+                http_status: Some(200),
+                snapshot_hash: Some("sha256:shell".to_string()),
+                source_tier: Some("web".to_string()),
+                evidence_eligible: true,
+                is_pdf: false,
+                pdf_total_pages: None,
+                page_sections: Vec::new(),
+                excerpts: Vec::new(),
+                page_text: String::new(),
+                find_results: Vec::new(),
+                raw_html: None,
+            }],
+            executed_queries: vec!["shell source".to_string()],
+            source_failures: Vec::new(),
+        };
+
+        let payload = ctox_web_search_payload(
+            "shell source",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &result,
+            String::new(),
+        );
+        assert_eq!(payload["results"][0]["transport_verified"], true);
+        assert_eq!(payload["results"][0]["content_extracted"], false);
+        assert_eq!(payload["results"][0]["evidence_eligible"], false);
+        assert_eq!(payload["results"][0]["evidence_content_kind"], "none");
+        assert!(payload["results"][0]["summary"].is_null());
+        assert_eq!(payload["citations"], json!([]));
+    }
+
+    #[test]
     fn paragraph_selection_does_not_promote_unrelated_text() {
         let paragraphs = vec![
             "This paragraph discusses medieval manuscript preservation in libraries.".to_string(),
@@ -8925,10 +9094,24 @@ mod tests {
                 http_status: 200,
             },
         );
+        assert_eq!(verified.verification_status, "unverified");
+        assert!(!verified.evidence_eligible);
+        assert!(!evidence_doc_has_meaningful_content(&verified));
+        verified.page_text =
+            "Primary source record with downloadable data files and verified measurements."
+                .to_string();
+        apply_evidence_gate(
+            &mut verified,
+            &hit,
+            &FetchedPageContent {
+                body: b"verified body".to_vec(),
+                content_type: Some("text/plain".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
         assert_eq!(verified.verification_status, "verified");
         assert!(verified.evidence_eligible);
-        assert!(!evidence_doc_has_meaningful_content(&verified));
-        verified.summary = "Primary source record with downloadable data files.".to_string();
         assert!(evidence_doc_has_meaningful_content(&verified));
         assert!(verified.snapshot_hash.is_some());
 
@@ -8960,6 +9143,164 @@ mod tests {
         );
         assert_eq!(not_found.http_status, Some(404));
         assert!(!not_found.evidence_eligible);
+    }
+
+    #[test]
+    fn evidence_gate_rejects_200_shell_even_with_a_long_search_snippet() {
+        let hit = SearchHit {
+            title: "Shell result".to_string(),
+            url: "https://example.com/shell".to_string(),
+            snippet: "A long search-engine snippet that repeats plausible factual language about
+                the requested source but was never extracted from the opened page. "
+                .repeat(4),
+            source: "mock".to_string(),
+            rank: 1,
+        };
+        let shell = r#"<!doctype html><html><head><title>Source</title><script>window.__DATA__ = {};</script></head><body><div id="app"></div></body></html>"#;
+        let opened = extract_opened_page("requested source facts", &hit, shell);
+        assert!(
+            opened.page_text.is_empty(),
+            "shell must not become page text"
+        );
+
+        let config = test_config(ProviderKind::Mock);
+        let mut doc = build_query_evidence_doc(
+            &config,
+            "requested source facts",
+            &hit,
+            hit.url.clone(),
+            opened,
+        );
+        apply_evidence_gate(
+            &mut doc,
+            &hit,
+            &FetchedPageContent {
+                body: shell.as_bytes().to_vec(),
+                content_type: Some("text/html".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
+
+        assert!(!doc.evidence_eligible);
+        assert_eq!(doc.verification_status, "unverified");
+        assert_eq!(evidence_content_kind(&doc), "none");
+
+        let payload = ctox_web_search_payload(
+            "requested source facts",
+            &SearchToolRequest::default(),
+            ContextSize::Medium,
+            &SearchResponse {
+                provider: "mock".to_string(),
+                hits: vec![hit.clone()],
+                evidence: vec![doc],
+                executed_queries: vec!["requested source facts".to_string()],
+                source_failures: Vec::new(),
+            },
+            String::new(),
+        );
+        assert_eq!(payload["results"][0]["transport_verified"], false);
+        assert_eq!(payload["results"][0]["evidence_eligible"], false);
+        assert_eq!(payload["results"][0]["content_extracted"], false);
+        assert!(payload["citations"].as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn evidence_gate_rejects_login_cookie_and_metadata_fallbacks() {
+        let config = test_config(ProviderKind::Mock);
+        let cases = [
+            (
+                "https://example.com/login",
+                "login",
+                r#"<html><body><main><p>Please sign in to continue. Your account login is required before this page can be displayed.</p></main></body></html>"#,
+                "text/html",
+            ),
+            (
+                "https://example.com/cookie",
+                "cookie",
+                r#"<html><body><div class="cookie-banner"><p>We use cookies and similar technologies. Review cookie settings and privacy policy before continuing.</p></div></body></html>"#,
+                "text/html",
+            ),
+            (
+                "https://api.example.com/records/1",
+                "metadata",
+                r#"{"metadata":{"title":"A plausible record title","description":"A plausible metadata description with enough words to look like extracted content."}}"#,
+                "application/json",
+            ),
+        ];
+
+        for (url, source, body, content_type) in cases {
+            let hit = SearchHit {
+                title: source.to_string(),
+                url: url.to_string(),
+                snippet: "A long discovery snippet that must never be admitted as source evidence."
+                    .to_string(),
+                source: source.to_string(),
+                rank: 1,
+            };
+            let opened = extract_opened_page("requested source facts", &hit, body);
+            let mut doc = build_query_evidence_doc(
+                &config,
+                "requested source facts",
+                &hit,
+                hit.url.clone(),
+                opened,
+            );
+            apply_evidence_gate(
+                &mut doc,
+                &hit,
+                &FetchedPageContent {
+                    body: body.as_bytes().to_vec(),
+                    content_type: Some(content_type.to_string()),
+                    final_url: hit.url.clone(),
+                    http_status: 200,
+                },
+            );
+            assert!(
+                !doc.evidence_eligible,
+                "fallback must not be eligible for {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_read_withholds_typed_fields_until_page_content_is_admitted() {
+        let doc = EvidenceDoc {
+            url: "https://companyhouse.de/firma/example".to_string(),
+            canonical_url: "https://companyhouse.de/firma/example".to_string(),
+            title: "Sign in".to_string(),
+            summary: "Please sign in to continue".to_string(),
+            verification_status: "unverified".to_string(),
+            checked_at: 1,
+            http_status: Some(200),
+            snapshot_hash: Some("sha256:shell".to_string()),
+            source_tier: Some("P".to_string()),
+            evidence_eligible: false,
+            is_pdf: false,
+            pdf_total_pages: None,
+            page_sections: Vec::new(),
+            excerpts: Vec::new(),
+            page_text: String::new(),
+            find_results: Vec::new(),
+            raw_html: Some(
+                "<html><body><h1>Example GmbH</h1><p>Sign in to continue</p></body></html>"
+                    .to_string(),
+            ),
+        };
+        let url = doc.url.clone();
+        let payload = render_direct_web_read_payload(
+            &url,
+            "example",
+            &DirectWebReadRequest {
+                url: doc.url.clone(),
+                query: Some("example".to_string()),
+                find: Vec::new(),
+                country: None,
+            },
+            doc,
+        );
+        assert!(payload["extracted_fields"].is_null());
+        assert_eq!(payload["evidence_content_kind"], "none");
     }
 
     #[test]
@@ -9029,6 +9370,31 @@ mod tests {
             .iter()
             .any(|excerpt| excerpt.contains("checksum")));
         assert!(is_meaningful_evidence_text(&page.summary));
+
+        let config = test_config(ProviderKind::Mock);
+        let mut doc = build_query_evidence_doc(
+            &config,
+            "ENOLA propeller database archive checksum forces moments",
+            &hit,
+            hit.url.clone(),
+            page,
+        );
+        apply_evidence_gate(
+            &mut doc,
+            &hit,
+            &FetchedPageContent {
+                body: body.as_bytes().to_vec(),
+                content_type: Some("application/json".to_string()),
+                final_url: hit.url.clone(),
+                http_status: 200,
+            },
+        );
+        assert!(doc.evidence_eligible);
+        assert_eq!(evidence_content_kind(&doc), "metadata_receipt");
+        assert!(
+            !(evidence_doc_has_meaningful_content(&doc)
+                && evidence_content_kind(&doc) == "page_content")
+        );
     }
 
     #[test]

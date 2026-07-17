@@ -28,6 +28,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use anyhow::Result;
+use chrono::DateTime;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
@@ -44,6 +45,8 @@ use crate::web_search::{
 
 const MAX_HITS_PER_SOURCE: usize = 4;
 const MAX_READS_PER_SOURCE: usize = 2;
+const MAX_EVIDENCE_AGE_MS: u64 = 24 * 60 * 60 * 1_000;
+const MAX_CLOCK_SKEW_MS: u64 = 5 * 60 * 1_000;
 
 // ---------------------------------------------------------------------------
 // Public request / response shape
@@ -150,6 +153,7 @@ pub fn run_ctox_person_research_tool(
                     "repair_queued": result.repair_queued,
                     "run_id": result.run_id,
                     "record_count": result.fields.len(),
+                    "evidence_rejections": result.evidence_rejections,
                 }));
                 for (field, ev) in result.fields {
                     if !request.fields.is_empty() && !request.fields.contains(&field) {
@@ -250,7 +254,7 @@ pub fn run_ctox_person_research_tool(
         // fetch the gated profile pages behind them. If `extract_from_hits`
         // returns evidence, we use it and skip the per-hit read loop.
         if let Some(module) = sources::find(plan.source_id) {
-            let hit_objs = parse_hits(&hits);
+            let hit_objs = parse_verified_hits(&hits, plan, &company);
             if !hit_objs.is_empty() {
                 let ctx = SourceCtx {
                     root,
@@ -288,6 +292,9 @@ pub fn run_ctox_person_research_tool(
             if reads_for_plan >= MAX_READS_PER_SOURCE {
                 break;
             }
+            if !search_hit_evidence_eligible(hit, plan, &company) {
+                continue;
+            }
             let Some(url) = hit.get("url").and_then(Value::as_str) else {
                 continue;
             };
@@ -312,6 +319,15 @@ pub fn run_ctox_person_research_tool(
             );
             match read_payload {
                 Ok(payload) => {
+                    if !web_read_evidence_eligible(&payload, plan, &company, url) {
+                        read_runs.push(json!({
+                            "source_id": plan.source_id,
+                            "url": url,
+                            "ok": false,
+                            "evidence_rejected": true,
+                        }));
+                        continue;
+                    }
                     if let Some(fields) = payload
                         .get("extracted_fields")
                         .and_then(|v| v.get("fields"))
@@ -330,10 +346,41 @@ pub fn run_ctox_person_research_tool(
                             if scrape_covered_fields.contains(&field) {
                                 continue;
                             }
+                            let Some(source_url) = entry
+                                .get("canonical_url")
+                                .or_else(|| entry.get("source_url"))
+                                .and_then(Value::as_str)
+                                .filter(|value| {
+                                    valid_http_url(value)
+                                        && url_belongs_to_source(
+                                            value,
+                                            plan.source_id,
+                                            plan.aliases,
+                                            plan.host_suffixes,
+                                        )
+                                })
+                            else {
+                                continue;
+                            };
+                            if !entry_company_identity_matches(&payload, entry, &company) {
+                                continue;
+                            }
                             let mut tagged = entry.clone();
                             tagged["source_id"] = Value::String(plan.source_id.to_string());
                             tagged["tier"] = Value::String(tier_label(plan.tier).to_string());
                             tagged["hit_url"] = Value::String(url.to_string());
+                            tagged["source_url"] = Value::String(source_url.to_string());
+                            tagged["canonical_url"] = Value::String(
+                                payload
+                                    .get("canonical_url")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(source_url)
+                                    .to_string(),
+                            );
+                            tagged["evidence_eligible"] = Value::Bool(true);
+                            tagged["verification_status"] = Value::String("verified".into());
+                            tagged["checked_at"] =
+                                payload.get("checked_at").cloned().unwrap_or(Value::Null);
                             field_evidence.entry(field).or_default().push(tagged);
                         }
                     }
@@ -774,6 +821,18 @@ fn collect_browser_extract_evidence(
         }) else {
             continue;
         };
+        if !browser_extract_is_current(&doc, result, extract, payload, plan, company) {
+            runs.push(json!({
+                "ok": false,
+                "via": "browser_extract",
+                "source_id": plan.source_id,
+                "command_id": first_json_string(&[&doc], "command_id")
+                    .or_else(|| first_json_string(&[&doc], "id"))
+                    .unwrap_or_default(),
+                "evidence_rejected": true,
+            }));
+            continue;
+        }
         let Some(fields) = extract.get("fields").and_then(Value::as_object) else {
             runs.push(browser_extract_run_summary(
                 &doc, result, extract, payload, plan, 0,
@@ -867,6 +926,173 @@ fn browser_extract_run_summary(
     })
 }
 
+fn browser_extract_is_current(
+    doc: &Value,
+    result: &Value,
+    extract: &Value,
+    payload: &Value,
+    plan: &PersonResearchPlan,
+    company: &str,
+) -> bool {
+    if result.get("ok").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    if result
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| !matches!(status, "completed" | "succeeded" | "success" | "ok"))
+    {
+        return false;
+    }
+    if result
+        .get("classification")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status != "succeeded")
+    {
+        return false;
+    }
+    if result
+        .get("secret_value_in_payload")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || result.get("frame_data_in_payload").and_then(Value::as_bool) == Some(true)
+    {
+        return false;
+    }
+
+    let source_ids = [
+        first_json_string(&[extract], "sourceId"),
+        first_json_string(&[extract], "source_id"),
+        first_json_string(&[result], "source_id"),
+        first_json_string(&[payload], "source_id"),
+    ];
+    if source_ids
+        .iter()
+        .flatten()
+        .any(|source_id| !source_id_matches_plan(source_id, plan))
+        || source_ids.iter().all(Option::is_none)
+    {
+        return false;
+    }
+
+    let Some(source_url) = first_json_string(&[extract, payload], "url").or_else(|| {
+        payload
+            .pointer("/browser_context_artifact/browser_context/url")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }) else {
+        return false;
+    };
+    if !valid_http_url(&source_url)
+        || !url_belongs_to_source(
+            &source_url,
+            plan.source_id,
+            plan.aliases,
+            plan.host_suffixes,
+        )
+    {
+        return false;
+    }
+    for candidate_url in [
+        first_json_string(&[extract], "url"),
+        first_json_string(&[payload], "url"),
+        context_value(payload).and_then(|context| first_json_string(&[context], "url")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_http_url(&candidate_url)
+            || !url_belongs_to_source(
+                &candidate_url,
+                plan.source_id,
+                plan.aliases,
+                plan.host_suffixes,
+            )
+        {
+            return false;
+        }
+    }
+
+    let context = context_value(payload).unwrap_or(&Value::Null);
+    let session_id = first_json_string(&[payload, context], "session_id");
+    if session_id.as_deref().unwrap_or_default().is_empty() {
+        return false;
+    }
+    if let (Some(record_id), Some(session_id)) = (
+        doc.get("record_id").and_then(Value::as_str),
+        session_id.as_deref(),
+    ) {
+        if record_id != session_id {
+            return false;
+        }
+    }
+    if let (Some(payload_session), Some(context_session)) = (
+        payload.get("session_id").and_then(Value::as_str),
+        context.get("session_id").and_then(Value::as_str),
+    ) {
+        if payload_session != context_session {
+            return false;
+        }
+    }
+    let frame_id = first_json_string(&[payload, context], "frame_id");
+    if frame_id.as_deref().unwrap_or_default().is_empty() {
+        return false;
+    }
+    if let (Some(payload_frame), Some(context_frame)) = (
+        payload.get("frame_id").and_then(Value::as_str),
+        context.get("frame_id").and_then(Value::as_str),
+    ) {
+        if payload_frame != context_frame {
+            return false;
+        }
+    }
+    if let (Some(command_id), Some(document_command_id)) = (
+        payload.get("command_id").and_then(Value::as_str),
+        doc.get("command_id")
+            .or_else(|| doc.get("id"))
+            .and_then(Value::as_str),
+    ) {
+        if command_id != document_command_id {
+            return false;
+        }
+    }
+    let captured_at = first_json_number(
+        &[extract, result, payload, context],
+        &["captured_at_ms", "frame_captured_at_ms"],
+    );
+    let updated_at = doc
+        .get("updated_at_ms")
+        .and_then(Value::as_u64)
+        .or_else(|| first_json_number(&[result, payload], &["updated_at_ms"]));
+    let expires_at = first_json_number(
+        &[context, payload, result],
+        &["expires_at_ms", "frame_expires_at_ms"],
+    );
+    let now = now_ms();
+    if !captured_at.is_some_and(is_fresh_timestamp)
+        || !updated_at.is_some_and(is_fresh_timestamp)
+        || !expires_at.is_some_and(|timestamp| timestamp > now)
+    {
+        return false;
+    }
+
+    let Some(fields) = extract.get("fields").and_then(Value::as_object) else {
+        return false;
+    };
+    browser_extract_matches_company(company, extract, payload, fields)
+}
+
+fn context_value(payload: &Value) -> Option<&Value> {
+    payload.pointer("/browser_context_artifact/browser_context")
+}
+
+fn first_json_number(values: &[&Value], keys: &[&str]) -> Option<u64> {
+    values.iter().find_map(|value| {
+        keys.iter()
+            .find_map(|key| value.get(*key).and_then(timestamp_ms))
+    })
+}
+
 fn browser_extract_scalar(value: &Value) -> Option<String> {
     match value {
         Value::String(raw) => {
@@ -893,7 +1119,7 @@ fn browser_extract_matches_company(
     if tokens.is_empty() {
         return false;
     }
-    let mut haystack = String::new();
+    let mut identity_haystack = String::new();
     for value in [
         first_json_string(&[extract, payload], "url"),
         first_json_string(&[extract, payload], "title"),
@@ -909,22 +1135,38 @@ fn browser_extract_matches_company(
     .into_iter()
     .flatten()
     {
-        haystack.push(' ');
-        haystack.push_str(&value.to_ascii_lowercase());
+        identity_haystack.push(' ');
+        identity_haystack.push_str(&value.to_ascii_lowercase());
     }
     for (field_name, raw_value) in fields {
         if forbidden_browser_extract_key(field_name) {
             continue;
         }
-        if FieldKey::from_str(field_name).is_none() {
+        if !matches!(
+            field_name.trim().to_ascii_lowercase().as_str(),
+            "company" | "company_name" | "firma_name" | "company_identity"
+        ) {
             continue;
         }
         if let Some(value) = browser_extract_scalar(raw_value) {
-            haystack.push(' ');
-            haystack.push_str(&value.to_ascii_lowercase());
+            identity_haystack.push(' ');
+            identity_haystack.push_str(&value.to_ascii_lowercase());
         }
     }
-    tokens.iter().any(|token| haystack.contains(token))
+    company_identity_matches(company, &identity_haystack)
+}
+
+fn company_identity_matches(company: &str, haystack: &str) -> bool {
+    let tokens = company_match_tokens(company);
+    if tokens.is_empty() {
+        return false;
+    }
+    let actual_tokens: BTreeSet<String> = haystack
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|token| !token.is_empty())
+        .collect();
+    tokens.iter().all(|token| actual_tokens.contains(token))
 }
 
 fn company_match_tokens(company: &str) -> Vec<String> {
@@ -1073,6 +1315,193 @@ fn parse_hits(raw: &[Value]) -> Vec<SourceHit> {
             }
         })
         .collect()
+}
+
+fn parse_verified_hits(raw: &[Value], plan: &PersonResearchPlan, company: &str) -> Vec<SourceHit> {
+    let eligible: Vec<Value> = raw
+        .iter()
+        .filter(|hit| search_hit_evidence_eligible(hit, plan, company))
+        .cloned()
+        .collect();
+    parse_hits(&eligible)
+}
+
+fn search_hit_evidence_eligible(hit: &Value, plan: &PersonResearchPlan, company: &str) -> bool {
+    if !evidence_gate_is_current(hit) {
+        return false;
+    }
+    let Some(url) = hit.get("url").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(canonical_url) = hit.get("canonical_url").and_then(Value::as_str) else {
+        return false;
+    };
+    valid_http_url(url)
+        && valid_http_url(canonical_url)
+        && url_belongs_to_source(
+            canonical_url,
+            plan.source_id,
+            plan.aliases,
+            plan.host_suffixes,
+        )
+        && url_belongs_to_source(url, plan.source_id, plan.aliases, plan.host_suffixes)
+        && company_identity_matches(
+            company,
+            &format!(
+                "{} {}",
+                hit.get("title").and_then(Value::as_str).unwrap_or_default(),
+                hit.get("snippet")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ),
+        )
+}
+
+fn web_read_evidence_eligible(
+    payload: &Value,
+    plan: &PersonResearchPlan,
+    company: &str,
+    requested_url: &str,
+) -> bool {
+    if !evidence_gate_is_current(payload) {
+        return false;
+    }
+    let Some(canonical_url) = payload.get("canonical_url").and_then(Value::as_str) else {
+        return false;
+    };
+    if !valid_http_url(requested_url)
+        || !valid_http_url(canonical_url)
+        || !url_belongs_to_source(
+            requested_url,
+            plan.source_id,
+            plan.aliases,
+            plan.host_suffixes,
+        )
+        || !url_belongs_to_source(
+            canonical_url,
+            plan.source_id,
+            plan.aliases,
+            plan.host_suffixes,
+        )
+    {
+        return false;
+    }
+    let Some(extracted) = payload.get("extracted_fields") else {
+        return false;
+    };
+    if let Some(source_id) = extracted.get("source_id").and_then(Value::as_str) {
+        if !source_id_matches_plan(source_id, plan) {
+            return false;
+        }
+    }
+    company_identity_matches(
+        company,
+        &format!(
+            "{} {} {} {}",
+            payload
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            payload
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            payload
+                .get("page_text_excerpt")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            canonical_url,
+        ),
+    )
+}
+
+fn entry_company_identity_matches(payload: &Value, entry: &Value, company: &str) -> bool {
+    let explicit = ["company", "company_name", "firma_name", "company_identity"]
+        .iter()
+        .find_map(|key| entry.get(*key).and_then(Value::as_str))
+        .or_else(|| {
+            ["title", "summary", "page_text_excerpt"]
+                .iter()
+                .find_map(|key| payload.get(*key).and_then(Value::as_str))
+        });
+    let Some(explicit) = explicit else {
+        return false;
+    };
+    company_identity_matches(company, explicit)
+}
+
+fn evidence_gate_is_current(value: &Value) -> bool {
+    let gate = value
+        .get("evidence_gate")
+        .or_else(|| value.get("evidence"))
+        .unwrap_or(value);
+    gate.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+        && gate.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && gate
+            .get("http_status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| (200..300).contains(&status))
+        && gate
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| !hash.trim().is_empty())
+        && gate.get("fresh").and_then(Value::as_bool) != Some(false)
+        && gate
+            .get("checked_at")
+            .or_else(|| gate.get("checked_at_ms"))
+            .and_then(timestamp_ms)
+            .is_some_and(is_fresh_timestamp)
+}
+
+fn source_id_matches_plan(source_id: &str, plan: &PersonResearchPlan) -> bool {
+    source_id.eq_ignore_ascii_case(plan.source_id)
+        || plan
+            .aliases
+            .iter()
+            .any(|alias| source_id.eq_ignore_ascii_case(alias))
+}
+
+fn valid_http_url(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw.trim()) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+}
+
+fn timestamp_ms(value: &Value) -> Option<u64> {
+    let raw = value
+        .as_u64()
+        .or_else(|| {
+            value
+                .as_i64()
+                .filter(|value| *value >= 0)
+                .map(|value| value as u64)
+        })
+        .or_else(|| value.as_str()?.trim().parse::<u64>().ok());
+    if let Some(raw) = raw {
+        return Some(if raw < 10_000_000_000 {
+            raw * 1_000
+        } else {
+            raw
+        });
+    }
+    value
+        .as_str()
+        .and_then(|text| DateTime::parse_from_rfc3339(text.trim()).ok())
+        .and_then(|date| u64::try_from(date.timestamp_millis()).ok())
+}
+
+fn is_fresh_timestamp(timestamp: u64) -> bool {
+    let now = now_ms();
+    timestamp <= now.saturating_add(MAX_CLOCK_SKEW_MS)
+        && now.saturating_sub(timestamp) <= MAX_EVIDENCE_AGE_MS
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn find_terms_for_fields(fields: &[FieldKey]) -> Vec<String> {
@@ -1599,8 +2028,12 @@ mod tests {
                 "source_id": "linkedin.com",
                 "capture_script": "linkedin.profile_capture.v1",
                 "secret_value": "bad-secret",
-                "browser_context_artifact": {
+                    "browser_context_artifact": {
                     "browser_context": {
+                        "session_id": "browser-session-test",
+                        "frame_id": "frame-test",
+                        "frame_captured_at_ms": now_ms(),
+                        "frame_expires_at_ms": now_ms() + 60_000,
                         "url": "https://www.linkedin.com/in/alice",
                         "title": "Alice Example - CEO - ACME | LinkedIn",
                         "frame_data": "bad-frame"
@@ -1625,6 +2058,8 @@ mod tests {
                 }
             }
         });
+        let mut doc = doc;
+        doc["updated_at_ms"] = json!(now_ms());
         conn.execute(
             "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES (?1, ?2)",
             (
@@ -1657,6 +2092,37 @@ mod tests {
         let serialized = format!("{evidence:?}{runs:?}");
         assert!(!serialized.contains("bad-secret"));
         assert!(!serialized.contains("bad-frame"));
+
+        let plan = build_person_research_plan(&request)
+            .into_iter()
+            .find(|plan| plan.source_id == "linkedin.com")
+            .expect("linkedin plan");
+        let result = doc.get("result").unwrap();
+        let extract = result.get("extract").unwrap();
+        let payload = doc.get("payload").unwrap();
+        assert!(browser_extract_is_current(
+            &doc, result, extract, payload, &plan, "ACME"
+        ));
+        let mut stale = doc.clone();
+        stale["updated_at_ms"] = json!(1_u64);
+        assert!(!browser_extract_is_current(
+            &stale,
+            stale.get("result").unwrap(),
+            stale["result"].get("extract").unwrap(),
+            stale.get("payload").unwrap(),
+            &plan,
+            "ACME"
+        ));
+        let mut mixed_frame = doc.clone();
+        mixed_frame["payload"]["frame_id"] = json!("different-frame");
+        assert!(!browser_extract_is_current(
+            &mixed_frame,
+            mixed_frame.get("result").unwrap(),
+            mixed_frame["result"].get("extract").unwrap(),
+            mixed_frame.get("payload").unwrap(),
+            &plan,
+            "ACME"
+        ));
 
         drop(conn);
         let _ = fs::remove_dir_all(root);
@@ -1697,6 +2163,59 @@ mod tests {
                 }
             }),
             &fields,
+        ));
+    }
+
+    #[test]
+    fn search_evidence_rejects_stale_wrong_source_and_wrong_company() {
+        let request = PersonResearchRequest {
+            company: "ACME GmbH".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::FirmaName],
+            include_private: Vec::new(),
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plan = build_person_research_plan(&request)
+            .into_iter()
+            .find(|plan| plan.source_id == "northdata.de")
+            .expect("northdata plan");
+        let gate = json!({
+            "evidence_eligible": true,
+            "verification_status": "verified",
+            "http_status": 200,
+            "checked_at": now_ms(),
+            "snapshot_hash": "sha256:test"
+        });
+        let base = json!({
+            "url": "https://www.northdata.de/ACME",
+            "canonical_url": "https://www.northdata.de/ACME",
+            "title": "ACME company profile",
+            "snippet": "ACME company register",
+            "evidence_gate": gate
+        });
+        assert!(search_hit_evidence_eligible(&base, &plan, "ACME GmbH"));
+
+        let mut stale = base.clone();
+        stale["evidence_gate"]["checked_at"] = json!(1_u64);
+        assert!(!search_hit_evidence_eligible(&stale, &plan, "ACME GmbH"));
+
+        let mut wrong_source = base.clone();
+        wrong_source["canonical_url"] = json!("https://evil.example/ACME");
+        assert!(!search_hit_evidence_eligible(
+            &wrong_source,
+            &plan,
+            "ACME GmbH"
+        ));
+
+        let mut wrong_company = base;
+        wrong_company["title"] = json!("Globex company profile");
+        wrong_company["snippet"] = json!("Globex company register");
+        assert!(!search_hit_evidence_eligible(
+            &wrong_company,
+            &plan,
+            "ACME GmbH"
         ));
     }
 

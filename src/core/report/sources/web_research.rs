@@ -112,41 +112,146 @@ impl WebResearchAdapter {
     }
 }
 
-/// Walk the bundle's source records and assemble a single text blob suitable
-/// for regex DOI / arXiv extraction. We pull `snippet`, `read.summary`, and
-/// any `read.excerpts[]` strings.
+/// Return true only for a source that has passed the complete evidence gate.
+/// Discovery metadata and failed or incomplete reads remain in the raw bundle
+/// for audit, but must not feed a report corpus or identifier extraction.
+pub(crate) fn is_evidence_eligible_source(source: &Value) -> bool {
+    let metadata_only = source
+        .get("metadata_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let source_type = source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source_tier = source
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let canonical_url = source
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(is_canonical_http_url);
+    let canonical_url_is_metadata = source
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(is_metadata_canonical_url);
+    let successful_transport = source
+        .get("http_status")
+        .and_then(Value::as_i64)
+        .is_some_and(|status| (200..=299).contains(&status));
+    let snapshotted = source
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .is_some_and(is_sha256_receipt);
+    let has_rejection_reason = source
+        .get("evidence_rejection_reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty());
+
+    source.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+        && source.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && source.get("transport_verified").and_then(Value::as_bool) == Some(true)
+        && source.get("content_extracted").and_then(Value::as_bool) == Some(true)
+        && source
+            .get("actual_full_text_or_data")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && source
+            .get("evidence_relevance_score")
+            .and_then(Value::as_i64)
+            .is_some_and(|score| score >= 8)
+        && successful_transport
+        && snapshotted
+        && canonical_url
+        && !canonical_url_is_metadata
+        && !metadata_only
+        && !source_type.contains("metadata")
+        && !source_tier.contains("metadata")
+        && source_type != "aggregator"
+        && source_tier != "aggregator"
+        && !has_rejection_reason
+}
+
+fn is_canonical_http_url(raw: &str) -> bool {
+    url::Url::parse(raw.trim())
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+}
+
+fn is_sha256_receipt(raw: &str) -> bool {
+    raw.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
+fn is_metadata_canonical_url(url: &str) -> bool {
+    let normalized = url.trim().to_ascii_lowercase();
+    [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://api.crossref.org/",
+        "https://api.openalex.org/",
+        "https://api.semanticscholar.org/",
+        "https://www.semanticscholar.org/",
+        "https://scholar.google.",
+        "https://www.researchgate.net/",
+        "https://www.academia.edu/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+/// Extract only source content from an eligible record. In particular, do not
+/// use search snippets or scholarly metadata as a substitute for a snapshot.
+pub(crate) fn evidence_text(source: &Value) -> String {
+    let mut buf = String::new();
+    if let Some(s) = source.get("canonical_url").and_then(Value::as_str) {
+        append_line(&mut buf, s);
+    }
+    if let Some(s) = source.get("title").and_then(Value::as_str) {
+        append_line(&mut buf, s);
+    }
+    if let Some(read) = source.get("read") {
+        if let Some(s) = read.get("summary").and_then(Value::as_str) {
+            append_line(&mut buf, s);
+        }
+        if let Some(excerpts) = read.get("excerpts").and_then(Value::as_array) {
+            for excerpt in excerpts {
+                if let Some(s) = excerpt.as_str() {
+                    append_line(&mut buf, s);
+                } else if let Some(s) = excerpt.get("text").and_then(Value::as_str) {
+                    append_line(&mut buf, s);
+                }
+            }
+        }
+        if let Some(find_results) = read.get("find_results").and_then(Value::as_array) {
+            for result in find_results {
+                if let Some(matches) = result.get("matches").and_then(Value::as_array) {
+                    for value in matches.iter().filter_map(Value::as_str) {
+                        append_line(&mut buf, value);
+                    }
+                }
+            }
+        }
+    }
+    buf
+}
+
+fn append_line(buf: &mut String, text: &str) {
+    buf.push_str(text);
+    buf.push('\n');
+}
+
+/// Walk only eligible source records and assemble a text blob suitable for
+/// regex DOI / arXiv extraction. Rejected candidates are intentionally absent.
 fn collect_text_corpus(bundle: &Value) -> String {
     let mut buf = String::new();
     if let Some(arr) = bundle.get("sources").and_then(Value::as_array) {
         for src in arr {
-            if let Some(s) = src.get("snippet").and_then(Value::as_str) {
-                buf.push_str(s);
-                buf.push('\n');
-            }
-            if let Some(s) = src.get("title").and_then(Value::as_str) {
-                buf.push_str(s);
-                buf.push('\n');
-            }
-            if let Some(s) = src.get("url").and_then(Value::as_str) {
-                buf.push_str(s);
-                buf.push('\n');
-            }
-            if let Some(read) = src.get("read") {
-                if let Some(s) = read.get("summary").and_then(Value::as_str) {
-                    buf.push_str(s);
-                    buf.push('\n');
-                }
-                if let Some(exs) = read.get("excerpts").and_then(Value::as_array) {
-                    for ex in exs {
-                        if let Some(s) = ex.as_str() {
-                            buf.push_str(s);
-                            buf.push('\n');
-                        } else if let Some(s) = ex.get("text").and_then(Value::as_str) {
-                            buf.push_str(s);
-                            buf.push('\n');
-                        }
-                    }
-                }
+            if is_evidence_eligible_source(src) {
+                buf.push_str(&evidence_text(src));
             }
         }
     }
@@ -237,22 +342,98 @@ mod tests {
     }
 
     #[test]
-    fn collect_text_corpus_walks_sources_and_reads() {
+    fn collect_text_corpus_excludes_rejected_and_metadata_sources() {
         let bundle = json!({
             "sources": [
                 {
-                    "snippet": "see 10.1234/abc.def",
+                    "url": "https://dead.example/source",
+                    "canonical_url": "https://publisher.example/source",
+                    "source_type": "scholarly",
+                    "source_tier": "scholarly",
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 32,
+                    "http_status": 200,
+                    "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+                    "evidence_eligible": true,
+                    "title": "Accepted source",
                     "read": {
-                        "summary": "another arXiv:2401.12345",
-                        "excerpts": ["10.5678/xyz.qq"]
+                        "summary": "accepted arXiv:2401.12345",
+                        "excerpts": ["accepted DOI 10.5678/xyz.qq"]
+                    }
+                },
+                {
+                    "canonical_url": "https://metadata.example/paper",
+                    "source_type": "paper_metadata",
+                    "source_tier": "metadata",
+                    "metadata_only": true,
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "http_status": 200,
+                    "snapshot_hash": "sha256:metadata",
+                    "evidence_eligible": true,
+                    "read": {
+                        "summary": "metadata DOI 10.9999/metadata"
+                    }
+                },
+                {
+                    "canonical_url": "https://dead.example/paper",
+                    "verification_status": "failed",
+                    "transport_verified": false,
+                    "content_extracted": false,
+                    "http_status": 404,
+                    "snapshot_hash": null,
+                    "evidence_eligible": false,
+                    "read": {
+                        "summary": "dead DOI 10.8888/dead"
                     }
                 }
             ]
         });
         let blob = collect_text_corpus(&bundle);
-        assert!(blob.contains("10.1234/abc.def"));
-        assert!(blob.contains("arXiv:2401.12345"));
+        assert!(blob.contains("accepted arXiv:2401.12345"));
         assert!(blob.contains("10.5678/xyz.qq"));
+        assert!(!blob.contains("10.9999/metadata"));
+        assert!(!blob.contains("10.8888/dead"));
+        assert_eq!(extract_dois(&blob), vec!["10.5678/xyz.qq"]);
+    }
+
+    #[test]
+    fn eligibility_requires_canonical_snapshot_and_verified_transport() {
+        let mut source = json!({
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "source_tier": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "http_status": 200,
+            "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+            "evidence_eligible": true
+        });
+        assert!(is_evidence_eligible_source(&source));
+
+        for field in ["canonical_url", "snapshot_hash"] {
+            let mut invalid = source.clone();
+            invalid[field] = Value::String(String::new());
+            assert!(!is_evidence_eligible_source(&invalid), "missing {field}");
+        }
+        source["snapshot_hash"] = json!("sha256:not-a-content-hash");
+        assert!(!is_evidence_eligible_source(&source));
+        source["snapshot_hash"] = json!(format!("sha256:{}", "a".repeat(64)));
+        source["http_status"] = json!(500);
+        assert!(!is_evidence_eligible_source(&source));
+        source["http_status"] = json!(200);
+        source["canonical_url"] = json!("https://doi.org/10.1234/metadata");
+        assert!(!is_evidence_eligible_source(&source));
+        source["canonical_url"] = json!("https://publisher.example/source");
+        source["actual_full_text_or_data"] = json!(false);
+        assert!(!is_evidence_eligible_source(&source));
     }
 
     #[test]
