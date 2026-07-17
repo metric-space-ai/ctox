@@ -1,0 +1,11 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-importer" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad-importer" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+  </defs>
+  <rect x="3" y="9" width="18" height="12" rx="2.5" fill="url(#grad-importer)" fill-opacity="0.12" stroke="url(#grad-importer)" stroke-width="2" stroke-linejoin="round"></rect>
+  <path d="M12 3v9" stroke="url(#grad-importer)" stroke-width="2" stroke-linecap="round"></path>
+  <path d="M8.5 8.5 12 12l3.5-3.5" stroke="url(#grad-importer)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
