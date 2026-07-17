@@ -4126,6 +4126,161 @@ mod tests {
         assert_eq!(v0_again_status["schemaHash"], v0_status["schemaHash"]);
     }
 
+    fn checkpoint_contract_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webrtc-checkpoint-contract.json"
+        ))
+        .expect("parse checkpoint contract fixture")
+    }
+
+    fn render_checkpoint_epoch_input(
+        template: &str,
+        database_name: &str,
+        collection_name: &str,
+        schema_hash: &str,
+        latest_lwt: f64,
+        latest_id: &str,
+    ) -> String {
+        template
+            .replace("{databaseName}", database_name)
+            .replace("{collectionName}", collection_name)
+            .replace("{schemaHash}", schema_hash)
+            // f64 Display: an integer lwt renders WITHOUT a decimal point,
+            // matching JS `String(Number)` — that equivalence is part of the
+            // pinned contract (fixture `checkpointStatus.lwtRendering`).
+            .replace("{latestLwt}", &format!("{latest_lwt}"))
+            .replace("{latestId}", latest_id)
+    }
+
+    /// SYNC-03: the checkpoint wire shape is pinned by
+    /// `tests/fixtures/webrtc-checkpoint-contract.json` on BOTH language
+    /// sides. A one-sided change to the field list, the epoch derivation, or
+    /// the empty-cursor fallback must turn this test red.
+    #[tokio::test]
+    async fn checkpoint_contract_fixture_matches_checkpoint_status() {
+        let fixture = checkpoint_contract_fixture();
+        assert_eq!(fixture["contract"], "ctox-checkpoint-contract-v1");
+        let template = fixture["checkpointStatus"]["epochInputTemplate"]
+            .as_str()
+            .expect("epoch input template");
+
+        // 1. The fixture's worked-example hashes are real sha256 values under
+        //    the SAME hash + format pipeline production uses. This proves the
+        //    fixture numbers themselves (the JS smoke recomputes them with
+        //    node:crypto, pinning the algorithm cross-language).
+        let example = &fixture["example"];
+        assert_eq!(
+            sha256_hex(example["latestId"].as_str().unwrap().as_bytes()),
+            example["latestIdHash"].as_str().unwrap()
+        );
+        let example_epoch_input = render_checkpoint_epoch_input(
+            template,
+            example["databaseName"].as_str().unwrap(),
+            example["collectionName"].as_str().unwrap(),
+            example["schemaHash"].as_str().unwrap(),
+            example["latestLwt"].as_f64().unwrap(),
+            example["latestId"].as_str().unwrap(),
+        );
+        assert_eq!(
+            example_epoch_input,
+            example["epochInput"].as_str().unwrap(),
+            "fixture epochInput must equal the substituted epochInputTemplate"
+        );
+        assert_eq!(
+            sha256_hex(example_epoch_input.as_bytes()),
+            example["epoch"].as_str().unwrap()
+        );
+
+        // 2. A real storage instance emits EXACTLY the fixture's field list
+        //    and derives its epoch via the fixture template.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+
+        // Empty collection: the `{id: "", lwt: 0}` replication-cursor
+        // fallback pinned by the fixture flows into the epoch input.
+        let empty_status = instance.replication_checkpoint_status().await;
+        let empty_cursor = &fixture["replicationCursor"]["empty"];
+        assert_eq!(empty_cursor["id"], "");
+        assert_eq!(empty_cursor["lwt"], 0);
+        assert_eq!(
+            empty_status["latestLwt"].as_f64(),
+            empty_cursor["lwt"].as_f64()
+        );
+        assert_eq!(empty_status["latestIdHash"], "");
+        let empty_epoch_input = render_checkpoint_epoch_input(
+            template,
+            "db",
+            "docs",
+            empty_status["schemaHash"].as_str().unwrap(),
+            empty_cursor["lwt"].as_f64().unwrap(),
+            empty_cursor["id"].as_str().unwrap(),
+        );
+        assert_eq!(
+            empty_status["epoch"].as_str().unwrap(),
+            sha256_hex(empty_epoch_input.as_bytes()),
+            "empty-collection epoch must derive from the fixture's empty replication cursor"
+        );
+
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("note-1", "1-a", 1, false, 7.0),
+                }],
+                "insert",
+            )
+            .await
+            .unwrap();
+        let status = instance.replication_checkpoint_status().await;
+
+        let mut expected_fields: Vec<&str> = fixture["checkpointStatus"]["fields"]
+            .as_array()
+            .expect("checkpoint status field list")
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        expected_fields.sort_unstable();
+        let mut actual_fields: Vec<&str> = status
+            .as_object()
+            .expect("checkpoint status object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        actual_fields.sort_unstable();
+        assert_eq!(
+            actual_fields, expected_fields,
+            "checkpoint status field list drifted from webrtc-checkpoint-contract.json"
+        );
+
+        assert_eq!(status["source"], fixture["checkpointStatus"]["source"]);
+        assert_eq!(status["state"], fixture["checkpointStatus"]["state"]);
+        assert_eq!(status["state"], "advertised");
+        assert_eq!(status["collection"], "docs");
+        assert_eq!(
+            status["latestIdHash"].as_str().unwrap(),
+            sha256_hex(b"note-1")
+        );
+
+        let live_epoch_input = render_checkpoint_epoch_input(
+            template,
+            "db",
+            "docs",
+            status["schemaHash"].as_str().unwrap(),
+            status["latestLwt"].as_f64().unwrap(),
+            "note-1",
+        );
+        assert_eq!(
+            status["epoch"].as_str().unwrap(),
+            sha256_hex(live_epoch_input.as_bytes()),
+            "live epoch must be sha256 of the fixture's epochInputTemplate substitution"
+        );
+    }
+
     #[tokio::test]
     async fn change_stream_emits_external_sqlite_writes() {
         use tokio::time::timeout;

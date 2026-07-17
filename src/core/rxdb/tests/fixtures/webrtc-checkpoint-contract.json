@@ -1,0 +1,79 @@
+{
+  "contract": "ctox-checkpoint-contract-v1",
+  "description": "Cross-language pin of the CTOX RxDB checkpoint wire shape. Consumed by Rust unit tests (src/core/rxdb/src/storage/sqlite/instance.rs, src/core/rxdb/src/plugins/replication_webrtc/index_mod.rs) and the JS smoke (src/apps/business-os/rxdb/tests/checkpoint-contract-smoke.mjs). A one-sided change to the checkpoint payload, the epoch derivation, or the validity-key formats must turn one of these consumers red.",
+  "capabilities": {
+    "peerSession": "ctox-peer-session-v1",
+    "checkpointEpoch": "ctox-checkpoint-epoch-v1",
+    "checkpointGeneration": "ctox-checkpoint-generation-v2"
+  },
+  "checkpointStatus": {
+    "source": "rxdb-rs-sqlite",
+    "state": "advertised",
+    "fields": [
+      "source",
+      "state",
+      "collection",
+      "schemaHash",
+      "latestLwt",
+      "latestIdHash",
+      "epoch"
+    ],
+    "latestLwt": "number; the highest _meta.lwt in the collection, 0 when empty",
+    "latestIdHash": "sha256-hex of the latest document id; empty string when the collection has no documents",
+    "epochInputTemplate": "{databaseName}\n{collectionName}\n{schemaHash}\n{latestLwt}\n{latestId}",
+    "epoch": "sha256-hex of the newline-joined epoch input",
+    "lwtRendering": "latestLwt is an f64 rendered via Rust Display inside the epoch input: integer values render WITHOUT a decimal point, matching JS String(Number)"
+  },
+  "replicationCursor": {
+    "fields": ["id", "lwt"],
+    "empty": { "id": "", "lwt": 0 }
+  },
+  "handshake": {
+    "checkpointKeyPaths": [
+      "collection.checkpoint",
+      "collectionCheckpoints",
+      "storageGeneration",
+      "peerSession.sessionId",
+      "nativeTimeMs"
+    ],
+    "collectionCheckpoint": "collection.checkpoint carries the representative collection's checkpointStatus object",
+    "collectionCheckpoints": "per-collection checkpointStatus map keyed by collection name; the key is ABSENT for single-collection rooms",
+    "storageGeneration": "string when the native peer advertises a storage generation; JSON null when empty (the key is always present, browsers treat null as absent)",
+    "peerSessionSessionId": "peerSession.sessionId is the native per-run session id, string, never empty",
+    "nativeTimeMs": "unsigned integer, native wall clock in milliseconds since the unix epoch"
+  },
+  "validityKeys": {
+    "v2": {
+      "capability": "ctox-checkpoint-generation-v2",
+      "template": "{storageGeneration}|{collectionName}|{schemaHash}",
+      "requires": "capability advertised AND non-empty storageGeneration AND non-empty schemaHash; independent of peerSession.sessionId",
+      "example": {
+        "storageGeneration": "storage-gen-1",
+        "collectionName": "business_notes",
+        "schemaHash": "fixture-checkpoint-schema-hash",
+        "key": "storage-gen-1|business_notes|fixture-checkpoint-schema-hash"
+      }
+    },
+    "v1": {
+      "capability": "ctox-checkpoint-epoch-v1",
+      "template": "{epoch}|{sessionId}|{schemaHash}",
+      "requires": "fallback when the v2 path is unavailable; non-empty checkpoint.epoch AND peerSession.sessionId AND schemaHash, else empty key (no checkpoint reuse)",
+      "example": {
+        "epoch": "cc6b690025fba578bce192f5a930539c31b9f9e32a14388c12d1e09e3a505c99",
+        "sessionId": "rxdb-rs-run-a",
+        "schemaHash": "fixture-checkpoint-schema-hash",
+        "key": "cc6b690025fba578bce192f5a930539c31b9f9e32a14388c12d1e09e3a505c99|rxdb-rs-run-a|fixture-checkpoint-schema-hash"
+      }
+    }
+  },
+  "example": {
+    "databaseName": "ctox_business_os",
+    "collectionName": "business_notes",
+    "schemaHash": "fixture-checkpoint-schema-hash",
+    "latestLwt": 1721200000000,
+    "latestId": "note-1",
+    "latestIdHash": "ea503d892f34f0298079b79d21a57e4addd3ede7d0f2e7d608473f7d028fbd92",
+    "epochInput": "ctox_business_os\nbusiness_notes\nfixture-checkpoint-schema-hash\n1721200000000\nnote-1",
+    "epoch": "cc6b690025fba578bce192f5a930539c31b9f9e32a14388c12d1e09e3a505c99"
+  }
+}

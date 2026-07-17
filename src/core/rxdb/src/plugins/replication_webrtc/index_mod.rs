@@ -2399,6 +2399,171 @@ mod tests {
         );
     }
 
+    /// SYNC-03: the checkpoint wire shape is pinned by
+    /// `tests/fixtures/webrtc-checkpoint-contract.json` on BOTH language
+    /// sides (Rust here + `checkpoint-contract-smoke.mjs` in the browser
+    /// runtime suite). This test pins the handshake key paths the checkpoint
+    /// payload travels under.
+    #[test]
+    fn checkpoint_contract_fixture_matches_handshake_payload() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webrtc-checkpoint-contract.json"
+        ))
+        .expect("parse checkpoint contract fixture");
+        assert_eq!(
+            fixture.get("contract").and_then(Value::as_str),
+            Some("ctox-checkpoint-contract-v1")
+        );
+
+        // Capability names pinned by the fixture must match the generated
+        // wire contract and be advertised by the native peer.
+        assert_eq!(
+            fixture
+                .pointer("/capabilities/checkpointGeneration")
+                .and_then(Value::as_str),
+            Some(CTOX_CHECKPOINT_GENERATION_CAPABILITY)
+        );
+        assert_eq!(
+            fixture
+                .pointer("/validityKeys/v2/capability")
+                .and_then(Value::as_str),
+            Some(CTOX_CHECKPOINT_GENERATION_CAPABILITY)
+        );
+        for pointer in [
+            "/capabilities/peerSession",
+            "/capabilities/checkpointEpoch",
+            "/capabilities/checkpointGeneration",
+        ] {
+            let capability = fixture
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .expect("capability name");
+            assert!(
+                CTOX_RXDB_NATIVE_CAPABILITIES.contains(&capability),
+                "native peer must advertise fixture capability {capability}"
+            );
+        }
+
+        // Build a checkpoint payload straight from the fixture's worked
+        // example and pass it through the REAL handshake payload builder.
+        let example = &fixture["example"];
+        let checkpoint = serde_json::json!({
+            "source": fixture["checkpointStatus"]["source"],
+            "state": fixture["checkpointStatus"]["state"],
+            "collection": example["collectionName"],
+            "schemaHash": example["schemaHash"],
+            "latestLwt": example["latestLwt"],
+            "latestIdHash": example["latestIdHash"],
+            "epoch": example["epoch"],
+        });
+        let collection_payload = serde_json::json!({
+            "name": example["collectionName"],
+            "schemaVersion": 0,
+            "schemaHash": example["schemaHash"],
+            "schemaHashSource": CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+            "checkpoint": checkpoint,
+        });
+
+        // Single-collection room, no storage generation: collection.checkpoint
+        // present, collectionCheckpoints key ABSENT, storageGeneration is JSON
+        // null (key present; browsers treat null as absent).
+        let single =
+            ctox_protocol_response_payload(collection_payload.clone(), Some("rxdb-rs-run-a"));
+        assert_eq!(single.pointer("/collection/checkpoint"), Some(&checkpoint));
+        assert!(
+            single.get("collectionCheckpoints").is_none(),
+            "collectionCheckpoints key must be absent for single-collection rooms"
+        );
+        assert_eq!(
+            single.get("storageGeneration"),
+            Some(&Value::Null),
+            "storageGeneration must be JSON null when the native peer has no generation"
+        );
+        assert_eq!(
+            single
+                .pointer("/peerSession/sessionId")
+                .and_then(Value::as_str),
+            Some("rxdb-rs-run-a")
+        );
+        assert!(single.get("nativeTimeMs").and_then(Value::as_u64).is_some());
+
+        // Multiplexed room with a storage generation: every checkpoint key
+        // path listed in the fixture resolves on the payload.
+        let checkpoints_map = serde_json::json!({
+            example["collectionName"].as_str().unwrap(): checkpoint,
+        });
+        let storage_generation = fixture
+            .pointer("/validityKeys/v2/example/storageGeneration")
+            .and_then(Value::as_str)
+            .expect("v2 example storage generation");
+        let multiplexed = ctox_protocol_response_payload_with_flag(
+            collection_payload,
+            Some("rxdb-rs-run-a"),
+            true,
+            None,
+            Some(checkpoints_map.clone()),
+            Some(storage_generation),
+        );
+        assert_eq!(
+            multiplexed.get("collectionCheckpoints"),
+            Some(&checkpoints_map)
+        );
+        assert_eq!(
+            multiplexed.get("storageGeneration").and_then(Value::as_str),
+            Some(storage_generation)
+        );
+        for path in fixture["handshake"]["checkpointKeyPaths"]
+            .as_array()
+            .expect("handshake checkpoint key paths")
+        {
+            let pointer = format!("/{}", path.as_str().unwrap().replace('.', "/"));
+            assert!(
+                multiplexed.pointer(&pointer).is_some(),
+                "handshake key path {path} missing from ctoxProtocol payload"
+            );
+        }
+
+        // The fixture's v1/v2 validity-key worked examples are consistent with
+        // this payload's checkpoint evidence (the browser derivation itself is
+        // driven by checkpoint-contract-smoke.mjs against the real JS code).
+        let expected_v2_key = format!(
+            "{}|{}|{}",
+            storage_generation,
+            multiplexed
+                .pointer("/collection/name")
+                .and_then(Value::as_str)
+                .unwrap(),
+            multiplexed
+                .pointer("/collection/schemaHash")
+                .and_then(Value::as_str)
+                .unwrap(),
+        );
+        assert_eq!(
+            fixture
+                .pointer("/validityKeys/v2/example/key")
+                .and_then(Value::as_str),
+            Some(expected_v2_key.as_str())
+        );
+        let expected_v1_key = format!(
+            "{}|{}|{}",
+            multiplexed
+                .pointer("/collection/checkpoint/epoch")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "rxdb-rs-run-a",
+            multiplexed
+                .pointer("/collection/schemaHash")
+                .and_then(Value::as_str)
+                .unwrap(),
+        );
+        assert_eq!(
+            fixture
+                .pointer("/validityKeys/v1/example/key")
+                .and_then(Value::as_str),
+            Some(expected_v1_key.as_str())
+        );
+    }
+
     fn assert_protocol_error(result: Result<(), RxError>, expected_code: &str) {
         let error = result.expect_err("protocol validation must fail");
         assert_eq!(error.code(), "RC_WEBRTC_PROTOCOL");

@@ -539,6 +539,22 @@ the schema contract from the module `schema.js` files; the query-fingerprint
 corpus under `tests/fixtures/query_fingerprint/` pins JS/Rust fingerprint
 parity.
 
+**Checkpoint contract.** `tests/fixtures/webrtc-checkpoint-contract.json`
+(`ctox-checkpoint-contract-v1`) pins the checkpoint wire shape both sides must
+interpret identically: the checkpoint status object's exact field list
+(`source`, `state`, `collection`, `schemaHash`, `latestLwt`, `latestIdHash`,
+`epoch`), the epoch derivation
+(`epoch = sha256("{db}\n{collection}\n{schemaHash}\n{lwt}\n{id}")`), the
+handshake keys it travels under (`collection.checkpoint`,
+`collectionCheckpoints`, `storageGeneration` — string when set, JSON null when
+empty), the `{id, lwt}` replication cursor, and the v1
+(`epoch|sessionId|schemaHash`) / v2 (`storageGeneration|collection|schemaHash`)
+validity-key formats — each with worked sha256 examples. This fixture is not
+generator-backed; it is consumed directly by Rust tests in
+`storage/sqlite/instance.rs` and `plugins/replication_webrtc/index_mod.rs` and
+by `checkpoint-contract-smoke.mjs`, which drives the real
+`checkpointValidityKeyFromProtocol` through the replication harness.
+
 ---
 
 ## 8. Failure & recovery semantics
@@ -751,6 +767,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `advanced-status-bridge-smoke` | V1.5 → `business-os-advanced-status-v1` envelope mapping. |
 | `bundle-reproducible-smoke` | **Guard:** dist must be byte-reproducible from src with the pinned esbuild (skips loudly offline; CI enforces). |
 | `checkpoint-age-diagnostics-smoke` | Per-collection checkpoint staleness: lwt recorded on transport activity (max across peers), `pull/pushCheckpointAgeMs` derived at snapshot time — no idle timers. |
+| `checkpoint-contract-smoke` | **Guard:** checkpoint wire shape (status fields, epoch derivation, validity-key v1/v2 formats) matches the `webrtc-checkpoint-contract.json` fixture; drives the real validity-key code through the replication harness. |
 | `command-bus-projection-smoke` | **Regression:** queue commands wait for the task projection; control commands' terminal `completed` ack without `task_id` is success; `failed` rejects. |
 | `compression-roundtrip-smoke` | JS decoder reads inline and deflate-compressed chunks shaped like the Rust dispatcher's. |
 | `contract-drift-smoke` | **Guard:** re-runs both contract generators; generated files must match the fixtures (side-effect free). |
