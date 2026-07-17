@@ -442,12 +442,12 @@ function wireUi(host) {
       appDesc: inputDesc.value,
       appCollections: state.appCollections,
       isDeploying: state.isDeploying,
-      lang: ctx?.locale === 'en' ? 'en' : 'de'
+      lang: state.ctx?.locale === 'en' ? 'en' : 'de'
     });
     btnDeploy.disabled = !actionState.deployReady;
     btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
     btnDeploy.title = actionState.deployReady
-      ? (ctx?.locale === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
+      ? (state.ctx?.locale === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
     if (requestDiagnostics) {
