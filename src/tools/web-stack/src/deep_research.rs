@@ -162,6 +162,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut sources = Vec::new();
     let mut seen_urls = BTreeSet::new();
     let mut search_runs = Vec::new();
+    seed_explicit_identifier_sources(&query_text, &mut seen_urls, &mut sources);
 
     for plan in &plans {
         if plan.label == "annas_archive_metadata" {
@@ -474,6 +475,8 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
     }
 
     let preferred = [
+        "data_file",
+        "archive_metadata",
         "open_access_paper",
         "scholarly",
         "patent",
@@ -500,6 +503,75 @@ fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value
         }
     }
     selected
+}
+
+fn seed_explicit_identifier_sources(
+    query: &str,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+) {
+    for doi in extract_explicit_dois(query) {
+        let (url, source_type) = doi
+            .strip_prefix("10.5281/zenodo.")
+            .filter(|record_id| record_id.chars().all(|ch| ch.is_ascii_digit()))
+            .map(|record_id| {
+                (
+                    format!("https://zenodo.org/records/{record_id}"),
+                    "archive_metadata",
+                )
+            })
+            .unwrap_or_else(|| (format!("https://doi.org/{doi}"), "paper_metadata"));
+        if !seen_urls.insert(normalize_url_key(&url)) {
+            continue;
+        }
+        sources.push(json!({
+            "title": format!("Explicit DOI {doi}"),
+            "url": url,
+            "canonical_url": url,
+            "domain": domain_for_url(&url),
+            "snippet": format!("Exact identifier supplied by the research request: {doi}"),
+            "rank": 0,
+            "source": "explicit_identifier",
+            "source_type": source_type,
+            "source_tier": source_tier_for_source(source_type),
+            "verification_status": "unverified",
+            "discovery_status": "explicit_identifier",
+            "evidence_eligible": false,
+            "search_label": "explicit_identifier",
+            "scholarly": true,
+            "metadata_only": true,
+            "doi": doi,
+        }));
+    }
+}
+
+fn extract_explicit_dois(text: &str) -> Vec<String> {
+    let mut dois = Vec::new();
+    let mut seen = BTreeSet::new();
+    for token in text.split_whitespace() {
+        let candidate = token
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\''
+                )
+            })
+            .trim_end_matches(['.', ':'])
+            .trim_start_matches("https://doi.org/")
+            .trim_start_matches("http://doi.org/")
+            .trim_start_matches("doi:")
+            .to_ascii_lowercase();
+        if candidate.starts_with("10.")
+            && candidate.contains('/')
+            && candidate
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ".-_/()".contains(ch))
+            && seen.insert(candidate.clone())
+        {
+            dois.push(candidate);
+        }
+    }
+    dois
 }
 
 fn normalize_required_query(raw: &str) -> Result<String> {
@@ -2613,6 +2685,69 @@ mod tests {
         assert_eq!(
             DeepResearchDepth::from_label("medium"),
             Some(DeepResearchDepth::Standard)
+        );
+    }
+
+    #[test]
+    fn exact_zenodo_doi_seeds_the_canonical_record() {
+        let mut seen = BTreeSet::new();
+        let mut sources = Vec::new();
+        seed_explicit_identifier_sources(
+            "Verify DOI 10.5281/zenodo.20111572 and its original archive",
+            &mut seen,
+            &mut sources,
+        );
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0]["url"], "https://zenodo.org/records/20111572");
+        assert_eq!(sources[0]["source_type"], "archive_metadata");
+        assert_eq!(sources[0]["discovery_status"], "explicit_identifier");
+        assert_eq!(sources[0]["evidence_eligible"], false);
+    }
+
+    #[test]
+    fn original_data_and_archive_receipts_are_selected_before_generic_web_hits() {
+        let selected = select_balanced_sources(
+            vec![
+                json!({
+                    "url": "https://irrelevant.example/article",
+                    "source_type": "web",
+                    "discovery_score": 99,
+                }),
+                json!({
+                    "url": "https://zenodo.org/records/20111572",
+                    "source_type": "archive_metadata",
+                    "discovery_status": "explicit_identifier",
+                }),
+                json!({
+                    "url": "https://zenodo.org/records/20111572/files/data.csv",
+                    "source_type": "data_file",
+                    "discovery_score": 30,
+                }),
+            ],
+            2,
+        );
+
+        let urls = selected
+            .iter()
+            .filter_map(|source| source.get("url").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            urls,
+            vec![
+                "https://zenodo.org/records/20111572/files/data.csv",
+                "https://zenodo.org/records/20111572",
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_doi_parser_rejects_unrelated_numbers() {
+        assert_eq!(
+            extract_explicit_dois(
+                "size 223601320 md5 245267e590546f160f3b971d7f8e05fb https://doi.org/10.1234/ABC.9"
+            ),
+            vec!["10.1234/abc.9"]
         );
     }
 
