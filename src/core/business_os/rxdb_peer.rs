@@ -2639,22 +2639,37 @@ async fn run_native_peer(
     };
     let configured_signaling_urls = signaling_urls.clone();
     let runtime_schema_fingerprint = runtime_installed_module_schema_fingerprint(&root)?;
-    let signaling_base_url = signaling_urls
+    let signaling_base_urls: Vec<String> = signaling_urls
         .into_iter()
-        .find(|url| !url.trim().is_empty())
-        .context("Business OS native RxDB peer requires a signaling URL")?;
+        .filter(|url| !url.trim().is_empty())
+        .collect();
+    if signaling_base_urls.is_empty() {
+        anyhow::bail!("Business OS native RxDB peer requires a signaling URL");
+    }
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
-    // The provider re-derives the URL — including fresh `token_iat`/
+    // The provider re-derives the URLs — including fresh `token_iat`/
     // `token_exp` — on EVERY signaling (re)connect attempt. Baking the token
     // window in once meant that after >24h uptime any socket drop became a
     // permanent join-rejection loop (server: "control plane token expired").
-    let signaling_url_provider: std::sync::Arc<dyn Fn() -> String + Send + Sync> = {
-        let base_url = signaling_base_url.clone();
+    // ALL configured URLs are handed over as a failover list; the signaling
+    // client sticks to the working one and rotates on failed attempts.
+    let signaling_url_provider: std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
+        let base_urls = signaling_base_urls.clone();
         let sync_room = sync_room.clone();
         let password = signaling_room_password.clone();
         let peer_session_id = peer_session_id.clone();
         std::sync::Arc::new(move || {
-            signaling_url_with_native_metadata(&base_url, &sync_room, &password, &peer_session_id)
+            base_urls
+                .iter()
+                .map(|base_url| {
+                    signaling_url_with_native_metadata(
+                        base_url,
+                        &sync_room,
+                        &password,
+                        &peer_session_id,
+                    )
+                })
+                .collect()
         })
     };
     let ice_servers = {
@@ -2826,7 +2841,7 @@ async fn run_native_peer(
             ))
         };
         let mut bringup = tokio::spawn(async move {
-            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
+            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_list_provider(
                 collection_list,
                 multi_signaling_url_provider,
                 topic,

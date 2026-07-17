@@ -560,7 +560,49 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     retry_time: u64,
 ) -> Result<Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>, RxError> {
     let provider = Arc::clone(&signaling_url_provider);
-    let signaling = SignalingClient::connect_with_url_provider(move || provider()).await?;
+    replicate_web_rtc_rs_multi_with_url_list_provider(
+        collections,
+        Arc::new(move || vec![provider()]),
+        topic,
+        peer_session_id,
+        ice_servers,
+        is_peer_valid,
+        collection_authz,
+        collection_write_authz,
+        document_read_authz,
+        document_write_authz,
+        pull_batch_size,
+        push_batch_size,
+        retry_time,
+    )
+    .await
+}
+
+/// Like [`replicate_web_rtc_rs_multi_with_url_provider`], but the provider
+/// returns a FAILOVER LIST of signaling URLs (each re-derived per attempt).
+/// The signaling client tries the list in order on the initial connect and
+/// rotates to the next candidate only when an establish attempt fails — the
+/// configured URL list used to be cosmetic (only the first entry was ever
+/// used), which made the primary signaling server a single point of failure
+/// for new pairings.
+#[allow(clippy::too_many_arguments)]
+pub async fn replicate_web_rtc_rs_multi_with_url_list_provider(
+    collections: Vec<Arc<RxCollection>>,
+    signaling_url_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    topic: String,
+    peer_session_id: String,
+    ice_servers: Vec<RTCIceServer>,
+    is_peer_valid: Option<Arc<dyn Fn(&WebRTCRsPeer) -> bool + Send + Sync>>,
+    collection_authz: Option<CollectionAuthzHook>,
+    collection_write_authz: Option<CollectionAuthzHook>,
+    document_read_authz: Option<DocumentReadAuthzHook>,
+    document_write_authz: Option<DocumentWriteAuthzHook>,
+    pull_batch_size: u64,
+    push_batch_size: u64,
+    retry_time: u64,
+) -> Result<Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>, RxError> {
+    let provider = Arc::clone(&signaling_url_provider);
+    let signaling = SignalingClient::connect_with_url_list_provider(move || provider()).await?;
     let mut config = WebRTCRsConfig::new(signaling, topic.clone());
     if !ice_servers.is_empty() {
         config.ice_servers = ice_servers;

@@ -44,9 +44,9 @@ pub use connection_handler_rs::{
 };
 pub use index_mod::{
     master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi, replicate_web_rtc_rs,
-    replicate_web_rtc_rs_multi, replicate_web_rtc_rs_multi_with_url_provider,
-    replicate_web_rtc_with_options, RxWebRTCReplicationPool, RxWebRTCReplicationState,
-    SyncOptionsWebRTC, SyncOptionsWebRTCRs,
+    replicate_web_rtc_rs_multi, replicate_web_rtc_rs_multi_with_url_list_provider,
+    replicate_web_rtc_rs_multi_with_url_provider, replicate_web_rtc_with_options,
+    RxWebRTCReplicationPool, RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
 };
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{

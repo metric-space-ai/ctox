@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
 
@@ -63,11 +63,21 @@ pub struct SignalingClient {
     /// URL of the initial connect (identification/logging only — reconnects
     /// ask `url_provider` for a fresh URL).
     pub url: String,
-    /// Produces the URL for every (re)connect attempt. Time-windowed query
-    /// params (`token_iat`/`token_exp`, TTL 24h) used to be frozen into the
-    /// connect-time URL; after >24h uptime any socket drop then turned into a
-    /// permanent join-rejection loop. The provider recomputes them per attempt.
-    url_provider: Arc<dyn Fn() -> String + Send + Sync>,
+    /// Produces the candidate URL list for every (re)connect attempt.
+    /// Time-windowed query params (`token_iat`/`token_exp`, TTL 24h) used to
+    /// be frozen into the connect-time URL; after >24h uptime any socket drop
+    /// then turned into a permanent join-rejection loop. The provider
+    /// recomputes them per attempt. Multiple URLs are a failover list: the
+    /// client sticks to the URL that last worked and rotates to the next
+    /// candidate only when an establish attempt fails (the configured list
+    /// used to be cosmetic — only the first URL was ever tried, so a downed
+    /// primary signaling server meant no new session could ever pair).
+    url_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// Index into the provider's URL list for the next (re)connect attempt.
+    /// Sticky on success, advanced on a failed establish. Never touches the
+    /// reconnect backoff: rotation must not reset it (backoff resets only on
+    /// a `joined` broadcast, see the supervisor).
+    url_rotation: AtomicUsize,
     /// Stream of every server frame we received.
     server_messages: RxSubject<ServerToClient>,
     /// Holds the latest list of peer ids we're co-resident with.
@@ -108,12 +118,59 @@ impl SignalingClient {
     where
         F: Fn() -> String + Send + Sync + 'static,
     {
-        let url_provider: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(url_provider);
-        let url_string = url_provider();
-        let (write_half, read_half) = establish_ws(&url_string).await?;
+        Self::connect_with_url_list_provider(move || vec![url_provider()]).await
+    }
+
+    /// Like [`Self::connect_with_url_provider`], but the provider returns a
+    /// FAILOVER LIST of candidate URLs (all re-derived per attempt). The
+    /// initial connect tries each candidate in order; reconnects stay sticky
+    /// on the last-working candidate and rotate to the next one only after a
+    /// failed establish attempt.
+    pub async fn connect_with_url_list_provider<F>(url_provider: F) -> Result<Arc<Self>, RxError>
+    where
+        F: Fn() -> Vec<String> + Send + Sync + 'static,
+    {
+        let url_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(url_provider);
+        let candidates: Vec<String> = url_provider()
+            .into_iter()
+            .filter(|url| !url.trim().is_empty())
+            .collect();
+        if candidates.is_empty() {
+            return Err(new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({
+                    "message": "signaling URL provider returned no usable URLs",
+                })),
+            ));
+        }
+        // Initial connect: walk the failover list once. The index of the
+        // first working candidate seeds the sticky rotation so reconnects
+        // keep using it.
+        let mut connected: Option<(usize, String, (WsWrite, WsRead))> = None;
+        let mut last_error: Option<RxError> = None;
+        for (index, candidate) in candidates.iter().enumerate() {
+            match establish_ws(candidate).await {
+                Ok(halves) => {
+                    connected = Some((index, candidate.clone(), halves));
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "ctox_rxdb::signaling_client",
+                        url = %candidate,
+                        "initial signaling connect failed: {error}; trying next candidate",
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        let Some((initial_index, url_string, (write_half, read_half))) = connected else {
+            return Err(last_error.expect("candidates is non-empty, so at least one error"));
+        };
         let client = Arc::new(Self {
             url: url_string,
             url_provider,
+            url_rotation: AtomicUsize::new(initial_index),
             server_messages: RxSubject::new(),
             peer_list: RxBehaviorSubject::new(Vec::new()),
             peer_roles: PlMutex::new(HashMap::new()),
@@ -166,7 +223,25 @@ impl SignalingClient {
                         return;
                     }
                     tokio::time::sleep(delay).await;
-                    let fresh_url = (supervisor_client.url_provider)();
+                    // Failover: re-derive the full candidate list, stay sticky
+                    // on the index that last worked, rotate only on failure
+                    // below. Rotation is independent of the backoff (which
+                    // still resets only on a `joined` broadcast).
+                    let fresh_candidates: Vec<String> = (supervisor_client.url_provider)()
+                        .into_iter()
+                        .filter(|url| !url.trim().is_empty())
+                        .collect();
+                    if fresh_candidates.is_empty() {
+                        tracing::warn!(
+                            target: "ctox_rxdb::signaling_client",
+                            delay_secs = delay.as_secs(),
+                            "signaling URL provider returned no usable URLs; backing off",
+                        );
+                        delay = (delay * 2).min(SIGNALING_RECONNECT_MAX_DELAY);
+                        continue;
+                    }
+                    let rotation = supervisor_client.url_rotation.load(Ordering::Acquire);
+                    let fresh_url = fresh_candidates[rotation % fresh_candidates.len()].clone();
                     match establish_ws(&fresh_url).await {
                         Ok((write_half, new_read)) => {
                             *supervisor_client.writer.lock().await = Some(write_half);
@@ -188,7 +263,7 @@ impl SignalingClient {
                             }
                             tracing::info!(
                                 target: "ctox_rxdb::signaling_client",
-                                url = %supervisor_client.url,
+                                url = %fresh_url,
                                 "signaling socket reconnected",
                             );
                             // A socket open is not a successful reconnect. Keep
@@ -198,10 +273,16 @@ impl SignalingClient {
                             break;
                         }
                         Err(e) => {
+                            // Rotate to the next failover candidate for the
+                            // NEXT attempt; the backoff still applies in full.
+                            supervisor_client
+                                .url_rotation
+                                .fetch_add(1, Ordering::AcqRel);
                             tracing::warn!(
                                 target: "ctox_rxdb::signaling_client",
+                                url = %fresh_url,
                                 delay_secs = delay.as_secs(),
-                                "signaling reconnect failed: {e}; backing off",
+                                "signaling reconnect failed: {e}; rotating to next candidate and backing off",
                             );
                             delay = (delay * 2).min(SIGNALING_RECONNECT_MAX_DELAY);
                         }
@@ -688,6 +769,146 @@ mod tests {
         assert!(
             joins.load(Ordering::SeqCst) >= 2,
             "client must auto re-join the room after reconnect (saw {} joins)",
+            joins.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Serve one accepted WebSocket signaling session: init frame, count the
+    /// join, answer `joined`, then either drop or linger.
+    async fn serve_one_signaling_session(
+        listener: &TcpListener,
+        joins: &Arc<AtomicUsize>,
+        drop_after_join: bool,
+    ) {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ws.send(Message::Text(
+            r#"{"type":"init","yourPeerId":"p1"}"#.to_string(),
+        ))
+        .await
+        .unwrap();
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg {
+                if t.contains("\"type\":\"join\"") {
+                    joins.fetch_add(1, Ordering::SeqCst);
+                    break;
+                }
+            }
+        }
+        ws.send(Message::Text(
+            r#"{"type":"joined","otherPeerIds":[],"peers":[]}"#.to_string(),
+        ))
+        .await
+        .unwrap();
+        if drop_after_join {
+            drop(ws);
+        } else {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
+    /// Failover chaos test (SYNC-31): the URL list is a real failover list.
+    /// (1) Initial connect: the first candidate is dead, the client must land
+    /// on the second. (2) Reconnect: after the socket drops with the working
+    /// candidate gone too, the client must rotate through the list and re-join
+    /// on a candidate that came back. Rotation must not bypass the
+    /// backoff-resets-only-on-joined rule (unchanged supervisor logic).
+    #[tokio::test]
+    async fn signaling_client_fails_over_across_url_candidates() {
+        // Dead candidate: bind a port, then close the listener so connects
+        // are refused fast.
+        let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+
+        let live = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let live_addr = live.local_addr().unwrap();
+        let joins = Arc::new(AtomicUsize::new(0));
+
+        // Session 1 (initial connect must fail over dead -> live), dropped
+        // after join to force the reconnect path; session 2 proves the
+        // supervisor stayed on the live candidate and re-joined.
+        let joins_s = Arc::clone(&joins);
+        let server = tokio::spawn(async move {
+            serve_one_signaling_session(&live, &joins_s, true).await;
+            serve_one_signaling_session(&live, &joins_s, false).await;
+        });
+
+        let dead_url = format!("ws://{dead_addr}");
+        let live_url = format!("ws://{live_addr}");
+        let client = SignalingClient::connect_with_url_list_provider(move || {
+            vec![dead_url.clone(), live_url.clone()]
+        })
+        .await
+        .expect("initial connect must fail over to the live candidate");
+        client.join("room-failover".to_string()).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while tokio::time::Instant::now() < deadline {
+            if joins.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        client.close().await;
+        let _ = server.await;
+
+        assert!(
+            joins.load(Ordering::SeqCst) >= 2,
+            "client must fail over to the live URL and auto re-join after a drop (saw {} joins)",
+            joins.load(Ordering::SeqCst)
+        );
+    }
+
+    /// SYNC-31: after the working candidate dies, the supervisor must rotate
+    /// to the next candidate on the NEXT attempt instead of hammering the
+    /// dead one forever.
+    #[tokio::test]
+    async fn signaling_client_rotates_to_next_candidate_when_current_dies() {
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_addr = first.local_addr().unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_addr = second.local_addr().unwrap();
+        let joins = Arc::new(AtomicUsize::new(0));
+
+        // First server: one session, dropped after join, then the listener
+        // itself goes away (its port starts refusing connections).
+        let joins_a = Arc::clone(&joins);
+        let server_a = tokio::spawn(async move {
+            serve_one_signaling_session(&first, &joins_a, true).await;
+            drop(first);
+        });
+        // Second server: accepts the failed-over reconnect.
+        let joins_b = Arc::clone(&joins);
+        let server_b = tokio::spawn(async move {
+            serve_one_signaling_session(&second, &joins_b, false).await;
+        });
+
+        let first_url = format!("ws://{first_addr}");
+        let second_url = format!("ws://{second_addr}");
+        let client = SignalingClient::connect_with_url_list_provider(move || {
+            vec![first_url.clone(), second_url.clone()]
+        })
+        .await
+        .unwrap();
+        client.join("room-rotate".to_string()).await.unwrap();
+
+        // Attempt 1 after the drop hits the dead first URL (sticky index),
+        // rotates, attempt 2 lands on the second URL: base 1s + 2s backoff.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while tokio::time::Instant::now() < deadline {
+            if joins.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        client.close().await;
+        let _ = server_a.await;
+        let _ = server_b.await;
+
+        assert!(
+            joins.load(Ordering::SeqCst) >= 2,
+            "supervisor must rotate to the next candidate after the current one dies (saw {} joins)",
             joins.load(Ordering::SeqCst)
         );
     }
