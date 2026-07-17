@@ -12,13 +12,13 @@
           const prefs = JSON.parse(localStorage.getItem('ctox.businessOs.accountPreferences') || '{}') || {};
           const theme = prefs.theme === 'light' ? 'light' : 'dark';
           const language = prefs.language === 'en' ? 'en' : 'de';
-          const shellStyle = prefs.shellStyle === 'macos' ? 'macos' : 'windows';
+          const shellStyle = prefs.shellStyle === 'macos' || prefs.shellStyle === 'windows' ? prefs.shellStyle : 'ctox';
           document.documentElement.dataset.theme = theme;
           document.documentElement.lang = language;
           document.documentElement.dataset.shellStyle = shellStyle;
         } catch {
           document.documentElement.dataset.theme = 'dark';
-          document.documentElement.dataset.shellStyle = 'windows';
+          document.documentElement.dataset.shellStyle = 'ctox';
         }
       })();
     </script>
