@@ -7278,12 +7278,24 @@ pub fn update_module_to_catalog(
         "catalog source `{source_module}` is missing"
     );
 
-    let current_sha = compute_module_bundle(installed_app_root, &module_id)
+    // Both roots were resolved above from the installed manifest. Hash those
+    // exact directories; resolving again from an app root can select a
+    // same-named source module and make an old install look current.
+    let current_sha = compute_module_bundle_at(&installed_dir, &module_id)
         .map(|bundle| bundle.sha256)
         .unwrap_or_default();
-    let catalog_sha = compute_module_bundle(source_app_root, &source_module)
+    let catalog_sha = compute_module_bundle_at(&source_dir, &source_module)
         .map(|bundle| bundle.sha256)
         .unwrap_or_default();
+    let installed_version = installed_manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let catalog_version = catalog_module_version(source_app_root, &source_module);
+    let manifest_versions_match = !installed_version.is_empty()
+        && !catalog_version.is_empty()
+        && installed_version == catalog_version;
     let installed_from = installed_baseline_bundle_sha(root, &module_id)?;
     let mode = request.mode.trim();
     let is_customized = !installed_from.is_empty() && current_sha != installed_from;
@@ -7298,12 +7310,13 @@ pub fn update_module_to_catalog(
             "module `{module_id}` has local changes; pass mode=discard to overwrite (a recovery version is saved first)"
         );
     }
-    if !catalog_sha.is_empty() && catalog_sha == current_sha {
+    if !catalog_sha.is_empty() && catalog_sha == current_sha && manifest_versions_match {
         return Ok(serde_json::json!({
             "ok": true,
             "module_id": module_id,
             "updated": false,
             "reason": "already_current",
+            "catalog_version": catalog_version,
         }));
     }
 
@@ -7350,7 +7363,6 @@ pub fn update_module_to_catalog(
     let backup = installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
     activate_staged_module_directory(&staging, &installed_dir, &backup)?;
 
-    let catalog_version = catalog_module_version(source_app_root, &source_module);
     record_module_version(
         root,
         installed_app_root,
@@ -30375,8 +30387,11 @@ fn process_documents_report_command(
     queue_task: Option<&channels::QueueTaskView>,
     reply_text: Option<&str>,
 ) -> anyhow::Result<CommandAccepted> {
+    // Validate research lineage before creating a fallback DOCX. A generated
+    // placeholder must never make an evidence-gated report appear complete.
+    let lineage = document_report_lineage(root, command)?;
     ensure_generated_docx_exists(root, command)?;
-    match writeback_generated_docx(root, conn, command_id, command, reply_text) {
+    match writeback_generated_docx(root, conn, command_id, command, reply_text, &lineage) {
         Ok(result) => {
             let completed_at_ms = now_ms() as i64;
             conn.execute(
@@ -31827,6 +31842,15 @@ struct DocumentsWritebackResult {
     chunks: usize,
     path: String,
     index_text_chars: usize,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentsReportLineage {
+    linked_records: Vec<Value>,
+    source_receipt_snapshot_hashes: Vec<String>,
+    knowledge_version: Value,
 }
 
 fn document_knowledge_context(command: &BusinessCommand) -> Value {
@@ -31846,6 +31870,14 @@ fn document_knowledge_context(command: &BusinessCommand) -> Value {
 }
 
 fn document_linked_records(command: &BusinessCommand) -> Vec<Value> {
+    if let Some(linked_records) = command
+        .payload
+        .get("writeback_contract")
+        .and_then(|value| value.get("linked_records"))
+        .and_then(Value::as_array)
+    {
+        return linked_records.clone();
+    }
     let context = document_knowledge_context(command);
     let Some(context_object) = context.as_object() else {
         return Vec::new();
@@ -31873,12 +31905,469 @@ fn document_linked_records(command: &BusinessCommand) -> Vec<Value> {
     })]
 }
 
+fn document_report_is_research(command: &BusinessCommand) -> bool {
+    if command.command_type == "research.systematic.report.create"
+        || command
+            .payload
+            .get("research_mode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+    if command
+        .payload
+        .get("required_skills")
+        .and_then(Value::as_array)
+        .is_some_and(|skills| {
+            skills.iter().any(|skill| {
+                skill
+                    .as_str()
+                    .is_some_and(|value| value.trim() == "systematic-research")
+            })
+        })
+    {
+        return true;
+    }
+    document_linked_records(command).iter().any(|record| {
+        let kind = first_string_field(record, &["kind", "type", "record_type", "role"])
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        kind == "research_task"
+            || kind == "knowledge_domain"
+            || kind.contains("source_receipt")
+            || kind.contains("source-receipt")
+    })
+}
+
+fn document_source_receipt_links(
+    command: &BusinessCommand,
+    linked_records: &[Value],
+) -> Vec<Value> {
+    let mut links = linked_records
+        .iter()
+        .filter(|record| {
+            let kind = first_string_field(record, &["kind", "type", "record_type", "role"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let collection = first_string_field(record, &["collection", "table_collection"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            kind.contains("source_receipt")
+                || kind.contains("source-receipt")
+                || collection == "source_receipts"
+                || (collection == "knowledge_tables"
+                    && document_source_receipt_snapshot_hash(record).is_some())
+                || (kind == "source" && document_source_receipt_snapshot_hash(record).is_some())
+                || (kind.contains("evidence") && !kind.contains("knowledge"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if links.is_empty() {
+        for key in ["source_receipt_links", "source_receipts"] {
+            if let Some(receipts) = command.payload.get(key).and_then(Value::as_array) {
+                links.extend(receipts.iter().cloned());
+            }
+        }
+        if links.is_empty() {
+            let source_ids = command
+                .payload
+                .get("source_ids")
+                .and_then(Value::as_array)
+                .or_else(|| {
+                    command
+                        .payload
+                        .pointer("/graph_focus/source_ids")
+                        .and_then(Value::as_array)
+                });
+            if let Some(source_ids) = source_ids {
+                links.extend(source_ids.iter().filter_map(|id| {
+                    id.as_str().map(|id| {
+                        serde_json::json!({
+                            "kind": "source_receipt",
+                            "id": id
+                        })
+                    })
+                }));
+            }
+        }
+    }
+    if links.is_empty() {
+        if let Some(source_references) = document_knowledge_context(command)
+            .get("source_references")
+            .and_then(Value::as_array)
+        {
+            links.extend(source_references.iter().cloned());
+        }
+    }
+    links
+}
+
+fn document_knowledge_version(
+    command: &BusinessCommand,
+    linked_records: &[Value],
+) -> Option<Value> {
+    for object in [&command.payload, &command.client_context] {
+        if let Some(value) = object.get("knowledge_version") {
+            if !value.is_null() {
+                return Some(value.clone());
+            }
+        }
+        if let Some(version_id) = object
+            .get("knowledge_version_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(serde_json::json!({ "version_id": version_id }));
+        }
+    }
+
+    let context = document_knowledge_context(command);
+    if let Some(object) = context.as_object() {
+        for key in ["knowledge_version", "version_id", "version"] {
+            if let Some(value) = object.get(key) {
+                if value.is_string() && value.as_str().is_some_and(|text| !text.trim().is_empty())
+                    || value.is_object()
+                {
+                    return Some(if key == "knowledge_version" {
+                        value.clone()
+                    } else {
+                        serde_json::json!({ key: value })
+                    });
+                }
+            }
+        }
+        if let (Some(id), Some(updated_at_ms)) = (
+            object.get("id").and_then(Value::as_str),
+            object.get("updated_at_ms").and_then(Value::as_i64),
+        ) {
+            if !id.trim().is_empty() && updated_at_ms > 0 {
+                let mut version = serde_json::Map::new();
+                version.insert("id".to_string(), Value::String(id.to_string()));
+                version.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                for key in ["content_hash", "schema_hash"] {
+                    if let Some(value) = object.get(key).filter(|value| value.is_string()) {
+                        version.insert(key.to_string(), value.clone());
+                    }
+                }
+                return Some(Value::Object(version));
+            }
+        }
+    }
+
+    linked_records.iter().find_map(|record| {
+        let kind = first_string_field(record, &["kind", "type", "record_type"])
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !(kind.contains("knowledge") || kind == "knowledge_domain") {
+            return None;
+        }
+        for key in ["knowledge_version", "version_id", "version"] {
+            if let Some(value) = record.get(key) {
+                if !value.is_null() {
+                    return Some(if key == "knowledge_version" {
+                        value.clone()
+                    } else {
+                        serde_json::json!({ key: value })
+                    });
+                }
+            }
+        }
+        record
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .map(|updated_at_ms| {
+                serde_json::json!({
+                    "id": record.get("id").cloned().unwrap_or(Value::Null),
+                    "updated_at_ms": updated_at_ms
+                })
+            })
+    })
+}
+
+fn valid_document_receipt_snapshot_hash(value: &str) -> bool {
+    let Some(hex) = value.trim().strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn document_source_receipt_reference(link: &Value) -> Option<String> {
+    first_string_field(
+        link,
+        &["source_id", "receipt_id", "evidence_id", "record_id", "id"],
+    )
+}
+
+fn document_source_receipt_snapshot_hash(link: &Value) -> Option<String> {
+    first_string_field(
+        link,
+        &[
+            "snapshot_hash",
+            "source_receipt_snapshot_hash",
+            "receipt_snapshot_hash",
+        ],
+    )
+}
+
+fn document_knowledge_table_rows(document: &Value) -> Vec<Value> {
+    [
+        document.get("rows"),
+        document.pointer("/payload/rows"),
+        document.get("records"),
+        document.pointer("/payload/records"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_array)
+    .cloned()
+    .unwrap_or_default()
+}
+
+fn document_source_receipt_row_matches(row: &Value, reference: &str) -> bool {
+    ["source_id", "receipt_id", "evidence_id", "id"]
+        .iter()
+        .filter_map(|key| row.get(*key).and_then(Value::as_str))
+        .any(|value| value == reference)
+}
+
+fn document_source_receipt_from_knowledge_tables(
+    root: &Path,
+    link: &Value,
+) -> anyhow::Result<Option<Value>> {
+    let Some(reference) = document_source_receipt_reference(link) else {
+        return Ok(None);
+    };
+    let table_reference = first_string_field(
+        link,
+        &[
+            "table_id",
+            "knowledge_table_id",
+            "table_record_id",
+            "table_ref",
+        ],
+    );
+    if let Some(table_id) = table_reference {
+        if let Some(document) = load_rxdb_collection_record(root, "knowledge_tables", &table_id)? {
+            if let Some(row) = document_knowledge_table_rows(&document)
+                .into_iter()
+                .find(|row| document_source_receipt_row_matches(row, &reference))
+            {
+                return Ok(Some(row));
+            }
+        }
+    }
+
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, "knowledge_tables") else {
+        return Ok(None);
+    };
+    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        if let Some(row) = document_knowledge_table_rows(&document)
+            .into_iter()
+            .find(|row| document_source_receipt_row_matches(row, &reference))
+        {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
+}
+
+fn document_source_receipt_candidate(root: &Path, link: &Value) -> anyhow::Result<Option<Value>> {
+    // A writeback link is only a reference. Never treat its embedded fields as
+    // an authoritative receipt; the source row must come from Knowledge's
+    // projected tables so the report is bound to the stored snapshot.
+    document_source_receipt_from_knowledge_tables(root, link)
+}
+
+fn document_source_receipt_is_eligible(value: &Value) -> bool {
+    let snapshot_hash = value
+        .get("snapshot_hash")
+        .and_then(Value::as_str)
+        .is_some_and(valid_document_receipt_snapshot_hash);
+    let canonical_url = value
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| {
+            if url != url.trim() {
+                return false;
+            }
+            Url::parse(url).is_ok_and(|parsed| {
+                matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()
+            })
+        });
+    let source_tier = value
+        .get("source_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source_type = value
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let status = [
+        "review_status",
+        "source_status",
+        "relevance_status",
+        "status",
+    ]
+    .iter()
+    .filter_map(|key| value.get(*key).and_then(Value::as_str))
+    .map(|status| status.trim().to_ascii_lowercase())
+    .collect::<Vec<_>>();
+    snapshot_hash
+        && value.get("evidence_eligible") == Some(&Value::Bool(true))
+        && value.get("verification_status").and_then(Value::as_str) == Some("verified")
+        && value.get("transport_verified") == Some(&Value::Bool(true))
+        && value.get("content_extracted") == Some(&Value::Bool(true))
+        && value.get("actual_full_text_or_data") == Some(&Value::Bool(true))
+        && value
+            .get("evidence_relevance_score")
+            .and_then(Value::as_i64)
+            .is_some_and(|score| score >= 8)
+        && value
+            .get("http_status")
+            .and_then(Value::as_i64)
+            .is_some_and(|status| (200..=299).contains(&status) && status != 204)
+        && canonical_url
+        && !source_tier.is_empty()
+        && !source_tier.contains("metadata")
+        && !source_tier.contains("aggregat")
+        && !source_type.contains("metadata")
+        && source_type != "aggregator"
+        && !value
+            .get("canonical_url")
+            .and_then(Value::as_str)
+            .is_some_and(document_metadata_canonical_url)
+        && !value
+            .get("metadata_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && !value
+            .get("evidence_rejection_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.trim().is_empty())
+        && [
+            "source_id",
+            "trace_id",
+            "run_id",
+            "research_run_id",
+            "source_row_ref",
+            "provenance",
+        ]
+        .iter()
+        .any(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+        })
+        && !status.iter().any(|status| {
+            matches!(
+                status.as_str(),
+                "rejected" | "off_topic" | "off-topic" | "irrelevant" | "fachfremd"
+            )
+        })
+}
+
+fn document_metadata_canonical_url(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://api.crossref.org/",
+        "https://api.openalex.org/",
+        "https://api.semanticscholar.org/",
+        "https://www.semanticscholar.org/",
+        "https://scholar.google.",
+        "https://www.researchgate.net/",
+        "https://www.academia.edu/",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn document_report_lineage(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<DocumentsReportLineage> {
+    let linked_records = document_linked_records(command);
+    if !document_report_is_research(command) {
+        return Ok(DocumentsReportLineage {
+            linked_records,
+            source_receipt_snapshot_hashes: Vec::new(),
+            knowledge_version: Value::Null,
+        });
+    }
+
+    let knowledge_version = document_knowledge_version(command, &linked_records)
+        .context("research DOCX writeback requires an exact Knowledge version")?;
+    let receipt_links = document_source_receipt_links(command, &linked_records);
+    anyhow::ensure!(
+        !receipt_links.is_empty(),
+        "research DOCX writeback requires requested source receipt links; refusing fallback completion"
+    );
+    let mut snapshot_hashes = Vec::new();
+    for link in receipt_links {
+        let candidate = document_source_receipt_candidate(root, &link)?
+            .context("source receipt link did not resolve to a receipt")?;
+        anyhow::ensure!(
+            document_source_receipt_is_eligible(&candidate),
+            "research DOCX writeback requires an eligible source receipt with a verified snapshot hash"
+        );
+        let snapshot_hash = candidate
+            .get("snapshot_hash")
+            .and_then(Value::as_str)
+            .context("eligible source receipt is missing snapshot_hash")?
+            .to_string();
+        if let Some(requested_hash) = document_source_receipt_snapshot_hash(&link) {
+            anyhow::ensure!(
+                requested_hash == snapshot_hash,
+                "source receipt snapshot hash changed; refusing to write unbound research DOCX"
+            );
+        }
+        if !snapshot_hashes.contains(&snapshot_hash) {
+            snapshot_hashes.push(snapshot_hash);
+        }
+    }
+    anyhow::ensure!(
+        !snapshot_hashes.is_empty(),
+        "research DOCX writeback requires at least one eligible source receipt"
+    );
+    Ok(DocumentsReportLineage {
+        linked_records,
+        source_receipt_snapshot_hashes: snapshot_hashes,
+        knowledge_version,
+    })
+}
+
+fn document_lineage_payload(lineage: &DocumentsReportLineage) -> Value {
+    serde_json::json!({
+        "knowledge_version": lineage.knowledge_version,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+    })
+}
+
 fn writeback_generated_docx(
     root: &Path,
     conn: &Connection,
     command_id: &str,
     command: &BusinessCommand,
     reply_text: Option<&str>,
+    lineage: &DocumentsReportLineage,
 ) -> anyhow::Result<DocumentsWritebackResult> {
     let filename = expected_docx_filename(command)
         .with_context(|| format!("documents command {command_id} has no expected DOCX filename"))?;
@@ -31934,14 +32423,16 @@ fn writeback_generated_docx(
     }]);
     let status = "Draft";
     let knowledge_context = document_knowledge_context(command);
-    let linked_records = document_linked_records(command);
+    let linked_records = lineage.linked_records.clone();
+    let knowledge_lineage = document_lineage_payload(lineage);
     let model_json = serde_json::json!({
         "type": "docx",
         "source_kind": "ctox_generated_docx",
         "filename": filename,
         "title": title,
         "index_text": index_text,
-        "knowledge_context": knowledge_context
+        "knowledge_context": knowledge_context,
+        "knowledge_lineage": knowledge_lineage
     });
     let document_payload = serde_json::json!({
         "id": document_id,
@@ -31955,6 +32446,9 @@ fn writeback_generated_docx(
         "owner_id": "",
         "current_version_id": version_id,
         "source_sha256": source_sha256,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+        "knowledge_version": lineage.knowledge_version,
+        "knowledge_lineage": document_lineage_payload(lineage),
         "page_count": 0,
         "diagnostics_count": 1,
         "linked_records": linked_records,
@@ -32015,6 +32509,9 @@ fn writeback_generated_docx(
         "blob_id": blob_id,
         "diagnostics": diagnostics,
         "model_json": model_json,
+        "source_receipt_snapshot_hashes": lineage.source_receipt_snapshot_hashes,
+        "knowledge_version": lineage.knowledge_version,
+        "knowledge_lineage": document_lineage_payload(lineage),
         "model": serde_json::Value::Null,
         "business_command_id": command_id,
         "source_path": docx_path.display().to_string(),
@@ -32102,6 +32599,8 @@ fn writeback_generated_docx(
         chunks: chunks_total,
         path: docx_path.display().to_string(),
         index_text_chars: index_text.chars().count(),
+        source_receipt_snapshot_hashes: lineage.source_receipt_snapshot_hashes.clone(),
+        knowledge_version: lineage.knowledge_version.clone(),
     })
 }
 
@@ -40031,6 +40530,304 @@ mod tests {
     }
 
     #[test]
+    fn document_report_writeback_preserves_browser_linked_records_verbatim() {
+        let linked_records = vec![
+            serde_json::json!({ "kind": "research_task", "id": "task-42" }),
+            serde_json::json!({ "kind": "knowledge_domain", "id": "bearing_design" }),
+            serde_json::json!({
+                "kind": "source_receipt",
+                "id": "source-7",
+                "snapshot_hash": format!("sha256:{}", "a".repeat(64)),
+                "role": "evidence"
+            }),
+        ];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_linked_records".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "writeback_contract": { "linked_records": linked_records },
+            }),
+            client_context: Value::Null,
+        };
+
+        assert_eq!(document_linked_records(&command), linked_records);
+    }
+
+    #[test]
+    fn non_research_document_lineage_keeps_legacy_workflow_compatible() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let linked_records = vec![serde_json::json!({
+            "kind": "crm_record",
+            "id": "customer-7"
+        })];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_non_research".to_string()),
+            module: "documents".to_string(),
+            command_type: "documents.report.generate".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "writeback_contract": {
+                    "preserve_knowledge_lineage": true,
+                    "linked_records": linked_records.clone()
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let lineage = document_report_lineage(root.path(), &command)?;
+        assert_eq!(lineage.linked_records, linked_records);
+        assert!(lineage.source_receipt_snapshot_hashes.is_empty());
+        assert!(lineage.knowledge_version.is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_rejects_missing_receipts_before_fallback_generation(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_missing_receipts".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "output_filename": "missing-receipts.docx",
+                "required_skills": ["systematic-research"],
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": {
+                    "linked_records": [
+                        { "kind": "research_task", "id": "task-42" },
+                        { "kind": "knowledge_domain", "id": "bearing_design" }
+                    ]
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let error = document_report_lineage(root.path(), &command)
+            .expect_err("research writeback must fail closed without source receipts");
+        assert!(error.to_string().contains("source receipt"));
+        assert!(!root
+            .path()
+            .join("runtime/business-os/documents/generated/missing-receipts.docx")
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        let receipt_hash = format!("sha256:{}", "b".repeat(64));
+        let rxdb_path = rxdb_store_path(root.path());
+        fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
+        let rxdb_conn = Connection::open(&rxdb_path)?;
+        let table = format!(
+            "ctox_business_os__knowledge_tables__v{}",
+            rxdb_schema_version("knowledge_tables")
+        );
+        rxdb_conn.execute(
+            &format!(
+                "CREATE TABLE {} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )",
+                sqlite_quote_identifier(&table)
+            ),
+            [],
+        )?;
+        drop(rxdb_conn);
+        upsert_rxdb_collection_record(
+            root.path(),
+            "knowledge_tables",
+            "table-evidence",
+            1700000000000,
+            serde_json::json!({
+                "table_key": "source_catalog",
+                "rows": [{
+                    "id": "source-7",
+                    "source_id": "source-7",
+                    "trace_id": "trace-7",
+                    "snapshot_hash": receipt_hash.clone(),
+                    "verification_status": "verified",
+                    "transport_verified": true,
+                    "content_extracted": true,
+                    "actual_full_text_or_data": true,
+                    "evidence_relevance_score": 9,
+                    "http_status": 200,
+                    "canonical_url": "https://publisher.example/source-7",
+                    "source_tier": "primary",
+                    "evidence_eligible": true
+                }]
+            }),
+        )?;
+        let linked_records = vec![
+            serde_json::json!({ "kind": "research_task", "id": "task-42" }),
+            serde_json::json!({
+                "kind": "knowledge_domain",
+                "id": "bearing_design",
+                "knowledge_version": "knowledge-v7"
+            }),
+            serde_json::json!({
+                "kind": "source_receipt",
+                "id": "source-7",
+                "table_id": "table-evidence",
+                "snapshot_hash": receipt_hash,
+            }),
+        ];
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_receipts".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "version_id": "knowledge-v7",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": { "linked_records": linked_records }
+            }),
+            client_context: Value::Null,
+        };
+
+        let lineage = document_report_lineage(root.path(), &command)?;
+        assert_eq!(
+            lineage.source_receipt_snapshot_hashes,
+            vec![format!("sha256:{}", "b".repeat(64))]
+        );
+        assert_eq!(
+            lineage.knowledge_version,
+            serde_json::json!({ "version_id": "knowledge-v7" })
+        );
+        assert_eq!(
+            document_lineage_payload(&lineage)
+                .get("source_receipt_snapshot_hashes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_ne!(
+            lineage.source_receipt_snapshot_hashes[0],
+            hex_sha256(b"the generated DOCX bytes")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn research_report_lineage_rejects_embedded_receipt_without_authoritative_row() {
+        let root = tempdir().expect("temp root");
+        let receipt = serde_json::json!({
+            "kind": "source_receipt",
+            "id": "source-embedded",
+            "snapshot_hash": format!("sha256:{}", "c".repeat(64)),
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "http_status": 200,
+            "canonical_url": "https://publisher.example/embedded",
+            "source_tier": "primary",
+            "evidence_eligible": true,
+            "source_id": "source-embedded",
+            "trace_id": "trace-embedded"
+        });
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_doc_embedded_receipt".to_string()),
+            module: "documents".to_string(),
+            command_type: "research.systematic.report.create".to_string(),
+            record_id: None,
+            payload: serde_json::json!({
+                "required_skills": ["systematic-research"],
+                "knowledge_context": {
+                    "id": "skill:bearing-design",
+                    "updated_at_ms": 1700000000000_i64
+                },
+                "writeback_contract": {
+                    "linked_records": [
+                        { "kind": "research_task", "id": "task-42" },
+                        receipt
+                    ]
+                }
+            }),
+            client_context: Value::Null,
+        };
+
+        let error = document_report_lineage(root.path(), &command)
+            .expect_err("embedded receipt must not satisfy research lineage");
+        assert!(error.to_string().contains("source receipt"));
+    }
+
+    #[test]
+    fn document_source_receipt_eligibility_matches_research_ui_gate() {
+        let base = serde_json::json!({
+            "id": "source-7",
+            "source_id": "source-7",
+            "trace_id": "trace-7",
+            "snapshot_hash": format!("sha256:{}", "d".repeat(64)),
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 9,
+            "http_status": 200,
+            "canonical_url": "https://publisher.example/source-7",
+            "source_type": "publisher",
+            "source_tier": "primary",
+            "evidence_eligible": true
+        });
+        for (field, value) in [
+            ("actual_full_text_or_data", Value::Bool(false)),
+            ("evidence_relevance_score", Value::from(7)),
+            (
+                "evidence_rejection_reason",
+                Value::String("off_topic".to_owned()),
+            ),
+            ("http_status", Value::from(204)),
+            ("source_type", Value::String("metadata".to_owned())),
+            ("source_type", Value::String("aggregator".to_owned())),
+        ] {
+            let mut candidate = base.clone();
+            candidate[field] = value;
+            assert!(
+                !document_source_receipt_is_eligible(&candidate),
+                "mutated field {field} must fail the evidence gate"
+            );
+        }
+        for url in [
+            "https://doi.org/10.1000/test",
+            "https://api.crossref.org/works/test",
+            "https://api.openalex.org/works/test",
+            "https://api.semanticscholar.org/graph/v1/paper/test",
+            "https://www.semanticscholar.org/paper/test",
+            "https://scholar.google.com/scholar?q=test",
+            "https://www.researchgate.net/publication/test",
+            "https://www.academia.edu/test",
+        ] {
+            let mut candidate = base.clone();
+            candidate["canonical_url"] = Value::String(url.to_owned());
+            assert!(
+                !document_source_receipt_is_eligible(&candidate),
+                "metadata URL {url} must fail the evidence gate"
+            );
+        }
+    }
+
+    #[test]
     fn exhausted_intake_failure_creates_durable_canonical_evidence() -> anyhow::Result<()> {
         let root = tempdir()?;
         let document = serde_json::json!({
@@ -40835,6 +41632,123 @@ mod tests {
                 "entry": "index.html"
             }))?,
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn module_update_legacy_manifest_uses_explicit_separate_module_roots() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let source_app_root = root.join("catalog-app");
+        let installed_app_root = root.join("installed-app");
+        let source_dir = source_app_root.join("modules/research");
+        let installed_dir = installed_app_root.join("installed-modules/research");
+        fs::create_dir_all(&source_dir)?;
+        fs::create_dir_all(installed_dir.parent().context("installed module parent")?)?;
+
+        let manifest = serde_json::json!({
+            "id": "research",
+            "title": "Research",
+            "version": "1.0.0",
+            "entry": "modules/research/index.html",
+            "collections": [],
+            "layout": {"shell": "windowed"},
+            "launch_kind": "desktop-app",
+            "presentation": {
+                "default_mode": "window",
+                "supported_modes": ["window", "maximized", "focus"],
+                "initial_size": {"width": 960, "height": 640},
+                "minimum_size": {"width": 640, "height": 480}
+            },
+            "install_scope": "store"
+        });
+        fs::write(
+            source_dir.join("module.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+        fs::write(
+            source_dir.join("index.html"),
+            "<main data-module-root></main>",
+        )?;
+        fs::write(
+            source_dir.join("index.js"),
+            "export function mount(ctx) { ctx.host.textContent = 'Research'; }\n",
+        )?;
+        fs::write(
+            source_dir.join("icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )?;
+        fs::create_dir_all(source_dir.join("tests"))?;
+        fs::write(
+            source_dir.join("tests/research.test.mjs"),
+            "console.log('ok');\n",
+        )?;
+        copy_dir_recursive(&source_dir, &installed_dir)?;
+
+        let mut legacy_manifest = manifest.clone();
+        legacy_manifest["version"] = Value::String("0.1.0".to_owned());
+        legacy_manifest["entry"] =
+            Value::String("installed-modules/research/index.html".to_owned());
+        legacy_manifest["install_scope"] = Value::String("installed".to_owned());
+        legacy_manifest["default_installed"] = Value::Bool(true);
+        legacy_manifest["developer"] = Value::String("CTOX".to_owned());
+        legacy_manifest["store"] = serde_json::json!({
+            "distribution": "ctox-runtime-installed-module",
+            "source_path": "installed-modules/research",
+            "installable": false
+        });
+        fs::write(
+            installed_dir.join("module.json"),
+            serde_json::to_vec_pretty(&legacy_manifest)?,
+        )?;
+
+        // The update validator is rooted at the test store. Copy only the
+        // existing validator/checker inputs needed by this focused test.
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let validator = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+        fs::create_dir_all(validator.parent().context("validator parent")?)?;
+        fs::copy(
+            repo_root.join("src/apps/business-os/scripts/validate-app-module.mjs"),
+            &validator,
+        )?;
+        let checker = root.join(
+            "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+        );
+        fs::create_dir_all(checker.parent().context("checker parent")?)?;
+        fs::copy(
+            repo_root.join(
+                "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+            ),
+            &checker,
+        )?;
+
+        let outcome = update_module_to_catalog(
+            root,
+            &source_app_root,
+            &installed_app_root,
+            &chef_session(),
+            ModuleUpdateRequest {
+                module_id: "research".to_owned(),
+                mode: "vanilla".to_owned(),
+                expected_baseline_sha256: String::new(),
+                target_catalog_version: String::new(),
+            },
+        )?;
+        assert_eq!(outcome.get("updated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            outcome.get("catalog_version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        let updated: Value =
+            serde_json::from_str(&fs::read_to_string(installed_dir.join("module.json"))?)?;
+        assert_eq!(
+            updated.get("version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            updated.get("source_module_id").and_then(Value::as_str),
+            Some("research")
+        );
         Ok(())
     }
 
