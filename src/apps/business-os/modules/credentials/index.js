@@ -127,10 +127,10 @@ async function loadModuleMarkup() {
     /* fall through to minimal markup */
   }
   return '<main class="ctox-workspace ctox-workspace--single credentials-module" data-credentials-root>'
-    + '<section class="ctox-pane"><div class="ctox-pane-scroll cred-body">'
-    + '<div class="cred-notice" data-cred-notice></div>'
-    + '<div class="cred-list" data-cred-list></div>'
-    + '<div class="cred-list" data-cred-extra-list></div>'
+    + '<section class="ctox-pane"><div class="ctox-record-workbench__body">'
+    + '<div class="ctox-callout" data-cred-notice></div>'
+    + '<div class="ctox-record-list" data-cred-list></div>'
+    + '<div class="ctox-record-list" data-cred-extra-list></div>'
     + '</div></section></main>';
 }
 
@@ -250,7 +250,7 @@ function rowHtml(entry, isExtra) {
   const placeholder = isSet ? state.t('ph_rotate') : state.t('ph_set');
   const saveLabel = isSet ? state.t('btn_rotate') : state.t('btn_save');
   const deleteButton = isSet
-    ? `<button type="button" class="ctox-button is-danger" data-action="delete" data-key="${esc(name)}">${esc(state.t('btn_delete'))}</button>`
+    ? `<button type="button" class="ctox-button ctox-button--sm is-danger" data-action="delete" data-key="${esc(name)}">${esc(state.t('btn_delete'))}</button>`
     : '';
   return `<div class="cred-row" data-key="${esc(name)}" data-context-record-id="${esc(name)}" data-context-record-type="credential" data-context-label="${esc(name)}">
     <div class="cred-meta">
@@ -260,7 +260,7 @@ function rowHtml(entry, isExtra) {
     </div>
     <div class="cred-actions">
       <input type="password" class="ctox-input" data-value-for="${esc(name)}" placeholder="${esc(placeholder)}" autocomplete="new-password" />
-      <button type="button" class="ctox-button" data-action="save" data-key="${esc(name)}">${esc(saveLabel)}</button>
+      <button type="button" class="ctox-button ctox-button--sm" data-action="save" data-key="${esc(name)}">${esc(saveLabel)}</button>
       ${deleteButton}
     </div>
   </div>`;
