@@ -31,10 +31,7 @@ use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
 use ctox_core::config::{
     find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
-    ManagedFeatures,
 };
-#[cfg(target_os = "linux")]
-use ctox_core::features::Feature;
 use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_core::AuthManager;
 use ctox_core::ThreadManager;
@@ -89,16 +86,16 @@ fn direct_session_arg0_paths() -> Arg0DispatchPaths {
     }
 }
 
-fn configure_managed_linux_sandbox(features: &mut ManagedFeatures) -> anyhow::Result<()> {
+fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)>) {
     #[cfg(target_os = "linux")]
-    features
-        .enable(Feature::UseLegacyLandlock)
-        .map_err(|err| anyhow::anyhow!("managed Linux sandbox configuration: {err}"))?;
+    {
+        const KEY: &str = "features.use_legacy_landlock";
+        cli_overrides.retain(|(key, _)| key != KEY);
+        cli_overrides.push((KEY.to_string(), toml::Value::Boolean(true)));
+    }
 
     #[cfg(not(target_os = "linux"))]
-    let _ = features;
-
-    Ok(())
+    let _ = cli_overrides;
 }
 
 fn persistent_worker_thread_name(root: &Path) -> String {
@@ -1047,17 +1044,18 @@ impl PersistentSession {
                 provider.provider_id, provider.base_url, provider.wire_api
             );
         }
-        let mut config = ConfigBuilder::default()
+        // This must be part of the canonical override set passed into the
+        // in-process app server. Mutating only the initially built Config is
+        // insufficient because per-turn configs and spawned threads rebuild
+        // from these overrides.
+        configure_managed_linux_sandbox(&mut cli_overrides);
+        let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
             .harness_overrides(overrides)
             .cloud_requirements(cloud_requirements.clone())
             .build()
             .await
             .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
-        // Managed CTOX hosts can run inside containers where user namespaces
-        // are unavailable. The stable Landlock path preserves filesystem and
-        // seccomp enforcement without depending on a host bwrap package.
-        configure_managed_linux_sandbox(&mut config.features)?;
         let config = Arc::new(config);
         let session_source = if read_only_sandbox {
             SessionSource::SubAgent(SubAgentSource::Review)
@@ -1836,6 +1834,34 @@ mod tests {
 
         #[cfg(not(target_os = "linux"))]
         assert!(paths.ctox_linux_sandbox_exe.is_none());
+    }
+
+    #[test]
+    fn managed_linux_sandbox_override_survives_turn_rebuilds() {
+        let mut overrides = vec![(
+            "features.use_legacy_landlock".to_string(),
+            toml::Value::Boolean(false),
+        )];
+
+        configure_managed_linux_sandbox(&mut overrides);
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            overrides,
+            vec![(
+                "features.use_legacy_landlock".to_string(),
+                toml::Value::Boolean(true),
+            )]
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            overrides,
+            vec![(
+                "features.use_legacy_landlock".to_string(),
+                toml::Value::Boolean(false),
+            )]
+        );
     }
 
     #[test]
