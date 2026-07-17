@@ -22,7 +22,12 @@ test('presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(source, shadowPattern);
   assert.doesNotMatch(source, gradientPattern);
   assert.doesNotMatch(source, hardNeutralPattern);
-  assert.match(css, /grid-template-columns: var\(--coding-agents-left-width, 300px\) 6px minmax\(0, 1fr\)/);
+  // Standard shell frame: kit workspace + declarative resizer, no DIY grid.
+  assert.match(html, /class="ctox-workspace ctox-workspace--two-pane coding-agents-module/);
+  assert.match(html, /data-resize-frame/);
+  assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
+  assert.doesNotMatch(js, /CtoxResizer/);
+  assert.doesNotMatch(css, /--coding-agents-left-width/);
   assert.match(css, /\.lifecycle-status-row/);
   assert.match(css, /\.browser-log-box/);
 });

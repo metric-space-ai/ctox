@@ -1,5 +1,14 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
+
+// Root class list: the standard shell frame (.ctox-workspace--two-pane with
+// data-resize-frame) plus the module hook and the per-provider theme class.
+// The theme classes are JS state markers; the provider accent comes from the
+// shell tokens.
+const ROOT_CLASSES = 'ctox-workspace ctox-workspace--two-pane coding-agents-module';
+
+function applyRootTheme() {
+  if (els.root) els.root.className = `${ROOT_CLASSES} theme-${state.activeApp}`;
+}
 
 const state = {
   ctx: null,
@@ -77,22 +86,9 @@ export async function mount(ctx) {
   wireEvents();
   const projectionSubscriptions = subscribeProjectionUpdates();
 
-  // Initialize resizable layout columns
-  const resizers = [];
-  const leftResizer = ctx.host.querySelector('[data-resizer="left"]');
-  const containerEl = ctx.host.querySelector('[data-coding-agents-root]');
-
-  if (leftResizer && containerEl) {
-    const resizerL = new CtoxResizer({
-      resizerEl: leftResizer,
-      containerEl: containerEl,
-      cssVar: '--coding-agents-left-width',
-      side: 'left',
-      minWidth: 260,
-      maxWidth: 450
-    });
-    resizers.push(resizerL);
-  }
+  // Column resizing is owned by the shell (setupModuleResizers in app.js),
+  // wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handle inside the `[data-resize-frame]` root — no module JS needed here.
 
   // Set initial diagnostics state
   updateUI();
@@ -111,7 +107,6 @@ export async function mount(ctx) {
     projectionSubscriptions.forEach((subscription) => {
       try { subscription?.unsubscribe?.(); } catch (err) { console.warn('[coding-agents] projection unsubscribe failed', err); }
     });
-    resizers.forEach(r => r.destroy());
     styleLink.remove();
   };
 }
@@ -476,7 +471,7 @@ function wireEvents() {
       state.activeApp = targetApp;
 
       // Update Root Class Theme
-      els.root.className = `coding-agents-module theme-${targetApp}`;
+      applyRootTheme();
 
       // Update Header values
       if (targetApp === 'antigravity') {
@@ -709,7 +704,8 @@ function setWorkspaceLoadState(status, error = '') {
 
 function createWorkspaceStateNode(status, error = '') {
   const wrap = document.createElement('div');
-  wrap.className = `workspace-load-state ${status === 'error' ? 'error' : ''}`;
+  // Kit empty state; `workspace-load-state`/`error` stay as JS state hooks.
+  wrap.className = `ctox-empty workspace-load-state ${status === 'error' ? 'error' : ''}`;
 
   const title = document.createElement('strong');
   const body = document.createElement('span');
@@ -749,7 +745,7 @@ function renderNoWorkspaceSelected(message) {
   if (els.promptInput) els.promptInput.disabled = true;
   if (els.promptSubmit) els.promptSubmit.disabled = true;
   if (els.chatFeed) {
-    els.chatFeed.innerHTML = `<div class="workbench-empty-state"><strong>No workspace selected.</strong><span>${escapeHtml(message)}</span></div>`;
+    els.chatFeed.innerHTML = `<div class="ctox-empty workbench-empty-state"><strong>No workspace selected.</strong><span>${escapeHtml(message)}</span></div>`;
   }
 }
 
@@ -1085,7 +1081,9 @@ function renderWorkspaces() {
   workspaces.forEach(path => {
     const shortName = path.split('/').pop() || path;
     const el = document.createElement('div');
-    el.className = `workspace-item ${state.activeWorkspace === path ? 'active' : ''}`;
+    // Kit list row; `workspace-item`/`active` stay as JS selection hooks,
+    // `is-selected` drives the kit selection styling.
+    el.className = `ctox-list-item workspace-item ${state.activeWorkspace === path ? 'active is-selected' : ''}`;
     el.dataset.workspace = path;
     el.dataset.contextRecordId = path;
     el.dataset.contextRecordType = 'workspace';
@@ -1100,12 +1098,12 @@ function renderWorkspaces() {
         <span class="workspace-path" title="${escapeAttr(path)}">${escapeHtml(path)}</span>
       </div>
       <div class="workspace-actions">
-        <select class="workspace-agent-select" aria-label="Coding agent for ${escapeAttr(shortName)}" style="pointer-events: auto;">
+        <select class="ctox-pane-filter workspace-agent-select" aria-label="Coding agent for ${escapeAttr(shortName)}">
           <option value="antigravity" ${mappedApp === 'antigravity' ? 'selected' : ''}>Antigravity</option>
           <option value="claude" ${mappedApp === 'claude' ? 'selected' : ''}>Claude</option>
           <option value="codex" ${mappedApp === 'codex' ? 'selected' : ''}>Codex</option>
         </select>
-        <button type="button" class="btn-remove-workspace" title="Remove Workspace" aria-label="Remove workspace ${escapeAttr(path)}">&times;</button>
+        <button type="button" class="ctox-icon-button ctox-icon-button--sm is-danger btn-remove-workspace" title="Remove Workspace" aria-label="Remove workspace ${escapeAttr(path)}">&times;</button>
       </div>
     `;
 
@@ -1119,7 +1117,7 @@ function renderWorkspaces() {
       // If this is the active workspace, switch theme immediately
       if (state.activeWorkspace === path) {
         state.activeApp = newAgent;
-        els.root.className = `coding-agents-module theme-${state.activeApp}`;
+        applyRootTheme();
         els.activeAppDesc.textContent = `Active Coding Agent: ${state.activeApp.toUpperCase()} (${state.activeWorkspace})`;
         updateUI();
         refreshSessions();
@@ -1161,7 +1159,7 @@ function renderWorkspaces() {
     // Keep active workspace styled
     const activeItem = box.querySelector(`[data-workspace="${cssEscape(state.activeWorkspace)}"]`);
     if (activeItem) {
-      activeItem.classList.add('active');
+      activeItem.classList.add('active', 'is-selected');
     } else {
       state.activeWorkspace = null;
     }
@@ -1173,7 +1171,7 @@ function selectWorkspace(path, app) {
   state.activeApp = app;
 
   // Set theme accent on root
-  els.root.className = `coding-agents-module theme-${state.activeApp}`;
+  applyRootTheme();
 
   // Update header titles
   els.activeAppTitle.textContent = state.activeWorkspace.split('/').pop() || 'Workspace';
@@ -1184,7 +1182,9 @@ function selectWorkspace(path, app) {
 
   // Render active outline
   els.workspacesListBox.querySelectorAll('.workspace-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.workspace === path);
+    const isActive = item.dataset.workspace === path;
+    item.classList.toggle('active', isActive);
+    item.classList.toggle('is-selected', isActive);
   });
 
   updateUI();
@@ -1308,7 +1308,7 @@ function renderSessions() {
     if (els.newSessionBtn) els.newSessionBtn.disabled = false;
     els.promptInput.disabled = true;
     els.promptSubmit.disabled = true;
-    els.chatFeed.innerHTML = `<div class="workbench-empty-state"><strong>No active sessions for this workspace.</strong><span>Use "+ New Session" to create one with an initial instruction.</span></div>`;
+    els.chatFeed.innerHTML = `<div class="ctox-empty workbench-empty-state"><strong>No active sessions for this workspace.</strong><span>Use "+ New Session" to create one with an initial instruction.</span></div>`;
     return;
   }
 
@@ -1342,7 +1342,7 @@ async function loadSessionDetails(sessionId, app) {
   if (!feedBox) return;
 
   if (!sessionId) {
-    feedBox.innerHTML = `<div class="empty-list-placeholder">No session active.</div>`;
+    feedBox.innerHTML = `<div class="ctox-empty">No session active.</div>`;
     els.promptInput.disabled = true;
     els.promptSubmit.disabled = true;
     return;
@@ -1351,7 +1351,7 @@ async function loadSessionDetails(sessionId, app) {
   els.promptInput.disabled = false;
   els.promptSubmit.disabled = false;
 
-  feedBox.innerHTML = `<div class="empty-list-placeholder" style="animation: pulse-glow 1s infinite alternate;">Retrieving session records from SQLite database...</div>`;
+  feedBox.innerHTML = `<div class="ctox-empty">Retrieving session records from SQLite database...</div>`;
 
   let elements = await sessionEventsFromProjection(sessionId);
   let res = null;
@@ -1363,7 +1363,7 @@ async function loadSessionDetails(sessionId, app) {
 
   if (Array.isArray(elements)) {
     if (elements.length === 0) {
-      feedBox.innerHTML = `<div class="empty-list-placeholder">No conversation history recorded in this session.</div>`;
+      feedBox.innerHTML = `<div class="ctox-empty">No conversation history recorded in this session.</div>`;
       return;
     }
 
@@ -1399,7 +1399,7 @@ async function loadSessionDetails(sessionId, app) {
 
     feedBox.scrollTop = feedBox.scrollHeight;
   } else {
-    feedBox.innerHTML = `<div class="empty-list-placeholder text-red">Failed to read SQLite logs from host: ${escapeHtml(res?.stderr || 'Timeout')}</div>`;
+    feedBox.innerHTML = `<div class="ctox-empty"><span class="text-red">Failed to read SQLite logs from host: ${escapeHtml(res?.stderr || 'Timeout')}</span></div>`;
   }
 }
 
