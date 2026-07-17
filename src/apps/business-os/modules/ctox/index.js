@@ -9,9 +9,6 @@ const NODE_HEIGHT = 76;
 const DEFAULT_ZOOM = 1;
 const MIN_ZOOM = 0.72;
 const MAX_ZOOM = 1.8;
-const LEFT_COLUMN_WIDTH_KEY = 'ctox.businessOs.ctox.leftColumnWidth';
-const LEFT_COLUMN_MIN = 220;
-const LEFT_COLUMN_MAX = 560;
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
 const HARNESS_STALL_GRACE_MS = 90 * 1000;
@@ -20,7 +17,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260706-kit-tokens1';
+const CTOX_STYLE_BUILD = '20260717-kit-migration1';
 
 const labels = {
   de: {
@@ -443,7 +440,6 @@ export async function mount(ctx) {
     },
   };
 
-  applyHarnessColumnWidth(ctx.host, readStoredLeftColumnWidth());
   const harness = ctx.host.querySelector('[data-ctox-harness]');
   if (harness) harness.__ctoxState = state;
   const teardownShellMessages = wireShellMessages(state);
@@ -578,11 +574,14 @@ async function refresh(state) {
 function renderLoading(state) {
   const t = labels[state.lang];
   state.ctx.host.querySelector('[data-ctox-left]').innerHTML = `
-    <div class="ctox-panel-title">
-      <span>${escapeHtml(t.tasks)}</span>
-      <strong>${escapeHtml(t.loadingQueue)}</strong>
-      <small>${escapeHtml(t.loadingQueueDetail)}</small>
-    </div>
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t.tasks)}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(t.loadingQueue)}</h2>
+        </div>
+      </div>
+    </header>
     <div class="ctox-loading-list" aria-hidden="true">
       <span></span>
       <span></span>
@@ -590,7 +589,7 @@ function renderLoading(state) {
     </div>
   `;
   state.ctx.host.querySelector('[data-ctox-main]').innerHTML = `
-    <section class="ctox-loading-state" aria-live="polite" aria-busy="true">
+    <section class="ctox-empty" aria-live="polite" aria-busy="true">
       <div>
         <strong>${escapeHtml(t.loadingRuntime)}</strong>
         <span>${escapeHtml(t.loadingRuntimeDetail)}</span>
@@ -779,113 +778,13 @@ function formatRelativeAge(ms, lang) {
   return lang === 'de' ? `${days} Tg.` : `${days} d`;
 }
 
-function readStoredLeftColumnWidth() {
-  const stored = localStorage.getItem(LEFT_COLUMN_WIDTH_KEY);
-  if (!stored) return 340;
-  const width = Number(stored);
-  return Number.isFinite(width) ? clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX) : 340;
-}
-
-function applyHarnessColumnWidth(host, width) {
-  const harness = host?.querySelector?.('[data-ctox-harness]');
-  if (!harness) return;
-  harness.style.setProperty('--ctox-left-width', `${Math.round(clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX))}px`);
-}
-
 function wireColumnResize(state) {
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handle in
-  // index.html declaratively. We must NOT DIY-wire it here or the handle gets
-  // double-wired. Return a no-op teardown; mount/unmount semantics are preserved.
+  // Column resizing is owned by the shell-global resizer (setupModuleResizers
+  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handle
+  // in index.html declaratively (including width persistence). The module must
+  // NOT DIY-wire it here or the handle gets double-wired. Return a no-op
+  // teardown; mount/unmount semantics are preserved.
   return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  const harness = state.ctx.host.querySelector('[data-ctox-harness]');
-  const handle = state.ctx.host.querySelector('[data-ctox-column-resizer]');
-  if (!harness || !handle) return () => {};
-
-  let drag = null;
-  let raf = 0;
-  const readWidth = () => {
-    const cssWidth = Number.parseFloat(window.getComputedStyle(harness).getPropertyValue('--ctox-left-width'));
-    if (Number.isFinite(cssWidth)) return clampMetric(cssWidth, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX);
-    const left = state.ctx.host.querySelector('[data-ctox-left]');
-    return clampMetric(left?.getBoundingClientRect?.().width || 340, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX);
-  };
-  const setWidth = (width) => {
-    const next = Math.round(clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX));
-    harness.style.setProperty('--ctox-left-width', `${next}px`);
-    handle.setAttribute('aria-valuenow', String(next));
-    handle.setAttribute('aria-valuetext', `${next} px`);
-    localStorage.setItem(LEFT_COLUMN_WIDTH_KEY, String(next));
-    return next;
-  };
-  const stopDrag = (event) => {
-    if (raf) window.cancelAnimationFrame(raf);
-    raf = 0;
-    if (drag?.pointerId !== undefined) {
-      try { handle.releasePointerCapture(drag.pointerId); } catch {}
-    }
-    drag = null;
-    handle.classList.remove('is-dragging');
-    document.body.classList.remove('ctox-column-resizing');
-    event?.preventDefault?.();
-  };
-  const moveDrag = (event) => {
-    if (!drag) return;
-    event.preventDefault();
-    if (raf) window.cancelAnimationFrame(raf);
-    const clientX = event.clientX;
-    raf = window.requestAnimationFrame(() => {
-      raf = 0;
-      setWidth(drag.startWidth + (clientX - drag.startX));
-    });
-  };
-  const startDrag = (event) => {
-    if (event.button !== undefined && event.button !== 0) return;
-    event.preventDefault();
-    drag = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startWidth: readWidth(),
-    };
-    handle.setPointerCapture?.(event.pointerId);
-    handle.classList.add('is-dragging');
-    document.body.classList.add('ctox-column-resizing');
-  };
-  const onKeyDown = (event) => {
-    const current = readWidth();
-    const step = event.shiftKey ? 48 : 24;
-    let next = null;
-    if (event.key === 'ArrowLeft') next = current - step;
-    if (event.key === 'ArrowRight') next = current + step;
-    if (event.key === 'Home') next = LEFT_COLUMN_MIN;
-    if (event.key === 'End') next = LEFT_COLUMN_MAX;
-    if (next === null) return;
-    event.preventDefault();
-    setWidth(next);
-  };
-
-  handle.setAttribute('role', 'separator');
-  handle.setAttribute('tabindex', '0');
-  handle.setAttribute('aria-orientation', 'vertical');
-  handle.setAttribute('aria-valuemin', String(LEFT_COLUMN_MIN));
-  handle.setAttribute('aria-valuemax', String(LEFT_COLUMN_MAX));
-  setWidth(readWidth());
-  handle.addEventListener('pointerdown', startDrag);
-  handle.addEventListener('pointermove', moveDrag);
-  handle.addEventListener('pointerup', stopDrag);
-  handle.addEventListener('pointercancel', stopDrag);
-  handle.addEventListener('keydown', onKeyDown);
-
-  return () => {
-    stopDrag();
-    handle.removeEventListener('pointerdown', startDrag);
-    handle.removeEventListener('pointermove', moveDrag);
-    handle.removeEventListener('pointerup', stopDrag);
-    handle.removeEventListener('pointercancel', stopDrag);
-    handle.removeEventListener('keydown', onKeyDown);
-  };
 }
 
 function renderLeft(state) {
@@ -903,18 +802,24 @@ function renderLeft(state) {
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
   left.innerHTML = `
-    <div class="ctox-panel-title ctox-context-item" data-harness-health-tooltip data-context-label="${escapeAttr(t.tasks)}" data-context-record-id="ctox-tasks">
-      <span>${escapeHtml(t.tasks)}</span>
-      <strong>${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</strong>
-    </div>
-    ${taskCategoryChips(model.tasks, selectedCategory, state)}
-    <div class="ctox-work-overview">
+    <header class="ctox-pane-header ctox-pane-band ctox-context-item" data-harness-health-tooltip data-context-label="${escapeAttr(t.tasks)}" data-context-record-id="ctox-tasks">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t.tasks)}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</h2>
+        </div>
+      </div>
+      ${taskCategoryChips(model.tasks, selectedCategory, state)}
+    </header>
+    <div class="ctox-pane-scroll ctox-work-overview">
       ${workSection('done', t.doneWork, visibleGroups.done, state)}
       ${workSection('current', t.currentWork, visibleGroups.current, state)}
       ${workSection('queue', t.queue, [...visibleGroups.blocked, ...visibleGroups.waiting], state)}
     </div>
-    ${inboundChannelPanel(model.inboundChannels, state)}
-    ${webStackPanel(state)}
+    <div class="ctox-harness-aux">
+      ${inboundChannelPanel(model.inboundChannels, state)}
+      ${webStackPanel(state)}
+    </div>
   `;
 
   const newTaskBoard = left.querySelector('.ctox-work-overview');
@@ -954,11 +859,11 @@ function taskCategoryChips(tasks, selectedCategory, state) {
     ...Array.from(categories.values()).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label)),
   ];
   return `
-    <div class="ctox-task-filter-chips" aria-label="${escapeAttr(t.tasks)}">
+    <div class="ctox-pane-tools ctox-task-filter-chips" aria-label="${escapeAttr(t.tasks)}">
       ${items.map(({ key, label, count }) => `
-        <button type="button" class="${selectedCategory === key ? 'is-active' : ''}" data-task-category="${escapeAttr(key)}">
+        <button type="button" class="ctox-chip ${selectedCategory === key ? 'is-active' : ''}" data-task-category="${escapeAttr(key)}" aria-pressed="${selectedCategory === key}">
           <span>${escapeHtml(label)}</span>
-          <strong>${count}</strong>
+          <span class="ctox-chip-count">${count}</span>
         </button>
       `).join('')}
     </div>
@@ -1003,23 +908,9 @@ function workSection(key, title, tasks, state) {
     <details class="ctox-work-section is-${escapeAttr(key)}" data-task-section="${escapeAttr(key)}" ${open ? 'open' : ''}>
       <summary>
         <span>${escapeHtml(title)}</span>
-        <strong>${tasks.length}</strong>
+        <strong class="ctox-badge">${tasks.length}</strong>
       </summary>
-      <div class="ctox-task-list">
-        ${tasks.length ? tasks.map((task) => taskRow(task, state)).join('') : `<p>${escapeHtml(t.noWorkHere)}</p>`}
-      </div>
-    </details>
-  `;
-}
-
-function taskSection(key, title, tasks, state) {
-  const t = labels[state.lang];
-  const open = state.openTaskSections?.has(key) || tasks.some((task) => task.id === state.selectedTaskId);
-  if (!tasks.length && !open) return '';
-  return `
-    <details class="ctox-task-section" data-task-section="${escapeAttr(key)}" ${open ? 'open' : ''}>
-      <summary><span>${escapeHtml(title)}</span><strong>${tasks.length}</strong></summary>
-      <div class="ctox-task-list">
+      <div class="ctox-list ctox-task-list">
         ${tasks.length ? tasks.map((task) => taskRow(task, state)).join('') : `<p>${escapeHtml(t.noWorkHere)}</p>`}
       </div>
     </details>
@@ -1051,8 +942,8 @@ function taskRow(task, state) {
   }
 
   return `
-    <button type="button" class="ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${tone}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}">
-      <span class="ctox-task-status-wrapper">
+    <button type="button" class="ctox-list-item ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${tone}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}">
+      <span class="ctox-badge ctox-task-status-wrapper ${statusBadgeVariant(tone)}">
         <span class="ctox-task-icon-container">${iconHtml}</span>
         <span class="ctox-task-status-text">${escapeHtml(displayStatus(task.status, state.lang))}</span>
       </span>
@@ -1064,14 +955,23 @@ function taskRow(task, state) {
   `;
 }
 
+// Task status is a non-clickable state display — rendered as a kit badge, so
+// the row tone maps onto the badge variant vocabulary.
+function statusBadgeVariant(tone) {
+  if (tone === 'tone-ok') return 'is-success';
+  if (tone === 'tone-blocked') return 'is-danger';
+  if (tone === 'tone-running') return 'is-info';
+  return 'is-warning';
+}
+
 function inboundChannelPanel(channels, state) {
   const t = labels[state.lang];
   if (!channels?.length) return '';
   return `
     <details class="ctox-aux-section ctox-inbound-panel ctox-context-item" data-context-label="${escapeAttr(t.inboundChannels)}" data-context-record-id="ctox-inbound-channels">
       <summary>
-        <span>${escapeHtml(t.inboundChannels)}</span>
-        <strong>${channels.reduce((sum, channel) => sum + channel.count, 0)}</strong>
+        <span class="ctox-pane-kicker">${escapeHtml(t.inboundChannels)}</span>
+        <strong class="ctox-badge">${channels.reduce((sum, channel) => sum + channel.count, 0)}</strong>
       </summary>
       <div class="ctox-inbound-list">
         ${channels.map((channel) => `
@@ -1109,7 +1009,7 @@ function webStackPanel(state) {
           <strong>${escapeHtml(source.id)}</strong>
           <small>${escapeHtml(source.credential.secret_name || '')}</small>
         </span>
-        <button type="button" data-webstack-auth-source="${escapeAttr(source.id)}" data-webstack-auth-secret="${escapeAttr(source.credential.secret_name || '')}">
+        <button type="button" class="ctox-button ctox-button--sm" data-webstack-auth-source="${escapeAttr(source.id)}" data-webstack-auth-secret="${escapeAttr(source.credential.secret_name || '')}">
           ${escapeHtml(configured ? t.webStackAuthAssist : t.webStackVerifyCredential)}
         </button>
       </article>
@@ -1143,17 +1043,17 @@ function webStackPanel(state) {
     : projectionMissing
       ? t.webStackSyncRequired
       : `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`;
-  const statusTone = webStack.error ? 'is-status' : (webStack.notice ? 'is-notice' : '');
+  const statusTone = webStack.error ? 'is-warning' : (webStack.notice ? 'is-info' : '');
   return `
     <details class="ctox-aux-section ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
       <summary>
-        <span>${escapeHtml(t.webStack)}</span>
-        <strong>${escapeHtml(headerSummary)}</strong>
+        <span class="ctox-pane-kicker">${escapeHtml(t.webStack)}</span>
+        <strong class="ctox-badge">${escapeHtml(headerSummary)}</strong>
       </summary>
       <div class="ctox-web-stack-body">
-        <button type="button" data-webstack-refresh aria-label="${escapeAttr(`${t.webStack} aktualisieren`)}" title="${escapeAttr(`${t.webStack} aktualisieren`)}">↻</button>
-        <p class="ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</p>
-        ${projectionMissing ? `<p class="ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</p>` : ''}
+        <button type="button" class="ctox-pane-icon" data-webstack-refresh aria-label="${escapeAttr(`${t.webStack} aktualisieren`)}" title="${escapeAttr(`${t.webStack} aktualisieren`)}">↻</button>
+        <div class="ctox-callout ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</div>
+        ${projectionMissing ? `<div class="ctox-callout is-info ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</div>` : ''}
         ${sourceOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
         <div class="ctox-web-stack-source-list">
           ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
@@ -1398,15 +1298,17 @@ function renderMain(state) {
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   main.innerHTML = `
-    <header class="ctox-flow-head">
-      <div>
-        <span>${escapeHtml(t.liveFlow)}</span>
-        <h1>${escapeHtml(t.doingNow)}</h1>
-      </div>
-      <div class="ctox-flow-source" data-harness-health-tooltip>
-        <strong>${escapeHtml(flowSource.mode)}</strong>
-        <span>${escapeHtml(flowSource.status)}</span>
-        ${live ? liveStatusMarkup(state) : ''}
+    <header class="ctox-pane-header ctox-pane-band">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(t.liveFlow)}</span>
+          <h2 class="ctox-pane-title">${escapeHtml(t.doingNow)}</h2>
+        </div>
+        <div class="ctox-flow-source" data-harness-health-tooltip>
+          <strong>${escapeHtml(flowSource.mode)}</strong>
+          <span>${escapeHtml(flowSource.status)}</span>
+          ${live ? liveStatusMarkup(state) : ''}
+        </div>
       </div>
     </header>
     <section class="ctox-metrics-strip" aria-label="${escapeAttr(t.measurements)}">
@@ -1492,7 +1394,7 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
       <section class="ctox-timeline-panel ${hasRange ? '' : 'is-disabled'}" aria-label="Activity timeline" style="--timeline-progress:${escapeAttr(progressPercent(value, max))}%">
         <div class="ctox-timeline-head">
           <div>
-            <span>${escapeHtml(t.timeline)}</span>
+            <span class="ctox-pane-kicker">${escapeHtml(t.timeline)}</span>
             ${timelineLiveStatusMarkup(selectedTask, selectedNode, state)}
           </div>
           <strong>${escapeHtml(hasRange ? (selectedNode?.label || '') : t.timelineUnavailable)}</strong>
@@ -1520,7 +1422,7 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
     <section class="ctox-timeline-panel is-task-timeline ${hasRange ? '' : 'is-disabled'}" aria-label="${escapeAttr(t.taskSteps)}" style="--timeline-progress:${escapeAttr(progressPercent(activeStepIndex, max))}%">
       <div class="ctox-timeline-head">
         <div>
-          <span>${escapeHtml(t.timeline)}</span>
+          <span class="ctox-pane-kicker">${escapeHtml(t.timeline)}</span>
           ${timelineLiveStatusMarkup(selectedTask, current, state)}
         </div>
         <strong>${escapeHtml(hasRange ? selectedTask.title : t.timelineUnavailable)}</strong>
@@ -2224,61 +2126,68 @@ function taskDrawer(task, state) {
   const body = document.createElement('div');
   body.className = 'drawer-body ctox-task-drawer';
   body.innerHTML = `
-    <header class="ctox-detail-header">
+    <header class="drawer-header-row">
       <div>
-        <span>${escapeHtml(t.taskDetail)}</span>
+        <span class="ctox-pane-kicker">${escapeHtml(t.taskDetail)}</span>
         <h2>${escapeHtml(displayTitle)}</h2>
         <small>${escapeHtml(sourceLine)}</small>
       </div>
-      <button class="icon-button ctox-drawer-close" type="button" data-close-ctox-drawer aria-label="Schließen">×</button>
+      <button class="ctox-pane-icon ctox-drawer-close" type="button" data-close-ctox-drawer aria-label="Schließen">×</button>
     </header>
-    <section class="ctox-task-status-strip">
+    <section class="ctox-callout is-info ctox-task-status-strip">
       <div>
-        <strong class="${escapeAttr(statusClass(task.status))}">${escapeHtml(displayStatus(task.status, state.lang))}</strong>
+        <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.status))}">${escapeHtml(displayStatus(task.status, state.lang))}</strong>
         ${target ? `<small>${escapeHtml(target)}</small>` : ''}
       </div>
       ${taskLiveStatusMarkup(task, state)}
     </section>
-    <form class="ctox-task-edit" data-ctox-task-edit>
+    <form class="ctox-card ctox-task-edit" data-ctox-task-edit>
       <header>
-        <h3>${escapeHtml(t.editTask)}</h3>
+        <span>${escapeHtml(t.editTask)}</span>
         ${canModifyCtoxApp(state) ? '' : `<small>${escapeHtml(t.chefAdminOnly)}</small>`}
       </header>
-      <label>
-        <span>${escapeHtml(t.taskTitle)}</span>
-        <input type="text" name="${titleField.redacted ? 'titleDisplay' : 'title'}" value="${escapeAttr(titleField.text)}" ${canModifyCtoxApp(state) && !titleField.redacted ? '' : 'disabled'}>
-        ${titleField.redacted ? `<small>${escapeHtml(t.redactedTechnicalDetail)}</small>` : ''}
-      </label>
-      <label>
-        <span>${escapeHtml(t.taskPrompt)}</span>
-        <textarea name="${promptField.redacted ? 'promptDisplay' : 'prompt'}" rows="4" ${canModifyCtoxApp(state) && !promptField.redacted ? '' : 'disabled'}>${escapeHtml(promptField.text)}</textarea>
-        ${promptField.redacted ? `<small>${escapeHtml(t.taskPromptRedacted)}</small>` : ''}
-      </label>
-      <label>
-        <span>${escapeHtml(t.priority)}</span>
-        <select name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
-          ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
-        </select>
-      </label>
-      <footer>
-        <button type="submit" class="ctox-task-save" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.saveTask)}</button>
-        ${canResumeCtoxTask(task) ? `<button type="button" class="ctox-task-resume" data-ctox-task-resume ${state.ctx?.commandBus?.dispatch ? '' : 'disabled'}>${escapeHtml(t.resumeTask)}</button>` : ''}
-        <button type="button" class="ctox-task-delete" data-ctox-task-delete ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.deleteTask)}</button>
+      <div class="ctox-card-body">
+        <label class="ctox-task-edit-field">
+          <span class="ctox-field-label">${escapeHtml(t.taskTitle)}</span>
+          <input class="ctox-input" type="text" name="${titleField.redacted ? 'titleDisplay' : 'title'}" value="${escapeAttr(titleField.text)}" ${canModifyCtoxApp(state) && !titleField.redacted ? '' : 'disabled'}>
+          ${titleField.redacted ? `<small>${escapeHtml(t.redactedTechnicalDetail)}</small>` : ''}
+        </label>
+        <label class="ctox-task-edit-field">
+          <span class="ctox-field-label">${escapeHtml(t.taskPrompt)}</span>
+          <textarea class="ctox-textarea" name="${promptField.redacted ? 'promptDisplay' : 'prompt'}" rows="4" ${canModifyCtoxApp(state) && !promptField.redacted ? '' : 'disabled'}>${escapeHtml(promptField.text)}</textarea>
+          ${promptField.redacted ? `<small>${escapeHtml(t.taskPromptRedacted)}</small>` : ''}
+        </label>
+        <label class="ctox-task-edit-field">
+          <span class="ctox-field-label">${escapeHtml(t.priority)}</span>
+          <select class="ctox-select" name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
+            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <footer class="ctox-task-edit-footer">
+        <button type="submit" class="ctox-button is-primary" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.saveTask)}</button>
+        ${canResumeCtoxTask(task) ? `<button type="button" class="ctox-button" data-ctox-task-resume ${state.ctx?.commandBus?.dispatch ? '' : 'disabled'}>${escapeHtml(t.resumeTask)}</button>` : ''}
+        <button type="button" class="ctox-button is-danger" data-ctox-task-delete ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.deleteTask)}</button>
         <small data-ctox-task-action-status></small>
       </footer>
     </form>
     ${showSummary ? `
-      <section class="ctox-detail-summary">
-        <p>${escapeHtml(summary)}</p>
+      <section class="ctox-card">
+        <header>${escapeHtml(t.summary)}</header>
+        <div class="ctox-card-body">
+          <p>${escapeHtml(summary)}</p>
+        </div>
       </section>
     ` : ''}
     ${resultSummaryText ? `
-      <section class="ctox-detail-summary">
-        <span>${escapeHtml(t.evidence)}</span>
-        <p>${escapeHtml(resultSummaryText)}</p>
+      <section class="ctox-card">
+        <header>${escapeHtml(t.evidence)}</header>
+        <div class="ctox-card-body">
+          <p>${escapeHtml(resultSummaryText)}</p>
+        </div>
       </section>
     ` : ''}
-    <section class="ctox-drawer-section ctox-drawer-timeline">
+    <section class="ctox-drawer-timeline">
       <header>
         <h3>${escapeHtml(t.timeline)}</h3>
         <small>${escapeHtml(`${steps.length} ${t.taskSteps}`)}</small>
@@ -2497,27 +2406,35 @@ function flowNodeDrawer(node, task, state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <span>${escapeHtml(t.stationDetail)}</span>
+        <span class="ctox-pane-kicker">${escapeHtml(t.stationDetail)}</span>
         <h2>${escapeHtml(node.label)}</h2>
       </div>
-      <button class="icon-button ctox-drawer-close" type="button" data-close-ctox-drawer aria-label="Schließen">×</button>
+      <button class="ctox-pane-icon ctox-drawer-close" type="button" data-close-ctox-drawer aria-label="Schließen">×</button>
     </header>
-    <dl class="ctox-task-facts">
-      ${nodeLiveFactMarkup(node, task, state)}
-      <div><dt>${escapeHtml(t.currentStep)}</dt><dd>${escapeHtml(node.phase || '')}</dd></div>
-      <div><dt>${escapeHtml(t.status)}</dt><dd>${escapeHtml(displayStatus(node.status, state.lang))}</dd></div>
-      <div><dt>${escapeHtml(t.taskDetail)}</dt><dd>${escapeHtml(task?.title || t.noRecentWork)}</dd></div>
-      <div><dt>${escapeHtml(t.measurements)}</dt><dd>${escapeHtml(metricsLabel(node, state.lang))}</dd></div>
-    </dl>
-    <section class="ctox-drawer-section">
-      <h3>${escapeHtml(t.summary)}</h3>
-      ${(node.lines || []).map((line) => `<p>${escapeHtml(line)}</p>`).join('') || `<p>${escapeHtml(t.noRecentWork)}</p>`}
+    <section class="ctox-card">
+      <div class="ctox-card-body">
+        <dl class="ctox-fields">
+          ${nodeLiveFactMarkup(node, task, state)}
+          <dt>${escapeHtml(t.currentStep)}</dt><dd>${escapeHtml(node.phase || '')}</dd>
+          <dt>${escapeHtml(t.status)}</dt><dd>${escapeHtml(displayStatus(node.status, state.lang))}</dd>
+          <dt>${escapeHtml(t.taskDetail)}</dt><dd>${escapeHtml(task?.title || t.noRecentWork)}</dd>
+          <dt>${escapeHtml(t.measurements)}</dt><dd>${escapeHtml(metricsLabel(node, state.lang))}</dd>
+        </dl>
+      </div>
+    </section>
+    <section class="ctox-card">
+      <header>${escapeHtml(t.summary)}</header>
+      <div class="ctox-card-body">
+        ${(node.lines || []).map((line) => `<p>${escapeHtml(line)}</p>`).join('') || `<p>${escapeHtml(t.noRecentWork)}</p>`}
+      </div>
     </section>
     ${node.tools?.length ? `
-      <section class="ctox-drawer-section">
-        <h3>${escapeHtml(t.tools)}</h3>
-        <div class="ctox-node-tools">
-          ${node.tools.map((tool) => `<span>${escapeHtml(tool)}</span>`).join('')}
+      <section class="ctox-card">
+        <header>${escapeHtml(t.tools)}</header>
+        <div class="ctox-card-body">
+          <div class="ctox-node-tools">
+            ${node.tools.map((tool) => `<span class="ctox-badge">${escapeHtml(tool)}</span>`).join('')}
+          </div>
         </div>
       </section>
     ` : ''}
@@ -3246,10 +3163,10 @@ function ctoxCommandContextFromElement(state, target) {
   const taskId = recordElement?.dataset.taskId || recordElement?.dataset.ctoxTaskId || selectedTask?.id || '';
   const task = state.model?.tasks?.find((item) => item.id === taskId || item.taskId === taskId) || selectedTask || null;
   const field = element?.closest?.('input, textarea, select, button');
-  const panel = element?.closest?.('[data-ctox-left], [data-flow-canvas], .ctox-timeline-panel, .ctox-flow-header, .ctox-metric-grid');
+  const panel = element?.closest?.('[data-ctox-left], [data-flow-canvas], .ctox-timeline-panel, .ctox-flow-source, .ctox-metrics-strip');
   const column = recordElement?.dataset.ctoxInboundChannel
     ? 'inbound'
-    : panel?.hasAttribute?.('data-flow-canvas') || panel?.classList?.contains('ctox-flow-header') || panel?.classList?.contains('ctox-metric-grid')
+    : panel?.hasAttribute?.('data-flow-canvas') || panel?.classList?.contains('ctox-flow-source') || panel?.classList?.contains('ctox-metrics-strip')
       ? 'flow'
       : panel?.classList?.contains('ctox-timeline-panel')
         ? 'timeline'
@@ -3282,13 +3199,13 @@ function renderCtoxContextMenu(state, context, x, y) {
   const t = labels[state.lang];
   const canModifyApp = canModifyCtoxApp(state);
   state.contextMenu.innerHTML = `
-    <form class="ctox-context-chat" data-ctox-context-chat-form>
+    <form data-ctox-context-chat-form>
       <header>
         <div>
           <strong>${escapeHtml(t.chatToCtox)}</strong>
           <span>${escapeHtml(ctoxContextSummary(context))}</span>
         </div>
-        <button type="button" data-ctox-context-close aria-label="Schließen">×</button>
+        <button type="button" data-context-close data-ctox-context-close aria-label="Schließen">×</button>
       </header>
       ${canModifyApp ? `
         <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
@@ -3649,7 +3566,7 @@ function nodeLiveFactMarkup(node, task, state) {
   if (!isHarnessLive(state)) return '';
   if (task && normalizeCommandStatus(task.status) !== 'running') return '';
   const t = labels[state.lang];
-  return `<div><dt>${escapeHtml(t.live)}</dt><dd>${liveStatusMarkup(state, { compact: true })}</dd></div>`;
+  return `<dt>${escapeHtml(t.live)}</dt><dd>${liveStatusMarkup(state, { compact: true })}</dd>`;
 }
 
 function aggregateFlowMetrics(flowResult) {

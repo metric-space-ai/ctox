@@ -71,7 +71,15 @@ test('Presentation layer stays compact and shell-native', () => {
   assert.doesNotMatch(source, shadowPattern);
   assert.doesNotMatch(source, gradientPattern);
   assert.doesNotMatch(source, hardNeutralPattern);
-  assert.match(css, /grid-template-columns: var\(--ctox-left-width\) 6px minmax\(0, 1fr\)/);
+  // The module frame rides on the standard kit workspace: .ctox-workspace
+  // columns, .ctox-pane panels and the declarative shell resizer — the module
+  // must not re-declare its own column grid or resizer chrome.
+  assert.match(html, /class="ctox-workspace ctox-workspace--two-pane ctox-harness-app"/);
+  assert.match(html, /class="ctox-pane ctox-harness-left"/);
+  assert.match(html, /class="ctox-pane ctox-harness-main"/);
+  assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
+  assert.doesNotMatch(css, /\.ctox-column-resizer\s*\{/);
+  assert.doesNotMatch(css, /grid-template-columns:\s*var\(--ctox-left-width\)/);
   assert.match(manifest, /currentColor/);
 });
 
