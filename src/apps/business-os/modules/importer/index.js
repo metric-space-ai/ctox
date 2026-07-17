@@ -3,7 +3,7 @@ import {
   transcodeApp,
   suggestedModuleId,
   scaffoldModule,
-} from '../../shared/app-transcode.mjs?v=20260717-importer-v1';
+} from '../../shared/app-transcode.mjs?v=20260717-importer-v2';
 
 // The App Importer is the hand-over moment of the product story: a coding
 // agent conceived the app, the importer raises it. Source (folder or public
@@ -131,8 +131,27 @@ async function writeModuleToDirectory(rootHandle, moduleId, moduleFiles, sourceF
   }
 }
 
+async function loadModuleMarkup() {
+  const response = await fetch(new URL('./index.html', import.meta.url));
+  if (!response.ok) throw new Error(`importer markup unavailable: ${response.status}`);
+  return response.text();
+}
+
+function ensureStyles() {
+  if (document.getElementById('importer-module-styles')) return;
+  const styleLink = document.createElement('link');
+  styleLink.rel = 'stylesheet';
+  styleLink.href = new URL('./index.css', import.meta.url).href;
+  styleLink.id = 'importer-module-styles';
+  document.head.appendChild(styleLink);
+}
+
 export async function mount(ctx) {
-  const host = ctx?.host || document.querySelector('[data-importer-root]')?.parentElement || document.body;
+  ensureStyles();
+  const host = ctx?.host || document.body;
+  ctx?.left?.replaceChildren?.();
+  ctx?.right?.replaceChildren?.();
+  host.innerHTML = await loadModuleMarkup();
   const root = host.querySelector('[data-importer-root]') || host;
   const messages = await loadModuleMessages(import.meta.url, ctx?.locale, FALLBACK_LABELS);
   const t = (key, fallback, vars = {}) => {

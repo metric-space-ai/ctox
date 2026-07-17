@@ -119,6 +119,18 @@ test("transcodeApp reports unsupported bare dependencies instead of guessing", (
   assert.deepEqual(result.report.unsupported, ["axios"]);
 });
 
+test("build-time config files never reach the runtime report", () => {
+  const files = {
+    ...FIXTURE,
+    "vite.config.ts": 'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\nexport default defineConfig({ plugins: [react()] });',
+    "eslint.config.js": 'import x from "eslint";\nexport default [x];',
+  };
+  const result = transcodeApp(sucrase, files);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.report.unsupported, []);
+  assert.equal(result.files["vite.config.js"], undefined);
+});
+
 test("transcodeApp fails honestly without an entry", () => {
   const result = transcodeApp(sucrase, { "readme.md": "hi" });
   assert.equal(result.ok, false);

@@ -16,6 +16,14 @@ export const VENDORED_SPECIFIERS = Object.freeze({
 });
 
 const SOURCE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs"];
+
+// Build-time configuration is not runtime code: importing a Vite app must
+// not drag vite/eslint/tailwind into the runtime-dependency report.
+const BUILD_CONFIG_RE = /^(vite|vitest|eslint|postcss|tailwind|prettier|babel|jest|tsup|rollup|webpack)\.config\.[cm]?[jt]sx?$/;
+
+export function isBuildConfigFile(name) {
+  return BUILD_CONFIG_RE.test(name.split("/").pop() || "");
+}
 const ENTRY_CANDIDATES = [
   "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
   "src/index.tsx", "src/index.ts", "src/index.jsx", "src/index.js",
@@ -167,7 +175,7 @@ export function transcodeApp(sucrase, files, options = {}) {
   const allCss = [];
   const allBare = new Set();
   for (const [name, content] of Object.entries(files)) {
-    if (name === "package.json" || name.endsWith(".d.ts")) continue;
+    if (name === "package.json" || name.endsWith(".d.ts") || isBuildConfigFile(name)) continue;
     if (name.endsWith(".css")) { out[name] = content; continue; }
     if (!isSourceFile(name)) { out[name] = content; continue; }
     const result = transcodeFile(sucrase, name, content, fileNames);
