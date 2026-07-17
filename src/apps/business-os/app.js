@@ -10625,11 +10625,12 @@ function workspaceStatusText() {
     : '';
   if (brandingName) return brandingName;
   const instanceName = getInstanceName();
-  const managedDesktop = (
+  const desktopInstanceSource = String(
     launchConfigForPageSession?.desktop_instance?.source
     || readUrlPairingConfig()?.desktop_instance?.source
-  ) === 'ctox_dev';
-  if (instanceName && (managedDesktop || (instanceName !== 'A6000' && !isLocalBusinessOsSurface()))) {
+    || ''
+  ).trim();
+  if (instanceName && (desktopInstanceSource || (instanceName !== 'A6000' && !isLocalBusinessOsSurface()))) {
     return instanceName;
   }
   return shellText('localWorkspace');
