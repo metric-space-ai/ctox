@@ -17,6 +17,7 @@
  *   SMOKE_MODE=workspace-large-file-viewer-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=concurrent-writers-convergence-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=tickets-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=tickets-clarification-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
@@ -299,6 +300,7 @@ const supportedSmokeModes = [
   'browser-to-rust',
   'rust-to-browser',
   'presence-merge-two-browsers',
+  'concurrent-writers-convergence-browser-to-rust',
   'workspace-rust-to-browser',
   'workspace-agent-artifacts-rust-to-browser',
   'workspace-agent-artifacts-stress-rust-to-browser',
@@ -378,6 +380,7 @@ if ([
   'business-os-dynamic-apps-ui',
   'business-os-threads-rightclick-ui',
   'presence-merge-two-browsers',
+  'concurrent-writers-convergence-browser-to-rust',
   ...businessOsProductionSmokeModes,
 ].includes(smokeMode) && !useAppDb) {
   throw new Error(`SMOKE_MODE=${smokeMode} requires an app shell SMOKE_PAGE_PATH such as /index.html or /business-os#ctox`);
@@ -3021,6 +3024,352 @@ async function runPresenceMergeTwoBrowsersMode(pageA) {
       };
     }, 120000);
     evidence.presenceClearedOnPeerClose = true;
+  } finally {
+    try { await browserB.close(); } catch {}
+    removeSmokePath(profileB);
+  }
+  return evidence;
+}
+
+// Backlog SYNC-02: multi-writer convergence E2E. Two isolated browser peers
+// plus the native Rust peer mutate the SAME document through the full live
+// replication loop (real WebRTC, real signaling, real SQLite master):
+//   (a) LWW: concurrent same-field edits on a default (whole-doc LWW)
+//       collection converge to one winner on all three peers.
+//   (b) field-merge: concurrent different-field edits on a
+//       `conflictStrategy: 'field-merge'` collection (customers module,
+//       docs/ctox-rxdb.md §8.2) converge with BOTH edits on all three peers.
+//   (c) delete-vs-update: one peer tombstones while the other holds an
+//       unsynced concurrent update; the master tombstone wins on every peer
+//       and the losing update is journaled into the losing browser's
+//       conflict store as `delete_vs_update` (docs/ctox-rxdb.md §9).
+async function runConcurrentWritersConvergenceMode(pageA) {
+  const evidence = { mode: 'concurrent-writers-convergence-browser-to-rust' };
+  const step = (label) => console.log(`[concurrent-writers] ${label}`);
+  const pollPage = async (page, label, fn, arg = null, timeoutMs = 60000) => {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      last = await page.evaluate(fn, arg);
+      if (last && last.ok) return last;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`${label} did not converge within ${timeoutMs}ms: ${JSON.stringify(last)}`);
+  };
+  // Business-field view of a doc: replication meta (`_rev`, `_meta`, …)
+  // legitimately differs across peers (keep_meta=false wire normalization),
+  // so cross-peer byte-identity is asserted over the business fields.
+  const businessFieldsJson = (doc) => {
+    if (!doc || typeof doc !== 'object') return JSON.stringify(doc ?? null);
+    const keys = Object.keys(doc).filter((key) => !key.startsWith('_')).sort();
+    return JSON.stringify(Object.fromEntries(keys.map((key) => [key, doc[key]])));
+  };
+  const readNativeRow = (table, id) => {
+    const row = sqlite(`
+      SELECT deleted || char(9) || data
+      FROM ${quoteSqlIdentifier(table)}
+      WHERE id='${sqlString(id)}'
+      LIMIT 1;
+    `).trim();
+    if (!row) return null;
+    const splitAt = row.indexOf('\t');
+    return {
+      deleted: row.slice(0, splitAt) === '1',
+      doc: JSON.parse(row.slice(splitAt + 1)),
+    };
+  };
+  const pollNativeRow = async (table, id, label, predicate, timeoutMs = 60000) => {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      last = readNativeRow(table, id);
+      if (last && predicate(last)) return last;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`native ${label} did not converge within ${timeoutMs}ms: ${JSON.stringify(last)}`);
+  };
+  const docStateOnPage = async (page, collection, id) => page.evaluate(async ({ collection, id }) => {
+    const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].findOne(id).exec();
+    // Quiescence is scoped to the scenario collection: the shell keeps
+    // unrelated background writes (icons, catalog merges, …) that are not
+    // part of the convergence contract under test.
+    const unsynced = await globalThis.ctoxBusinessOsSmoke.state.db.getUnsyncedWriteSummary();
+    return {
+      doc: doc ? (doc.toJSON?.() || doc) : null,
+      unsyncedTotal: Number(unsynced?.byCollection?.[collection] || 0),
+    };
+  }, { collection, id });
+  const setupCollections = (page) => page.evaluate(async () => {
+    const state = globalThis.ctoxBusinessOsSmoke.state;
+    const consentMod = await import('/modules/consent/schema.js');
+    const customersMod = await import('/modules/customers/schema.js');
+    await state.db.addCollections({
+      // Default whole-doc LWW collection (no conflictStrategy declared).
+      business_consents: consentMod.collections.business_consents,
+      // First shipped field-merge consumer (§8.2).
+      customer_accounts: customersMod.collections.customer_accounts,
+    });
+    await state.sync.startCollection('business_consents');
+    await state.sync.startCollection('customer_accounts');
+    return true;
+  });
+  const runId = `${Date.now()}_${token(6)}`;
+  const lwwId = `conv-lww-${runId}`;
+  const mergeId = `conv-merge-${runId}`;
+  const dvuId = `conv-dvu-${runId}`;
+  const consentTable = 'ctox_business_os__business_consents__v0';
+  const accountTable = 'ctox_business_os__customer_accounts__v0';
+
+  const profileB = fs.mkdtempSync(path.join(runtimeRoot, 'browser-profile-b-'));
+  step('launching second browser peer');
+  const browserB = await chromium.launchPersistentContext(profileB, chromiumLaunchOptions());
+  try {
+    const pageB = await browserB.newPage();
+    pageB.on('console', (msg) => {
+      const type = msg.type();
+      if (type === 'warning' || type === 'error') {
+        console.log(`[browserB:${type}] ${msg.text()}`);
+      }
+    });
+    pageB.on('pageerror', (error) => {
+      console.log(`[browserB:pageerror] ${error?.stack || error}`);
+    });
+    const urlB = new URL(pageA.url());
+    urlB.searchParams.set('smokeDbId', `${smokeDbId}_peer_b`);
+    await pageB.goto(urlB.toString(), { waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
+    step('waiting for both shells');
+    const syncRuntimeReady = () => {
+      const state = globalThis.ctoxBusinessOsSmoke?.state;
+      return Boolean(
+        globalThis.ctoxBusinessOsSmoke
+        && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
+        && globalThis.CTOX_BUSINESS_OS_STATUS
+        && state?.sync?.startCollection
+        && state?.db?.addCollections
+      );
+    };
+    await pageA.waitForFunction(syncRuntimeReady, null, { timeout: smokeHookWaitTimeoutMs });
+    await pageB.waitForFunction(syncRuntimeReady, null, { timeout: smokeHookWaitTimeoutMs });
+    step('starting scenario collections on both peers');
+    await setupCollections(pageA);
+    await setupCollections(pageB);
+    step('collections started');
+
+    const seedAndAwait = async (collection, table, doc, label) => {
+      step(`seeding ${label} doc ${doc.id}`);
+      await pageA.evaluate(async ({ collection, doc }) => {
+        await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].insert(doc);
+      }, { collection, doc });
+      await pollPage(pageB, `${label} seed replication A->B`, async ({ collection, id }) => {
+        const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].findOne(id).exec();
+        return { ok: Boolean(doc), id };
+      }, { collection, id: doc.id });
+      await pollNativeRow(table, doc.id, `${label} seed`, (row) => !row.deleted);
+    };
+    // Quiescence + convergence over all three peers: both browsers report no
+    // unsynced writes for their whole store and all three peers satisfy the
+    // scenario predicate at the same instant.
+    const awaitTripleConvergence = async ({ collection, table, id, label, converged, timeoutMs = 90000 }) => {
+      const deadline = Date.now() + timeoutMs;
+      let snapshot = null;
+      while (Date.now() < deadline) {
+        const [a, b] = await Promise.all([
+          docStateOnPage(pageA, collection, id),
+          docStateOnPage(pageB, collection, id),
+        ]);
+        snapshot = { a, b, native: readNativeRow(table, id) };
+        if (a.unsyncedTotal === 0 && b.unsyncedTotal === 0 && converged(snapshot)) return snapshot;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error(`${label} did not converge within ${timeoutMs}ms: ${JSON.stringify(snapshot)}`);
+    };
+    const assertBusinessFieldIdentity = (label, snapshot) => {
+      const nativeJson = businessFieldsJson(snapshot.native?.doc);
+      if (businessFieldsJson(snapshot.a.doc) !== nativeJson || businessFieldsJson(snapshot.b.doc) !== nativeJson) {
+        throw new Error(`${label} winning doc differs across peers:\nA:      ${businessFieldsJson(snapshot.a.doc)}\nB:      ${businessFieldsJson(snapshot.b.doc)}\nnative: ${nativeJson}`);
+      }
+    };
+
+    // ---- (a) LWW: concurrent same-field edits ---------------------------
+    const seededAt = Date.now();
+    await seedAndAwait('business_consents', consentTable, {
+      id: lwwId,
+      subject_id: 'conv-subject',
+      subject_type: 'contact',
+      purpose: 'lww-base',
+      legal_basis: 'consent',
+      source: 'concurrent-writers-smoke',
+      created_at_ms: seededAt,
+      updated_at_ms: seededAt,
+    }, 'lww');
+    // Both writers mutate the same field inside one tight window, before
+    // either edit has replicated to the other peer — a genuine multi-writer
+    // race through the live replication loop. The 150ms stagger keeps the
+    // wall-clock and HLC orderings aligned (same machine) without removing
+    // the concurrency: propagation through push + native commit + relay
+    // takes longer than the stagger.
+    const patchPurpose = async ({ collection, id, value }) => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw[collection].findOne(id).exec();
+      await doc.patch({ purpose: value, updated_at_ms: Date.now() });
+      return true;
+    };
+    step('lww: concurrent same-field edits');
+    await Promise.all([
+      pageA.evaluate(patchPurpose, { collection: 'business_consents', id: lwwId, value: 'lww-from-a' }),
+      new Promise((resolve) => setTimeout(resolve, 150)).then(() => pageB.evaluate(
+        patchPurpose,
+        { collection: 'business_consents', id: lwwId, value: 'lww-from-b' },
+      )),
+    ]);
+    step('lww: edits applied, waiting for three-peer convergence');
+    // The assertion is CONVERGENCE: all three peers settle on exactly ONE of
+    // the two concurrent edits and hold byte-identical business fields.
+    // Which edit wins is currently interleaving-dependent: push conflicts
+    // arbitrate by HLC while the browser pull gate still orders by
+    // wall-clock lwt, so the master relay of the first push (re-stamped with
+    // the native commit lwt) can silently drop the other writer's newer
+    // unsynced edit before it ever pushes.
+    // TODO(SYNC-11): once the pull gate orders by `_meta.ctoxHlc`, tighten
+    // this to assert the deterministic HLC winner ('lww-from-b' — the later
+    // physical timestamp) AND that the losing writer's dropped edit is
+    // journaled in its conflict store (db.conflicts.list(), update_vs_update
+    // generalization of delete_vs_update). Today the losing LWW edit is
+    // silently dropped without a conflict record.
+    const lwwEditValues = ['lww-from-a', 'lww-from-b'];
+    const lwwOutcome = await awaitTripleConvergence({
+      collection: 'business_consents',
+      table: consentTable,
+      id: lwwId,
+      label: 'lww three-peer convergence',
+      converged: ({ a, b, native }) => Boolean(
+        a.doc && b.doc && native && !native.deleted
+        && lwwEditValues.includes(native.doc?.purpose)
+        && a.doc.purpose === native.doc.purpose
+        && b.doc.purpose === native.doc.purpose,
+      ),
+    });
+    assertBusinessFieldIdentity('lww', lwwOutcome);
+    evidence.lwwConverged = true;
+    evidence.lwwWinnerValue = lwwOutcome.native.doc.purpose;
+
+    // ---- (b) field-merge: concurrent different-field edits --------------
+    await seedAndAwait('customer_accounts', accountTable, {
+      id: mergeId,
+      name: 'Concurrent Writers GmbH',
+      account_status: 'active',
+      customer_stage: 'customer',
+      health_status: 'green',
+      search_text: 'concurrent writers gmbh',
+      is_deleted: false,
+      created_at_ms: seededAt,
+      updated_at_ms: seededAt,
+    }, 'field-merge');
+    step('field-merge: concurrent different-field edits');
+    // Deterministic concurrency: B edits field Y while its replication line
+    // for the collection is down (it has not seen A's edit), A edits field X
+    // and pushes it to the native master, then B replays. The pull over B's
+    // unsynced row three-way merges base/local/master at field granularity
+    // (§8.2) and pushes the merged doc back — the same interleaving as two
+    // users editing the same record in different offices.
+    //
+    // Deliberately NOT a same-instant Promise.all race: with both lines hot,
+    // the winner of the first push relays back with the native-stamped
+    // wall-clock lwt, and the current pull gate (SYNC-11) can drop the other
+    // writer's unsynced edit before the merge path ever sees it — observed
+    // dropping the `industry` edit on every peer in ~1 of 2 runs.
+    // TODO(SYNC-11): once the pull gate orders by HLC, add a second
+    // same-instant Promise.all merge round here and assert no field is lost.
+    await pageB.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.stopCollection('customer_accounts');
+    });
+    await pageB.evaluate(async ({ id }) => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.customer_accounts.findOne(id).exec();
+      await doc.patch({ domain: 'domain-from-b', updated_at_ms: Date.now() });
+    }, { id: mergeId });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await pageA.evaluate(async ({ id }) => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.customer_accounts.findOne(id).exec();
+      await doc.patch({ industry: 'industry-from-a', updated_at_ms: Date.now() });
+    }, { id: mergeId });
+    await pollNativeRow(accountTable, mergeId, 'field-merge master edit', (row) => (
+      !row.deleted && row.doc?.industry === 'industry-from-a'
+    ));
+    await pageB.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.startCollection('customer_accounts');
+    });
+    step('field-merge: edits applied, waiting for three-peer convergence');
+    // Field-merge must preserve BOTH concurrent edits (§8.2): a field only
+    // one side changed takes that side, on every peer including the master.
+    const mergeOutcome = await awaitTripleConvergence({
+      collection: 'customer_accounts',
+      table: accountTable,
+      id: mergeId,
+      label: 'field-merge three-peer convergence',
+      converged: ({ a, b, native }) => [a.doc, b.doc, native?.doc].every((doc) => Boolean(
+        doc
+        && doc.industry === 'industry-from-a'
+        && doc.domain === 'domain-from-b',
+      )) && !native.deleted,
+    });
+    assertBusinessFieldIdentity('field-merge', mergeOutcome);
+    evidence.fieldMergeConverged = true;
+
+    // ---- (c) delete-vs-update -------------------------------------------
+    await seedAndAwait('business_consents', consentTable, {
+      id: dvuId,
+      subject_id: 'conv-subject',
+      subject_type: 'contact',
+      purpose: 'dvu-base',
+      legal_basis: 'consent',
+      source: 'concurrent-writers-smoke',
+      created_at_ms: seededAt,
+      updated_at_ms: seededAt,
+    }, 'delete-vs-update');
+    // B edits while its replication line for the collection is down (a real
+    // concurrent editor that has not seen the delete yet), A tombstones and
+    // pushes to the native master, then B comes back and replays. The edit
+    // happens strictly BEFORE the delete so the master tombstone wins under
+    // both the documented semantics (§8.2 "a master tombstone wins
+    // outright") and the current wall-clock pull gate.
+    step('delete-vs-update: concurrent tombstone and update');
+    await pageB.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.stopCollection('business_consents');
+    });
+    await pageB.evaluate(patchPurpose, { collection: 'business_consents', id: dvuId, value: 'dvu-from-b' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await pageA.evaluate(async ({ id }) => {
+      const doc = await globalThis.ctoxBusinessOsSmoke.state.db.raw.business_consents.findOne(id).exec();
+      await doc.remove();
+    }, { id: dvuId });
+    await pollNativeRow(consentTable, dvuId, 'delete-vs-update tombstone', (row) => row.deleted);
+    step('delete-vs-update: native tombstone confirmed, replaying B');
+    await pageB.evaluate(async () => {
+      await globalThis.ctoxBusinessOsSmoke.state.sync.startCollection('business_consents');
+    });
+    await awaitTripleConvergence({
+      collection: 'business_consents',
+      table: consentTable,
+      id: dvuId,
+      label: 'delete-vs-update three-peer convergence',
+      converged: ({ a, b, native }) => Boolean(!a.doc && !b.doc && native?.deleted),
+    });
+    evidence.deleteUpdateConverged = true;
+    // The losing update must be recoverable: the master tombstone won
+    // outright, so B's concurrent edit lands in B's conflict store (§8.2/§9).
+    const conflict = await pollPage(pageB, 'delete-vs-update conflict journal on B', async ({ id }) => {
+      const conflicts = await globalThis.ctoxBusinessOsSmoke.state.db.conflicts.list();
+      const match = (conflicts || []).find((entry) => (
+        entry.conflictType === 'delete_vs_update'
+        && entry.collection === 'business_consents'
+        && (entry.local?.id === id || entry.local?.[0]?.id === id)
+      ));
+      return { ok: Boolean(match), conflictCount: (conflicts || []).length, match: match || null };
+    }, { id: dvuId }, 30000);
+    const journaledLocal = conflict.match?.local?.id ? conflict.match.local : conflict.match?.local?.[0];
+    if (journaledLocal?.purpose !== 'dvu-from-b') {
+      throw new Error(`delete-vs-update conflict is missing the losing update: ${JSON.stringify(conflict.match)}`);
+    }
+    evidence.deleteUpdateConflictJournaled = true;
   } finally {
     try { await browserB.close(); } catch {}
     removeSmokePath(profileB);
@@ -6504,10 +6853,12 @@ function ensureCtoxSmokeBinary() {
           editor: Array.from(fs.readFileSync(path.join(root, `output/playwright/ctox-office/rust/${officeRestartKind}.edit-save/ctox-rust.Editor.bin`))),
         }
       : null;
-    // Backlog OS-C3: the two-browser mode drives a second isolated peer from
-    // the node side instead of the single-page evaluate below.
+    // Backlog OS-C3/SYNC-02: the two-browser modes drive a second isolated
+    // peer from the node side instead of the single-page evaluate below.
     const result = smokeMode === 'presence-merge-two-browsers'
       ? await runPresenceMergeTwoBrowsersMode(page)
+      : smokeMode === 'concurrent-writers-convergence-browser-to-rust'
+      ? await runConcurrentWritersConvergenceMode(page)
       : await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, threadsRightClickCapabilities, officeRestartFixtureBytes }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
@@ -15851,6 +16202,17 @@ function ensureCtoxSmokeBinary() {
         if (result[flag] !== true) throw new Error(`presence-merge evidence missing: ${flag}`);
         console.log(`${flag.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}=1`);
       }
+    } else if (result.mode === 'concurrent-writers-convergence-browser-to-rust') {
+      for (const flag of [
+        'lwwConverged',
+        'fieldMergeConverged',
+        'deleteUpdateConverged',
+        'deleteUpdateConflictJournaled',
+      ]) {
+        if (result[flag] !== true) throw new Error(`concurrent-writers evidence missing: ${flag}`);
+        console.log(`${flag.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}=1`);
+      }
+      console.log(`lww_winner_value=${result.lwwWinnerValue || ''}`);
     } else if (result.mode === 'rust-to-browser' || result.mode === 'workspace-rust-to-browser') {
       if (result.payload !== rustSeed.content) throw new Error(`browser payload mismatch: ${result.payload}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);

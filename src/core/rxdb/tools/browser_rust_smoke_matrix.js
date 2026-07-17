@@ -17,6 +17,7 @@
  *   SMOKE_MODES=workspace-large-materialize-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=workspace-large-file-viewer-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=concurrent-writers-convergence-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=migration-version-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=tickets-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
@@ -113,9 +114,25 @@ const defaultModes = [
   'workspace-large-materialize-rust-to-browser',
   'workspace-large-file-viewer-rust-to-browser',
   'workspace-large-file-viewer-restart-rust-to-browser',
+  'concurrent-writers-convergence-browser-to-rust',
 ];
 const modeEvidenceRequirements = {
   'rust-to-browser': { keys: ['replicated_id'] },
+  'concurrent-writers-convergence-browser-to-rust': {
+    keys: [
+      'lww_converged',
+      'field_merge_converged',
+      'delete_update_converged',
+      'delete_update_conflict_journaled',
+      'lww_winner_value',
+    ],
+    values: {
+      lww_converged: 1,
+      field_merge_converged: 1,
+      delete_update_converged: 1,
+      delete_update_conflict_journaled: 1,
+    },
+  },
   'browser-to-rust': { keys: ['readiness_payload', 'replicated_id'] },
   'command-browser-to-rust': {
     keys: ['command_id', 'task_id', 'task_count_for_command', 'status', 'task_status'],
@@ -871,6 +888,12 @@ for (const [index, mode] of modes.entries()) {
   const effectiveStartupHookWaitBudgetMs = isFileChunkStatusMode(mode)
     ? Math.min(startupHookWaitBudgetMs, fileChunkStatusStartupHookWaitBudgetMs)
     : startupHookWaitBudgetMs;
+  // Two-browser convergence boots a second full Business OS shell on top of
+  // the regular single-page startup; give it more room than the default
+  // per-mode timeout without loosening every other mode.
+  const effectiveModeTimeoutMs = mode === 'concurrent-writers-convergence-browser-to-rust'
+    ? Math.max(modeTimeoutMs, 360000)
+    : modeTimeoutMs;
   let lastStatus = 1;
   let lastSignal = null;
   const modeSummary = {
@@ -916,7 +939,7 @@ for (const [index, mode] of modes.entries()) {
         env,
         encoding: 'utf8',
         stdio: ['ignore', stdoutFd, stderrFd],
-        timeout: modeTimeoutMs,
+        timeout: effectiveModeTimeoutMs,
         killSignal: 'SIGTERM',
       });
     } finally {
@@ -962,7 +985,7 @@ for (const [index, mode] of modes.entries()) {
     lastSignal = result.signal || null;
     const timedOut = result.error?.code === 'ETIMEDOUT';
     if (timedOut) {
-      console.error(`smoke ${mode} timed out after ${modeTimeoutMs} ms`);
+      console.error(`smoke ${mode} timed out after ${effectiveModeTimeoutMs} ms`);
       lastStatus = 1;
     }
     modeSummary.attempts.push({
@@ -970,7 +993,7 @@ for (const [index, mode] of modes.entries()) {
       status: result.status,
       signal: result.signal || null,
       timedOut,
-      timeoutMs: modeTimeoutMs,
+      timeoutMs: effectiveModeTimeoutMs,
       pagePath: effectivePagePath,
       url: `http://127.0.0.1:${env.BUSINESS_PORT}${effectivePagePath}`,
       businessPort: Number(env.BUSINESS_PORT),

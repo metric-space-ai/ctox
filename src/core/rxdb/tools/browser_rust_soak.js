@@ -55,6 +55,7 @@ const defaultSoakModes = [
   'file-chunk-metadata-error-browser-status',
   'file-chunk-tombstone-error-browser-status',
   'file-chunk-stale-generation-error-browser-status',
+  'concurrent-writers-convergence-browser-to-rust',
 ];
 const cyclesInput = process.env.SOAK_CYCLES || '3';
 const minCyclesInput = process.env.SOAK_MIN_CYCLES || '';

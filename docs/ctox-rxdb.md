@@ -861,9 +861,12 @@ CTOX_BIN=$PWD/runtime/build/cargo-target/debug/ctox \
 
 (Playwright must be importable; the harness also honours
 `PLAYWRIGHT_MODULE_PATH`. The harness validates `SMOKE_MODE` against the
-list at the top of `browser_rust_smoke.js` — 41 modes in total; the soak's
-default matrix runs 31 of them, the rest are UI/clarification modes driven
-by other CI entry points.)
+list at the top of `browser_rust_smoke.js` — 52 modes at the time of writing;
+the soak's default matrix runs 34 of them, the rest are UI/clarification modes
+driven by other CI entry points. The multi-writer mode
+`concurrent-writers-convergence-browser-to-rust` drives TWO isolated browser
+peers plus the native peer in one room and asserts LWW/field-merge/
+delete-vs-update convergence across all three.)
 
 ### 10.4 Canonical commands after touching the data plane
 
