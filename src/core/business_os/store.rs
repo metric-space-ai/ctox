@@ -42675,7 +42675,7 @@ mod tests {
         fs::create_dir_all(&module_dir)?;
         fs::write(
             module_dir.join("module.json"),
-            serde_json::to_vec_pretty(&json!({
+            serde_json::to_vec_pretty(&serde_json::json!({
                 "id": "inventory",
                 "title": "Inventory",
                 "external_data_sources": [{
