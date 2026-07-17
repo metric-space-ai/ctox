@@ -10,7 +10,7 @@ import {
 const BUILD = '20260717-semantic-graph-v2';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
-const ROW_LIMIT = 1200;
+const ROW_LIMIT = 5000;
 const COLLECTION_READ_TIMEOUT_MS = 10000;
 const POST_SYNC_REFRESH_LIMIT = 1;
 const KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500]);
