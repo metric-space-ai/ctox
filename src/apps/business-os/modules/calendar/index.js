@@ -1,5 +1,4 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import { createCalendarView } from './calendar-view-adapter.js';
 
 const RENDER_DEBOUNCE_MS = 50;
@@ -134,8 +133,8 @@ export async function mount(ctx) {
   bindElements(ctx.host);
   wireEvents();
 
-  // Setup Column Resizers
-  const resizerCleanup = setupResizers(ctx.host);
+  // Column resizing is declarative: the shell (app.js setupModuleResizers)
+  // wires the `.ctox-column-resizer[data-resizer-var]` handles from index.html.
 
   // Initialize EventCalendar View Instance
   initCalendarView();
@@ -185,7 +184,6 @@ export async function mount(ctx) {
       state.calendarViewInstance.destroy();
       state.calendarViewInstance = null;
     }
-    resizerCleanup();
     unbindEvents();
   };
 }
@@ -373,58 +371,6 @@ function unbindEvents() {
   els.closeDrawerBtn?.removeEventListener('click', handlers.closeDrawer);
   document.removeEventListener('keydown', handlers.keydown);
   state.domHandlers = null;
-}
-
-function setupResizers(host) {
-  // Column resizing is now owned by the shell-global resizer (app.js
-  // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var]`
-  // handles in index.html, inside the `[data-resize-frame]` root, get
-  // drag/keyboard/persistence for free. This DIY (CtoxResizer + localStorage)
-  // is retired; we no-op so call sites keep working without dangling refs.
-  return () => {};
-
-  // eslint-disable-next-line no-unreachable
-  const leftResizer = host.querySelector('[data-calendar-col-resizer="left"]');
-  const rightResizer = host.querySelector('[data-calendar-col-resizer="right"]');
-  const containerEl = els.root || host;
-
-  const cleanups = [];
-
-  if (leftResizer) {
-    const resizerL = new CtoxResizer({
-      resizerEl: leftResizer,
-      containerEl,
-      cssVar: '--calendar-left-width',
-      side: 'left',
-      minWidth: 250,
-      maxWidth: 450,
-      onResize: (width) => localStorage.setItem('ctox.calendar.layout.leftWidth', width)
-    });
-    cleanups.push(() => resizerL.destroy());
-  }
-
-  if (rightResizer) {
-    const resizerR = new CtoxResizer({
-      resizerEl: rightResizer,
-      containerEl,
-      cssVar: '--calendar-right-width',
-      side: 'right',
-      minWidth: 200,
-      maxWidth: 400,
-      onResize: (width) => localStorage.setItem('ctox.calendar.layout.rightWidth', width)
-    });
-    cleanups.push(() => resizerR.destroy());
-  }
-
-  // Set initial widths
-  const leftWidth = localStorage.getItem('ctox.calendar.layout.leftWidth') || '320';
-  const rightWidth = localStorage.getItem('ctox.calendar.layout.rightWidth') || '280';
-  containerEl.style.setProperty('--calendar-left-width', `${leftWidth}px`);
-  containerEl.style.setProperty('--calendar-right-width', `${rightWidth}px`);
-
-  return () => {
-    cleanups.forEach(c => c());
-  };
 }
 
 // ----------------------------------------------------
@@ -632,14 +578,20 @@ function renderAll() {
 
 function renderDataStatus() {
   if (!els.calendarDataStatus) return;
+  const setStatus = (text, variant) => {
+    els.calendarDataStatus.textContent = text;
+    els.calendarDataStatus.classList.toggle('is-danger', variant === 'error');
+    els.calendarDataStatus.classList.toggle('is-info', variant === 'ready');
+  };
   if (!calendarDb()) {
-    els.calendarDataStatus.textContent = state.t('noDatabase', labels[state.lang].noDatabase);
-    els.calendarDataStatus.dataset.state = 'error';
+    setStatus(state.t('noDatabase', labels[state.lang].noDatabase), 'error');
     return;
   }
   const selectedEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
-  els.calendarDataStatus.textContent = `${selectedEvents.length} Termine · ${state.calendars.length} Kalender · ${state.bookingPages.length} Buchungsseiten`;
-  els.calendarDataStatus.dataset.state = selectedEvents.length > 0 ? 'ready' : 'empty';
+  setStatus(
+    `${selectedEvents.length} Termine · ${state.calendars.length} Kalender · ${state.bookingPages.length} Buchungsseiten`,
+    selectedEvents.length > 0 ? 'ready' : 'empty'
+  );
 }
 
 // ----------------------------------------------------
@@ -650,7 +602,7 @@ function renderCalendarsSidebar() {
   if (!els.calendarList) return;
 
   if (state.calendars.length === 0) {
-    els.calendarList.innerHTML = `<div class="auditing-empty-state">Keine Kalender.</div>`;
+    els.calendarList.innerHTML = `<div class="ctox-empty">Keine Kalender.</div>`;
     return;
   }
 
@@ -659,14 +611,14 @@ function renderCalendarsSidebar() {
     const checked = state.selectedCalendarIds.has(cal.id);
     const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
     html += `
-      <div class="calendar-item" data-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
+      <div class="ctox-list-item calendar-item" data-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
         <div class="calendar-item-left">
           <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
           <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
           <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
         </div>
         <div class="calendar-item-actions">
-          <button type="button" class="ctox-icon-button calendar-row-action" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" title="Bearbeiten" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">${actionIcon('edit')}</button>
+          <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" title="Bearbeiten" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">${actionIcon('edit')}</button>
         </div>
       </div>
     `;
@@ -699,7 +651,7 @@ function renderBookingPagesSidebar() {
   if (!els.bookingPagesList) return;
 
   if (state.bookingPages.length === 0) {
-    els.bookingPagesList.innerHTML = `<div class="auditing-empty-state">Keine Buchungsseiten.</div>`;
+    els.bookingPagesList.innerHTML = `<div class="ctox-empty">Keine Buchungsseiten.</div>`;
     return;
   }
 
@@ -710,16 +662,16 @@ function renderBookingPagesSidebar() {
     const isActive = bp.status === 'active';
     const isSelected = bp.id === state.selectedBookingPageId;
     html += `
-      <div class="booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" data-context-record-id="${escapeHtml(bp.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(bp.title || bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
+      <div class="ctox-list-item booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" data-context-record-id="${escapeHtml(bp.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(bp.title || bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
         <div class="booking-page-item-left">
           <div class="booking-page-item-title">
             <span>${escapeHtml(bp.title)}</span>
-            <div class="booking-page-item-subtitle">${Number(bp.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)} · ${isActive ? 'Aktiv' : 'Inaktiv'}</div>
+            <small>${Number(bp.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)} · ${isActive ? 'Aktiv' : 'Inaktiv'}</small>
           </div>
         </div>
         <div class="booking-page-item-actions">
-          <a class="ctox-icon-button calendar-row-action" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen">${actionIcon('open')}</a>
-          <button type="button" class="ctox-icon-button calendar-row-action" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" title="Bearbeiten" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">${actionIcon('edit')}</button>
+          <a class="ctox-icon-button ctox-icon-button--sm" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen">${actionIcon('open')}</a>
+          <button type="button" class="ctox-icon-button ctox-icon-button--sm" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" title="Bearbeiten" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">${actionIcon('edit')}</button>
         </div>
       </div>
     `;
@@ -757,11 +709,11 @@ function renderAuditingLists() {
     if (selectedPage) {
       const safeSlug = normalizeSlug(selectedPage.slug) || String(selectedPage.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
       els.bookingContext.innerHTML = `
-        <div class="calendar-booking-context-card">
-          <span class="calendar-context-kicker">Ausgewählte Buchungsseite</span>
+        <div class="ctox-callout calendar-context-card">
+          <span class="ctox-field-label">Ausgewählte Buchungsseite</span>
           <strong>${escapeHtml(selectedPage.title)}</strong>
           <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
-          <button type="button" class="ctox-button" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
+          <button type="button" class="ctox-button ctox-button--sm" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
         </div>
       `;
       els.bookingContext.querySelector('[data-action="clear-booking-selection"]')?.addEventListener('click', () => {
@@ -769,7 +721,7 @@ function renderAuditingLists() {
         scheduleRender();
       });
     } else {
-      els.bookingContext.innerHTML = `<div class="calendar-booking-context-empty">Buchungsseite wählen, um Holds und Buchungen zu filtern.</div>`;
+      els.bookingContext.innerHTML = `<div class="ctox-callout calendar-context-card">Buchungsseite wählen, um Holds und Buchungen zu filtern.</div>`;
     }
   }
 
@@ -780,20 +732,20 @@ function renderAuditingLists() {
       return active && (!selectedPage || h.booking_page_id === selectedPage.id);
     });
     if (activeHolds.length === 0) {
-      els.bookingHoldsList.innerHTML = `<div class="auditing-empty-state">${selectedPage ? 'Keine aktiven Holds für diese Buchungsseite.' : 'Keine aktiven Holds.'}</div>`;
+      els.bookingHoldsList.innerHTML = `<div class="ctox-empty">${selectedPage ? 'Keine aktiven Holds für diese Buchungsseite.' : 'Keine aktiven Holds.'}</div>`;
     } else {
       els.bookingHoldsList.innerHTML = activeHolds.map(hold => {
         const bp = state.bookingPages.find(p => p.id === hold.booking_page_id);
         const startStr = new Date(hold.slot_start_ms).toLocaleString();
         const expiresStr = new Date(hold.expires_at_ms).toLocaleTimeString();
         return `
-          <div class="auditing-card">
-            <div class="auditing-card-header">
-              <span class="auditing-card-title">${escapeHtml(bp?.title || 'Buchung hold')}</span>
+          <div class="ctox-list-item calendar-audit-item">
+            <div class="calendar-audit-head">
+              <strong>${escapeHtml(bp?.title || 'Buchung hold')}</strong>
               <span class="ctox-badge is-warning">Hold</span>
             </div>
-            <div class="auditing-card-detail">Zeit: ${startStr}</div>
-            <div class="auditing-card-detail is-expiry">Läuft ab um ${expiresStr}</div>
+            <small>Zeit: ${startStr}</small>
+            <small class="is-expiry">Läuft ab um ${expiresStr}</small>
           </div>
         `;
       }).join('');
@@ -806,21 +758,21 @@ function renderAuditingLists() {
       .filter(booking => !selectedPage || booking.booking_page_id === selectedPage.id)
       .sort((a, b) => b.slot_start_ms - a.slot_start_ms);
     if (sortedBookings.length === 0) {
-      els.bookingsList.innerHTML = `<div class="auditing-empty-state">${selectedPage ? 'Keine bestätigten Buchungen für diese Buchungsseite.' : 'Keine bestätigten Buchungen.'}</div>`;
+      els.bookingsList.innerHTML = `<div class="ctox-empty">${selectedPage ? 'Keine bestätigten Buchungen für diese Buchungsseite.' : 'Keine bestätigten Buchungen.'}</div>`;
     } else {
       els.bookingsList.innerHTML = sortedBookings.map(bk => {
         const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
         const startStr = new Date(bk.slot_start_ms).toLocaleString();
         const statusBadge = bk.status === 'confirmed' ? 'is-success' : 'is-danger';
         return `
-          <div class="auditing-card" data-action="view-booking" data-id="${bk.id}" style="cursor:pointer;">
-            <div class="auditing-card-header">
-              <span class="auditing-card-title">${escapeHtml(bk.attendee_name)}</span>
+          <div class="ctox-list-item calendar-audit-item" data-action="view-booking" data-id="${bk.id}">
+            <div class="calendar-audit-head">
+              <strong>${escapeHtml(bk.attendee_name)}</strong>
               <span class="ctox-badge ${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
             </div>
-            <div class="auditing-card-detail">Event: ${escapeHtml(bp?.title || 'Beratung')}</div>
-            <div class="auditing-card-detail">Zeit: ${startStr}</div>
-            <div class="auditing-card-detail">E-Mail: ${escapeHtml(bk.attendee_email)}</div>
+            <small>Event: ${escapeHtml(bp?.title || 'Beratung')}</small>
+            <small>Zeit: ${startStr}</small>
+            <small>E-Mail: ${escapeHtml(bk.attendee_email)}</small>
           </div>
         `;
       }).join('');
@@ -949,7 +901,7 @@ function updateEventFormPresenceHint() {
   }
   if (!hint) {
     hint = document.createElement('div');
-    hint.className = 'calendar-presence-hint';
+    hint.className = 'ctox-badge is-warning calendar-presence-hint';
     hint.setAttribute('data-calendar-presence-hint', '');
     els.drawerTitle?.insertAdjacentElement('afterend', hint);
   }
@@ -992,40 +944,40 @@ function openEventForm(eventId = null, defaults = null) {
     <form id="drawerEventForm">
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
-          <label>Titel</label>
+          <label class="ctox-field-label">Titel</label>
           <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" aria-describedby="event-title-error" />
           <div class="calendar-field-error" id="event-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Kalender</label>
+            <label class="ctox-field-label">Kalender</label>
             <select class="ctox-select" name="calendar_id" id="drawerEventCalendarSelect" required aria-describedby="event-calendar-error">
               ${calsOptions || '<option value="" disabled selected>Keine Kalender verfügbar</option>'}
             </select>
             <div class="calendar-field-error" id="event-calendar-error" data-error-for="calendar_id"></div>
           </div>
           <div class="calendar-form-group">
-            <label>Ort / Meeting URL</label>
+            <label class="ctox-field-label">Ort / Meeting URL</label>
             <input type="text" class="ctox-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Startzeit</label>
+            <label class="ctox-field-label">Startzeit</label>
             <input type="datetime-local" class="ctox-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required aria-describedby="event-start-error" />
             <div class="calendar-field-error" id="event-start-error" data-error-for="start_time"></div>
           </div>
           <div class="calendar-form-group">
-            <label>Endzeit</label>
+            <label class="ctox-field-label">Endzeit</label>
             <input type="datetime-local" class="ctox-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required aria-describedby="event-end-error" />
             <div class="calendar-field-error" id="event-end-error" data-error-for="end_time"></div>
           </div>
         </div>
 
         <div class="calendar-form-group">
-          <label>Wiederholung</label>
+          <label class="ctox-field-label">Wiederholung</label>
           <select class="ctox-select" name="recurrence_rule">
             <option value="" ${!dbEvent?.recurrence_rule ? 'selected' : ''}>Keine</option>
             <option value="FREQ=DAILY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('DAILY') ? 'selected' : ''}>Täglich</option>
@@ -1035,7 +987,7 @@ function openEventForm(eventId = null, defaults = null) {
         </div>
 
         <div class="calendar-form-group">
-          <label>Beschreibung</label>
+          <label class="ctox-field-label">Beschreibung</label>
           <textarea class="ctox-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
         </div>
       </div>
@@ -1164,19 +1116,19 @@ function openBookingPageForm(bpId = null) {
     <form id="drawerBookingPageForm">
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
-          <label>Titel des Buchungs-Links</label>
+          <label class="ctox-field-label">Titel des Buchungs-Links</label>
           <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" aria-describedby="booking-title-error" />
           <div class="calendar-field-error" id="booking-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Link-Kürzel (Slug)</label>
+            <label class="ctox-field-label">Link-Kürzel (Slug)</label>
             <input type="text" class="ctox-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" aria-describedby="booking-slug-error" />
             <div class="calendar-field-error" id="booking-slug-error" data-error-for="slug"></div>
           </div>
           <div class="calendar-form-group">
-            <label>Dauer (Minuten)</label>
+            <label class="ctox-field-label">Dauer (Minuten)</label>
             <input type="number" class="ctox-input" name="duration_minutes" min="5" max="480" value="${dbBp?.duration_minutes || 30}" required aria-describedby="booking-duration-error" />
             <div class="calendar-field-error" id="booking-duration-error" data-error-for="duration_minutes"></div>
           </div>
@@ -1184,29 +1136,29 @@ function openBookingPageForm(bpId = null) {
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Puffer Davor (Minuten)</label>
+            <label class="ctox-field-label">Puffer Davor (Minuten)</label>
             <input type="number" class="ctox-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
           </div>
           <div class="calendar-form-group">
-            <label>Puffer Danach (Minuten)</label>
+            <label class="ctox-field-label">Puffer Danach (Minuten)</label>
             <input type="number" class="ctox-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Mindestvorlauf (Minuten)</label>
+            <label class="ctox-field-label">Mindestvorlauf (Minuten)</label>
             <input type="number" class="ctox-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
           </div>
           <div class="calendar-form-group">
-            <label>Max. Tage im Voraus</label>
+            <label class="ctox-field-label">Max. Tage im Voraus</label>
             <input type="number" class="ctox-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
           </div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
-            <label>Standort-Typ</label>
+            <label class="ctox-field-label">Standort-Typ</label>
             <select class="ctox-select" name="location_mode">
               <option value="link" ${dbBp?.location_mode === 'link' ? 'selected' : ''}>Online-Meeting Link</option>
               <option value="phone" ${dbBp?.location_mode === 'phone' ? 'selected' : ''}>Telefonnummer</option>
@@ -1214,7 +1166,7 @@ function openBookingPageForm(bpId = null) {
             </select>
           </div>
           <div class="calendar-form-group">
-            <label>Status</label>
+            <label class="ctox-field-label">Status</label>
             <select class="ctox-select" name="status">
               <option value="active" ${dbBp?.status === 'active' ? 'selected' : ''}>Aktiv</option>
               <option value="inactive" ${dbBp?.status === 'inactive' ? 'selected' : ''}>Inaktiv</option>
@@ -1223,7 +1175,7 @@ function openBookingPageForm(bpId = null) {
         </div>
 
         <div class="calendar-form-group">
-          <label>Beschreibung</label>
+          <label class="ctox-field-label">Beschreibung</label>
           <textarea class="ctox-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
         </div>
       </div>
@@ -1327,14 +1279,14 @@ function openCalendarForm(calId = null) {
     <form id="drawerCalendarForm">
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
-          <label>Kalendertitel</label>
+          <label class="ctox-field-label">Kalendertitel</label>
           <input type="text" class="ctox-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" aria-describedby="calendar-title-error" />
           <div class="calendar-field-error" id="calendar-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-group">
-          <label>Farbe</label>
-          <input type="color" class="ctox-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
+          <label class="ctox-field-label">Farbe</label>
+          <input type="color" class="ctox-input" name="color" value="${dbCal?.color || '#3b82f6'}" />
         </div>
       </div>
 
@@ -1428,7 +1380,7 @@ function openBookingDetail(bkId) {
     <div class="calendar-drawer-form-inner">
       <dl class="ctox-fields ctox-fields--stacked">
         <dt>Kunde</dt>
-        <dd class="calendar-booking-detail-name">${escapeHtml(bk.attendee_name)}</dd>
+        <dd>${escapeHtml(bk.attendee_name)}</dd>
         <dt>E-Mail</dt>
         <dd>${escapeHtml(bk.attendee_email)}</dd>
         ${bk.attendee_phone ? `
