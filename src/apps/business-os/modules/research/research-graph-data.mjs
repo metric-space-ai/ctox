@@ -5,12 +5,26 @@ export const GRAPH_DETAIL_LEVELS = Object.freeze({
   standard: 64,
   deep: 120,
 });
+export const GRAPH_NODE_KINDS = Object.freeze(['topic', 'concept', 'source', 'evidence', 'measurement']);
+export const GRAPH_RELATION_TYPES = Object.freeze([
+  'supports',
+  'measures',
+  'derived_from',
+  'part_of',
+  'contradicts',
+  'correlates_with',
+  'co_occurs',
+]);
 const SEMANTIC_TEXT_FIELDS = new Set([
   'title', 'subtitle', 'summary', 'description', 'abstract', 'note', 'contribution_note',
   'fact_label', 'quote', 'content', 'finding', 'conclusion', 'method', 'material',
 ]);
 const SEMANTIC_PHRASE_FIELDS = new Set([
-  'tags', 'keywords', 'topics', 'entities', 'subject_terms', 'controlled_terms',
+  'tags', 'keywords', 'topics', 'entities', 'subject_terms', 'controlled_terms', 'aliases', 'aliases_json',
+]);
+const TECHNICAL_TOKENS = new Set([
+  'snapshot', 'snapshots', 'snapshotid', 'snapshothash', 'sha256', 'canonical', 'verification',
+  'verified', 'verificationstatus', 'extracted', 'retrieved', 'sourceid', 'evidenceid', 'claimid',
 ]);
 const CLUSTER_PALETTE = Object.freeze([
   '#58a9d8',
@@ -43,25 +57,46 @@ export function buildResearchGraphProjection(input = {}) {
     12,
     MAX_GRAPH_NODES,
   );
+  if (input.graphContractStatus === 'invalid_graph_contract') {
+    return emptyProjection(detailLevel, 'invalid_graph_contract', input.graphContractErrors || []);
+  }
   const persisted = projectionFromPersisted(input);
+  if (persisted?.status === 'invalid_graph_contract') {
+    return emptyProjection(detailLevel, persisted.status, persisted.errors);
+  }
   const documents = buildDocuments(input);
   const base = persisted || projectionFromResearchRows(input, documents);
   const layered = addRequestedLayers(base.nodes, base.links, documents, input.graphLayer, visibleLimit);
   const enriched = enrichGraph(layered.nodes, layered.links);
-  const nodes = selectVisibleNodes(enriched.nodes, input.graphLayer, visibleLimit);
+  return sliceResearchGraphProjection({
+    // Keep one stable layout per layer and expose nested visibility slices to
+    // the renderer. Detail changes can then update visibility without
+    // replacing the force graph topology.
+    layoutNodes: enriched.nodes,
+    layoutLinks: enriched.links,
+    origin: persisted ? 'persisted' : 'derived',
+    status: 'ready',
+  }, detailLevel, visibleLimit, input.graphLayer);
+}
+
+export function sliceResearchGraphProjection(projection, detailLevel = 'standard', visibleLimit, graphLayer = 'concepts') {
+  const layoutNodes = Array.isArray(projection?.layoutNodes) ? projection.layoutNodes : (projection?.nodes || []);
+  const layoutLinks = Array.isArray(projection?.layoutLinks) ? projection.layoutLinks : (projection?.links || []);
+  const nodes = selectVisibleNodes(layoutNodes, graphLayer, Number(visibleLimit) || GRAPH_DETAIL_LEVELS[detailLevel] || GRAPH_DETAIL_LEVELS.standard);
   const visibleNodeIds = new Set(nodes.map((node) => node.id));
-  const links = enriched.links
+  const links = layoutLinks
     .filter((link) => visibleNodeIds.has(link.source) && visibleNodeIds.has(link.target))
     .slice(0, MAX_GRAPH_LINKS);
-  const topics = summarizeTopics(nodes);
   return {
+    ...projection,
     nodes,
     links,
-    topics,
-    origin: persisted ? 'persisted' : 'derived',
+    visibleNodeIds: [...visibleNodeIds],
+    visibleLinkIds: links.map((link) => link.id),
+    topics: summarizeTopics(nodes),
     detailLevel,
-    availableNodeCount: enriched.nodes.length,
-    availableLinkCount: enriched.links.length,
+    availableNodeCount: layoutNodes.length,
+    availableLinkCount: layoutLinks.length,
     metrics: {
       nodeCount: nodes.length,
       linkCount: links.length,
@@ -75,9 +110,12 @@ export function buildResearchGraphProjection(input = {}) {
 function projectionFromPersisted(input) {
   const rawNodes = Array.isArray(input.graphNodeRows) ? input.graphNodeRows : [];
   const rawLinks = Array.isArray(input.graphEdgeRows) ? input.graphEdgeRows : [];
-  if (!rawNodes.length || !rawLinks.length) return null;
+  if (!rawNodes.length && !rawLinks.length) return null;
+  if (!rawNodes.length || !rawLinks.length) return { status: 'invalid_graph_contract', errors: ['nodes_and_edges_required'] };
+  const validation = validatePersistedGraph(rawNodes, rawLinks, verifiedSourceIds(input));
+  if (!validation.valid) return { status: 'invalid_graph_contract', errors: validation.errors };
   const nodes = rawNodes.map((row, index) => {
-    const id = firstString(row, ['node_id', 'id', 'concept_id', 'key']) || `concept_${index + 1}`;
+    const id = firstString(row, ['node_id', 'id', 'concept_id', 'key']);
     return {
       id,
       label: firstString(row, ['label', 'title', 'concept', 'term']) || formatConceptLabel(id),
@@ -91,22 +129,74 @@ function projectionFromPersisted(input) {
       evidenceCount: positiveNumber(row.evidence_count, 0),
       aliases: parseStringList(row.aliases_json ?? row.aliases),
       sourceIds: parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources),
-      provenance: row.provenance_json ?? row.provenance ?? null,
+      provenance: parseProvenance(row.provenance_json ?? row.provenance),
     };
   });
   const nodeIds = new Set(nodes.map((node) => node.id));
   const links = rawLinks.map((row, index) => ({
-    id: firstString(row, ['edge_id', 'id']) || `edge_${index + 1}`,
+    id: firstString(row, ['edge_id', 'id']),
     source: firstString(row, ['source_id', 'source', 'from']),
     target: firstString(row, ['target_id', 'target', 'to']),
-    relationType: firstString(row, ['relation_type', 'relation', 'type']) || 'related_to',
+    relationType: firstString(row, ['relation_type', 'relation', 'type']),
     label: firstString(row, ['label', 'relation_label']),
     weight: positiveNumber(row.weight ?? row.occurrences ?? row.count, 1),
     confidence: normalizedUnit(row.confidence),
     sourceIds: parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources),
-    provenance: row.provenance_json ?? row.provenance ?? null,
-  })).filter((link) => link.source !== link.target && nodeIds.has(link.source) && nodeIds.has(link.target));
+    provenance: parseProvenance(row.provenance_json ?? row.provenance),
+  }));
   return links.length ? { nodes, links } : null;
+}
+
+function validatePersistedGraph(rawNodes, rawLinks, verifiedIds) {
+  const errors = [];
+  const sourceIds = new Set(verifiedIds);
+  const nodeIds = new Set();
+  for (const [index, row] of rawNodes.entries()) {
+    const id = firstString(row, ['node_id', 'id', 'concept_id', 'key']);
+    const label = firstString(row, ['label', 'title', 'concept', 'term']);
+    const kind = firstString(row, ['kind', 'node_type', 'type']);
+    const rowSourceIds = parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources);
+    if (!id || nodeIds.has(id)) errors.push(`node[${index}].node_id`);
+    if (id) nodeIds.add(id);
+    if (!isSemanticLabel(label)) errors.push(`node[${index}].label`);
+    if (!GRAPH_NODE_KINDS.includes(kind)) errors.push(`node[${index}].kind`);
+    if (!rowSourceIds.length || rowSourceIds.some((sourceId) => !sourceIds.has(sourceId))) errors.push(`node[${index}].source_ids`);
+    if (!isConfidence(row.confidence)) errors.push(`node[${index}].confidence`);
+    if (!parseProvenance(row.provenance_json ?? row.provenance)) errors.push(`node[${index}].provenance`);
+  }
+  for (const [index, row] of rawLinks.entries()) {
+    const source = firstString(row, ['source_id', 'source', 'from']);
+    const target = firstString(row, ['target_id', 'target', 'to']);
+    const relation = firstString(row, ['relation_type', 'relation', 'type']);
+    const rowSourceIds = parseStringList(row.source_ids_json ?? row.source_ids ?? row.sources);
+    if (!firstString(row, ['edge_id', 'id'])) errors.push(`edge[${index}].edge_id`);
+    if (!source || !target || source === target || !nodeIds.has(source) || !nodeIds.has(target)) errors.push(`edge[${index}].endpoints`);
+    if (!GRAPH_RELATION_TYPES.includes(relation)) errors.push(`edge[${index}].relation_type`);
+    if (!rowSourceIds.length || rowSourceIds.some((sourceId) => !sourceIds.has(sourceId))) errors.push(`edge[${index}].source_ids`);
+    if (!isConfidence(row.confidence)) errors.push(`edge[${index}].confidence`);
+    if (!parseProvenance(row.provenance_json ?? row.provenance)) errors.push(`edge[${index}].provenance`);
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function verifiedSourceIds(input) {
+  if (input.verifiedSourceIds) return new Set(input.verifiedSourceIds);
+  return new Set((input.sourceModels || []).filter((source) => source?.evidenceEligible === true).map((source) => String(source.id || '')).filter(Boolean));
+}
+
+function emptyProjection(detailLevel, status = 'ready', errors = []) {
+  return {
+    nodes: [],
+    links: [],
+    topics: [],
+    origin: status === 'invalid_graph_contract' ? 'invalid' : 'derived',
+    status,
+    errors,
+    detailLevel,
+    availableNodeCount: 0,
+    availableLinkCount: 0,
+    metrics: { nodeCount: 0, linkCount: 0, clusterCount: 0, sourceCount: 0, evidenceCount: 0 },
+  };
 }
 
 function projectionFromResearchRows(input, documents = buildDocuments(input)) {
@@ -145,6 +235,9 @@ function projectionFromResearchRows(input, documents = buildDocuments(input)) {
           target,
           weight: 0,
           sourceIds: new Set(),
+          relationType: 'co_occurs',
+          label: 'Co-occurs',
+          provenance: { kind: 'derived', method: 'verified_source_cooccurrence' },
         };
         edge.weight += Math.max(0.5, Math.min(from.weight, to.weight));
         if (document.sourceId) edge.sourceIds.add(document.sourceId);
@@ -158,6 +251,8 @@ function projectionFromResearchRows(input, documents = buildDocuments(input)) {
       ...node,
       sourceIds: [...node.sourceIds],
       rawScore: node.occurrences + node.documentCount * 2.8 + (node.kind === 'topic' ? 4 : 0),
+      confidence: 0.5,
+      provenance: { kind: 'derived', method: 'verified_source_text' },
     }))
     .sort((left, right) => right.rawScore - left.rawScore || left.id.localeCompare(right.id))
     .slice(0, MAX_GRAPH_NODES);
@@ -181,9 +276,11 @@ function buildDocuments(input) {
     if (!evidenceBySource.has(sourceId)) evidenceBySource.set(sourceId, []);
     evidenceBySource.get(sourceId).push(row);
   }
-  const documents = sourceModels.map((source, index) => ({
+  const documents = sourceModels
+    .filter((source) => String(source?.id || '').trim())
+    .map((source, index) => ({
     id: `document:${source.id || index}`,
-    sourceId: String(source.id || `source_${index + 1}`),
+    sourceId: String(source.id).trim(),
     title: String(source.title || source.row?.title || `Source ${index + 1}`),
     score: Number(source.score || 0),
     source,
@@ -191,23 +288,6 @@ function buildDocuments(input) {
     text: collectSemanticText([source, source.row, source.curated, evidenceBySource.get(String(source.id || '')) || []]),
     phrases: collectSemanticPhrases([source, source.row, source.curated]),
   }));
-  if (input.task) {
-    documents.unshift({
-      id: `task:${input.task.id || 'research'}`,
-      sourceId: '',
-      title: String(input.task.title || input.task.prompt || 'Research'),
-      score: 100,
-      source: null,
-      evidence: [],
-      text: collectSemanticText({
-        title: input.task.title,
-        description: input.task.prompt,
-        summary: input.task.criteria,
-        topics: input.task.topics,
-      }),
-      phrases: collectSemanticPhrases({ topics: input.task.topics }),
-    });
-  }
   return documents;
 }
 
@@ -271,15 +351,19 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
   let remainingEvidence = evidenceBudget;
   for (const document of rankedDocuments) {
     const sourceNodeId = `source:${document.sourceId}`;
-    extraNodes.push({
-      id: sourceNodeId,
-      label: shortLabel(document.title, 42),
-      kind: 'source',
-      occurrences: 1,
-      documentCount: 1,
-      rawScore: 3 + document.score / 20,
-      sourceIds: [document.sourceId],
-    });
+    if (!nodes.some((node) => node.id === sourceNodeId) && !extraNodes.some((node) => node.id === sourceNodeId)) {
+      extraNodes.push({
+        id: sourceNodeId,
+        label: shortLabel(document.title, 42),
+        kind: 'source',
+        occurrences: 1,
+        documentCount: 1,
+        rawScore: 3 + document.score / 20,
+        sourceIds: [document.sourceId],
+        confidence: normalizedUnit(document.source?.row?.confidence) || 0.5,
+        provenance: { kind: 'derived', method: 'source_catalog' },
+      });
+    }
     for (const concept of (bySource.get(document.sourceId) || []).slice(0, 6)) {
       extraLinks.push({
         id: `edge:${stableHash(`${sourceNodeId}\u0000${concept.id}`).toString(36)}`,
@@ -287,12 +371,17 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
         target: concept.id,
         weight: 2,
         sourceIds: [document.sourceId],
+        relationType: 'supports',
+        label: 'Supports',
+        confidence: normalizedUnit(document.source?.row?.confidence) || 0.5,
+        provenance: { kind: 'derived', method: 'source_concept_binding' },
       });
     }
     if (layer === 'evidence') {
       const evidenceForSource = document.evidence.slice(0, Math.min(3, remainingEvidence));
       for (const [index, evidence] of evidenceForSource.entries()) {
-        const evidenceId = `evidence:${document.sourceId}:${index}`;
+        const evidenceRecordId = firstString(evidence, ['evidence_id', 'claim_id', 'id']);
+        const evidenceId = `evidence:${document.sourceId}:${evidenceRecordId || index}`;
         extraNodes.push({
           id: evidenceId,
           label: shortLabel(firstString(evidence, ['fact_label', 'title', 'name']) || `Beleg ${index + 1}`, 48),
@@ -302,7 +391,8 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
           documentCount: 1,
           rawScore: 2,
           sourceIds: [document.sourceId],
-          confidence: normalizedUnit(evidence.confidence),
+          confidence: normalizedUnit(evidence.confidence) || 0.5,
+          provenance: { kind: 'derived', method: 'evidence_points', evidenceId: evidenceRecordId },
         });
         extraLinks.push({
           id: `edge:${stableHash(`${sourceNodeId}\u0000${evidenceId}`).toString(36)}`,
@@ -310,6 +400,10 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
           target: evidenceId,
           weight: 1.5,
           sourceIds: [document.sourceId],
+          relationType: 'measures',
+          label: 'Measures',
+          confidence: normalizedUnit(evidence.confidence) || 0.5,
+          provenance: { kind: 'derived', method: 'evidence_binding', evidenceId: evidenceRecordId },
         });
       }
       remainingEvidence -= evidenceForSource.length;
@@ -354,6 +448,10 @@ function enrichGraph(rawNodes, rawLinks) {
       source: typeof link.source === 'object' ? link.source.id : link.source,
       target: typeof link.target === 'object' ? link.target.id : link.target,
       weight: positiveNumber(link.weight, 1),
+      relationType: link.relationType || 'co_occurs',
+      label: link.label || relationLabel(link.relationType || 'co_occurs'),
+      confidence: isConfidence(link.confidence) ? normalizedUnit(link.confidence) : 0.5,
+      provenance: parseProvenance(link.provenance) || { kind: 'derived', method: 'cooccurrence' },
     }))
     .filter((link) => link.source !== link.target && nodeById.has(link.source) && nodeById.has(link.target));
   const adjacency = new Map(nodes.map((node) => [node.id, new Map()]));
@@ -523,7 +621,7 @@ function tokenize(value) {
   const matches = String(value || '').match(/[\p{L}\p{N}][\p{L}\p{N}+#.-]{2,}/gu) || [];
   return matches
     .map((label) => ({ label: normalizeDisplayLabel(label), normalized: normalizeToken(label) }))
-    .filter((token) => token.normalized.length >= 3 && !STOP_WORDS.has(token.normalized) && !/^\d+$/.test(token.normalized));
+    .filter((token) => token.normalized.length >= 3 && !STOP_WORDS.has(token.normalized) && !TECHNICAL_TOKENS.has(token.normalized) && !/^\d+$/.test(token.normalized));
 }
 
 function collectText(value, depth = 0) {
@@ -557,7 +655,14 @@ function collectSemanticPhrases(value, depth = 0, field = '') {
   if (depth > 5 || value === null || value === undefined) return [];
   if (typeof value === 'string') {
     if (!SEMANTIC_PHRASE_FIELDS.has(field)) return [];
-    return value.split(/[,;|]/).map((item) => item.trim()).filter(Boolean);
+    const raw = value.trim();
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.flatMap((item) => collectSemanticPhrases(String(item), depth + 1, 'tags'));
+      } catch {}
+    }
+    return raw.split(/[,;|]/).map((item) => item.trim()).filter(Boolean).filter((item) => !isTechnicalPhrase(item));
   }
   if (Array.isArray(value)) {
     return value.slice(0, 80).flatMap((item) => collectSemanticPhrases(item, depth + 1, field));
@@ -648,6 +753,36 @@ function normalizeDetailLevel(value) {
   return Object.hasOwn(GRAPH_DETAIL_LEVELS, value) ? value : 'standard';
 }
 
+function isConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100;
+}
+
+function parseProvenance(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSemanticLabel(value) {
+  const label = String(value || '').trim();
+  if (label.length < 2 || /^https?:\/\//i.test(label) || /^sha256:/i.test(label)) return false;
+  return !isTechnicalPhrase(label) && !/^(?:node|edge|concept|topic)[:_][a-z0-9_-]+$/i.test(label);
+}
+
+function isTechnicalPhrase(value) {
+  return /https?:\/\/|sha256:|snapshot|canonical|source[_ -]?id|evidence[_ -]?id|claim[_ -]?id/i.test(String(value || ''));
+}
+
+function relationLabel(relation) {
+  return String(relation || 'co_occurs').replace(/_/g, ' ');
+}
+
 export const __researchGraphDataTestHooks = {
   approximateBetweenness,
   collectText,
@@ -656,5 +791,6 @@ export const __researchGraphDataTestHooks = {
   louvainFirstPhase,
   projectionFromPersisted,
   projectionFromResearchRows,
+  validatePersistedGraph,
   tokenize,
 };

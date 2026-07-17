@@ -39,8 +39,8 @@ test('measurement semantics never fall back to legacy radial load and retain zer
   assert.equal(hooks.metricPropellerLength({ prop_diameter_mm: 0, prop_diameter_in: 9 }, 'prop_diameter'), 0);
 
   const measurements = hooks.aggregateMeasurements([
-    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', radial_load_N: 4, rpm: 0 },
-    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', tangential_equivalent_force_N: 0, force_N: 0 },
+    { source_id: 'source-1', evidence_id: 'evidence-1', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', radial_load_N: 4, rpm: 0 },
+    { source_id: 'source-1', evidence_id: 'evidence-2', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', tangential_equivalent_force_N: 0, force_N: 0 },
   ]);
   assert.equal(measurements.get('source-1').maxTangentialEquivalent, 0);
   assert.equal(measurements.get('source-1').maxRpm, 0);
@@ -52,18 +52,23 @@ test('measurement rows require individually matching source snapshot lineage', (
     evidenceEligible: true,
     row: {
       source_id: 'source-1',
+      evidence_id: 'evidence-1',
       canonical_url: 'https://example.test/source-1',
       snapshot_id: 'snap-1',
+      snapshot_path: 'runtime/snapshots/source-1.html',
+      retrieved_at: '2026-07-17T00:00:00Z',
+      url_role: 'original_content',
+      content_scope: 'full_text',
       snapshot_hash: `sha256:${'1'.repeat(64)}`,
     },
   };
   const rows = [
-    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 10 },
-    { source_id: 'source-1', snapshot_id: '', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 20 },
-    { source_id: 'source-1', snapshot_id: 'snap-other', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 30 },
-    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'2'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 40 },
-    { source_id: 'source-1', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/other', force_N: 50 },
-    { source_id: 'source-2', snapshot_id: 'snap-1', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 60 },
+    { source_id: 'source-1', evidence_id: 'evidence-1', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 10 },
+    { source_id: 'source-1', evidence_id: 'evidence-2', snapshot_id: '', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 20 },
+    { source_id: 'source-1', evidence_id: 'evidence-3', snapshot_id: 'snap-other', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 30 },
+    { source_id: 'source-1', evidence_id: 'evidence-4', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'2'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 40 },
+    { source_id: 'source-1', evidence_id: 'evidence-5', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/other', force_N: 50 },
+    { source_id: 'source-2', evidence_id: 'evidence-6', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: `sha256:${'1'.repeat(64)}`, canonical_url: 'https://example.test/source-1', force_N: 60 },
   ];
 
   assert.equal(hooks.filterMeasurementRowsForEvidence(rows, [source]).length, 1);
@@ -115,9 +120,9 @@ test('knowledge refresh contract preserves living research lineage and source pr
     {
       id: 'table:sources', table_key: 'source_catalog', knowledge_version_id: 'knowledge-v7',
       knowledge_version: { version_id: 'knowledge-v7', status: 'current' },
-      rows: [{ source_id: 'source-1', canonical_url: 'https://example.test/source-1', source_receipt_url: 'https://receipt.test/source-1', snapshot_id: 'snap-1', snapshot_hash: snapshotHash, verification_status: 'verified', transport_verified: true, content_extracted: true, actual_full_text_or_data: true, evidence_relevance_score: 9, http_status: 200, evidence_eligible: true, source_tier: 'primary' }],
+      rows: [{ source_id: 'source-1', evidence_id: 'evidence-1', canonical_url: 'https://example.test/source-1', source_receipt_url: 'https://receipt.test/source-1', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: snapshotHash, verification_status: 'verified', transport_verified: true, content_extracted: true, actual_full_text_or_data: true, evidence_relevance_score: 9, http_status: 200, evidence_eligible: true, source_tier: 'primary' }],
     },
-    { id: 'table:evidence', table_key: 'evidence_points', rows: [{ evidence_id: 'evidence-1', source_id: 'source-1', canonical_url: 'https://example.test/source-1', snapshot_id: 'snap-1', snapshot_hash: snapshotHash }] },
+    { id: 'table:evidence', table_key: 'evidence_points', rows: [{ evidence_id: 'evidence-1', source_id: 'source-1', canonical_url: 'https://example.test/source-1', snapshot_id: 'snap-1', snapshot_path: 'runtime/snapshots/source-1.html', retrieved_at: '2026-07-17T00:00:00Z', url_role: 'original_content', content_scope: 'full_text', snapshot_hash: snapshotHash }] },
   ] };
   const payload = hooks.knowledgeRefreshPayload(task, base, { id: 'run-7', knowledge_version_id: 'knowledge-v7' });
 
@@ -141,9 +146,14 @@ test('graph document lineage is native-contract-shaped and fail-closed', () => {
     evidenceEligible: true,
     row: {
       source_id: 'source-1',
+      evidence_id: 'evidence-1',
       canonical_url: 'https://example.test/source-1',
       source_receipt_url: 'https://receipt.test/source-1',
       snapshot_id: 'snap-1',
+      snapshot_path: 'runtime/snapshots/source-1.html',
+      retrieved_at: '2026-07-17T00:00:00Z',
+      url_role: 'original_content',
+      content_scope: 'full_text',
       snapshot_hash: snapshotHash,
     },
   };
@@ -174,8 +184,13 @@ test('graph document lineage requires a persisted receipt locator and never uses
     evidenceEligible: true,
     row: {
       source_id: 'source-canonical-only',
+      evidence_id: 'evidence-canonical-only',
       canonical_url: 'https://example.test/canonical-only',
       snapshot_id: 'snap-canonical-only',
+      snapshot_path: 'runtime/snapshots/canonical-only.html',
+      retrieved_at: '2026-07-17T00:00:00Z',
+      url_role: 'original_content',
+      content_scope: 'full_text',
       snapshot_hash: snapshotHash,
     },
   };
@@ -202,14 +217,21 @@ test('graph document lineage requires a persisted receipt locator and never uses
 test('systematic research scoring contract pins all source gates and independent audits', () => {
   const contract = hooks.researchScoringContract([{ id: 'evidence_strength', label: 'Evidence', weight: 1 }]);
   assert.deepEqual(contract.required_source_fields, [
+    'source_id',
     'verification_status',
     'transport_verified',
     'content_extracted',
     'actual_full_text_or_data',
     'evidence_relevance_score',
     'http_status',
+    'snapshot_id',
+    'snapshot_path',
     'snapshot_hash',
     'canonical_url',
+    'evidence_id_or_claim_id',
+    'retrieved_at',
+    'url_role',
+    'content_scope',
     'evidence_eligible',
     'source_tier',
   ]);
@@ -236,6 +258,7 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
   };
   const valid = {
     source_id: 'valid',
+    evidence_id: 'evidence-valid',
     title: 'Verified rotor load dataset',
     source_type: 'dataset',
     source_url: 'https://example.test/valid',
@@ -244,6 +267,11 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
     content_extracted: true,
     http_status: 200,
     snapshot_hash: `sha256:${'a'.repeat(64)}`,
+    snapshot_id: 'snapshot-valid',
+    snapshot_path: 'runtime/snapshots/valid.html',
+    retrieved_at: '2026-07-17T00:00:00Z',
+    url_role: 'original_content',
+    content_scope: 'full_text',
     canonical_url: 'https://example.test/valid',
     evidence_eligible: true,
     source_tier: 'primary',
@@ -283,6 +311,7 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
     assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata|Rejected|Aggregated|Legacy|not verified|Transport not verified|No source content extracted|Canonical source missing|snapshot|full text|Relevance|Evidence rejected/i, id);
   }
   assert.deepEqual(models.filter((model) => model.evidenceEligible).map((model) => model.id), ['valid']);
+  assert.equal(hooks.buildSourceModels(task, [{ ...valid, source_id: '' }], [], []).length, 0);
   assert.equal(hooks.formatPortfolioScore(null), '—');
   assert.equal(hooks.formatDimensionScore(null), '—');
 });
@@ -322,7 +351,7 @@ test('source table exposes canonical links only for evidence-eligible sources', 
   assert.doesNotMatch(markup, /unverified-canonical|unverified-discovery/);
 });
 
-test('evidence graph filtering removes unverified source nodes and provenance', () => {
+test('evidence graph filtering fails closed when persisted rows lose source provenance', () => {
   const filtered = hooks.filterGraphRowsForEvidence([
     { node_id: 'source:verified', label: 'Verified', source_ids_json: '["verified"]' },
     { node_id: 'source:legacy', label: 'Legacy', source_ids_json: '["legacy"]' },
@@ -333,9 +362,9 @@ test('evidence graph filtering removes unverified source nodes and provenance', 
     { edge_id: 'legacy-edge', source_id: 'source:legacy', target_id: 'concept:load', source_ids_json: '["legacy"]' },
   ], new Set(['verified']));
 
-  assert.deepEqual(filtered.nodes.map((row) => row.node_id), ['source:verified', 'concept:load', 'concept:task']);
-  assert.equal(filtered.nodes.find((row) => row.node_id === 'concept:load').source_ids_json, '["verified"]');
-  assert.deepEqual(filtered.edges.map((row) => row.edge_id), ['valid-edge']);
+  assert.equal(filtered.status, 'invalid_graph_contract');
+  assert.deepEqual(filtered.nodes, []);
+  assert.deepEqual(filtered.edges, []);
 });
 
 test('targeted graph research carries only currently eligible source ids', () => {

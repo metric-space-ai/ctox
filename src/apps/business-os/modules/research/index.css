@@ -316,6 +316,10 @@
   justify-items: center;
   gap: 5px;
   transform: translateY(-50%);
+  padding: 3px;
+  border: 1px solid rgba(43, 53, 64, 0.75);
+  border-radius: 6px;
+  background: rgba(12, 15, 17, 0.78);
 }
 
 .research-graph-tool {
@@ -345,9 +349,9 @@
 }
 
 .research-graph-detail {
-  display: grid;
+  display: flex;
   gap: 2px;
-  width: 58px;
+  width: auto;
   border: 1px solid #2b3540;
   border-radius: 5px;
   padding: 2px;
@@ -355,19 +359,18 @@
 }
 
 .research-graph-detail button {
-  min-width: 0;
-  height: 25px;
-  overflow: hidden;
+  min-width: 52px;
+  height: 28px;
+  overflow: visible;
   border: 0;
   border-radius: 3px;
   background: transparent;
   color: #8f9ca4;
   padding: 0 4px;
   font: inherit;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 760;
   letter-spacing: 0;
-  text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -510,6 +513,37 @@
   color: #7d8a90;
   font-size: 9px;
   line-height: 1.45;
+}
+
+.research-graph-inspector {
+  display: grid;
+  gap: 3px;
+  margin: 0 6px 6px;
+  padding: 7px 8px;
+  border-top: 1px solid #252d32;
+  color: #aab8be;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.research-graph-inspector strong { color: #eef5f7; font-size: 11px; }
+.research-graph-inspector small { color: #7f8e95; overflow-wrap: anywhere; }
+.research-graph-inspector ul { display: grid; gap: 3px; margin: 2px 0 0; padding: 0; list-style: none; }
+.research-graph-inspector li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 6px; }
+.research-graph-inspector li small { grid-column: 1 / -1; }
+
+.research-graph-contract-error {
+  position: absolute;
+  top: 128px;
+  left: 50%;
+  z-index: 7;
+  transform: translateX(-50%);
+  border: 1px solid #a85b54;
+  border-radius: 4px;
+  padding: 6px 9px;
+  background: rgba(45, 21, 21, 0.92);
+  color: #ffc3b9;
+  font: 700 11px/1.2 ui-monospace, SFMono-Regular, monospace;
 }
 
 .research-graph-actions {
@@ -1358,13 +1392,18 @@
   }
 
   .research-graph-tool {
-    width: 38px;
-    height: 38px;
+    width: 40px;
+    height: 40px;
   }
 
   .research-graph-detail {
-    width: 62px;
+    width: auto;
+    height: 40px;
+    align-items: center;
   }
+
+  .research-graph-detail { gap: 1px; }
+  .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
 
   .research-graph-tool[data-graph-command="zoom-in"],
   .research-graph-tool[data-graph-command="zoom-out"],
@@ -1388,17 +1427,31 @@
     justify-content: center;
     padding: 6px;
   }
+
+  .research-graph-rail {
+    top: 138px;
+    right: 4px;
+    left: 4px;
+    display: flex;
+    justify-content: flex-end;
+    transform: none;
+    gap: 2px;
+    flex-wrap: wrap;
+  }
 }
 
 @media (pointer: coarse) {
   .research-graph-tool {
-    width: 44px;
-    height: 44px;
+    width: 42px;
+    height: 42px;
   }
 
   .research-graph-detail {
-    width: 64px;
+    width: auto;
+    height: 42px;
   }
+
+  .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
 }
 
 /* Research Shards & View Toggle styles */

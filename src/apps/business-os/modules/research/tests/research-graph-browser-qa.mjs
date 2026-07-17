@@ -47,6 +47,7 @@ const html = `<!doctype html>
       import { mount } from '/modules/research/index.js';
 
       const lineageReady = !location.search.includes('missing-lineage');
+      const invalidGraph = location.search.includes('invalid-graph');
 
       const clusters = [
         ['Data Visualization', 'semantic graph', 'network analysis', 'knowledge mapping', 'visual analytics', 'interactive canvas', 'graph rendering', 'spatial layout', 'node centrality', 'cluster exploration', 'visual hierarchy', 'information design'],
@@ -65,15 +66,17 @@ const html = `<!doctype html>
         cluster_id: 'cluster:' + cluster,
         occurrences: Math.max(2, 22 - index * 1.4 + cluster),
         betweenness_centrality: index === 0 ? 0.94 - cluster * 0.045 : Math.max(0.04, 0.52 - index * 0.035 + cluster * 0.01),
+        confidence: 0.9,
+        evidence_count: 1,
         source_ids_json: JSON.stringify(['source_' + (cluster * 3 + index) % 25, 'source_' + (cluster * 5 + index + 3) % 25]),
-        provenance_json: JSON.stringify({ table: 'source_catalog', method: 'cooccurrence' }),
+        provenance_json: JSON.stringify({ table: 'semantic_graph_nodes', method: 'cooccurrence' }),
       })));
       const graphEdges = [];
       for (let cluster = 0; cluster < clusters.length; cluster += 1) {
         for (let index = 1; index < clusters[cluster].length; index += 1) {
-          graphEdges.push({ edge_id: 'hub:' + cluster + ':' + index, source_id: 'node:' + cluster + ':0', target_id: 'node:' + cluster + ':' + index, weight: 13 - index * 0.5, source_ids_json: JSON.stringify(['source_' + (cluster * 4 + index) % 25]) });
-          graphEdges.push({ edge_id: 'mesh:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + cluster + ':' + ((index % 11) + 1), weight: 5 + index % 4, source_ids_json: JSON.stringify(['source_' + (cluster * 7 + index) % 25]) });
-          if (index % 2 === 0) graphEdges.push({ edge_id: 'cross:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + ((cluster + index) % clusters.length) + ':' + ((index * 3) % 11 + 1), weight: 3 + index % 5, source_ids_json: JSON.stringify(['source_' + (cluster * 9 + index) % 25]) });
+          graphEdges.push({ edge_id: 'hub:' + cluster + ':' + index, source_id: 'node:' + cluster + ':0', target_id: 'node:' + cluster + ':' + index, relation_type: invalidGraph && cluster === 0 && index === 1 ? 'made_up' : 'supports', label: 'Supports', confidence: 0.88, provenance_json: JSON.stringify({ table: 'semantic_graph_edges', method: 'evidence_grounded' }), weight: 13 - index * 0.5, source_ids_json: JSON.stringify(['source_' + (cluster * 4 + index) % 25]) });
+          graphEdges.push({ edge_id: 'mesh:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + cluster + ':' + ((index % 11) + 1), relation_type: 'co_occurs', label: 'Co-occurs', confidence: 0.76, provenance_json: JSON.stringify({ table: 'semantic_graph_edges', method: 'evidence_grounded' }), weight: 5 + index % 4, source_ids_json: JSON.stringify(['source_' + (cluster * 7 + index) % 25]) });
+          if (index % 2 === 0) graphEdges.push({ edge_id: 'cross:' + cluster + ':' + index, source_id: 'node:' + cluster + ':' + index, target_id: 'node:' + ((cluster + index) % clusters.length) + ':' + ((index * 3) % 11 + 1), relation_type: 'correlates_with', label: 'Correlates with', confidence: 0.72, provenance_json: JSON.stringify({ table: 'semantic_graph_edges', method: 'evidence_grounded' }), weight: 3 + index % 5, source_ids_json: JSON.stringify(['source_' + (cluster * 9 + index) % 25]) });
         }
       }
       const sourceRows = Array.from({ length: 28 }, (_, index) => ({
@@ -84,6 +87,11 @@ const html = `<!doctype html>
         canonical_url: 'https://example.com/research/' + index,
         source_receipt_url: lineageReady ? 'https://receipt.example.com/research/' + index : '',
         snapshot_id: 'snapshot:competitive-ai:' + index,
+        snapshot_path: 'runtime/research/snapshots/competitive-ai-' + index + '.html',
+        evidence_id: 'evidence_' + index,
+        retrieved_at: '2026-07-17T00:00:00Z',
+        url_role: 'publisher_full_text',
+        content_scope: 'full_text',
         summary: clusters[index % clusters.length].join(' ') + ' evidence governance research insight',
         contribution_note: 'Verified evidence for ' + clusters[index % clusters.length][0] + ' and ' + clusters[(index + 2) % clusters.length][1],
         evidence_relevance: 92 - index,
@@ -105,6 +113,10 @@ const html = `<!doctype html>
         source_id: source.source_id,
         canonical_url: source.canonical_url,
         snapshot_id: source.snapshot_id,
+        snapshot_path: source.snapshot_path,
+        retrieved_at: source.retrieved_at,
+        url_role: source.url_role,
+        content_scope: source.content_scope,
         snapshot_hash: source.snapshot_hash,
         criterion_id: clusters[index % clusters.length][fact + 1],
         fact_label: clusters[index % clusters.length][fact + 2],
@@ -199,8 +211,30 @@ if (serveOnly) {
   process.stdout.write(`Research Graph preview: http://127.0.0.1:${port}/qa\n`);
   await new Promise(() => {});
 }
-const browser = await chromium.launch({ executablePath: chromiumExecutable(), headless: true, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-webgl'] });
+const browser = await chromium.launch({ executablePath: chromiumExecutable(), headless: true, args: ['--disable-gpu', '--use-gl=swiftshader', '--enable-webgl'] });
 const failures = [];
+const canvasPixelCount = (page) => page.evaluate(() => {
+  const canvas = document.querySelector('[data-research-graph-host] canvas');
+  if (!canvas) return 0;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (context) {
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let nonBackground = 0;
+    for (let index = 0; index < pixels.length; index += 16) {
+      if (pixels[index] > 20 || pixels[index + 1] > 20 || pixels[index + 2] > 20) nonBackground += 1;
+    }
+    return nonBackground;
+  }
+  const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+  if (!gl) return 0;
+  const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+  gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  let nonBackground = 0;
+  for (let index = 0; index < pixels.length; index += 16) {
+    if (pixels[index] > 20 || pixels[index + 1] > 20 || pixels[index + 2] > 20) nonBackground += 1;
+  }
+  return nonBackground;
+});
 try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
   page.setDefaultTimeout(60000);
@@ -229,8 +263,14 @@ try {
   assert.equal(await page.locator('.research-graph-dimension').textContent(), '3D');
   assert.ok(await page.locator('.research-graph-topics li').count() >= 5);
   assert.ok(await page.locator('[data-research-graph-host] canvas').boundingBox());
+  assert.ok(await canvasPixelCount(page) > 100, 'initial graph canvas is blank');
+  const contract = await page.evaluate(() => ({ nodes: window.__researchQa.graphNodes, edges: window.__researchQa.graphEdges }));
+  assert.ok(contract.nodes.every((node) => node.source_ids_json && Number.isFinite(node.confidence) && node.provenance_json));
+  assert.ok(contract.edges.every((edge) => ['supports', 'measures', 'derived_from', 'part_of', 'contradicts', 'correlates_with', 'co_occurs'].includes(edge.relation_type) && Number.isFinite(edge.confidence) && edge.provenance_json));
+  assert.doesNotMatch(await page.locator('.research-sources-shards-filters').innerText(), /Rotor|Prüfstand|Fluglog|Vibration|Simulation/);
+  assert.doesNotMatch((await page.locator('.research-graph-shell').innerText()), /snapshot|sha256|canonical_url|source_id/i);
   const initialNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
-  const detailStartedAt = Date.now();
+  const initialReheatCount = await page.locator('[data-research-graph-host]').getAttribute('data-graph-reheat-count');
   await page.locator('[data-action="graph-detail"][data-graph-detail="overview"]').click();
   await page.waitForTimeout(500);
   const overviewNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
@@ -239,10 +279,11 @@ try {
   await page.waitForTimeout(500);
   const deepNodeCount = Number((await page.locator('[data-graph-summary]').textContent()).match(/^\d+/)?.[0] || 0);
   assert.ok(deepNodeCount >= initialNodeCount);
-  assert.ok(Date.now() - detailStartedAt < 4000, 'detail changes exceeded the interactive budget');
+  assert.equal(await page.locator('[data-research-graph-host]').getAttribute('data-graph-reheat-count'), initialReheatCount, 'nested detail changes reheated the simulation');
   assert.equal(await page.locator('[data-action="graph-detail"].is-active').getAttribute('data-graph-detail'), 'deep');
   await page.locator('[data-action="graph-detail"][data-graph-detail="standard"]').click();
   await page.waitForTimeout(500);
+  assert.ok(await canvasPixelCount(page) > 100, 'graph canvas became blank after nested slice changes');
   await page.screenshot({ path: resolve(outputDir, 'desktop-3d.png'), fullPage: true, timeout: 90000 });
 
   await page.locator('[data-action="graph-dimension"]').click();
@@ -276,6 +317,9 @@ try {
     `research action did not dispatch: ${JSON.stringify(failures)}`,
   );
   assert.equal(await page.evaluate(() => window.__researchQa.commands[1].command_type), 'research.systematic.run');
+  await page.locator('[data-action="graph-panel"][data-graph-panel="topics"]').click();
+  await page.locator('.research-graph-topics li button').first().click();
+  assert.match(await page.locator('[data-graph-inspector]').innerText(), /Confidence|Provenienz|co_occurs|Supports|Measures/i);
 
   const collapse = page.locator('[data-action="toggle-diagram"]');
   assert.equal(await collapse.count(), 1);
@@ -289,6 +333,21 @@ try {
   assert.ok(await page.locator('.research-graph-stage').isVisible());
   assert.equal(await page.locator('[data-graph-command="zoom-in"]').evaluate((node) => getComputedStyle(node).display), 'none');
   await page.screenshot({ path: resolve(outputDir, 'compact.png'), fullPage: true, timeout: 90000 });
+
+  const touchPage = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+  touchPage.setDefaultTimeout(60000);
+  await touchPage.goto(`http://127.0.0.1:${port}/qa`, { waitUntil: 'networkidle' });
+  await touchPage.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 60000 });
+  const touchLayout = await touchPage.evaluate(() => {
+    const stage = document.querySelector('.research-graph-stage')?.getBoundingClientRect();
+    const rail = document.querySelector('.research-graph-rail')?.getBoundingClientRect();
+    const controls = [...document.querySelectorAll('.research-graph-rail button')].filter((node) => getComputedStyle(node).display !== 'none').map((node) => ({ rect: node.getBoundingClientRect().toJSON(), text: node.innerText, clipped: node.scrollWidth > node.clientWidth }));
+    return { stage, rail, controls };
+  });
+  assert.ok(touchLayout.rail.height <= touchLayout.stage.height * 0.35, `touch control rail consumes too much stage height: ${JSON.stringify(touchLayout)}`);
+  assert.ok(touchLayout.controls.every(({ rect, clipped }) => rect.width >= 40 && rect.width <= 48 && rect.height >= 40 && rect.height <= 48 && !clipped), JSON.stringify(touchLayout.controls));
+  assert.ok(await canvasPixelCount(touchPage) > 100, 'touch graph canvas is blank');
+  await touchPage.close();
 
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForSelector('[data-research-graph-host] canvas', { state: 'visible', timeout: 60000 });
@@ -305,6 +364,13 @@ try {
   assert.equal(await missingPage.evaluate(() => window.__researchQa.commands.length), 0);
   assert.match(await missingPage.locator('.research-status-line').textContent(), /Knowledge|Provenienz|version/i);
   await missingPage.close();
+  const invalidPage = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 });
+  invalidPage.setDefaultTimeout(60000);
+  await invalidPage.goto(`http://127.0.0.1:${port}/qa?invalid-graph`, { waitUntil: 'networkidle' });
+  await invalidPage.waitForSelector('[data-graph-contract-status="invalid_graph_contract"]', { state: 'visible', timeout: 60000 });
+  assert.equal(await invalidPage.locator('[data-research-graph-host] canvas').count(), 0);
+  assert.equal(await invalidPage.evaluate(() => window.__researchQa.commands.length), 0);
+  await invalidPage.close();
   process.stdout.write(JSON.stringify({ ok: true, url: `http://127.0.0.1:${port}/qa`, screenshots: ['desktop-3d.png', 'desktop-2d-analytics.png', 'compact.png'], failures }, null, 2) + '\n');
 } finally {
   await browser.close();

@@ -32,14 +32,17 @@ export function createResearchGraph(host, options = {}) {
   let hoveredId = '';
   let autoRotateEnabled = options.autoRotate !== false;
   let settledFitPending = true;
+  let topologyKey = projectionTopologyKey(projection);
   let focusFrame = 0;
   let disposed = false;
+  host.dataset.graphReheatCount = '0';
 
   const graph = ForceGraph3D({
     controlType: 'orbit',
     rendererConfig: {
       alpha: false,
       antialias: projection.nodes.length <= 240,
+      preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     },
   })(host)
@@ -51,11 +54,14 @@ export function createResearchGraph(host, options = {}) {
       node.label,
       node.description,
       `${options.sourceCountLabel || 'Sources'}: ${(node.sourceIds || []).length}`,
+      `Confidence: ${formatConfidence(node.confidence)}`,
+      `Provenance: ${formatProvenance(node.provenance)}`,
     ].filter(Boolean).join('\n'))
     .nodeVal((node) => node.visualSize || 2)
     .nodeThreeObject((node) => buildNodeObject(node))
     .nodeThreeObjectExtend(false)
     .linkColor((link) => linkColor(link))
+    .linkLabel((link) => `${link.label || link.relationType || 'co_occurs'} · Confidence: ${formatConfidence(link.confidence)} · Provenance: ${formatProvenance(link.provenance)}`)
     .linkWidth((link) => linkWidth(link))
     .linkCurvature((link) => link.curvature || 0)
     .linkCurveRotation((link) => seededRotation(link.id))
@@ -105,6 +111,7 @@ export function createResearchGraph(host, options = {}) {
 
   configureForces();
   graph.graphData(cloneProjection(projection));
+  applyVisibilityState();
   setAutoRotate(options.autoRotate !== false);
   resize();
 
@@ -123,6 +130,9 @@ export function createResearchGraph(host, options = {}) {
         (graph.graphData?.().nodes || []).map((node) => [node.id, node]),
       );
       projection = normalizeProjection(nextProjection);
+      const nextTopologyKey = projectionTopologyKey(projection);
+      const topologyChanged = nextTopologyKey !== topologyKey;
+      topologyKey = nextTopologyKey;
       projection.nodes = projection.nodes.map((node) => {
         const positioned = positionedNodes.get(node.id);
         if (!positioned || !Number.isFinite(positioned.x)) return node;
@@ -136,15 +146,23 @@ export function createResearchGraph(host, options = {}) {
           vz: positioned.vz,
         };
       });
-      settledFitPending = true;
+      // Detail/layer slices preserve the existing camera and node positions.
+      // Only the initial mount needs the settled-layout camera correction.
+      settledFitPending = false;
       for (const timer of cameraFitTimers) window.clearTimeout(timer);
       cameraFitTimers.clear();
       rebuildAdjacency();
-      disposeNodeObjects();
-      graph.graphData(cloneProjection(projection));
+      if (topologyChanged) {
+        graph.graphData(cloneProjection(projection));
+        disposeStaleNodeObjects(new Set(projection.nodes.map((node) => node.id)));
+      }
+      applyVisibilityState();
       configureForces();
-      graph.d3ReheatSimulation?.();
-      scheduleInitialCameraFits();
+      if (topologyChanged) {
+        host.dataset.graphReheatCount = String(Number(host.dataset.graphReheatCount || 0) + 1);
+        graph.d3ReheatSimulation?.();
+        if (selectedId || hoveredId) applyFocusState();
+      }
     },
     setDimensions(nextDimensions) {
       if (disposed) return;
@@ -152,6 +170,7 @@ export function createResearchGraph(host, options = {}) {
       settledFitPending = true;
       graph.numDimensions(dimensions);
       configureForces();
+      host.dataset.graphReheatCount = String(Number(host.dataset.graphReheatCount || 0) + 1);
       graph.d3ReheatSimulation?.();
       setAutoRotate(autoRotateEnabled);
       if (dimensions === 2) graph.cameraPosition({ x: 0, y: 0, z: 520 }, { x: 0, y: 0, z: 0 }, 700);
@@ -340,6 +359,18 @@ export function createResearchGraph(host, options = {}) {
     graph.linkWidth(linkWidth);
   }
 
+  function applyVisibilityState() {
+    for (const [id, object] of nodeObjects) {
+      object.visible = projection.visibleNodeIds.has(id);
+    }
+    for (const link of graph.graphData?.().links || []) {
+      const object = link.__lineObj;
+      if (object) {
+        object.visible = projection.visibleLinkIds.has(link.id);
+      }
+    }
+  }
+
   function linkColor(link) {
     const focusId = hoveredId || selectedId;
     if (!focusId) return link.color || MUTED;
@@ -418,9 +449,29 @@ export function createResearchGraph(host, options = {}) {
   }
 
   function disposeNodeObjects() {
-    nodeObjects.clear();
-    for (const resource of resources) resource?.dispose?.();
-    resources.clear();
+    disposeStaleNodeObjects(new Set());
+  }
+
+  function disposeStaleNodeObjects(activeIds) {
+    for (const [id, object] of nodeObjects) {
+      if (activeIds.has(id)) continue;
+      const staleResources = new Set();
+      object.traverse?.((child) => {
+        if (child.geometry) staleResources.add(child.geometry);
+        if (child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((material) => {
+            staleResources.add(material);
+            if (material.map) staleResources.add(material.map);
+          });
+        }
+      });
+      staleResources.forEach((resource) => {
+        resource.dispose?.();
+        resources.delete(resource);
+      });
+      nodeObjects.delete(id);
+    }
   }
 }
 
@@ -434,10 +485,32 @@ function assertWebGlSupport() {
 }
 
 function normalizeProjection(value) {
+  const nodes = Array.isArray(value?.layoutNodes) ? value.layoutNodes : (Array.isArray(value?.nodes) ? value.nodes : []);
+  const links = Array.isArray(value?.layoutLinks) ? value.layoutLinks : (Array.isArray(value?.links) ? value.links : []);
   return {
-    nodes: Array.isArray(value?.nodes) ? value.nodes : [],
-    links: Array.isArray(value?.links) ? value.links : [],
+    nodes,
+    links,
+    visibleNodeIds: new Set(Array.isArray(value?.visibleNodeIds) ? value.visibleNodeIds : nodes.map((node) => node.id)),
+    visibleLinkIds: new Set(Array.isArray(value?.visibleLinkIds) ? value.visibleLinkIds : links.map((link) => link.id)),
   };
+}
+
+function projectionTopologyKey(value) {
+  return JSON.stringify({
+    nodes: (value?.nodes || []).map((node) => node.id),
+    links: (value?.links || []).map((link) => [nodeId(link.source), nodeId(link.target), link.id, link.relationType || 'co_occurs']),
+  });
+}
+
+function formatConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round((number > 1 ? number / 100 : number) * 100)}%` : 'n/a';
+}
+
+function formatProvenance(value) {
+  if (!value) return 'missing';
+  if (typeof value === 'string') return value;
+  return [value.method, value.table, value.evidenceId, value.kind].filter(Boolean).join(' · ') || 'verified';
 }
 
 function cloneProjection(projection) {

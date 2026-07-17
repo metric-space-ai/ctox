@@ -46,16 +46,18 @@ test('derives a clustered semantic graph with visual weights from research rows'
 });
 
 test('prefers persisted graph rows and preserves source provenance', () => {
+  const provenance = JSON.stringify({ table: 'semantic_graph_nodes', method: 'evidence_grounded' });
   const projection = buildResearchGraphProjection({
     graphNodeRows: [
-      { node_id: 'concept:graph', label: 'Graph', cluster_id: 'visualization', occurrences: 12, source_ids_json: '["source_a"]' },
-      { node_id: 'concept:research', label: 'Research', cluster_id: 'visualization', occurrences: 9, source_ids_json: '["source_a","source_b"]' },
-      { node_id: 'concept:evidence', label: 'Evidence', cluster_id: 'quality', occurrences: 7, source_ids_json: '["source_b"]' },
+      { node_id: 'concept:graph', label: 'Graph', kind: 'concept', confidence: 0.9, provenance_json: provenance, cluster_id: 'visualization', occurrences: 12, source_ids_json: '["source_a"]' },
+      { node_id: 'concept:research', label: 'Research', kind: 'concept', confidence: 0.86, provenance_json: provenance, cluster_id: 'visualization', occurrences: 9, source_ids_json: '["source_a","source_b"]' },
+      { node_id: 'concept:evidence', label: 'Evidence', kind: 'concept', confidence: 0.82, provenance_json: provenance, cluster_id: 'quality', occurrences: 7, source_ids_json: '["source_b"]' },
     ],
     graphEdgeRows: [
-      { edge_id: 'edge_1', source_id: 'concept:graph', target_id: 'concept:research', weight: 8, source_ids_json: '["source_a"]' },
-      { edge_id: 'edge_2', source_id: 'concept:research', target_id: 'concept:evidence', weight: 4, source_ids_json: '["source_b"]' },
+      { edge_id: 'edge_1', source_id: 'concept:graph', target_id: 'concept:research', relation_type: 'supports', confidence: 0.8, provenance_json: provenance, weight: 8, source_ids_json: '["source_a"]' },
+      { edge_id: 'edge_2', source_id: 'concept:research', target_id: 'concept:evidence', relation_type: 'co_occurs', confidence: 0.7, provenance_json: provenance, weight: 4, source_ids_json: '["source_b"]' },
     ],
+    verifiedSourceIds: ['source_a', 'source_b'],
     visibleLimit: 120,
   });
 
@@ -65,6 +67,31 @@ test('prefers persisted graph rows and preserves source provenance', () => {
   assert.deepEqual(projection.nodes.find((node) => node.id === 'concept:research').sourceIds, ['source_a', 'source_b']);
   assert.equal(projection.metrics.clusterCount, 2);
   assert.equal(projection.nodes[0].kind, 'concept');
+  assert.equal(projection.links[0].relationType, 'supports');
+  assert.equal(projection.links[0].provenance.method, 'evidence_grounded');
+});
+
+test('rejects persisted graph rows with invalid relation, provenance, or source binding', () => {
+  const projection = buildResearchGraphProjection({
+    graphNodeRows: [{ node_id: 'concept:bad', label: 'Bad concept', kind: 'concept', confidence: 0.8, source_ids_json: '["unverified"]' }],
+    graphEdgeRows: [{ edge_id: 'edge:bad', source_id: 'concept:bad', target_id: 'concept:bad', relation_type: 'made_up', confidence: 0.8, source_ids_json: '["unverified"]' }],
+    verifiedSourceIds: ['verified'],
+  });
+  assert.equal(projection.status, 'invalid_graph_contract');
+  assert.equal(projection.origin, 'invalid');
+  assert.deepEqual(projection.nodes, []);
+  assert.ok(projection.errors.some((error) => error.includes('relation_type')));
+});
+
+test('derived graph excludes task prompt concepts and marks fallback relations explicitly', () => {
+  const projection = buildResearchGraphProjection({
+    task: { id: 'task-prompt', title: 'Unsubstantiated Roadmap Hypothesis', prompt: 'Secret roadmap token must never rank.' },
+    sourceModels: [{ id: 'source_verified', evidenceEligible: true, title: 'Governance evidence study', score: 88, row: { summary: 'Governance evidence supports audit controls.' } }],
+    verifiedSourceIds: ['source_verified'],
+    visibleLimit: 36,
+  });
+  assert.doesNotMatch(projection.nodes.map((node) => node.label).join(' '), /Unsubstantiated|roadmap|secret/i);
+  assert.ok(projection.links.every((link) => link.relationType === 'co_occurs' && link.provenance?.kind === 'derived'));
 });
 
 test('adds source and evidence layers without exceeding graph limits', () => {
@@ -161,6 +188,8 @@ test('detail levels are nested and preserve the requested source and evidence la
   const deepIds = new Set(deep.nodes.map((node) => node.id));
   assert.ok(overview.nodes.every((node) => standardIds.has(node.id)));
   assert.ok(standard.nodes.every((node) => deepIds.has(node.id)));
+  assert.equal(new Set(deep.nodes.map((node) => node.id)).size, deep.nodes.length);
+  assert.ok(overview.nodes.length <= 36 && standard.nodes.length <= 64 && deep.nodes.length <= 120);
 });
 
 test('projects SKF-sized research data within an interactive budget', () => {
