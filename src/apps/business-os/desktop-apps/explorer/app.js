@@ -83,6 +83,7 @@ const MESSAGES = {
     openInModule: 'Im Modul öffnen',
     noFileSelected: 'Keine Datei ausgewählt.',
     dropFilesHere: 'Dateien hier ablegen',
+    visibleCount: (n) => `${n} sichtbar`,
     download: 'Herunterladen',
     showInModule: 'Im Modul anzeigen',
     downloadFailedPrefix: 'Download fehlgeschlagen',
@@ -151,6 +152,7 @@ const MESSAGES = {
     openInModule: 'Open in module',
     noFileSelected: 'No file selected.',
     dropFilesHere: 'Drop files here',
+    visibleCount: (n) => `${n} visible`,
     download: 'Download',
     showInModule: 'Show in module',
     downloadFailedPrefix: 'Download failed',
@@ -999,7 +1001,7 @@ export async function mount(container, ctx) {
   function renderFooter(rows = filteredRows()) {
     const sourceLabel = isFilesystemSource() ? (currentFolder()?.path || '/') : state.activeSource.label;
     const sourceState = state.lastLoad?.ok === false ? T.errorPrefix : T.loadedCount(state.lastLoad?.total ?? rows.length);
-    refs.status.textContent = `${rows.length} sichtbar · ${sourceState} · ${sourceLabel}`;
+    refs.status.textContent = `${T.visibleCount(rows.length)} · ${sourceState} · ${sourceLabel}`;
   }
 
   function revokePreviewUrl() {
