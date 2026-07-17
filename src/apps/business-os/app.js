@@ -38,7 +38,7 @@ import {
   shouldRenderModuleSourceAction,
 } from './shared/shell-permissions-ui.js?v=20260714-chat-queue-v56';
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260717-chat-overlay-v126';
-import { createDocumentsFacade } from './shared/documents.js?v=20260715-documents-facade-v11';
+import { createDocumentsFacade } from './shared/documents.js?v=20260717-documents-facade-v13';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -9065,7 +9065,7 @@ function resolveModuleAllowlist(catalogAllowlist) {
     if (trimmed) allow.add(trimmed);
   }
   if (allow.has('app-store')) {
-    allow.add('creator');
+    allow.add('importer');
   }
   return allow;
 }
@@ -9506,39 +9506,33 @@ function getOfflineFallbackCatalog() {
       "deletable": false
     },
     {
-      "id": "creator",
-      "title": "App Creator",
-      "description": "Business OS app request workspace for handing app creation and modification tasks to CTOX agents.",
-      "entry": "modules/creator/index.html",
-      "collections": [
-        "business_commands",
-        "business_module_catalog"
-      ],
+      "id": "importer",
+      "title": "App Importer",
+      "description": "Bring a coding-agent app into CTOX: pick a folder or a GitHub repo, transcode React/TypeScript to plain ESM, review the report, and install it as a versioned Business OS app.",
+      "entry": "modules/importer/index.html",
+      "collections": [],
       "layout": {
         "shell": "windowed",
-        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#0891b2\" /></linearGradient></defs><polyline points=\"7 8 3 12 7 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"17 8 21 12 17 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><line x1=\"14\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z\" fill=\"url(#grad-creator)\"></path><path d=\"M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z\" fill=\"url(#grad-creator)\"></path></svg>",
-        "left": "App request and metadata inputs",
-        "center": "App request status, installed apps, and CTOX task handoff",
-        "default_width": 1200,
-        "default_height": 800,
-        "min_width": 640,
-        "min_height": 480
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+        "left": "Source: folder or GitHub",
+        "center": "Transcode report and module details",
+        "right": "Install into local-modules"
       },
       "category": "Development",
       "version": "0.1.0",
       "developer": "CTOX",
       "license": "AGPL-3.0-only",
       "tags": [
-        "creator",
-        "developer-tools",
-        "app-creation",
-        "local-first",
-        "architecture"
+        "import",
+        "porting",
+        "react",
+        "typescript",
+        "coding-agent"
       ],
       "store": {
-        "summary": "Local-first workspace for creating Business-OS app requests and tracking installed apps.",
+        "summary": "The hand-over moment: a coding agent conceived the app, the importer raises it — transcoded to plain ESM, versioned, yours.",
         "repository": "metric-space-ai/ctox",
-        "source_path": "modules/creator",
+        "source_path": "modules/importer",
         "installable": false,
         "editable_after_install": false,
         "distribution": "system-module"
@@ -9553,12 +9547,12 @@ function getOfflineFallbackCatalog() {
           "focus"
         ],
         "initial_size": {
-          "width": 1200,
-          "height": 800
+          "width": 1040,
+          "height": 720
         },
         "minimum_size": {
-          "width": 640,
-          "height": 480
+          "width": 720,
+          "height": 520
         },
         "multi_instance": false,
         "auto_restore": false
@@ -10898,7 +10892,7 @@ const LAUNCHER_CATEGORIES = [
   {
     id: 'development',
     get name() { return shellLang() === 'de' ? '🛠️ Entwicklung' : '🛠️ Development'; },
-    matchIds: ['code-editor', 'creator']
+    matchIds: ['code-editor', 'importer']
   }
 ];
 
