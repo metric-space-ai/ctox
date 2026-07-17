@@ -1,5 +1,5 @@
 
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260717-kit2';
 const MODULE_ID = 'consent';
 const PRIMARY = 'business_consents';
 const TITLE = 'consent';
@@ -64,9 +64,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 
@@ -107,9 +109,11 @@ export async function mount(ctx) {
     const checkedPurpose = result?.purpose ?? result?.data?.purpose ?? (purposeRaw || null);
     setGate(
       '<strong>' + esc(allowed ? t('consentPresent') : t('consentMissing')) + '</strong>'
-      + '<div class="ats-result-row">' + esc(t('subject')) + ': ' + esc(subject_id) + '</div>'
-      + '<div class="ats-result-row">' + esc(t('purpose')) + ': ' + esc(checkedPurpose ?? t('existenceOnly')) + '</div>'
-      + '<div class="ats-result-row">' + esc(t('decision')) + ': ' + esc(allowed ? t('allowed') : t('denied')) + '</div>',
+      + fieldRows([
+        [t('subject'), subject_id],
+        [t('purpose'), checkedPurpose ?? t('existenceOnly')],
+        [t('decision'), allowed ? t('allowed') : t('denied')],
+      ]),
       allowed ? 'ok' : 'block'
     );
   }
@@ -141,12 +145,12 @@ export async function mount(ctx) {
     //   export -> { record_count, collections{coll:[rec]}, audit_trail[] }
     //   erase  -> { erased_count, erased{coll:[id]} }
     const data = result?.data || result || {};
-    let body = '<div class="ats-result-row">' + esc(t('subject')) + ': ' + esc(subjectId) + '</div>';
+    let body = '';
 
     if (commandType === ERASE_COMMAND) {
       const erased = data.erased && typeof data.erased === 'object' ? data.erased : {};
       const count = data.erased_count ?? Object.values(erased).reduce((n, ids) => n + (Array.isArray(ids) ? ids.length : 0), 0);
-      body += '<div class="ats-result-row">' + esc(t('deletedRecords')) + ': ' + esc(count) + '</div>';
+      body += fieldRows([[t('subject'), subjectId], [t('deletedRecords'), count]]);
       const collEntries = Object.entries(erased).filter(([, ids]) => Array.isArray(ids) && ids.length);
       if (collEntries.length) {
         body += '<ul class="ats-blockers">'
@@ -161,12 +165,11 @@ export async function mount(ctx) {
     const collections = data.collections && typeof data.collections === 'object' ? data.collections : {};
     const auditTrail = Array.isArray(data.audit_trail) ? data.audit_trail : [];
     const recordCount = data.record_count ?? Object.values(collections).reduce((n, recs) => n + (Array.isArray(recs) ? recs.length : 0), 0);
-    body += '<div class="ats-result-row">' + esc(t('affectedRecords')) + ': ' + esc(recordCount)
-      + ' · ' + esc(t('auditEntries')) + ': ' + esc(auditTrail.length) + '</div>';
+    body += fieldRows([[t('subject'), subjectId], [t('affectedRecords'), recordCount], [t('auditEntries'), auditTrail.length]]);
     const exportPayload = { subject_id: subjectId, record_count: recordCount, collections, audit_trail: auditTrail };
     let pretty;
     try { pretty = JSON.stringify(exportPayload, null, 2); } catch { pretty = String(exportPayload); }
-    body += '<div class="ats-result-row">' + esc(t('exportLabel')) + ':</div><pre class="ats-export">' + esc(pretty) + '</pre>';
+    body += '<div>' + esc(t('exportLabel')) + ':</div><pre class="ctox-pre">' + esc(pretty) + '</pre>';
     setGate('<strong>' + esc(label) + ' ' + esc(t('executed')) + '.</strong>' + body, 'ok');
   }
 
@@ -261,10 +264,17 @@ function consentRow(r, t, locale) {
     + '<div class="ats-item-meta">' + metaBits.join(' · ') + '</div>'
     + '</div>'
     + '<div class="ats-item-actions">'
-    + '<button type="button" class="ctox-button" data-subject-export="' + esc(subjectId) + '" title="' + esc(t('exportTitle')) + '">' + esc(t('exportShort')) + '</button>'
-    + '<button type="button" class="ctox-button is-danger" data-subject-erase="' + esc(subjectId) + '" title="' + esc(t('eraseTitle')) + '">' + esc(t('eraseShort')) + '</button>'
+    + '<button type="button" class="ctox-button ctox-button--sm" data-subject-export="' + esc(subjectId) + '" title="' + esc(t('exportTitle')) + '">' + esc(t('exportShort')) + '</button>'
+    + '<button type="button" class="ctox-button ctox-button--sm is-danger" data-subject-erase="' + esc(subjectId) + '" title="' + esc(t('eraseTitle')) + '">' + esc(t('eraseShort')) + '</button>'
     + '</div>'
     + '</div>';
+}
+
+// Key/value result rows inside the gate callout → kit .ctox-fields (base.css).
+function fieldRows(pairs) {
+  return '<dl class="ctox-fields">' + pairs
+    .map(([label, value]) => '<dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>')
+    .join('') + '</dl>';
 }
 
 function collectBlockers(result) {
