@@ -17,7 +17,11 @@
 // Per-collection sync runtime on top of CTOX Sync Engine. Repair philosophy: the
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
-import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
+import {
+  batchSizeFor,
+  collectionTopic,
+  nativeRxdbPeerReady,
+} from './sync-contract.js?v=20260717-knowledge-sync-v130';
 import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260714-chat-queue-v56';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
