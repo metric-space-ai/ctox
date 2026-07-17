@@ -75,6 +75,8 @@ test('systematic research scoring contract pins all source gates and independent
     'verification_status',
     'transport_verified',
     'content_extracted',
+    'actual_full_text_or_data',
+    'evidence_relevance_score',
     'http_status',
     'snapshot_hash',
     'canonical_url',
@@ -111,10 +113,12 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
     transport_verified: true,
     content_extracted: true,
     http_status: 200,
-    snapshot_hash: 'sha256:valid',
+    snapshot_hash: `sha256:${'a'.repeat(64)}`,
     canonical_url: 'https://example.test/valid',
     evidence_eligible: true,
     source_tier: 'primary',
+    actual_full_text_or_data: true,
+    evidence_relevance_score: 9,
   };
   const rows = [
     valid,
@@ -126,6 +130,11 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
     { ...valid, source_id: 'off-topic', title: 'Fachfremde candidate', relevance_status: 'fachfremd' },
     { ...valid, source_id: 'rejected', title: 'Rejected candidate', verification_status: 'rejected', review_status: 'rejected' },
     { ...valid, source_id: 'aggregated', title: 'Aggregated candidate', source_tier: 'aggregated' },
+    { ...valid, source_id: 'metadata-url', title: 'Metadata URL candidate', canonical_url: 'https://doi.org/10.1000/test' },
+    { ...valid, source_id: 'bad-hash', title: 'Unbound snapshot candidate', snapshot_hash: 'sha256:valid' },
+    { ...valid, source_id: 'no-fulltext', title: 'No original content', actual_full_text_or_data: false },
+    { ...valid, source_id: 'weak-relevance', title: 'Weak relevance', evidence_relevance_score: 7 },
+    { ...valid, source_id: 'explicit-rejection', title: 'Explicit rejection', evidence_rejection_reason: 'off_topic' },
     { source_id: 'legacy', title: 'Legacy candidate', source_url: 'https://example.test/legacy' },
   ];
   const models = hooks.buildSourceModels(task, rows, [], []);
@@ -135,13 +144,13 @@ test('UI evidence gate scores only verified, snapshotted, non-aggregated 2xx sou
   assert.ok(byId.get('valid').score > 4);
   assert.notEqual(byId.get('valid').dimensions.evidence_strength, null);
 
-  for (const id of ['not-found', 'transport', 'empty', 'no-canonical', 'metadata', 'off-topic', 'rejected', 'aggregated', 'legacy']) {
+  for (const id of ['not-found', 'transport', 'empty', 'no-canonical', 'metadata', 'off-topic', 'rejected', 'aggregated', 'metadata-url', 'bad-hash', 'no-fulltext', 'weak-relevance', 'explicit-rejection', 'legacy']) {
     const model = byId.get(id);
     assert.equal(model.evidenceEligible, false, id);
     assert.equal(model.score, null, id);
     assert.equal(model.grade, '—', id);
     assert.equal(model.dimensions.evidence_strength, null, id);
-    assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata only|Rejected|Aggregated|Legacy|not verified|Transport not verified|No source content extracted|Canonical source missing/i, id);
+    assert.match(model.evidenceStatusLabel, /HTTP 404|Metadata|Rejected|Aggregated|Legacy|not verified|Transport not verified|No source content extracted|Canonical source missing|snapshot|full text|Relevance|Evidence rejected/i, id);
   }
   assert.deepEqual(models.filter((model) => model.evidenceEligible).map((model) => model.id), ['valid']);
   assert.equal(hooks.formatPortfolioScore(null), '—');

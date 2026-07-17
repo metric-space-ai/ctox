@@ -1096,22 +1096,35 @@ function evidenceGate(row) {
   const snapshotHash = firstString(row, ['snapshot_hash']);
   const canonicalUrl = firstString(row, ['canonical_url']);
   const sourceTier = firstString(row, ['source_tier']).toLowerCase();
+  const sourceType = firstString(row, ['source_type', 'type']).toLowerCase();
+  const rejectionReason = firstString(row, ['evidence_rejection_reason']);
+  const relevanceScore = Number(row?.evidence_relevance_score);
+  const validSnapshotHash = /^sha256:[0-9a-f]{64}$/i.test(snapshotHash);
+  const actualSourceContent = row?.actual_full_text_or_data === true;
+  const relevant = Number.isInteger(relevanceScore) && relevanceScore >= 8;
+  const canonicalIsMetadata = isMetadataCanonicalUrl(canonicalUrl);
   const metadataOnly = row?.metadata_only === true
     || firstString(row, ['reading_status', 'source_status', 'review_status', 'status']).toLowerCase() === 'metadata_only'
     || firstString(row, ['source_type', 'type']).toLowerCase() === 'paper_metadata';
   const rejected = ['relevance_status', 'screening_status', 'review_status', 'source_status', 'status']
     .map((key) => firstString(row, [key]).toLowerCase())
     .some((value) => ['rejected', 'off_topic', 'off-topic', 'fachfremd', 'irrelevant'].includes(value));
-  const aggregated = /aggregat|rollup|derived|synthes|summary/.test(sourceTier);
+  const aggregated = /aggregat|rollup|derived|synthes|summary/.test(sourceTier)
+    || sourceType === 'aggregator';
   const eligible = verificationStatus === 'verified'
     && row?.transport_verified === true
     && row?.content_extracted === true
     && Number.isInteger(httpStatus)
     && httpStatus >= 200
     && httpStatus < 300
-    && Boolean(snapshotHash)
+    && httpStatus !== 204
+    && validSnapshotHash
     && Boolean(canonicalUrl)
+    && !canonicalIsMetadata
     && row?.evidence_eligible === true
+    && actualSourceContent
+    && relevant
+    && !rejectionReason
     && Boolean(sourceTier)
     && !aggregated
     && !metadataOnly
@@ -1124,14 +1137,33 @@ function evidenceGate(row) {
     return { eligible: false, status: 'http_error', label: `HTTP ${httpStatus}` };
   }
   if (aggregated) return { eligible: false, status: 'aggregated', label: 'Aggregated source' };
+  if (canonicalIsMetadata) return { eligible: false, status: 'metadata_url', label: 'Metadata URL only' };
   if (verificationStatus !== 'verified') return { eligible: false, status: 'unverified', label: 'Not verified' };
   if (row?.transport_verified !== true) return { eligible: false, status: 'transport_unverified', label: 'Transport not verified' };
   if (row?.content_extracted !== true) return { eligible: false, status: 'empty_content', label: 'No source content extracted' };
-  if (!snapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Snapshot missing' };
+  if (!validSnapshotHash) return { eligible: false, status: 'missing_snapshot', label: 'Valid snapshot missing' };
   if (!canonicalUrl) return { eligible: false, status: 'missing_canonical_url', label: 'Canonical source missing' };
+  if (!actualSourceContent) return { eligible: false, status: 'no_primary_content', label: 'No full text or original data' };
+  if (!relevant) return { eligible: false, status: 'insufficient_relevance', label: 'Relevance not verified' };
+  if (rejectionReason) return { eligible: false, status: 'rejected', label: 'Evidence rejected' };
   if (row?.evidence_eligible !== true) return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
   if (!sourceTier) return { eligible: false, status: 'legacy', label: 'Legacy / not verified' };
   return { eligible: false, status: 'not_eligible', label: 'Evidence not eligible' };
+}
+
+function isMetadataCanonicalUrl(raw) {
+  const normalized = String(raw || '').trim().toLowerCase();
+  return [
+    'https://doi.org/',
+    'http://doi.org/',
+    'https://api.crossref.org/',
+    'https://api.openalex.org/',
+    'https://api.semanticscholar.org/',
+    'https://www.semanticscholar.org/',
+    'https://scholar.google.',
+    'https://www.researchgate.net/',
+    'https://www.academia.edu/',
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 function emptyScoreDimensions(axisDefs = BASE_AXES) {
@@ -2959,7 +2991,7 @@ async function runSelectedResearch() {
     `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, http_status 2xx, snapshot_hash, canonical_url, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
+    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe jede kanonische Quelle, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen. Die UI-Evidence-Gate-Felder verification_status=verified, transport_verified=true, content_extracted=true, actual_full_text_or_data=true, evidence_relevance_score>=8, http_status 2xx (nicht 204), snapshot_hash als SHA-256, canonical_url auf die Originalquelle, evidence_eligible=true und ein nicht-aggregierter source_tier sind zwingend; Metadaten-URLs, alte, fehlende, metadata_only, fachfremde oder rejected Zeilen bleiben ungescored.',
     'Vor Abschluss sind drei voneinander getrennte Audits auszuführen: Source-Audit (URL, Autorität, Inhalt, Snapshot), Data-Audit (Originaldatei, Zeile/Spalte, Einheit, Parsing, Umrechnung, Row-Count) und Claim-Audit (jede Knowledge- und Report-Aussage gegen freigegebene Evidence). Nicht bestandene Aussagen oder Quellen dürfen nicht in Knowledge, Scores oder Reports gelangen.',
     'Pflege parallel semantic_graph_nodes und semantic_graph_edges: Konzepte aus Titel, Zusammenfassung und Evidenz; gemeinsame Nennung im 4-Token-Fenster; automatische Communities; Betweenness-Zentralität; Source-IDs und Provenienz an jedem Graph-Datensatz. Schreibe inkrementell, damit die laufende Research-App über RxDB/WebRTC live aktualisiert wird.',
   ].filter(Boolean).join('\n');
@@ -3061,7 +3093,7 @@ function researchScoringContract(scoringDimensions) {
     weights: scoringWeights(scoringDimensions),
     total_field: 'weighted_total',
     rule: 'Only score rows passing the UI evidence gate: verification_status=verified, transport_verified=true, content_extracted=true, HTTP 2xx, non-empty snapshot_hash and canonical_url, evidence_eligible=true, and non-aggregated source_tier. Raw, legacy, metadata-only, off-topic, rejected, empty, or aggregated discovery candidates stay unscored.',
-    required_source_fields: ['verification_status', 'transport_verified', 'content_extracted', 'http_status', 'snapshot_hash', 'canonical_url', 'evidence_eligible', 'source_tier'],
+    required_source_fields: ['verification_status', 'transport_verified', 'content_extracted', 'actual_full_text_or_data', 'evidence_relevance_score', 'http_status', 'snapshot_hash', 'canonical_url', 'evidence_eligible', 'source_tier'],
     required_audits: ['source', 'data', 'claim'],
   };
 }
