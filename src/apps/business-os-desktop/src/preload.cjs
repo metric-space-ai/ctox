@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("ctoxDesktop", {
+  getAppInfo: () => ipcRenderer.invoke("app:info"),
   listInstances: () => ipcRenderer.invoke("instances:list"),
   activateInstance: (instance) => ipcRenderer.invoke("instances:activate", instance),
   removeInstance: (instance) => ipcRenderer.invoke("instances:remove", instance),
