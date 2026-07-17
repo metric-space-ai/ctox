@@ -2665,6 +2665,16 @@ async fn run_native_peer(
         ice_servers_from_sync_config(&sync.ice_servers)
     };
     let database_path = store::rxdb_store_path(&root);
+    // Publish process liveness before opening or repairing the potentially
+    // large SQLite store. SQLite has to parse the complete schema on first
+    // access, which can take noticeable time for long-lived installations.
+    // Holding the peer lock without a heartbeat during that work makes a
+    // healthy startup indistinguishable from a wedged peer.
+    let status_heartbeat = spawn_native_peer_status_heartbeat(
+        root.clone(),
+        peer_session_id.clone(),
+        database_path.clone(),
+    );
     match repair_stale_rxdb_collection_schema_versions(&root) {
         Ok(result) => {
             let repaired_tables = result
@@ -2690,17 +2700,6 @@ async fn run_native_peer(
     }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
-
-    // FIX 2: start the status heartbeat on its dedicated OS thread NOW — right
-    // after the process lock and DB are ready and BEFORE the collection
-    // bring-up loop. If bring-up stalls, the heartbeat must still be written so
-    // `business-os-rxdb-peer.status.json` stays fresh and the process is not
-    // mistaken for dead-but-lock-held.
-    let status_heartbeat = spawn_native_peer_status_heartbeat(
-        root.clone(),
-        peer_session_id.clone(),
-        database_path.clone(),
-    );
 
     // FIX 4: register collections fault tolerantly. A drifted/failing OPTIONAL
     // collection is logged and skipped; a failing REQUIRED collection still
@@ -13884,11 +13883,39 @@ pub fn repair_optional_rxdb_collection_schema_drift(
 }
 
 fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.is_file() {
+        return Ok(json!({
+            "ok": true,
+            "code": "ctox_rxdb_stale_schema_versions",
+            "action": "repair-stale-schema-versions",
+            "repaired": false,
+            "repaired_tables": 0,
+            "repaired_triggers": 0,
+            "collections": []
+        }));
+    }
+    // Opening a connection makes SQLite parse the complete schema. Reusing one
+    // connection for every collection avoids repeating that expensive parse
+    // hundreds of times during each native-peer start.
+    let conn = Connection::open(&database_path).with_context(|| {
+        format!(
+            "open native Business OS RxDB store {}",
+            database_path.display()
+        )
+    })?;
+    let _ = conn.busy_timeout(Duration::from_secs(10));
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
     let mut repaired_triggers = 0usize;
     for (collection, _) in business_os_collections() {
-        let result = repair_rxdb_collection_schema_version_drift(root, &collection, false, true)?;
+        let result = repair_rxdb_collection_schema_version_drift_with_connection(
+            &database_path,
+            &conn,
+            &collection,
+            false,
+            true,
+        )?;
         repaired_tables += result
             .get("repaired_tables")
             .and_then(Value::as_u64)
@@ -13948,19 +13975,35 @@ fn repair_rxdb_collection_schema_version_drift(
         )
     })?;
     let _ = conn.busy_timeout(Duration::from_secs(10));
-    let expected_version = expected_rxdb_collection_version(collection);
-    let active_version = active_rxdb_collection_version(&conn, collection)?;
-    let expected_table = rxdb_collection_version_table_name(collection, expected_version);
-    let expected_table_exists = sqlite_table_exists(&conn, &expected_table)?;
-    let stale_tables = stale_rxdb_collection_version_tables(
+    repair_rxdb_collection_schema_version_drift_with_connection(
+        &database_path,
         &conn,
+        collection,
+        dry_run,
+        force,
+    )
+}
+
+fn repair_rxdb_collection_schema_version_drift_with_connection(
+    database_path: &Path,
+    conn: &Connection,
+    collection: &str,
+    dry_run: bool,
+    force: bool,
+) -> anyhow::Result<Value> {
+    let expected_version = expected_rxdb_collection_version(collection);
+    let active_version = active_rxdb_collection_version(conn, collection)?;
+    let expected_table = rxdb_collection_version_table_name(collection, expected_version);
+    let expected_table_exists = sqlite_table_exists(conn, &expected_table)?;
+    let stale_tables = stale_rxdb_collection_version_tables(
+        conn,
         collection,
         expected_version,
         active_version,
         expected_table_exists,
     )?;
     let stale_triggers = stale_rxdb_collection_version_triggers(
-        &conn,
+        conn,
         collection,
         expected_version,
         active_version,
@@ -14956,6 +14999,21 @@ mod tests {
         assert!(is_recoverable_projection_write_error(&revision_error));
         assert!(is_recoverable_projection_write_error(&sqlite_unique_error));
         assert!(!is_recoverable_projection_write_error(&other_error));
+    }
+
+    #[test]
+    fn stale_schema_startup_repair_reuses_an_existing_store() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
+        let path = store::rxdb_store_path(root.path());
+        drop(Connection::open(&path).expect("open empty rxdb sqlite"));
+
+        let result =
+            repair_stale_rxdb_collection_schema_versions(root.path()).expect("startup repair");
+        assert_eq!(result["code"], "ctox_rxdb_stale_schema_versions");
+        assert_eq!(result["repaired"], false);
+        assert_eq!(result["repaired_tables"], 0);
+        assert_eq!(result["repaired_triggers"], 0);
     }
 
     #[test]
