@@ -16,6 +16,22 @@ test("source manager wires an app-owned known_hosts path into the ssh source", (
   assert.equal(manager.sources.ssh_managed.knownHostsPath, "/tmp/ctox/known_hosts");
 });
 
+test("source manager uses the bundled shell for every instance source", () => {
+  const manager = new SourceManager({
+    registryProvider: () => createDefaultRegistry(),
+    registrySaver: () => undefined,
+    secretStore: { get: async () => "", set: async () => undefined, delete: async () => undefined },
+    ctoxDevBaseUrl: "https://ctox.dev",
+    shellUrl: "https://ctox.dev/business-os/",
+    managedShellUrl: "http://127.0.0.1:59301/",
+    fetchImpl: async () => ({ status: 401, ok: false }),
+  });
+  assert.equal(manager.sources.ctox_dev.shellUrl, "http://127.0.0.1:59301/");
+  assert.equal(manager.sources.pairing_invite.options.shellUrl, "http://127.0.0.1:59301/");
+  assert.equal(manager.sources.local_daemon.options.shellUrl, "http://127.0.0.1:59301/");
+  assert.equal(manager.sources.ssh_managed.options.shellUrl, "http://127.0.0.1:59301/");
+});
+
 test("source manager removes unmanaged instances and blocks managed local delete", async () => {
   let registry = createDefaultRegistry();
   registry = upsertInstance(registry, {

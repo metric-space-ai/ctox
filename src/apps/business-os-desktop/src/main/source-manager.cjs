@@ -16,9 +16,13 @@ class SourceManager {
     // Wire an app-owned known_hosts path so SSH host-key pinning is durable and
     // independent of the operator's personal ~/.ssh/known_hosts. Without this the
     // implemented ensureKnownHost/UserKnownHostsFile machinery never ran in prod.
-    const pairingOptions = { shellUrl, knownHostsPath };
+    // Every Desktop-owned source renders the version-matched bundled shell.
+    // The registry shellUrl is a legacy remote fallback and ctox.dev disables
+    // its global /business-os endpoint in production for tenant isolation.
+    const desktopShellUrl = managedShellUrl || shellUrl;
+    const pairingOptions = { shellUrl: desktopShellUrl, knownHostsPath };
     this.sources = {
-      ctox_dev: new CtoxDevInstanceSource({ baseUrl: ctoxDevBaseUrl, shellUrl: managedShellUrl || shellUrl, fetchImpl }),
+      ctox_dev: new CtoxDevInstanceSource({ baseUrl: ctoxDevBaseUrl, shellUrl: desktopShellUrl, fetchImpl }),
       local_daemon: new LocalDaemonInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
       pairing_invite: new PairingInviteInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
       ssh_managed: new SshManagedInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),
