@@ -1,0 +1,10 @@
+{
+  "built_with": "src/scripts/build-app-importer-vendor.mjs",
+  "pins": {
+    "sucrase": "3.35.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "esbuild": "0.28.1"
+  },
+  "note": "Browser-ESM vendor bundles for the Business OS App Importer. Rebuild with the pinned script only; never edit bundles by hand."
+}
