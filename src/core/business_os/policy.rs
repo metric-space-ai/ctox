@@ -319,6 +319,8 @@ pub const ADMIN_ONLY_COLLECTIONS: &[&str] = &[
     "business_module_acl",
     "business_credentials",
     "business_module_source_files",
+    "business_module_commits",
+    "business_module_source_blob_chunks",
     "ctox_runtime_settings",
 ];
 

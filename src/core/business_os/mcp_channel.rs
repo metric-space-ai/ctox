@@ -5192,6 +5192,8 @@ fn collection_requires_typed_mcp_tool(collection: &str) -> bool {
             | "business_module_versions"
             | "business_module_reports"
             | "business_module_source_files"
+            | "business_module_commits"
+            | "business_module_source_blob_chunks"
             | "business_consents"
             | "business_credentials"
             | "ctox_runtime_settings"

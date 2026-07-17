@@ -10749,6 +10749,11 @@ const DEMAND_FILE_CHUNK_COLLECTIONS: &[DemandFileChunkCollection] = &[
         storage_collection: "spreadsheet_blob_chunks",
         key_field: "blob_id",
     },
+    DemandFileChunkCollection {
+        request_collection: "business_module_source_blob_chunks",
+        storage_collection: "business_module_source_blob_chunks",
+        key_field: "blob_id",
+    },
 ];
 
 /// SYNC-32: one resolved demand-file source — either a built-in entry from
@@ -14042,6 +14047,10 @@ fn business_record_projection_collections() -> Vec<String> {
                 "browser_frames"
                     | "business_workspace_branding"
                     | "business_module_catalog"
+                    // Source blob bodies are demand-streamed via the file-fetch
+                    // registry (DEMAND_FILE_CHUNK_COLLECTIONS), not eager-projected
+                    // as generic business records — same rule as desktop_file_chunks.
+                    | "business_module_source_blob_chunks"
                     | "ctox_runtime_settings"
                     | "desktop_files"
                     | "desktop_file_chunks"

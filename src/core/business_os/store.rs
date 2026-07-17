@@ -11107,6 +11107,107 @@ fn sync_module_version_records(
         }
         upsert_business_record(conn, "business_module_versions", &id, rec_updated, doc)?;
     }
+    sync_module_commit_records(conn, module_id, updated_at_ms)?;
+    Ok(())
+}
+
+/// Project each SEALED module version into an immutable, content-addressed
+/// `business_module_commits` doc — the replicated, git-style source history.
+/// Unsealed working rows are NOT commits (they are the working tree). The id is
+/// content-addressed over the sealed row's immutable facts, so a re-run upserts
+/// byte-identical docs (idempotent) and this also backfills existing history.
+/// `parent_id` links each sealed commit to the previous sealed one in seq order,
+/// making the otherwise-linear log DAG-ready. Bodies are NOT inlined here (the
+/// file_manifest carries per-file blob pointers; bodies stream as demand chunks).
+fn sync_module_commit_records(
+    conn: &Connection,
+    module_id: &str,
+    updated_at_ms: i64,
+) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT version_id, seq, origin, label, bundle_sha256, files_json,
+                created_by, created_at_ms
+         FROM business_module_versions
+         WHERE module_id = ?1 AND sealed = 1 ORDER BY seq ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![module_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut parent_id = String::new();
+    for (version_id, seq, origin, label, bundle_sha256, files_json, created_by, created_at_ms) in rows
+    {
+        let files: Vec<Value> = serde_json::from_str(&files_json).unwrap_or_default();
+        let file_manifest: Vec<Value> = files
+            .iter()
+            .map(|file| {
+                let sha = file.get("sha256").and_then(Value::as_str).unwrap_or_default();
+                serde_json::json!({
+                    "path": file.get("path").and_then(Value::as_str).unwrap_or_default(),
+                    "sha256": sha,
+                    // Content-addressed blob id == the file's content hash, so an
+                    // unchanged file shares one blob across every commit (dedup).
+                    "blob_id": sha,
+                    "size_bytes": file
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map(str::len)
+                        .unwrap_or(0),
+                })
+            })
+            .collect();
+        let message = if label.trim().is_empty() {
+            origin.clone()
+        } else {
+            label.clone()
+        };
+        let commit_id = format!(
+            "commit_{}",
+            hex_sha256(
+                format!(
+                    "{module_id}\n{parent_id}\n{seq}\n{bundle_sha256}\n{origin}\n{message}\n{created_by}\n{created_at_ms}"
+                )
+                .as_bytes()
+            )
+        );
+        let rec_updated = next_business_record_updated_at(
+            conn,
+            "business_module_commits",
+            &commit_id,
+            updated_at_ms,
+        )?;
+        let doc = serde_json::json!({
+            "id": commit_id,
+            "module_id": module_id,
+            "seq": seq,
+            "parent_id": parent_id,
+            "bundle_sha256": bundle_sha256,
+            "message": message,
+            "origin": origin,
+            "label": label,
+            "author": created_by,
+            "authored_at_ms": created_at_ms,
+            "sealed": true,
+            "file_manifest": file_manifest,
+            "version_id": version_id,
+            "created_at_ms": created_at_ms,
+            "updated_at_ms": rec_updated,
+        });
+        upsert_business_record(conn, "business_module_commits", &commit_id, rec_updated, doc)?;
+        parent_id = commit_id;
+    }
     Ok(())
 }
 
