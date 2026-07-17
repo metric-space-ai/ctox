@@ -1,115 +1,54 @@
-/* Reference migration to the shared design system (shared/base.css):
-   the module keeps its internal --customers-* names, but every value derives
-   from the shell tokens. Light/dark/prefers-color-scheme variants come from
-   the shell automatically — no per-module theme blocks, no :root writes.
-   Pane headers, tools, tabs, buttons, badges, fields, empty states and form
-   controls come from the shared kit (base.css / app.css); this file only owns
-   the module frame, the module-specific views (board, tables, timeline) and
-   small scoped add-ons to kit classes. */
+/* Reference migration to the shared design system (shared/base.css + app.css):
+   frame (.ctox-workspace + .ctox-pane + declarative .ctox-column-resizer),
+   pane headers (kicker/title/actions/icons), search, filter selects,
+   segmented tabs (.ctox-pane-tabs), toolbar (.ctox-toolbar), buttons
+   (.ctox-button / ctox-button--sm / is-danger), status badges
+   (.ctox-badge + is-* variants), tables (.ctox-table + .ctox-table-sort +
+   .is-num, selection via [aria-selected]), nav rows (.ctox-list-item +
+   .is-selected), field labels (.ctox-field-label), compact form fields
+   (.ctox-compact-field), empty states (.ctox-empty), callouts
+   (.ctox-callout), avatars (.ctox-avatar) and key/value fields
+   (.ctox-fields) all come from the kit. This file only keeps what is
+   customers-specific: the injected pane-body wrappers, the left-nav row
+   content, the dense fixed-layout tables, the opportunity pipeline board,
+   the inspector detail blocks, the record/link/mini rows, the activity
+   timeline, the command audit rows and the responsive stacking.
+   The width aliases keep the persisted resizer layout working — the shell
+   resizer writes --customers-*-width onto the frame element. */
 .customers-module {
-  --customers-left-width: 292px;
-  --customers-right-width: 340px;
-  --customers-bg: var(--bg);
-  --customers-pane: var(--surface);
-  --customers-pane-subtle: var(--surface-2);
-  --customers-line: var(--line);
-  --customers-line-strong: var(--line-strong);
-  --customers-text: var(--text);
-  --customers-muted: var(--muted);
-  --customers-soft: var(--surface-2);
-  --customers-accent: var(--accent);
-  --customers-accent-strong: var(--accent);
-  --customers-danger: var(--danger);
-  --customers-warning: var(--warning);
-  --customers-success: var(--success);
-  display: grid;
-  grid-template-columns: minmax(236px, var(--customers-left-width)) 8px minmax(460px, 1fr) 8px minmax(286px, var(--customers-right-width));
-  height: 100%;
-  min-height: 0;
-  background: var(--customers-bg);
-  color: var(--customers-text);
-  overflow: hidden;
+  --ctox-left-width: var(--customers-left-width, 292px);
+  --ctox-right-width: var(--customers-right-width, 340px);
 }
 
+/* The panes render into a single injected wrapper div ([data-customers-*]),
+   so the pane grid is one track and the wrapper is the flex column body
+   (header + scroll region) inside the kit .ctox-pane. */
 .customers-pane {
-  min-width: 0;
-  min-height: 0;
-  background: var(--customers-pane);
-  border-right: 1px solid var(--customers-line);
-  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
 }
 
-.customers-right {
-  border-right: 0;
-  border-left: 1px solid var(--customers-line);
-}
-
-.customers-resizer {
-  width: 8px;
-  min-width: 8px;
-  border: 0;
-  border-inline: 1px solid transparent;
-  background: var(--customers-bg);
-  cursor: col-resize;
-}
-
-.customers-resizer:hover,
-.customers-resizer:focus-visible,
-.customers-resizer.is-active {
-  background: color-mix(in srgb, var(--customers-accent) 16%, var(--customers-bg));
-  border-inline-color: var(--customers-line-strong);
-  outline: none;
-}
-
-.customers-left > div,
-.customers-center > div,
-.customers-right > div {
+.customers-pane > div {
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
 }
 
-.customers-scope:focus-visible,
-.customers-th-button:focus-visible,
-.customers-account-row:focus-visible,
-.customers-board-card:focus-visible,
-.customers-mini-row:focus-visible {
-  outline: 2px solid var(--customers-accent);
-  outline-offset: 2px;
+/* Standard focus ring for the module's custom interactive rows. */
+.customers-module .customers-scope:focus-visible,
+.customers-module .customers-mini-row:focus-visible,
+.customers-module .customers-account-row:focus-visible,
+.customers-module .customers-board-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-/* --------------------------------------------------------------------------
-   Kit add-ons: module-scoped tweaks on top of shared/base.css. Density for
-   dense row/toolbar actions, danger tint for kit icon buttons, the accent
-   badge variant and the advisory presence badge. No kit rebuilds.
-   ------------------------------------------------------------------------ */
-.customers-module .ctox-button.customers-mini {
-  min-height: 26px;
-  padding: 0 8px;
-  font-size: 11px;
-  white-space: nowrap;
+/* Active sort header keeps the accent tint (kit .ctox-table-sort). */
+.customers-module .ctox-table-sort.active {
+  color: var(--accent);
 }
 
-.customers-module .ctox-icon-button.customers-danger,
-.customers-module .ctox-pane-icon.customers-danger {
-  color: var(--customers-danger);
-}
-
-.customers-module .ctox-badge.customers-accent {
-  color: var(--customers-accent-strong);
-  border-color: color-mix(in srgb, var(--customers-accent-strong) 30%, var(--customers-line));
-}
-
-/* Presence hint (advisory): another user is viewing this record. The editing
-   variant uses the kit .is-danger badge directly. */
-.customers-module .ctox-badge.customers-presence {
-  color: var(--customers-accent-strong);
-  border-color: color-mix(in srgb, var(--customers-accent-strong) 45%, var(--customers-line));
-  background: color-mix(in srgb, var(--customers-accent-strong) 10%, transparent);
-}
-
-/* Inline stage select inside table rows / board cards. */
+/* custom: inline stage select inside table rows / board cards — a compact
+   density variant the kit does not ship. */
 .customers-module .ctox-select.customers-inline-select {
   width: 124px;
   min-height: 28px;
@@ -127,6 +66,7 @@
   overflow-x: auto;
 }
 
+/* Small layout utils shared by the module's custom content rows. */
 .customers-row-actions,
 .customers-chip-row,
 .customers-section-head {
@@ -147,17 +87,16 @@
 
 .customers-muted-row {
   min-height: 28px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
-.customers-left-scroll,
-.customers-center-scroll,
-.customers-right-scroll {
-  min-height: 0;
-  overflow: auto;
+/* h3 carries the kit .ctox-field-label look; reset the UA h3 top margin. */
+.customers-section-heading {
+  margin-top: 0;
 }
 
+/* Left nav: scroll padding and section rhythm around kit list rows. */
 .customers-left-scroll {
   padding: 10px;
 }
@@ -166,170 +105,35 @@
   margin-bottom: 16px;
 }
 
-.customers-section-label {
-  margin: 0 0 7px;
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
+/* custom: left-nav rows are kit .ctox-list-item rows whose content is a
+   label plus a count .ctox-badge (selection/hover come from the kit). */
 .customers-scope {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
-  min-height: 34px;
-  margin: 2px 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--customers-text);
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
   gap: 8px;
 }
 
-.customers-scope span:first-child {
+.customers-scope > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.customers-scope:hover,
-.customers-scope.active {
-  background: var(--customers-pane-subtle);
-}
-
-.customers-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--customers-soft);
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.customers-sync-list,
-.customers-mini-list {
-  display: grid;
-  gap: 8px;
-}
-
-.customers-sync-row,
-.customers-mini-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
-  border-bottom: 1px solid color-mix(in srgb, var(--customers-line) 60%, transparent);
-  color: var(--customers-muted);
-  font-size: 12px;
-}
-
-.customers-mini-row {
-  cursor: pointer;
-}
-
-.customers-sync-row span,
-.customers-mini-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.customers-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--customers-muted);
-  flex: 0 0 auto;
-}
-
-.customers-dot.ok {
-  background: var(--customers-success);
-}
-
-.customers-dot.warn {
-  background: var(--customers-warning);
-}
-
-.customers-dot.error {
-  background: var(--customers-danger);
-}
-
+/* custom: dense fixed-layout data tables on top of kit .ctox-table —
+   ellipsis cells and per-view min widths so wide reports scroll
+   horizontally inside the pane. */
 .customers-table {
-  width: 100%;
   min-width: 760px;
-  border-collapse: collapse;
   table-layout: fixed;
 }
 
 .customers-table th,
 .customers-table td {
-  height: 42px;
-  border-bottom: 1px solid var(--customers-line);
-  padding: 0 12px;
-  color: var(--customers-text);
-  font-size: 13px;
-  text-align: left;
-  vertical-align: middle;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.customers-table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--customers-pane);
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.customers-th-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  text-align: left;
-  text-transform: inherit;
-  padding: 0;
-  cursor: pointer;
-}
-
-.customers-th-button.active {
-  color: var(--customers-accent);
-}
-
-.customers-account-row {
-  cursor: pointer;
-}
-
-.customers-account-row:hover,
-.customers-account-row.selected,
-.customers-account-row:focus-visible {
-  background: var(--customers-pane-subtle);
 }
 
 .customers-contact-table {
@@ -348,13 +152,34 @@
   min-width: 980px;
 }
 
+.customers-account-row {
+  cursor: pointer;
+}
+
+/* custom: avatar + name cell inside the dense tables. */
+.customers-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.customers-name-cell > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .customers-muted-inline {
   display: block;
   margin-top: 2px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
+/* custom: opportunity pipeline board (kanban) — a genuinely module-specific
+   view the kit does not express. */
 .customers-board {
   display: grid;
   grid-auto-flow: column;
@@ -370,9 +195,9 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border: 1px solid var(--customers-line);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--customers-pane-subtle) 62%, var(--customers-pane));
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
 }
 
 .customers-board-head {
@@ -381,7 +206,7 @@
   justify-content: space-between;
   min-height: 48px;
   padding: 10px;
-  border-bottom: 1px solid var(--customers-line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 .customers-board-head strong,
@@ -393,13 +218,13 @@
 }
 
 .customers-board-head strong {
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 13px;
 }
 
 .customers-board-head span {
   margin-top: 2px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -416,17 +241,16 @@
   display: grid;
   gap: 7px;
   min-width: 0;
-  border: 1px solid var(--customers-line);
-  border-radius: 6px;
-  background: var(--customers-pane);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface);
   padding: 9px;
   cursor: pointer;
 }
 
 .customers-board-card:hover,
-.customers-board-card.selected,
-.customers-board-card:focus-visible {
-  border-color: var(--customers-accent);
+.customers-board-card[aria-selected="true"] {
+  border-color: var(--accent);
 }
 
 .customers-board-card-title,
@@ -437,14 +261,14 @@
 }
 
 .customers-board-card-title {
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 13px;
   font-weight: 750;
 }
 
 .customers-board-card-meta,
 .customers-board-card-row {
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -459,88 +283,96 @@
   display: grid;
   place-items: center;
   min-height: 74px;
-  border: 1px dashed var(--customers-line-strong);
-  border-radius: 6px;
-  color: var(--customers-muted);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--panel-radius);
+  color: var(--muted);
   font-size: 12px;
 }
 
-.customers-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-
-.customers-name-cell > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* custom: inspector detail blocks — stacked record sections separated by
+   hairlines inside the right pane. */
 .customers-detail-block {
   padding: 14px;
-  border-bottom: 1px solid var(--customers-line);
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.customers-permission-notice {
-  display: grid;
-  gap: 4px;
-  margin: 10px 12px 0;
-  border: 1px solid color-mix(in srgb, var(--customers-warning) 34%, var(--customers-line));
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--customers-warning) 9%, var(--customers-pane));
-  padding: 9px;
-}
-
-.customers-right-scroll > .customers-permission-notice {
-  margin: 12px 14px 0;
-}
-
-.customers-permission-notice strong {
-  color: var(--customers-text);
-  font-size: 12px;
-}
-
-.customers-permission-notice span {
-  color: var(--customers-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-/* Horizontal scroll wrapper around the kit .ctox-pane-tabs in the inspector. */
+/* Scroll wrapper around the kit .ctox-pane-tabs in the inspector. */
 .customers-detail-tabs {
   margin: 12px 14px 0;
   overflow-x: auto;
 }
 
+/* custom: record hero inside the inspector (title larger than the pane
+   header, plus a wrap-anywhere subtitle line). */
 .customers-detail-title {
   margin: 0;
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 16px;
   line-height: 1.25;
 }
 
 .customers-detail-subtitle {
   margin: 4px 0 0;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.customers-timeline {
-  display: grid;
-  gap: 10px;
+/* Permission notice: kit .ctox-callout.is-warning; the module only adds the
+   offset inside the scroll regions and the two-line content layout. */
+.customers-permission-notice {
+  margin: 10px 12px 0;
 }
 
+.customers-right-scroll > .customers-permission-notice {
+  margin: 12px 14px 0;
+}
+
+.customers-permission-notice strong,
+.customers-permission-notice span {
+  display: block;
+}
+
+.customers-permission-notice span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* custom: compact label/value rows inside inspector detail blocks (mini
+   lists for contacts, opportunities and files). */
+.customers-mini-list,
 .customers-task-list,
 .customers-note-list,
-.customers-link-list {
+.customers-link-list,
+.customers-timeline,
+.customers-command-list {
   display: grid;
   gap: 8px;
 }
 
+.customers-mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline, var(--line)) 60%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.customers-mini-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* custom: record/link rows — bordered content cards with a text column and
+   an action column inside the inspector. */
 .customers-record-row,
 .customers-link-row {
   display: grid;
@@ -548,8 +380,8 @@
   align-items: start;
   gap: 10px;
   min-width: 0;
-  border: 1px solid var(--customers-line);
-  border-radius: 6px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
   padding: 9px;
 }
 
@@ -577,7 +409,7 @@
 
 .customers-record-row strong,
 .customers-link-row strong {
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 13px;
   line-height: 1.3;
 }
@@ -585,23 +417,24 @@
 .customers-record-row span,
 .customers-link-row span {
   margin-top: 3px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
 .customers-record-row p,
 .customers-timeline-item p {
   margin: 6px 0 0;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
+/* custom: activity timeline — entries with an accent dot marker. */
 .customers-timeline-item {
   display: grid;
   grid-template-columns: 10px 1fr;
   gap: 9px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -611,40 +444,37 @@
   height: 8px;
   margin-top: 5px;
   border-radius: 50%;
-  background: var(--customers-accent);
+  background: var(--accent);
 }
 
 .customers-timeline-item strong {
   display: block;
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 12px;
 }
 
+/* Forms: fields are kit .ctox-compact-field labels around kit inputs. */
 .customers-form {
   display: grid;
   gap: 10px;
 }
 
-.customers-form label {
-  display: grid;
-  gap: 5px;
-  color: var(--customers-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
+/* custom: primary-contact checkbox row — a full-size inline control row,
+   not a compact field. */
 .customers-checkbox {
-  display: flex !important;
-  grid-template-columns: none;
+  display: flex;
   align-items: center;
-  gap: 8px !important;
-  color: var(--customers-text) !important;
-  font-weight: 650 !important;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .customers-checkbox input {
   width: 16px;
   height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .customers-form-actions {
@@ -653,74 +483,35 @@
   gap: 8px;
 }
 
+.customers-command-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .customers-command-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.customers-command-state {
-  color: var(--customers-muted);
-  font-size: 12px;
-}
-
-.customers-command-audit {
-  background: color-mix(in srgb, var(--customers-pane-subtle) 55%, var(--customers-pane));
-}
-
-.customers-command-pills {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.customers-command-pill {
-  display: inline-flex;
-  min-width: 22px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 1px solid var(--customers-line);
-  color: var(--customers-muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.customers-command-pill.pending {
-  color: var(--customers-warning);
-}
-
-.customers-command-pill.completed {
-  color: var(--customers-success);
-}
-
-.customers-command-pill.failed {
-  color: var(--customers-danger);
-}
-
-.customers-command-list {
-  display: grid;
-  gap: 7px;
-}
-
+/* custom: command audit rows — log entries with a status-tinted border. */
 .customers-command-row {
-  border: 1px solid var(--customers-line);
-  border-radius: 6px;
-  background: var(--customers-pane);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--surface);
   padding: 8px 9px;
 }
 
 .customers-command-row.pending {
-  border-color: color-mix(in srgb, var(--customers-warning) 32%, var(--customers-line));
+  border-color: color-mix(in srgb, var(--warning) 32%, var(--line));
 }
 
 .customers-command-row.completed {
-  border-color: color-mix(in srgb, var(--customers-success) 32%, var(--customers-line));
+  border-color: color-mix(in srgb, var(--success) 32%, var(--line));
 }
 
 .customers-command-row.failed {
-  border-color: color-mix(in srgb, var(--customers-danger) 32%, var(--customers-line));
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--line));
 }
 
 .customers-command-row strong,
@@ -732,26 +523,27 @@
 }
 
 .customers-command-row strong {
-  color: var(--customers-text);
+  color: var(--text);
   font-size: 12px;
 }
 
 .customers-command-row span {
   margin-top: 3px;
-  color: var(--customers-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
 .customers-command-row p {
   margin: 6px 0 0;
-  color: var(--customers-danger);
+  color: var(--danger);
   font-size: 11px;
   line-height: 1.35;
 }
 
+/* Responsive stacking: panes pile vertically instead of squashing. */
 @container business-app-window (max-width: 980px) {
   .customers-module {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(240px, 32svh) minmax(420px, 1fr) minmax(300px, 38svh);
     height: auto;
     min-height: 100%;
@@ -762,11 +554,9 @@
   .customers-center,
   .customers-right {
     min-height: 260px;
-    border: 0;
-    border-bottom: 1px solid var(--customers-line);
   }
 
-  .customers-resizer {
+  .customers-module .ctox-column-resizer {
     display: none;
   }
 
@@ -790,7 +580,7 @@
 
   .customers-record-row,
   .customers-link-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .customers-record-row .customers-row-actions,
@@ -820,6 +610,6 @@
   }
 
   .customers-command-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
