@@ -197,6 +197,19 @@ pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) 
     if collection == "ctox_queue_tasks" {
         return false;
     }
+    // SYNC-21: server-authoritative collections never accept a DIRECT peer
+    // replication write, regardless of role. `policy::evaluate` grants
+    // DataWrite to Chef/Admin at any scope (policy.rs:368-371), which
+    // `capability_allows_collection_permission` honors below, so without this
+    // gate an admin browser could masterWrite straight into an admin-only or
+    // server-owned projection collection and poison the replicated mirror that
+    // every peer renders (core SQLite authority stays safe; the mirror lies
+    // until the next native projection). Admins still mutate this state through
+    // the proper command/dispatch path, which writes core SQLite and
+    // re-projects; only the inbound peer-write hook is tightened here.
+    if is_server_authoritative_collection(root, collection) {
+        return false;
+    }
     // Commands receive a second, command-specific authorization when the
     // native consumer accepts the document. The peer still needs an exact
     // data.write grant to put anything onto the replicated command bus.
@@ -206,6 +219,41 @@ pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) 
         collection,
         BusinessOsPermission::DataWrite,
     )
+}
+
+/// Core→RxDB one-way projection collections owned exclusively by the native
+/// peer's projection loops in `rxdb_peer.rs`. The browser renders these
+/// read-only; a direct peer write would poison the mirror until the next
+/// projection overwrites it. Verified against `src/apps/business-os/` — none of
+/// these have a browser write path (unlike e.g. `desktop_files`, which the
+/// desktop apps legitimately create and therefore stays writable).
+const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
+    // rxdb_peer::sync_module_catalog_with_database — module lifecycle/release
+    // metadata projected from the native module catalog.
+    "business_module_catalog",
+    // rxdb_peer::sync_channel_state_with_database — communication channel state
+    // projected from native channel/account records.
+    "communication_accounts",
+    "channel_pairing_state",
+];
+
+/// A collection whose documents are server-authored (native core writes them,
+/// then projects into the RxDB mirror). A peer must NEVER direct-replicate a
+/// document into one, not even a Chef/Admin token: the mirror would diverge
+/// from core SQLite authority until the next projection.
+///
+/// The set is the union of:
+/// - `policy::ADMIN_ONLY_COLLECTIONS` — administrative/sensitive control data
+///   (business_users, business_module_acl, business_credentials,
+///   business_module_source_files, ctox_runtime_settings);
+/// - the native one-way projection loops in `NATIVE_PROJECTION_COLLECTIONS`;
+/// - external-SQL projection/status/refresh collections declared per source
+///   (`external_sql_sync::server_owned_projection_collections`), which
+///   `ensure_legacy_collection_grants` already refuses to grant DataWrite for.
+fn is_server_authoritative_collection(root: &Path, collection: &str) -> bool {
+    super::policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
+        || NATIVE_PROJECTION_COLLECTIONS.contains(&collection)
+        || super::external_sql_sync::projection_collection_is_server_owned(root, collection)
 }
 
 pub(super) fn may_replicate_document(
@@ -4535,6 +4583,136 @@ mod tests {
             "inventory_items"
         ));
         assert!(may_accept_peer_write(temp.path(), &token, "support_notes"));
+        Ok(())
+    }
+
+    #[test]
+    fn peer_write_gate_denies_server_authoritative_collections_for_admins() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        // Declare an external SQL source so `inventory_items` is a server-owned
+        // projection collection resolvable via source declarations.
+        let app_root = temp.path().join("src/apps/business-os");
+        let local_module = temp
+            .path()
+            .join("runtime/business-os/local-modules/inventory");
+        fs::create_dir_all(&app_root)?;
+        fs::create_dir_all(&local_module)?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            local_module.join("module.json"),
+            serde_json::to_vec(&json!({
+                "id":"inventory",
+                "title":"Inventory",
+                "entry":"local-modules/inventory/index.html",
+                "source":"local",
+                "install_scope":"local",
+                "collections":["inventory_items","inventory_sync_status"],
+                "external_data_sources":[{
+                    "id":"erp",
+                    "connection":{"server":"sql.example.test","database":"erp","user":"sync","password_secret":"ERP_SQL_PASSWORD"},
+                    "status_collection":"inventory_sync_status",
+                    "projections":[{"id":"items","collection":"inventory_items","record_id_field":"item_id","query":"SELECT item_id FROM dbo.items ORDER BY item_id OFFSET @P1 ROWS FETCH NEXT @P2 ROWS ONLY"}]
+                }]
+            }))?,
+        )?;
+        // Grant ordinary collaborative collections so a plain user can write
+        // them; the server-owned `inventory_items` grant is skipped internally.
+        store::ensure_legacy_collection_grants(
+            temp.path(),
+            &["customers".to_string(), "inventory_items".to_string()],
+        )?;
+
+        let now = now_ms();
+        let (admin_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "admin",
+            "Admin",
+            "admin",
+            now,
+        )?;
+        let (chef_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "chef",
+            "Chef",
+            "chef",
+            now,
+        )?;
+        let (user_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            temp.path(),
+            "alice",
+            "Alice",
+            "user",
+            now,
+        )?;
+
+        // Admin-only control collections: DENIED for every role, admin included
+        // (the SYNC-21 fix — policy.rs grants admins DataWrite at any scope, so
+        // before this gate an admin token bypassed the write-authority matrix).
+        for collection in crate::business_os::policy::ADMIN_ONLY_COLLECTIONS {
+            assert!(
+                !may_accept_peer_write(temp.path(), &admin_token, collection),
+                "admin must not peer-write admin-only {collection}"
+            );
+            assert!(
+                !may_accept_peer_write(temp.path(), &chef_token, collection),
+                "chef must not peer-write admin-only {collection}"
+            );
+            assert!(
+                !may_accept_peer_write(temp.path(), &user_token, collection),
+                "user must not peer-write admin-only {collection}"
+            );
+        }
+
+        // Native one-way core→RxDB projections: DENIED for admins too.
+        for collection in [
+            "business_module_catalog",
+            "communication_accounts",
+            "channel_pairing_state",
+        ] {
+            assert!(
+                !may_accept_peer_write(temp.path(), &admin_token, collection),
+                "admin must not peer-write projection {collection}"
+            );
+            assert!(!may_accept_peer_write(temp.path(), &user_token, collection));
+        }
+
+        // External-SQL projection collection: DENIED for admin (was bypassed)
+        // and already denied for the user.
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            &admin_token,
+            "inventory_items"
+        ));
+        assert!(!may_accept_peer_write(
+            temp.path(),
+            &user_token,
+            "inventory_items"
+        ));
+
+        // Ordinary collaborative collections stay unaffected: admin/chef keep
+        // write via role, the user keeps its explicit legacy grant.
+        assert!(may_accept_peer_write(
+            temp.path(),
+            &admin_token,
+            "customers"
+        ));
+        assert!(may_accept_peer_write(temp.path(), &chef_token, "customers"));
+        assert!(may_accept_peer_write(temp.path(), &user_token, "customers"));
+
+        // Another ordinary collection: admin still writes it via role, proving
+        // the gate did not blanket-deny ordinary collaborative data.
+        assert!(may_accept_peer_write(
+            temp.path(),
+            &admin_token,
+            "documents"
+        ));
+
+        // The native projection loops write these same collections via the
+        // store path (`database.collection(..).upsert(..)` in rxdb_peer.rs),
+        // NOT through `may_accept_peer_write`, which is wired solely as the
+        // inbound peer replication write hook (rxdb_peer.rs `collection_write_
+        // authz`). The projection path takes no capability token and is not
+        // reachable through this gate by construction, so it is unaffected.
         Ok(())
     }
 
