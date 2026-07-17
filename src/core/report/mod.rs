@@ -25,13 +25,19 @@ pub mod schema;
 pub mod state;
 pub mod workspace;
 
+pub mod blueprints;
 pub mod checks;
+pub mod claims;
 pub mod cli;
 pub mod mission_hook;
 pub mod patch;
 pub mod render;
+pub mod runs;
 pub mod schemas;
+pub mod scoring;
 pub mod sources;
+pub mod state_machine;
+pub mod store;
 
 #[cfg(test)]
 mod tests;
