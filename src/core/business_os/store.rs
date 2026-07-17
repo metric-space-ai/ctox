@@ -11362,6 +11362,85 @@ pub fn list_module_versions(
     }))
 }
 
+/// Explicit `ctox.source.commit`: seal the module's open working row (the
+/// accumulated `edit`-origin changes) into an immutable commit with a message.
+/// Returns an `ok:false` result when there is nothing to commit.
+fn commit_module_source(
+    root: &Path,
+    module_id: &str,
+    message: &str,
+    author: &str,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let message = message.trim();
+    let sealed = conn.execute(
+        "UPDATE business_module_versions
+         SET sealed = 1, origin = 'commit', updated_at_ms = ?2,
+             created_by = CASE WHEN ?4 <> '' THEN ?4 ELSE created_by END,
+             label = CASE WHEN ?3 <> '' THEN ?3 ELSE label END
+         WHERE module_id = ?1 AND sealed = 0",
+        params![module_id, now, message, author],
+    )?;
+    if sealed == 0 {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "module_id": module_id,
+            "error": "nothing to commit: no uncommitted source changes",
+        }));
+    }
+    // Refresh version + commit projections (emits the newly sealed commit doc).
+    sync_module_version_records(&conn, &module_id, now)?;
+    let version_id: String = conn.query_row(
+        "SELECT version_id FROM business_module_versions
+         WHERE module_id = ?1 AND sealed = 1 ORDER BY seq DESC LIMIT 1",
+        params![module_id],
+        |row| row.get(0),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "commit": version_summary_row(&conn, &version_id)?,
+    }))
+}
+
+/// `ctox.source.diff`: return the full file sets of two module versions so the
+/// caller (browser workbench / CLI) can render a per-file line diff. Bodies come
+/// from the immutable `files_json` bundle already stored per version.
+fn diff_module_source(
+    root: &Path,
+    module_id: &str,
+    from_version_id: &str,
+    to_version_id: &str,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    anyhow::ensure!(
+        !from_version_id.is_empty() && !to_version_id.is_empty(),
+        "from and to version ids are required"
+    );
+    let conn = open_store(root)?;
+    let load = |version_id: &str| -> anyhow::Result<Value> {
+        let files_json: String = conn
+            .query_row(
+                "SELECT files_json FROM business_module_versions
+                 WHERE version_id = ?1 AND module_id = ?2",
+                params![version_id, module_id],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("version {version_id} not found for module {module_id}"))?;
+        Ok(serde_json::from_str(&files_json).unwrap_or_default())
+    };
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "from": { "version_id": from_version_id, "files": load(from_version_id)? },
+        "to": { "version_id": to_version_id, "files": load(to_version_id)? },
+    }))
+}
+
 /// Per-module bundle modification state for the app-store badge.
 ///
 /// For every module that has a recorded version timeline, reports the baseline
@@ -21954,6 +22033,116 @@ pub fn accept_rxdb_business_command_with_origin(
                 return Ok(outcome);
             }
             let outcome = rollback_module_source_snapshot(root, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.source.commit" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(
+                command
+                    .payload
+                    .get("module_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsModify,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let message = command
+                .payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let author = session_user_id(&session).unwrap_or_default().to_string();
+            let outcome = commit_module_source(root, &module_id, message, &author)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.source.log" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(
+                command
+                    .payload
+                    .get("module_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsSourceView,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = list_module_versions(
+                root,
+                ModuleVersionListRequest {
+                    module_id: module_id.clone(),
+                },
+            )?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.source.diff" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(
+                command
+                    .payload
+                    .get("module_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsSourceView,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let from_version_id = command
+                .payload
+                .get("from_version_id")
+                .or_else(|| command.payload.get("from"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let to_version_id = command
+                .payload
+                .get("to_version_id")
+                .or_else(|| command.payload.get("to"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let outcome = diff_module_source(root, &module_id, from_version_id, to_version_id)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
