@@ -1215,7 +1215,31 @@ function installReporterStyles() {
       90% { opacity: .8; transform: scale(1); }
       97% { opacity: 0; transform: scale(1.55); }
     }
-    .ctox-report-fab svg { flex: 0 0 auto; transition: color 160ms ease, transform 200ms ease; }
+    /* A tiny living status dot: the beetle is not an error badge but the
+       standing "this app keeps evolving" companion — visibly alive even in
+       a still screenshot. */
+    .ctox-report-fab::after {
+      content: '';
+      position: absolute;
+      top: 5px;
+      right: 6px;
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent, #72b8aa);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--accent, #72b8aa) 85%, transparent);
+      animation: ctox-report-led 4s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes ctox-report-led {
+      0%, 100% { opacity: .55; }
+      50% { opacity: 1; }
+    }
+    .ctox-report-fab svg {
+      flex: 0 0 auto;
+      color: color-mix(in srgb, var(--accent, #72b8aa) 60%, var(--muted, #9ba4aa));
+      transition: color 160ms ease, transform 200ms ease;
+    }
     .ctox-report-fab-label {
       white-space: nowrap;
       opacity: 0;
@@ -1247,7 +1271,7 @@ function installReporterStyles() {
       outline-offset: 2px;
     }
     @media (prefers-reduced-motion: reduce) {
-      .ctox-report-fab::before { animation: none; }
+      .ctox-report-fab::before, .ctox-report-fab::after { animation: none; }
       .ctox-report-fab, .ctox-report-fab svg, .ctox-report-fab-label { transition: none; }
     }
     .ctox-report-fab.bug-crawled-away svg {

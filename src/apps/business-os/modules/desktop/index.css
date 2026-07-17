@@ -511,18 +511,138 @@ body[data-active-module="desktop"] .topbar {
   transition: background-color 300ms ease !important;
 }
 
-/* CTOX shell style: the desktop drops one tonal step below window surfaces
-   (--shell-desktop-bg from the shell token block) so open windows read as
-   physically elevated layers instead of blending into the wallpaper. A soft
-   corner vignette grounds the composition and keeps the accent glows from
-   washing the edges out. */
+/* ==========================================================================
+   CTOX shell style — the atmospheric desktop.
+
+   The wallpaper is the identity carrier: light gets an airy arctic-blue
+   field with soft turquoise light blooms; dark gets a deep blue-petrol
+   night field with aurora mesh gradients in turquoise and a breath of
+   violet, a gentle vignette, and fine film grain (inline SVG turbulence —
+   no external assets). Glass chrome blurs against these fields, which is
+   what makes the frosted topbar island, dock and widgets read as glass.
+
+   Scoped strictly to :root[data-shell-style="ctox"]. */
+
 :root[data-shell-style="ctox"] .desktop-module {
   background:
-    radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent-soft) 26%, var(--shell-desktop-bg)) 0px, transparent 55%),
-    radial-gradient(at 50% 0%, color-mix(in srgb, var(--accent) 12%, var(--shell-desktop-bg)) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, color-mix(in srgb, var(--accent-soft) 30%, var(--shell-desktop-bg)) 0px, transparent 55%),
-    radial-gradient(at 0% 100%, color-mix(in srgb, var(--accent) 8%, var(--shell-desktop-bg)) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, color-mix(in srgb, var(--accent-soft) 20%, var(--shell-desktop-bg)) 0px, transparent 50%),
-    radial-gradient(135% 105% at 50% 42%, transparent 62%, color-mix(in srgb, var(--shell-desktop-bg) 84%, #000) 100%),
-    var(--shell-desktop-bg);
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E"),
+    radial-gradient(58% 52% at 14% 6%, oklch(0.85 0.075 199 / 0.6) 0%, transparent 70%),
+    radial-gradient(48% 54% at 88% 14%, oklch(0.89 0.055 172 / 0.55) 0%, transparent 72%),
+    radial-gradient(72% 62% at 76% 96%, oklch(0.83 0.085 196 / 0.55) 0%, transparent 74%),
+    radial-gradient(44% 40% at 24% 82%, oklch(0.87 0.05 252 / 0.42) 0%, transparent 70%),
+    radial-gradient(135% 110% at 50% 42%, transparent 58%, oklch(0.7 0.045 240 / 0.3) 100%),
+    linear-gradient(160deg, oklch(0.94 0.024 228) 0%, oklch(0.9 0.032 246) 50%, oklch(0.93 0.028 206) 100%);
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .desktop-module {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"),
+    radial-gradient(58% 52% at 16% 6%, oklch(0.52 0.1 196 / 0.38) 0%, transparent 70%),
+    radial-gradient(46% 54% at 86% 12%, oklch(0.42 0.09 296 / 0.34) 0%, transparent 72%),
+    radial-gradient(72% 62% at 74% 96%, oklch(0.56 0.11 178 / 0.34) 0%, transparent 74%),
+    radial-gradient(42% 38% at 26% 78%, oklch(0.4 0.07 242 / 0.3) 0%, transparent 70%),
+    radial-gradient(135% 110% at 50% 42%, transparent 55%, oklch(0.13 0.025 255 / 0.66) 100%),
+    linear-gradient(158deg, oklch(0.25 0.05 232) 0%, oklch(0.17 0.035 250) 52%, oklch(0.22 0.045 208) 100%);
+}
+
+/* The HUD pixel grid fights the aurora; in the CTOX style it recedes to a
+   whisper so the gradient field and the grain carry the atmosphere. */
+:root[data-shell-style="ctox"] .desktop-module::before {
+  opacity: 0.5;
+}
+
+/* Desktop icon tiles: deeper frost, a real top light edge and a softer
+   shadow so they sit in the wallpaper like glass pebbles. */
+:root[data-shell-style="ctox"] .desktop-icon .desktop-icon-glyph {
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 32%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 36%, transparent) !important;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.4) inset !important;
+}
+
+:root[data-shell-style="ctox"] .desktop-icon:hover .desktop-icon-glyph {
+  background: color-mix(in srgb, var(--surface) 44%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent) !important;
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.14),
+    0 0 18px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.5) inset !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .desktop-icon .desktop-icon-glyph {
+  background: color-mix(in srgb, var(--surface) 30%, transparent) !important;
+  border-color: color-mix(in srgb, var(--line) 30%, transparent) !important;
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.36),
+    0 1px 0 rgba(255, 255, 255, 0.09) inset !important;
+}
+
+/* Labels must survive the aurora: a two-stop shadow in the theme's deep
+   tone keeps every glyph readable without a plate behind the text. */
+:root[data-shell-style="ctox"] .desktop-icon .desktop-icon-label {
+  color: var(--text-strong, var(--text));
+  text-shadow:
+    0 1px 2px color-mix(in srgb, var(--bg) 85%, transparent),
+    0 2px 10px color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .desktop-icon .desktop-icon-label {
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.7),
+    0 2px 12px rgba(0, 0, 0, 0.55);
+}
+
+/* The hero widget becomes the composition's centrepiece glass card. */
+:root[data-shell-style="ctox"] .desktop-hero-widget {
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface) 38%, transparent);
+  backdrop-filter: blur(26px) saturate(170%);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+  box-shadow:
+    0 20px 52px rgba(0, 0, 0, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.45) inset;
+}
+
+:root[data-shell-style="ctox"] .desktop-hero-widget:hover {
+  background: color-mix(in srgb, var(--surface) 48%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+  box-shadow:
+    0 26px 60px rgba(0, 0, 0, 0.2),
+    0 0 24px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.55) inset;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] .desktop-hero-widget {
+  background: color-mix(in srgb, var(--surface) 34%, transparent);
+  border-color: color-mix(in srgb, var(--line) 32%, transparent);
+  box-shadow:
+    0 22px 56px rgba(0, 0, 0, 0.44),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+}
+
+/* The desktop-scoped topbar rule above (body[data-active-module="desktop"])
+   predates the floating island and would flatten it back into a bar while
+   the desktop is showing. Re-assert the island recipe here with higher
+   specificity so the CTOX chrome stays an island over the wallpaper. */
+:root[data-shell-style="ctox"] body[data-active-module="desktop"] .topbar {
+  background: color-mix(in srgb, var(--shell-topbar-bg) 50%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 52%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 10px 28px color-mix(in srgb, var(--bg) 22%, transparent),
+    0 2px 8px color-mix(in srgb, var(--bg) 10%, transparent) !important;
+}
+
+:root[data-shell-style="ctox"][data-theme="dark"] body[data-active-module="desktop"] .topbar {
+  background: color-mix(in srgb, var(--shell-topbar-bg) 46%, transparent) !important;
+  border-color: color-mix(in srgb, var(--line) 40%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 12px 32px rgba(0, 0, 0, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.24) !important;
 }
