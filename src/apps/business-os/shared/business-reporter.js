@@ -22,6 +22,10 @@ let eggState = {
 let idleTimeout = null;
 const IDLE_TIME = 300000; // 5 minutes of inactivity
 
+function shouldEnableIdleAnimation() {
+  return !globalThis.ctoxBusinessOsDesktop;
+}
+
 function interpolateAngle(current, target, step) {
   let diff = (target - current) % 360;
   if (diff < -180) diff += 360;
@@ -300,6 +304,7 @@ export function initBusinessReporter({
   document.body.append(button);
 
   fabButton = button;
+  if (!shouldEnableIdleAnimation()) return;
 
   const handleActivity = (event) => {
     const target = event.target && typeof event.target.closest === 'function'

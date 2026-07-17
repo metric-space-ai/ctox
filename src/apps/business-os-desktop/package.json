@@ -1,6 +1,6 @@
 {
   "name": "@ctox/business-os-desktop",
-  "version": "0.3.42",
+  "version": "0.3.43",
   "private": true,
   "description": "Electron shell for CTOX Business OS managed and unmanaged instance switching.",
   "homepage": "https://ctox.dev",
