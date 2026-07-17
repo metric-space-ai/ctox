@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-chat-overlay-v126';
+const APP_BUILD = '20260717-native-selection-v127';
 
 ensureShellStylesheets();
 
@@ -10817,6 +10817,14 @@ function showStartupError(error) {
   if (retryBtn) {
     retryBtn.onclick = async () => {
       retryBtn.disabled = true;
+      if (
+        (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || String(error?.message || '').includes('nativen Capability-Token'))
+        && typeof window.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
+      ) {
+        retryBtn.textContent = 'Neue Berechtigung wird angefordert...';
+        window.ctoxBusinessOsDesktop.refreshManagedLaunch();
+        return;
+      }
       retryBtn.textContent = isLocalRxDbStartupError(error)
         ? 'Lokale RxDB wird neu synchronisiert...'
         : 'Wird neu geladen...';

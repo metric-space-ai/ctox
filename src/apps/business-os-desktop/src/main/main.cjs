@@ -158,7 +158,7 @@ async function createWindow() {
     height: 920,
     minWidth: 1180,
     minHeight: 720,
-    title: "CTOX Business OS Desktop Beta",
+    title: `CTOX Business OS Desktop Beta v${app.getVersion()}`,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -329,6 +329,20 @@ async function activateManagedInstance(instanceId) {
   return activateInstance(instance);
 }
 
+async function refreshManagedInstanceFromSender(sender) {
+  const activeEntry = Array.from(views.entries())
+    .find(([, view]) => view?.webContents?.id === sender?.id);
+  if (!activeEntry) throw new Error("managed refresh sender is not an active instance view");
+  const [instanceId] = activeEntry;
+  const instances = await sourceManager.listInstances();
+  const instance = instances.find((entry) => entry.id === instanceId);
+  if (!instance || instance.source !== "ctox_dev") {
+    throw new Error("managed refresh is available only for ctox.dev instances");
+  }
+  destroyInstanceView(instanceId);
+  await activateInstance(instance);
+}
+
 
 function protocolHandlers() {
   return {
@@ -398,11 +412,26 @@ async function openCtoxDevManagedInstance(instance) {
 }
 
 ipcMain.handle("instances:list", async () => sourceManager.listInstances());
+ipcMain.handle("app:info", async () => ({
+  name: app.getName(),
+  version: app.getVersion(),
+  platform: process.platform,
+}));
 ipcMain.handle("instances:activate", async (_event, instance) => activateInstance(instance));
 ipcMain.handle("instances:remove", async (_event, instance) => removeInstance(instance));
 ipcMain.handle("app-shell:show", async () => showAppShell());
 ipcMain.handle("app-shell:set-overlay-visible", async (_event, visible) => setChromeOverlayVisible(visible));
 ipcMain.handle("app-shell:open-switcher", async () => openInstanceSwitcherOverlay());
+ipcMain.on("instance:refresh-managed-launch", (event) => {
+  const sender = event.sender;
+  setImmediate(() => {
+    refreshManagedInstanceFromSender(sender).catch((error) => {
+      console.error("Managed instance refresh failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
+});
 ipcMain.handle("invites:import", async (_event, rawInvite) => sourceManager.importInvite(rawInvite));
 ipcMain.handle("pairing:manual", async (_event, options) => sourceManager.importManualPairing(options || {}));
 ipcMain.handle("pairing:rotate", async (_event, instance, rawInvite) => rotatePairing(instance, rawInvite));

@@ -4,6 +4,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const asar = require("@electron/asar");
+const builderConfig = require("../electron-builder.config.cjs");
+const appPackage = require("../package.json");
 
 function main() {
   if (process.platform === "darwin") {
@@ -15,7 +17,12 @@ function main() {
 
 function smokeMacBundle() {
   const appRoot = path.join(__dirname, "..");
-  const appPath = path.join(appRoot, "release", `mac-${process.arch}`, "CTOX Business-OS Desktop Beta.app");
+  const appPath = path.join(
+    appRoot,
+    "release",
+    `mac-${process.arch}`,
+    `${builderConfig.executableName}.app`,
+  );
   const plistPath = path.join(appPath, "Contents", "Info.plist");
   const iconPath = path.join(appPath, "Contents", "Resources", "icon.icns");
   const asarPath = path.join(appPath, "Contents", "Resources", "app.asar");
@@ -27,6 +34,7 @@ function smokeMacBundle() {
   const plist = fs.readFileSync(plistPath, "utf8");
   assert.match(plist, /ai\.metric-space\.ctox\.business-os-desktop/);
   assert.match(plist, /ctox-business-os-desktop/);
+  assert.match(plist, new RegExp(`<string>${appPackage.version.replace(/\./g, "\\.")}</string>`));
 
   const files = asar.listPackage(asarPath);
   assert.ok(files.includes("/src/main/main.cjs"), "main process source missing from app.asar");

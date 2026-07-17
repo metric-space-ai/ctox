@@ -1,6 +1,7 @@
 "use strict";
 
 const state = {
+  appInfo: null,
   instances: [],
   query: "",
   activeInstanceId: "",
@@ -71,6 +72,7 @@ const passwordDialogTitle = document.getElementById("password-dialog-title");
 const passwordDialogInput = document.getElementById("password-dialog-input");
 const passwordDialogCancel = document.getElementById("password-dialog-cancel");
 const badgeApi = window.CtoxInstanceBadges;
+const appVersion = document.getElementById("app-version");
 
 window.ctoxDesktop.onOpenSwitcher?.(() => {
   openSwitcher({ focus: true }).catch((error) => console.error("open switcher failed", error));
@@ -134,6 +136,14 @@ document.addEventListener("keydown", async (event) => {
 });
 
 async function refresh() {
+  if (!state.appInfo && window.ctoxDesktop.getAppInfo) {
+    state.appInfo = await window.ctoxDesktop.getAppInfo();
+    const version = String(state.appInfo?.version || "").trim();
+    appVersion.textContent = version ? `v${version}` : "Version unbekannt";
+    document.title = version
+      ? `CTOX Business OS Desktop Beta v${version}`
+      : "CTOX Business OS Desktop Beta";
+  }
   setInstances(await window.ctoxDesktop.listInstances());
   render();
 }

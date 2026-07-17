@@ -126,6 +126,13 @@ input::placeholder {
   text-transform: uppercase;
 }
 
+.app-version {
+  color: oklch(66% 0.012 230);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
 .current-instance {
   align-items: center;
   display: grid;
