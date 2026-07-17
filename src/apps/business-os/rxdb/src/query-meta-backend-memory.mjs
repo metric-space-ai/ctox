@@ -31,7 +31,9 @@ export function createMemoryMetaBackend() {
       const windowKey = queryWindowKey(record);
       deleteQueryWindowRefs(windowKey);
       const documentKeys = new Set();
-      for (const id of normalizeDocumentIds(record.documentIds)) {
+      // SYNC-52: selector ref ids ($nonsimple / $field|<path>) share the same
+      // index so the change-invalidation path avoids a full window scan.
+      for (const id of normalizeDocumentIds([...(record.documentIds || []), ...(record.selectorRefIds || [])])) {
         const documentKey = `${record.collection}|${id}`;
         documentKeys.add(documentKey);
         const refs = queryWindowRefsByDocument.get(documentKey) || new Set();

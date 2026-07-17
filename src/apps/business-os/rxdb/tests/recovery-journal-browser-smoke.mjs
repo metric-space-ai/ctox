@@ -146,6 +146,30 @@ try {
     const unresolvedAfterResolution = await storage.recoveryJournal.listConflicts();
     const recoveredCopyBatch = (await storage.recoveryJournal.listBatches('pending'))
       .find((batch) => batch.documentIds?.some((id) => id.startsWith('ticket-deleted-1-recovered-')));
+
+    // SYNC-53: resolved conflicts must be pruned after the retention window,
+    // while PENDING conflicts and unsynced WRITE batches survive untouched.
+    const gcPendingConflict = await storage.recoveryJournal.recordConflict({
+      collection: 'tickets',
+      local: { id: 'ticket-gc-pending', title: 'still recoverable' },
+      master: { id: 'ticket-gc-pending', title: 'native' },
+    });
+    const gcResolvedConflict = await storage.recoveryJournal.recordConflict({
+      collection: 'tickets',
+      base: { id: 'ticket-gc-resolved', title: 'base' },
+      local: { id: 'ticket-gc-resolved', title: 'local' },
+      master: { id: 'ticket-gc-resolved', title: 'native' },
+    });
+    await storage.recoveryJournal.resolveConflict(gcResolvedConflict.conflictId, 'restore_as_copy');
+    const batchesBeforeConflictGc = (await storage.recoveryJournal.listBatches('pending')).length;
+    // Before the retention window elapses nothing resolved is pruned.
+    const prunedWithinRetention = await storage.recoveryJournal.gcConflicts(Date.now());
+    // Past the 24h retention window, every resolved conflict is reclaimed.
+    const prunedAfterRetention = await storage.recoveryJournal.gcConflicts(Date.now() + 25 * 60 * 60 * 1000);
+    const pendingConflictsAfterGc = (await storage.recoveryJournal.listConflicts())
+      .filter((entry) => entry.conflictId === gcPendingConflict.conflictId).length;
+    const batchesAfterConflictGc = (await storage.recoveryJournal.listBatches('pending')).length;
+
     tickets.close();
     storage.close();
 
@@ -208,6 +232,11 @@ try {
       recoveredCopyJournaled: Boolean(recoveredCopyBatch),
       unresolvedAfterResolution: unresolvedAfterResolution.length,
       pendingAfterRestartReconciliation,
+      prunedWithinRetention,
+      prunedAfterRetention,
+      pendingConflictsAfterGc,
+      batchesBeforeConflictGc,
+      batchesAfterConflictGc,
     };
   });
 
@@ -229,6 +258,10 @@ try {
   assert(result.recoveredCopyJournaled, 'delete-vs-update recovery copy must be journaled');
   assert(result.unresolvedAfterResolution === 0, 'resolved conflicts must leave the pending conflict set');
   assert(result.pendingAfterRestartReconciliation.pendingWrites === 0, 'startup must reconcile journal entries against persisted native command state');
+  assert(result.prunedWithinRetention === 0, 'resolved conflicts within the retention window must NOT be pruned');
+  assert(result.prunedAfterRetention >= 1, 'resolved conflicts past the retention window must be pruned');
+  assert(result.pendingConflictsAfterGc === 1, 'a pending (unresolved) conflict must survive conflict GC');
+  assert(result.batchesBeforeConflictGc === result.batchesAfterConflictGc, 'unsynced write batches must survive conflict GC');
   console.log('ctox-rxdb recovery journal browser smoke OK');
 } finally {
   await browser.close();

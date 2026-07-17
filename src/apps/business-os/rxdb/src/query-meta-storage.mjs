@@ -69,7 +69,22 @@ export class QueryMetaStorage {
       lastAccessedAt: now,
     };
     await this.backend.putQueryWindow(record);
-    await this.backend.replaceQueryWindowDocumentRefs?.(record);
+    // SYNC-52: the change-invalidation path routes through the
+    // collection_documentId ref index instead of a full window scan. Real
+    // document ids cover member-invalidation; two synthetic ref ids cover the
+    // rest without materializing every window on each replicated change:
+    //   `$nonsimple`      — a window whose result cannot be reasoned about
+    //                       from a single doc (sorts / non-equality selectors)
+    //                       and must be invalidated on ANY change.
+    //   `$field|<path>`   — a simple-equality window keyed on <path>; a change
+    //                       touching that field may newly enter/leave it.
+    // These live in the SAME ref store (keyed by windowKey) so they are cleared
+    // whenever the window is replaced or deleted. They are attached only to the
+    // record handed to the ref writer, not persisted on the window itself.
+    await this.backend.replaceQueryWindowDocumentRefs?.({
+      ...record,
+      selectorRefIds: computeSelectorRefIds(queryShape),
+    });
     return record;
   }
 
@@ -223,18 +238,55 @@ export class QueryMetaStorage {
   async invalidateQueryWindowsForChanges(collection, documents, primaryPath = 'id') {
     const changes = Array.isArray(documents) ? documents.filter(Boolean) : [];
     if (!collection || !changes.length) return 0;
+    // SYNC-52: prefer the collection_documentId ref index so a change batch is
+    // O(matching refs), not O(all windows). The old path called
+    // `scanQueryWindows()` (an IndexedDB `getAll`) unconditionally on every
+    // replicated change tick, materializing the entire — unbounded — window
+    // store (with each window's full documentId array) into RAM. Backends
+    // without the ref index still fall back to the whole-store scan.
+    if (typeof this.backend.getQueryWindowKeysByDocumentIds !== 'function') {
+      return this.scanInvalidateQueryWindowsForChanges(collection, changes, primaryPath);
+    }
+    const lookupIds = new Set(['$nonsimple']);
+    for (const document of changes) {
+      const id = valueAtPath(document, primaryPath);
+      if (id != null && id !== '') lookupIds.add(String(id));
+      for (const path of documentLeafPaths(document)) lookupIds.add(`$field|${path}`);
+    }
+    const windowKeys = await this.backend.getQueryWindowKeysByDocumentIds(collection, [...lookupIds]);
+    let invalidated = 0;
+    const seen = new Set();
+    for (const key of windowKeys) {
+      const stringified = stringKey(key);
+      if (seen.has(stringified)) continue;
+      seen.add(stringified);
+      const window = await this.backend.getQueryWindow(stringified);
+      if (!window || window.collection !== collection) continue;
+      // Re-verify precisely — identical predicate to the legacy full scan, so
+      // over-matched candidates (multi-field equality windows found via one
+      // field, wrong equality value, etc.) are filtered out and correctness is
+      // preserved: a change still invalidates every window whose result could
+      // include the changed doc, and nothing more.
+      if (!changeAffectsWindow(window, changes, primaryPath)) continue;
+      await this.invalidateQueryWindow([
+        window.collection,
+        window.queryFingerprint,
+        window.offset,
+        window.limit,
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+
+  // Whole-store fallback for backends without the document-ref index. Keeps the
+  // original semantics for the in-memory/degraded path.
+  async scanInvalidateQueryWindowsForChanges(collection, changes, primaryPath = 'id') {
     const all = await this.backend.scanQueryWindows();
     let invalidated = 0;
     for (const window of all) {
       if (window.collection !== collection) continue;
-      const members = new Set((window.documentIds || []).map(String));
-      const simple = simpleEqualitySelector(window.queryShape);
-      const affected = !simple
-        || changes.some((document) => {
-          const id = valueAtPath(document, primaryPath);
-          return members.has(String(id ?? '')) || matchesSimpleEquality(document, simple);
-        });
-      if (!affected) continue;
+      if (!changeAffectsWindow(window, changes, primaryPath)) continue;
       await this.invalidateQueryWindow([
         window.collection,
         window.queryFingerprint,
@@ -404,17 +456,30 @@ export class QueryMetaStorage {
     rebalanceEvictionSchedulerGroup(group).catch(() => {});
   }
 
-  /// Orphan-window GC: drop sidecar query-window entries that haven't been
-  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
-  /// by other windows remain. This keeps the sidecar from growing monotonically
-  /// as one-off queries accumulate.
-  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1000 } = {}) {
+  /// Orphan-window GC: hard-delete sidecar query-window entries (and their
+  /// document/selector refs — `deleteQueryWindow` cascades) that have aged out.
+  /// Two thresholds, because one-off queries with a varying selector value mint
+  /// a fresh window on every exec:
+  ///   - complete / ever-completed windows: `maxAgeMs` (default 7 days). These
+  ///     are served local-first while revalidating (the `everCompleted` flag is
+  ///     load-bearing for stale-while-revalidate, see correctness-reconnect),
+  ///     so they get the full window.
+  ///   - windows that were invalidated/minted but NEVER completed (pure
+  ///     tombstones, no local-first value): `staleIncompleteMaxAgeMs` (default
+  ///     1 hour). This is the "short grace" hard-delete for sticky tombstones.
+  /// Wired into the production eviction scheduler via `runSchedulerMaintenance`.
+  async runWindowGc({
+    maxAgeMs = 7 * 24 * 60 * 60 * 1000,
+    staleIncompleteMaxAgeMs = 60 * 60 * 1000,
+  } = {}) {
     const now = this.clock();
     const all = await this.backend.scanQueryWindows();
     let removed = 0;
     for (const window of all) {
       const age = now - (window.lastAccessedAt ?? window.updatedAt ?? window.createdAt ?? now);
-      if (age >= maxAgeMs) {
+      const servesLocalFirst = Boolean(window.complete) || Boolean(window.everCompleted);
+      const threshold = servesLocalFirst ? maxAgeMs : staleIncompleteMaxAgeMs;
+      if (age >= threshold) {
         await this.backend.deleteQueryWindow([
           window.collection,
           window.queryFingerprint,
@@ -426,6 +491,55 @@ export class QueryMetaStorage {
     }
     return removed;
   }
+
+  /// Periodic maintenance run by the eviction scheduler timer (and callable
+  /// directly in tests). Evicts over-budget documents AND reclaims aged-out
+  /// query windows — the latter is the only production caller of `runWindowGc`,
+  /// which previously ran from tests alone while the sidecar grew unbounded.
+  async runSchedulerMaintenance() {
+    const evicted = await this.runEvictionIfOverBudget().catch(() => 0);
+    const windowsReclaimed = await this.runWindowGc().catch(() => 0);
+    return { evicted, windowsReclaimed };
+  }
+}
+
+function changeAffectsWindow(window, changes, primaryPath) {
+  const members = new Set((window.documentIds || []).map(String));
+  const simple = simpleEqualitySelector(window.queryShape);
+  if (!simple) return true;
+  return changes.some((document) => {
+    const id = valueAtPath(document, primaryPath);
+    return members.has(String(id ?? '')) || matchesSimpleEquality(document, simple);
+  });
+}
+
+// SYNC-52: synthetic ref ids that let a change be resolved to affected windows
+// through the document-ref index (see upsertQueryWindow). A non-simple window
+// is invalidated by any change (`$nonsimple`); a simple-equality window is a
+// candidate when a change touches one of its selector fields (`$field|<path>`).
+function computeSelectorRefIds(queryShape) {
+  const simple = simpleEqualitySelector(queryShape);
+  if (!simple) return ['$nonsimple'];
+  return simple.map(([field]) => `$field|${field}`);
+}
+
+// Flatten a changed document to the set of dotted leaf paths it defines, so the
+// change path can look up `$field|<path>` candidates. Mirrors `valueAtPath`
+// (dot-separated). `_meta` is skipped (large HLC/origin blob, never a selector
+// target); depth is bounded defensively.
+function documentLeafPaths(document, prefix = '', out = new Set(), depth = 0) {
+  if (!document || typeof document !== 'object' || Array.isArray(document) || depth > 6) return out;
+  for (const [key, value] of Object.entries(document)) {
+    if (key === '_meta') continue;
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      out.add(path);
+      documentLeafPaths(value, path, out, depth + 1);
+    } else {
+      out.add(path);
+    }
+  }
+  return out;
 }
 
 function simpleEqualitySelector(queryShape) {
@@ -480,7 +594,9 @@ async function rebalanceEvictionSchedulerGroup(group) {
 async function runEvictionSchedulerGroup(group) {
   await rebalanceEvictionSchedulerGroup(group);
   await Promise.all(
-    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0)),
+    // SYNC-52: run full maintenance (eviction AND window GC) on each tick so
+    // orphan query windows are actually reclaimed in production.
+    [...group.storages].map((storage) => storage.runSchedulerMaintenance().catch(() => 0)),
   );
 }
 

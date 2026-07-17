@@ -310,6 +310,40 @@ export class CtoxRecoveryJournal {
         await deleteRecord(this.db, BATCH_STORE, row.batchId);
       }
     }
+    await this.gcConflicts(now);
+  }
+
+  // SYNC-53: resolved conflict records hold full local+master+base documents
+  // (~3x a document each) and were never reclaimed — `resolveConflict` only
+  // flips state to 'resolved'. Every collision event (update_vs_update,
+  // delete_vs_update, clock_skew_detected) therefore grew IndexedDB forever
+  // with zero live rows. Prune conflicts that are RESOLVED and older than the
+  // same 24h retention window used for master-acked batches. PENDING /
+  // unresolved conflicts are user-recoverable state and are never touched
+  // here; neither are unsynced WRITE batches (handled by the master_acked
+  // path above and protected by §9). Returns the number of records pruned.
+  async gcConflicts(now = Date.now()) {
+    const rows = await getAllRecords(this.db, CONFLICT_STORE);
+    let pruned = 0;
+    for (const row of rows) {
+      if (row.state !== 'resolved') continue;
+      const resolvedAt = Number(row.resolvedAtMs || 0);
+      if (!resolvedAt) {
+        // A resolved record with no timestamp (legacy/imported) cannot be
+        // aged safely — stamp it now so a later pass reclaims it after the
+        // retention window instead of deleting a possibly-fresh resolution.
+        await updateRecord(this.db, CONFLICT_STORE, row.conflictId, (current) => ({
+          ...current,
+          resolvedAtMs: now,
+        }));
+        continue;
+      }
+      if (now - resolvedAt >= ACKED_RETENTION_MS) {
+        await deleteRecord(this.db, CONFLICT_STORE, row.conflictId);
+        pruned += 1;
+      }
+    }
+    return pruned;
   }
 
   async publishStatus() {

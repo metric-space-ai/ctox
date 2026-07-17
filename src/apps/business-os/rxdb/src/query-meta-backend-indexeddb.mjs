@@ -339,7 +339,10 @@ function normalizeDocumentIds(ids) {
 }
 
 async function putQueryWindowRefs(db, record) {
-  const documentIds = normalizeDocumentIds(record.documentIds);
+  // SYNC-52: real document ids plus synthetic selector ref ids
+  // ($nonsimple / $field|<path>) share the collection_documentId index so the
+  // change-invalidation path resolves affected windows without a full scan.
+  const documentIds = normalizeDocumentIds([...(record.documentIds || []), ...(record.selectorRefIds || [])]);
   if (!documentIds.length) return;
   const windowKey = queryWindowKey(record);
   await runTransaction(

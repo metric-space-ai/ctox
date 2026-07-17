@@ -1167,6 +1167,36 @@ var CtoxRecoveryJournal = class {
         await deleteRecord(this.db, BATCH_STORE, row.batchId);
       }
     }
+    await this.gcConflicts(now);
+  }
+  // SYNC-53: resolved conflict records hold full local+master+base documents
+  // (~3x a document each) and were never reclaimed — `resolveConflict` only
+  // flips state to 'resolved'. Every collision event (update_vs_update,
+  // delete_vs_update, clock_skew_detected) therefore grew IndexedDB forever
+  // with zero live rows. Prune conflicts that are RESOLVED and older than the
+  // same 24h retention window used for master-acked batches. PENDING /
+  // unresolved conflicts are user-recoverable state and are never touched
+  // here; neither are unsynced WRITE batches (handled by the master_acked
+  // path above and protected by §9). Returns the number of records pruned.
+  async gcConflicts(now = Date.now()) {
+    const rows = await getAllRecords(this.db, CONFLICT_STORE);
+    let pruned = 0;
+    for (const row of rows) {
+      if (row.state !== "resolved") continue;
+      const resolvedAt = Number(row.resolvedAtMs || 0);
+      if (!resolvedAt) {
+        await updateRecord(this.db, CONFLICT_STORE, row.conflictId, (current) => ({
+          ...current,
+          resolvedAtMs: now
+        }));
+        continue;
+      }
+      if (now - resolvedAt >= ACKED_RETENTION_MS) {
+        await deleteRecord(this.db, CONFLICT_STORE, row.conflictId);
+        pruned += 1;
+      }
+    }
+    return pruned;
   }
   async publishStatus() {
     try {
@@ -1418,7 +1448,7 @@ function createMemoryMetaBackend() {
       const windowKey = queryWindowKey(record);
       deleteQueryWindowRefs2(windowKey);
       const documentKeys = /* @__PURE__ */ new Set();
-      for (const id of normalizeDocumentIds(record.documentIds)) {
+      for (const id of normalizeDocumentIds([...record.documentIds || [], ...record.selectorRefIds || []])) {
         const documentKey = `${record.collection}|${id}`;
         documentKeys.add(documentKey);
         const refs = queryWindowRefsByDocument.get(documentKey) || /* @__PURE__ */ new Set();
@@ -1549,7 +1579,10 @@ var QueryMetaStorage = class {
       lastAccessedAt: now
     };
     await this.backend.putQueryWindow(record);
-    await this.backend.replaceQueryWindowDocumentRefs?.(record);
+    await this.backend.replaceQueryWindowDocumentRefs?.({
+      ...record,
+      selectorRefIds: computeSelectorRefIds(queryShape)
+    });
     return record;
   }
   async invalidateQueryWindow(key) {
@@ -1684,17 +1717,43 @@ var QueryMetaStorage = class {
   async invalidateQueryWindowsForChanges(collection, documents, primaryPath = "id") {
     const changes = Array.isArray(documents) ? documents.filter(Boolean) : [];
     if (!collection || !changes.length) return 0;
+    if (typeof this.backend.getQueryWindowKeysByDocumentIds !== "function") {
+      return this.scanInvalidateQueryWindowsForChanges(collection, changes, primaryPath);
+    }
+    const lookupIds = /* @__PURE__ */ new Set(["$nonsimple"]);
+    for (const document2 of changes) {
+      const id = valueAtPath2(document2, primaryPath);
+      if (id != null && id !== "") lookupIds.add(String(id));
+      for (const path of documentLeafPaths(document2)) lookupIds.add(`$field|${path}`);
+    }
+    const windowKeys = await this.backend.getQueryWindowKeysByDocumentIds(collection, [...lookupIds]);
+    let invalidated = 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (const key of windowKeys) {
+      const stringified = stringKey2(key);
+      if (seen.has(stringified)) continue;
+      seen.add(stringified);
+      const window2 = await this.backend.getQueryWindow(stringified);
+      if (!window2 || window2.collection !== collection) continue;
+      if (!changeAffectsWindow(window2, changes, primaryPath)) continue;
+      await this.invalidateQueryWindow([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+  // Whole-store fallback for backends without the document-ref index. Keeps the
+  // original semantics for the in-memory/degraded path.
+  async scanInvalidateQueryWindowsForChanges(collection, changes, primaryPath = "id") {
     const all = await this.backend.scanQueryWindows();
     let invalidated = 0;
     for (const window2 of all) {
       if (window2.collection !== collection) continue;
-      const members = new Set((window2.documentIds || []).map(String));
-      const simple = simpleEqualitySelector(window2.queryShape);
-      const affected = !simple || changes.some((document2) => {
-        const id = valueAtPath2(document2, primaryPath);
-        return members.has(String(id ?? "")) || matchesSimpleEquality(document2, simple);
-      });
-      if (!affected) continue;
+      if (!changeAffectsWindow(window2, changes, primaryPath)) continue;
       await this.invalidateQueryWindow([
         window2.collection,
         window2.queryFingerprint,
@@ -1851,17 +1910,30 @@ var QueryMetaStorage = class {
     rebalanceEvictionSchedulerGroup(group).catch(() => {
     });
   }
-  /// Orphan-window GC: drop sidecar query-window entries that haven't been
-  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
-  /// by other windows remain. This keeps the sidecar from growing monotonically
-  /// as one-off queries accumulate.
-  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
+  /// Orphan-window GC: hard-delete sidecar query-window entries (and their
+  /// document/selector refs — `deleteQueryWindow` cascades) that have aged out.
+  /// Two thresholds, because one-off queries with a varying selector value mint
+  /// a fresh window on every exec:
+  ///   - complete / ever-completed windows: `maxAgeMs` (default 7 days). These
+  ///     are served local-first while revalidating (the `everCompleted` flag is
+  ///     load-bearing for stale-while-revalidate, see correctness-reconnect),
+  ///     so they get the full window.
+  ///   - windows that were invalidated/minted but NEVER completed (pure
+  ///     tombstones, no local-first value): `staleIncompleteMaxAgeMs` (default
+  ///     1 hour). This is the "short grace" hard-delete for sticky tombstones.
+  /// Wired into the production eviction scheduler via `runSchedulerMaintenance`.
+  async runWindowGc({
+    maxAgeMs = 7 * 24 * 60 * 60 * 1e3,
+    staleIncompleteMaxAgeMs = 60 * 60 * 1e3
+  } = {}) {
     const now = this.clock();
     const all = await this.backend.scanQueryWindows();
     let removed = 0;
     for (const window2 of all) {
       const age = now - (window2.lastAccessedAt ?? window2.updatedAt ?? window2.createdAt ?? now);
-      if (age >= maxAgeMs) {
+      const servesLocalFirst = Boolean(window2.complete) || Boolean(window2.everCompleted);
+      const threshold = servesLocalFirst ? maxAgeMs : staleIncompleteMaxAgeMs;
+      if (age >= threshold) {
         await this.backend.deleteQueryWindow([
           window2.collection,
           window2.queryFingerprint,
@@ -1873,7 +1945,44 @@ var QueryMetaStorage = class {
     }
     return removed;
   }
+  /// Periodic maintenance run by the eviction scheduler timer (and callable
+  /// directly in tests). Evicts over-budget documents AND reclaims aged-out
+  /// query windows — the latter is the only production caller of `runWindowGc`,
+  /// which previously ran from tests alone while the sidecar grew unbounded.
+  async runSchedulerMaintenance() {
+    const evicted = await this.runEvictionIfOverBudget().catch(() => 0);
+    const windowsReclaimed = await this.runWindowGc().catch(() => 0);
+    return { evicted, windowsReclaimed };
+  }
 };
+function changeAffectsWindow(window2, changes, primaryPath) {
+  const members = new Set((window2.documentIds || []).map(String));
+  const simple = simpleEqualitySelector(window2.queryShape);
+  if (!simple) return true;
+  return changes.some((document2) => {
+    const id = valueAtPath2(document2, primaryPath);
+    return members.has(String(id ?? "")) || matchesSimpleEquality(document2, simple);
+  });
+}
+function computeSelectorRefIds(queryShape) {
+  const simple = simpleEqualitySelector(queryShape);
+  if (!simple) return ["$nonsimple"];
+  return simple.map(([field]) => `$field|${field}`);
+}
+function documentLeafPaths(document2, prefix = "", out = /* @__PURE__ */ new Set(), depth = 0) {
+  if (!document2 || typeof document2 !== "object" || Array.isArray(document2) || depth > 6) return out;
+  for (const [key, value] of Object.entries(document2)) {
+    if (key === "_meta") continue;
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out.add(path);
+      documentLeafPaths(value, path, out, depth + 1);
+    } else {
+      out.add(path);
+    }
+  }
+  return out;
+}
 function simpleEqualitySelector(queryShape) {
   if (!queryShape || typeof queryShape !== "object") return null;
   if (Array.isArray(queryShape.sort) && queryShape.sort.length > 0) return null;
@@ -1921,7 +2030,9 @@ async function rebalanceEvictionSchedulerGroup(group) {
 async function runEvictionSchedulerGroup(group) {
   await rebalanceEvictionSchedulerGroup(group);
   await Promise.all(
-    [...group.storages].map((storage) => storage.runEvictionIfOverBudget().catch(() => 0))
+    // SYNC-52: run full maintenance (eviction AND window GC) on each tick so
+    // orphan query windows are actually reclaimed in production.
+    [...group.storages].map((storage) => storage.runSchedulerMaintenance().catch(() => 0))
   );
 }
 async function recoverQueryMetaQuota(schedulerKey) {
@@ -7451,7 +7562,7 @@ function normalizeDocumentIds3(ids) {
   return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
 }
 async function putQueryWindowRefs(db, record) {
-  const documentIds = normalizeDocumentIds3(record.documentIds);
+  const documentIds = normalizeDocumentIds3([...record.documentIds || [], ...record.selectorRefIds || []]);
   if (!documentIds.length) return;
   const windowKey = queryWindowKey2(record);
   await runTransaction(
