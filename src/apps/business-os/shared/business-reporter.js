@@ -201,8 +201,8 @@ function animLoop(timestamp) {
     eggState.lastTime = timestamp;
 
     // A crawling bug notices a nearby cursor and darts away from it.
-    const pdx = eggState.x + 22 - eggState.pointerX;
-    const pdy = eggState.y + 22 - eggState.pointerY;
+    const pdx = eggState.x + 13 - eggState.pointerX;
+    const pdy = eggState.y + 13 - eggState.pointerY;
     const pointerDist = Math.hypot(pdx, pdy);
     if (eggState.state === 'crawling' && pointerDist < STARTLE_RADIUS) {
       eggState.state = 'startled';
@@ -406,7 +406,7 @@ export function initBusinessReporter({
         resetIdleTimer();
         return;
       }
-      const dist = Math.hypot(eggState.x + 22 - eggState.pointerX, eggState.y + 22 - eggState.pointerY);
+      const dist = Math.hypot(eggState.x + 13 - eggState.pointerX, eggState.y + 13 - eggState.pointerY);
       if (dist < FLEE_RADIUS) scurryBack();
       return;
     }
@@ -1227,25 +1227,24 @@ function bugIconSvg() {
   return `
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
       <g class="ctox-bug-antennae">
-        <path d="M10.5 4.9C9.8 3.9 9 3.2 8 2.8" />
-        <path d="M13.5 4.9c.7-1 1.5-1.7 2.5-2.1" />
+        <path d="M10.9 6.1c-.4-.7-.9-1.2-1.5-1.5" />
+        <path d="M13.1 6.1c.4-.7.9-1.2 1.5-1.5" />
       </g>
       <g class="ctox-bug-legs ctox-bug-legs-a">
-        <path d="M7.5 9.4 4.6 7.9" />
-        <path d="M7 13.2H3.8" />
-        <path d="M7.6 16.6l-2.7 2.1" />
+        <path d="M8.2 10.2 6.7 9.3" />
+        <path d="M7.8 13.1H6" />
+        <path d="m8.3 15.9-1.4 1.2" />
       </g>
       <g class="ctox-bug-legs ctox-bug-legs-b">
-        <path d="m16.5 9.4 2.9-1.5" />
-        <path d="M17 13.2h3.2" />
-        <path d="m16.4 16.6 2.7 2.1" />
+        <path d="m15.8 10.2 1.5-.9" />
+        <path d="M16.2 13.1H18" />
+        <path d="m15.7 15.9 1.4 1.2" />
       </g>
       <g class="ctox-bug-body">
-        <circle cx="12" cy="6.2" r="1.7" fill="currentColor" stroke="none" opacity=".9" />
-        <path d="M9.4 8.6c0-.7 1.1-1.3 2.6-1.3s2.6.6 2.6 1.3" fill="currentColor" stroke="none" opacity=".75" />
-        <path d="M12 8.9c2.6 0 4.3 1.9 4.3 4.8 0 3.4-1.9 5.8-4.3 5.8s-4.3-2.4-4.3-5.8c0-2.9 1.7-4.8 4.3-4.8Z" fill="currentColor" stroke="none" opacity=".62" />
-        <path d="M12 8.9c2.6 0 4.3 1.9 4.3 4.8 0 3.4-1.9 5.8-4.3 5.8s-4.3-2.4-4.3-5.8c0-2.9 1.7-4.8 4.3-4.8Z" />
-        <path d="M12 9v10.4" stroke-width="1" opacity=".65" />
+        <circle cx="12" cy="7.4" r="1.5" fill="currentColor" stroke="none" opacity=".9" />
+        <path d="M12 8.6c2.4 0 4 1.7 4 4.3 0 2.9-1.7 5-4 5s-4-2.1-4-5c0-2.6 1.6-4.3 4-4.3Z" fill="currentColor" stroke="none" opacity=".8" />
+        <path d="M12 8.6c2.4 0 4 1.7 4 4.3 0 2.9-1.7 5-4 5s-4-2.1-4-5c0-2.6 1.6-4.3 4-4.3Z" />
+        <path d="M12 8.8v8.9" stroke-width=".9" opacity=".5" />
       </g>
     </svg>`;
 }
@@ -1384,8 +1383,8 @@ function installReporterStyles() {
       z-index: 30;
       pointer-events: auto;
       cursor: pointer;
-      width: 44px;
-      height: 44px;
+      width: 26px;
+      height: 26px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1393,10 +1392,10 @@ function installReporterStyles() {
       color: var(--accent, #72b8aa);
       opacity: 1;
       transition: opacity 260ms ease;
-      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
     }
     .ctox-bug-actor.is-appearing { opacity: 0; }
-    .ctox-bug-actor svg { width: 26px; height: 26px; overflow: visible; }
+    .ctox-bug-actor svg { width: 15px; height: 15px; overflow: visible; }
     .ctox-bug-actor .ctox-bug-legs,
     .ctox-bug-actor .ctox-bug-antennae {
       transform-origin: 12px 12px;
@@ -1414,8 +1413,8 @@ function installReporterStyles() {
       animation: ctox-bug-twitch 1.6s ease-in-out infinite;
     }
     @keyframes ctox-bug-gait {
-      0%, 100% { transform: rotate(5deg); }
-      50% { transform: rotate(-5deg); }
+      0%, 100% { transform: rotate(3.5deg); }
+      50% { transform: rotate(-3.5deg); }
     }
     @keyframes ctox-bug-bob {
       0%, 100% { transform: scale(1); }
