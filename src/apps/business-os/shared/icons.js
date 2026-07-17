@@ -395,7 +395,7 @@ export function registerSvgIcon(moduleId, svgString) {
   registeredIcons.set(key, svgString);
 }
 
-export function getSvgIcon(moduleId, size = 24, strokeWidth = 2) {
+export function getSvgIcon(moduleId, size = 24, strokeWidth = 2, options = {}) {
   // Normalize module key
   let key = String(moduleId || '').trim().toLowerCase();
   if (key.startsWith('module:')) {
@@ -429,8 +429,9 @@ export function getSvgIcon(moduleId, size = 24, strokeWidth = 2) {
 
   // No curated or registered icon: derive a deterministic monogram icon so
   // custom / generated apps look distinct and intentional instead of all
-  // sharing one placeholder glyph.
-  return buildMonogramIcon(key, size, strokeWidth);
+  // sharing one placeholder glyph. The letter prefers the human-facing label
+  // (module title) over the internal id, which may carry tooling prefixes.
+  return buildMonogramIcon(key, size, strokeWidth, options.label);
 }
 
 // Curated gradient pairs matching the premium module-icon aesthetic. Both
@@ -461,14 +462,14 @@ function monogramLetter(key) {
   return match ? match[0].toUpperCase() : '◻';
 }
 
-function buildMonogramIcon(key, size, strokeWidth) {
+function buildMonogramIcon(key, size, strokeWidth, label = '') {
   const safeKey = String(key || '').trim();
   if (!safeKey) {
     return iconMap.fallback(size, strokeWidth).trim();
   }
   const hash = hashKey(safeKey);
   const [from, to] = MONOGRAM_GRADIENTS[hash % MONOGRAM_GRADIENTS.length];
-  const letter = monogramLetter(safeKey);
+  const letter = monogramLetter(String(label || '').trim() || safeKey);
   const gradId = `grad-mono-${hash.toString(36)}`;
   return `
     <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-monogram">

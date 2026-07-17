@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-explorer-i18n-v120';
+const APP_BUILD = '20260717-monogram-title-v121';
 
 ensureShellStylesheets();
 
@@ -557,7 +557,12 @@ async function loadShellIconsModule() {
 }
 
 function getRegisteredSvgIcon(id, size, strokeWidth) {
-  return shellIconsModule?.getSvgIcon?.(id, size, strokeWidth) || '';
+  // Pass the human-facing module title along so the monogram fallback derives
+  // its letter from the title (Contracts -> C) instead of the internal id,
+  // which may carry tooling prefixes (bench_contracts_... -> B).
+  const normalized = String(id || '').replace(/^module:|^desktop-app:/, '');
+  const label = state.modules?.find?.((mod) => mod.id === normalized)?.title || '';
+  return shellIconsModule?.getSvgIcon?.(id, size, strokeWidth, { label }) || '';
 }
 
 function getRegisteredActionIcon(name, size, strokeWidth) {
