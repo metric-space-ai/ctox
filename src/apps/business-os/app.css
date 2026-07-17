@@ -6,18 +6,18 @@
   --bg: oklch(0.965 0.006 235);
   --surface: oklch(0.987 0.005 235);
   --surface-2: oklch(0.944 0.008 235);
-  --line: oklch(0.84 0.012 235);
+  --line: oklch(0.82 0.012 235);
   --text: oklch(0.22 0.015 235);
   --text-strong: oklch(0.14 0.018 235);
-  --muted: oklch(0.48 0.015 235);
+  --muted: oklch(0.45 0.015 235);
   --accent: oklch(0.48 0.115 215);
   --accent-foreground: #ffffff;
   --accent-soft: oklch(0.9 0.04 215);
   --danger: oklch(0.56 0.13 28);
   --shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.12);
   --shadow-sm: 0 1px 2px oklch(0.22 0.015 235 / 0.08);
-  --shadow-md: 0 4px 12px oklch(0.22 0.015 235 / 0.1);
-  --shadow-lg: 0 8px 24px oklch(0.22 0.015 235 / 0.14);
+  --shadow-md: 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --shadow-lg: 0 8px 24px oklch(0.22 0.015 235 / 0.18);
   --hairline: color-mix(in srgb, var(--line) 62%, transparent);
   --panel-radius: 4px;
   --control-radius: 3px;
@@ -28,6 +28,19 @@
   --shell-app-bg: var(--bg);
   --shell-control-bg: var(--surface-2);
   --shell-topbar-shadow: none;
+  /* CTOX shell-style elevation ladder: desktop sits one tonal step below
+     window surfaces so stacked windows read as physical layers. Consumed
+     only by the :root[data-shell-style="ctox"] chrome layer at file end. */
+  --shell-desktop-bg: oklch(0.916 0.012 235);
+  --win-radius: 12px;
+  --win-border: color-mix(in srgb, var(--line) 88%, transparent);
+  --win-border-focus: color-mix(in srgb, var(--accent) 52%, var(--line));
+  --win-elev:
+    0 1px 2px oklch(0.22 0.015 235 / 0.1),
+    0 12px 32px oklch(0.22 0.015 235 / 0.16);
+  --win-elev-focus:
+    0 2px 6px oklch(0.22 0.015 235 / 0.14),
+    0 24px 56px oklch(0.22 0.015 235 / 0.24);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-family: var(--font-sans);
@@ -60,6 +73,18 @@
   --shell-app-bg: var(--bg);
   --shell-control-bg: var(--surface-2);
   --shell-topbar-shadow: none;
+  --shell-desktop-bg: #0a0d10;
+  --win-radius: 12px;
+  --win-border: #3a4149;
+  --win-border-focus: color-mix(in srgb, var(--accent) 55%, #3a4149);
+  --win-elev:
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 16px 44px rgba(0, 0, 0, 0.55);
+  --win-elev-focus:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 2px 8px rgba(0, 0, 0, 0.55),
+    0 28px 72px rgba(0, 0, 0, 0.66);
 }
 
 * {
@@ -5957,49 +5982,9 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
   transform: translateY(-2px) scale(1.03) !important;
 }
 
-/* 5. Sleek Floating Glass Windows */
-.shell-window {
-  background: color-mix(in srgb, var(--surface) 50%, transparent) !important;
-  backdrop-filter: blur(28px) saturate(145%) !important;
-  -webkit-backdrop-filter: blur(28px) saturate(145%) !important;
-  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent) !important;
-  border-radius: 18px !important;
-  box-shadow:
-    0 12px 38px rgba(0, 0, 0, 0.12),
-    0 1px 0 rgba(255, 255, 255, 0.08) inset !important;
-  overflow: hidden !important;
-  transition:
-    border-color 300ms ease,
-    box-shadow 300ms ease,
-    transform 350ms cubic-bezier(0.34, 1.56, 0.64, 1) !important;
-}
-
-.shell-window.is-focused {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line)) !important;
-  box-shadow:
-    0 20px 50px rgba(0, 0, 0, 0.18),
-    0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent) inset,
-    0 1px 0 rgba(255, 255, 255, 0.12) inset !important;
-}
-
-.shell-window-header {
-  background: transparent !important;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 30%, transparent) !important;
-  height: 42px !important;
-  padding: 0 12px !important;
-}
-
-.shell-window-title {
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  letter-spacing: -0.01em !important;
-  display: flex !important;
-  align-items: center !important;
-}
-
-.shell-window-content {
-  background: color-mix(in srgb, var(--bg) 15%, transparent) !important;
-}
+/* 5. (removed) The former "Sleek Floating Glass Windows" block was fully
+   neutralized by the Operational Instrument contract below and is replaced
+   by the scoped CTOX shell chrome at the end of this file. */
 
 /* 6. Active Window Group Badge */
 .shell-taskbar-badge {
@@ -7657,5 +7642,174 @@ button.shell-window-header-meta:focus-visible,
   .module-integrated-release select,
   .module-integrated-release button {
     min-height: 44px;
+  }
+}
+
+/* ==========================================================================
+   CTOX shell chrome — the default shell style.
+
+   "windows" and "macos" keep the flat Operational Instrument chrome above as
+   deliberate OS-familiar variants. The CTOX style carries the chat-dock
+   design language (soft radii, sparing glass on shell chrome, layered
+   elevation shadows) onto shell chrome only. App content inside
+   .shell-window-content stays on the flat instrument kit untouched.
+
+   Elevation ladder: desktop (--shell-desktop-bg) < desktop widgets <
+   windows (--win-elev) < focused window (--win-elev-focus). Windows stay
+   opaque — backdrop blur is reserved for small chrome surfaces (topbar,
+   taskbar, start menu, popovers) so app content stays cheap to composite.
+
+   Scoped strictly to :root[data-shell-style="ctox"]. The !important flags
+   are required to outrank the Operational Instrument contract block. */
+
+:root[data-shell-style="ctox"] .app-shell {
+  background: var(--shell-desktop-bg);
+}
+
+:root[data-shell-style="ctox"] .shell-window {
+  border: 1px solid var(--win-border) !important;
+  border-radius: var(--win-radius) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--win-elev) !important;
+  transition:
+    border-color 140ms ease,
+    box-shadow 180ms ease,
+    transform 200ms ease,
+    opacity 200ms ease !important;
+}
+
+:root[data-shell-style="ctox"] .shell-window.is-focused {
+  border-color: var(--win-border-focus) !important;
+  box-shadow: var(--win-elev-focus) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-window.is-maximized,
+:root[data-shell-style="ctox"] .shell-window.is-snapped,
+:root[data-shell-style="ctox"] .shell-window[data-snap-zone],
+:root[data-shell-style="ctox"] .shell-window.is-mobile-sheet {
+  border-radius: 0 !important;
+}
+
+/* Unfocused windows step back one layer: a whisper of desktop tint washes
+   the whole window (::before — ::after belongs to is-host-drop-target) and
+   the title mutes. The focused window then reads as physically on top. */
+:root[data-shell-style="ctox"] .shell-window::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--shell-desktop-bg) 22%, transparent);
+  border-radius: inherit;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+:root[data-shell-style="ctox"] .shell-window.is-focused::before {
+  opacity: 0;
+}
+
+:root[data-shell-style="ctox"] .shell-window:not(.is-focused) .shell-window-title {
+  color: var(--muted);
+}
+
+:root[data-shell-style="ctox"] .shell-window-header {
+  height: 34px !important;
+  min-height: 34px;
+  padding: 0 8px !important;
+  background: color-mix(in srgb, var(--surface-2) 66%, var(--surface)) !important;
+  border-bottom: 1px solid var(--hairline, var(--line)) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-window-title-text {
+  font-weight: 650;
+  letter-spacing: 0.005em;
+}
+
+:root[data-shell-style="ctox"] .shell-window-control {
+  width: 30px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+:root[data-shell-style="ctox"] .shell-window-control:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+:root[data-shell-style="ctox"] .shell-window-control--close:hover {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+:root[data-shell-style="ctox"] .shell-window-header-meta,
+:root[data-shell-style="ctox"] .shell-window-header-action {
+  border-radius: 999px;
+  border-color: var(--hairline, var(--line));
+}
+
+/* Shell chrome surfaces adopt the chat-dock glass language. */
+:root[data-shell-style="ctox"] .topbar {
+  background: color-mix(in srgb, var(--shell-topbar-bg) 80%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
+  border-bottom: 1px solid var(--hairline) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar {
+  border: 1px solid color-mix(in srgb, var(--line) 55%, transparent) !important;
+  border-radius: 14px !important;
+  background: color-mix(in srgb, var(--surface) 72%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%) !important;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar-item {
+  border-radius: 9px !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar-item:hover {
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent) !important;
+  box-shadow: none !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar-item[data-state="focused"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)) !important;
+  color: var(--accent) !important;
+  box-shadow: none !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar-popover {
+  border-radius: 12px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent) !important;
+  background: color-mix(in srgb, var(--surface) 82%, transparent) !important;
+  backdrop-filter: blur(16px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+:root[data-shell-style="ctox"] .shell-taskbar-popover-item {
+  border-radius: 8px !important;
+}
+
+:root[data-shell-style="ctox"] .shell-start-menu-panel {
+  border-radius: 14px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  backdrop-filter: blur(20px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(150%) !important;
+  box-shadow: var(--shadow-lg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-shell-style="ctox"] .shell-window,
+  :root[data-shell-style="ctox"] .shell-window::before {
+    transition: none !important;
   }
 }

@@ -65,7 +65,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260717-native-selection-v127';
+const APP_BUILD = '20260717-ctox-shell-chrome-v130';
 
 ensureShellStylesheets();
 
@@ -111,7 +111,7 @@ function ensureShellStylesheets() {
   if (typeof document === 'undefined') return;
   for (const href of [
     `app.css?v=${APP_BUILD}`,
-    'shared/base.css?v=20260609-base1',
+    `shared/base.css?v=${APP_BUILD}`,
   ]) {
     const absoluteHref = new URL(href, import.meta.url).href;
     const alreadyLoaded = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
@@ -935,7 +935,7 @@ async function bootstrap() {
   const prefs = readAccountPrefs();
   applyShellTheme(prefs.theme || 'dark', { persist: false });
   applyShellLanguage(prefs.language || 'de', { persist: false });
-  applyShellStyle(prefs.shellStyle || 'windows', { persist: false });
+  applyShellStyle(prefs.shellStyle || 'ctox', { persist: false });
   syncHeaderControls();
   wireShellActions();
 
@@ -1026,7 +1026,7 @@ async function bootstrap() {
     getSvgIcon: getRegisteredSvgIcon,
   });
   state.windowManager.setChromeLayout(
-    document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows'
+    normalizeShellStyle(document.documentElement.dataset.shellStyle) === 'macos' ? 'macos' : 'windows'
   );
   state.windowManager.setInsets({
     top: 0,
@@ -2366,7 +2366,7 @@ function formatLifecycleTimestamp(value) {
 }
 
 function shellPreferenceControlsTemplate() {
-  const shellStyle = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+  const shellStyle = normalizeShellStyle(document.documentElement.dataset.shellStyle);
   const language = shellLang();
   const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
   return `
@@ -2374,6 +2374,7 @@ function shellPreferenceControlsTemplate() {
       <label class="settings-preference-control">
         <span data-shell-t="shellStyleLabel">${escapeHtml(shellText('shellStyleLabel') || 'Window')}</span>
         <select class="header-select" data-shell-style-select aria-label="${escapeHtml(shellText('shellStyleAria') || 'Style')}" data-shell-t-aria="shellStyleAria">
+          ${preferenceOption('ctox', 'CTOX', shellStyle)}
           ${preferenceOption('windows', 'Windows', shellStyle)}
           ${preferenceOption('macos', 'macOS', shellStyle)}
         </select>
@@ -4175,10 +4176,17 @@ function applyShellTheme(theme, options = {}) {
   }
 }
 
+function normalizeShellStyle(style) {
+  if (style === 'macos' || style === 'windows') return style;
+  return 'ctox';
+}
+
 function applyShellStyle(style, options = {}) {
-  const value = style === 'macos' ? 'macos' : 'windows';
+  const value = normalizeShellStyle(style);
   document.documentElement.dataset.shellStyle = value;
-  state.windowManager?.setChromeLayout(value);
+  // The window manager only distinguishes control layouts; the CTOX style
+  // uses the windows layout (controls right) under its own visual chrome.
+  state.windowManager?.setChromeLayout(value === 'macos' ? 'macos' : 'windows');
   if (options.persist !== false) {
     writeAccountPrefs({ shellStyle: value });
   }
@@ -4192,7 +4200,7 @@ function syncHeaderControls() {
     select.value = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
   });
   document.querySelectorAll('[data-shell-style-select]').forEach((select) => {
-    select.value = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+    select.value = normalizeShellStyle(document.documentElement.dataset.shellStyle);
   });
 }
 
@@ -5325,7 +5333,7 @@ function createModuleContext(mod, overrides = {}) {
     getModules: () => state.modules,
     getDesktopApps: () => listDesktopApps(),
     locale: document.documentElement.lang === 'en' ? 'en' : 'de',
-    shellStyle: document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows',
+    shellStyle: normalizeShellStyle(document.documentElement.dataset.shellStyle),
     host: hostEl,
     left: overrides.left || els.leftContent,
     right: overrides.right || els.rightContent,

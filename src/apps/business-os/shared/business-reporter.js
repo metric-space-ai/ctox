@@ -22,6 +22,27 @@ let eggState = {
 let idleTimeout = null;
 const IDLE_TIME = 300000; // 5 minutes of inactivity
 
+function shouldEnableIdleAnimation() {
+  return !globalThis.ctoxBusinessOsDesktop;
+}
+
+function reporterCopy() {
+  const en = document.documentElement.lang === 'en';
+  return en
+    ? {
+      fabLabel: 'An app is never finished',
+      fabTitle: 'An app is never finished — tell CTOX what should improve.',
+      fabAria: 'Send feedback to CTOX: report a bug or feature',
+      tagline: 'An app is never finished. Your report goes straight into the CTOX work queue.',
+    }
+    : {
+      fabLabel: 'Eine App ist nie fertig',
+      fabTitle: 'Eine App ist nie fertig — sag CTOX, was besser werden soll.',
+      fabAria: 'Feedback an CTOX senden: Bug oder Feature melden',
+      tagline: 'Eine App ist nie fertig. Dein Hinweis geht direkt in die CTOX-Arbeitsschlange.',
+    };
+}
+
 function interpolateAngle(current, target, step) {
   let diff = (target - current) % 360;
   if (diff < -180) diff += 360;
@@ -289,17 +310,20 @@ export function initBusinessReporter({
     savingMarkup: false,
   };
 
+  const copy = reporterCopy();
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'ctox-report-fab';
   button.dataset.ctoxReporter = 'true';
-  button.setAttribute('aria-label', 'Bug oder Feature an CTOX melden');
-  button.title = 'Bug oder Feature an CTOX melden';
-  button.innerHTML = bugIconSvg();
+  button.setAttribute('aria-label', copy.fabAria);
+  button.title = copy.fabTitle;
+  button.innerHTML = `${bugIconSvg()}<span class="ctox-report-fab-label">${escapeHtml(copy.fabLabel)}</span>`;
   button.addEventListener('click', () => openReporterDialog(reporterState));
   document.body.append(button);
 
   fabButton = button;
+
+  if (!shouldEnableIdleAnimation()) return;
 
   const handleActivity = (event) => {
     const target = event.target && typeof event.target.closest === 'function'
@@ -349,6 +373,7 @@ function openReporterDialog(state) {
         </div>
         <button type="button" class="ctox-report-close" data-close aria-label="Schließen">x</button>
       </header>
+      <p class="ctox-report-tagline">${escapeHtml(reporterCopy().tagline)}</p>
       <div class="ctox-report-grid">
         <label>
           <span>Typ</span>
@@ -1139,6 +1164,10 @@ function installReporterStyles() {
   const style = document.createElement('style');
   style.id = REPORTER_STYLE_ID;
   style.textContent = `
+    /* The reporter FAB is the standing reminder that an app is never
+       finished. It rests as a quiet glass dot in the shell's chat-dock
+       language, breathes a soft pulse ring, and unfolds its thought on
+       hover. Loud alarm-red is reserved for real danger, not feedback. */
     .ctox-report-fab {
       position: fixed;
       right: 18px;
@@ -1146,19 +1175,81 @@ function installReporterStyles() {
       z-index: 40;
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      width: 44px;
-      height: 44px;
-      border: 1px solid rgba(239, 68, 68, .45);
-      background: #20252b;
-      color: #f2f5f7;
-      border-radius: 7px;
-      padding: 0;
-      font: 700 12px/1.1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+      justify-content: flex-start;
+      gap: 0;
+      height: 40px;
+      min-width: 40px;
+      max-width: 40px;
+      padding: 0 10px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--line, #3a4149) 55%, transparent);
+      background: color-mix(in srgb, var(--surface, #171a1d) 78%, transparent);
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+      color: var(--muted, #9ba4aa);
+      border-radius: 999px;
+      font: 650 12px/1.1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      box-shadow:
+        0 8px 24px rgba(0, 0, 0, .18),
+        0 1px 0 rgba(255, 255, 255, .06) inset;
       cursor: pointer;
+      transition:
+        max-width 260ms cubic-bezier(0.25, 0.8, 0.25, 1),
+        color 160ms ease,
+        border-color 160ms ease,
+        background-color 160ms ease,
+        box-shadow 200ms ease;
     }
-    .ctox-report-fab svg { color: #ef4444; flex: 0 0 auto; }
+    .ctox-report-fab::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      pointer-events: none;
+      border: 1px solid color-mix(in srgb, var(--accent, #72b8aa) 65%, transparent);
+      opacity: 0;
+      animation: ctox-report-breathe 9s ease-out infinite;
+    }
+    @keyframes ctox-report-breathe {
+      0%, 88%, 100% { opacity: 0; transform: scale(1); }
+      90% { opacity: .8; transform: scale(1); }
+      97% { opacity: 0; transform: scale(1.55); }
+    }
+    .ctox-report-fab svg { flex: 0 0 auto; transition: color 160ms ease, transform 200ms ease; }
+    .ctox-report-fab-label {
+      white-space: nowrap;
+      opacity: 0;
+      margin-left: 0;
+      transition: opacity 180ms ease 60ms, margin-left 200ms ease;
+    }
+    .ctox-report-fab:hover,
+    .ctox-report-fab:focus-visible {
+      max-width: 280px;
+      color: var(--text, #e6e9eb);
+      border-color: color-mix(in srgb, var(--accent, #72b8aa) 45%, var(--line, #3a4149));
+      background: color-mix(in srgb, var(--surface, #171a1d) 92%, transparent);
+      box-shadow:
+        0 12px 32px rgba(0, 0, 0, .24),
+        0 1px 0 rgba(255, 255, 255, .08) inset;
+    }
+    .ctox-report-fab:hover svg,
+    .ctox-report-fab:focus-visible svg {
+      color: var(--accent, #72b8aa);
+      transform: rotate(-8deg);
+    }
+    .ctox-report-fab:hover .ctox-report-fab-label,
+    .ctox-report-fab:focus-visible .ctox-report-fab-label {
+      opacity: 1;
+      margin-left: 8px;
+    }
+    .ctox-report-fab:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--accent, #72b8aa) 70%, transparent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ctox-report-fab::before { animation: none; }
+      .ctox-report-fab, .ctox-report-fab svg, .ctox-report-fab-label { transition: none; }
+    }
     .ctox-report-fab.bug-crawled-away svg {
       opacity: 0 !important;
       visibility: hidden !important;
@@ -1175,7 +1266,7 @@ function installReporterStyles() {
       align-items: center;
       justify-content: center;
       background: transparent;
-      color: #ef4444;
+      color: var(--accent, #72b8aa);
       transition: none;
     }
     .ctox-report-backdrop {
@@ -1194,10 +1285,10 @@ function installReporterStyles() {
       display: grid;
       gap: 14px;
       overflow: auto;
-      background: #181c21;
-      color: #e5e9ee;
-      border: 1px solid rgba(112, 131, 151, .32);
-      border-radius: 8px;
+      background: var(--surface, #181c21);
+      color: var(--text, #e5e9ee);
+      border: 1px solid var(--line, rgba(112, 131, 151, .32));
+      border-radius: 12px;
       padding: 18px;
       box-shadow: 0 20px 60px rgba(0, 0, 0, .42);
       font: 13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1210,11 +1301,17 @@ function installReporterStyles() {
       align-items: center;
       justify-content: space-between;
     }
+    .ctox-report-tagline {
+      margin: -6px 0 0;
+      color: var(--muted, #9aa4af);
+      font-size: 12px;
+      line-height: 1.4;
+    }
     .ctox-report-dialog header span,
     .ctox-report-dialog label span,
     .ctox-report-dialog footer span {
       display: block;
-      color: #9aa4af;
+      color: var(--muted, #9aa4af);
       font-size: 12px;
     }
     .ctox-report-dialog label {
@@ -1229,33 +1326,33 @@ function installReporterStyles() {
     .ctox-report-dialog select {
       width: 100%;
       box-sizing: border-box;
-      border: 1px solid rgba(133, 148, 163, .34);
+      border: 1px solid var(--line, rgba(133, 148, 163, .34));
       border-radius: 6px;
-      background: #101318;
-      color: #edf1f5;
+      background: var(--bg, #101318);
+      color: var(--text, #edf1f5);
       padding: 9px 10px;
       font: inherit;
     }
     .ctox-report-dialog input:focus,
     .ctox-report-dialog textarea:focus,
     .ctox-report-dialog select:focus {
-      outline: 2px solid rgba(57, 140, 196, .7);
+      outline: 2px solid color-mix(in srgb, var(--accent, #398cc4) 70%, transparent);
       outline-offset: 2px;
-      border-color: rgba(57, 140, 196, .82);
+      border-color: var(--accent, rgba(57, 140, 196, .82));
     }
     .ctox-report-dialog button,
     .ctox-report-markup-toolbar button {
       border: 0;
       border-radius: 6px;
-      background: #596a78;
-      color: #f5f7f9;
+      background: var(--accent, #596a78);
+      color: var(--accent-foreground, #f5f7f9);
       padding: 8px 11px;
       font: inherit;
       cursor: pointer;
     }
     .ctox-report-dialog header button {
       background: transparent;
-      color: #a9b1ba;
+      color: var(--muted, #a9b1ba);
       padding: 4px 7px;
     }
     .ctox-report-actions {
@@ -1267,8 +1364,9 @@ function installReporterStyles() {
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      border: 1px solid rgba(133, 148, 163, .24) !important;
-      background: #20252b !important;
+      border: 1px solid var(--line, rgba(133, 148, 163, .24)) !important;
+      background: var(--surface-2, #20252b) !important;
+      color: var(--text, #f5f7f9) !important;
     }
     .ctox-report-attachment {
       display: grid;

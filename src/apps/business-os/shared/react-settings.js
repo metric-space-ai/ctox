@@ -891,7 +891,8 @@ function settingsTemplate({
 
 function settingsPreferenceControls() {
   const lang = document.documentElement.lang === 'en' ? 'en' : 'de';
-  const shellStyle = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+  const rawShellStyle = document.documentElement.dataset.shellStyle;
+  const shellStyle = rawShellStyle === 'macos' || rawShellStyle === 'windows' ? rawShellStyle : 'ctox';
   const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
   const copy = lang === 'en'
     ? {
@@ -917,6 +918,7 @@ function settingsPreferenceControls() {
       <label class="settings-preference-control">
         <span data-shell-t="shellStyleLabel">${escapeHtml(copy.shellStyle)}</span>
         <select class="header-select" data-shell-style-select aria-label="${escapeAttr(copy.shellStyleAria)}" data-shell-t-aria="shellStyleAria">
+          ${option('ctox', 'CTOX', shellStyle)}
           ${option('windows', 'Windows', shellStyle)}
           ${option('macos', 'macOS', shellStyle)}
         </select>

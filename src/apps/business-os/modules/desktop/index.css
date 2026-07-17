@@ -510,3 +510,16 @@ body[data-active-module="desktop"] .topbar {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.02) !important;
   transition: background-color 300ms ease !important;
 }
+
+/* CTOX shell style: the desktop drops one tonal step below window surfaces
+   (--shell-desktop-bg from the shell token block) so open windows read as
+   physically elevated layers instead of blending into the wallpaper. */
+:root[data-shell-style="ctox"] .desktop-module {
+  background:
+    radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent-soft) 22%, var(--shell-desktop-bg)) 0px, transparent 55%),
+    radial-gradient(at 50% 0%, color-mix(in srgb, var(--accent) 10%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, color-mix(in srgb, var(--accent-soft) 26%, var(--shell-desktop-bg)) 0px, transparent 55%),
+    radial-gradient(at 0% 100%, color-mix(in srgb, var(--accent) 7%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, color-mix(in srgb, var(--accent-soft) 18%, var(--shell-desktop-bg)) 0px, transparent 50%),
+    var(--shell-desktop-bg);
+}
