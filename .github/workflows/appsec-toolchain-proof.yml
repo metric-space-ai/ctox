@@ -41,7 +41,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'minimal' }}
+  group: appsec-toolchain-proof-${{ github.ref }}-${{ inputs.profile || 'minimal' }}-${{ inputs.platform_scope || 'all' }}
   cancel-in-progress: false
 
 jobs:
