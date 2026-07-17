@@ -984,6 +984,13 @@ struct ModuleManifest {
     /// data-access review; drives the "external source — unverified" badge.
     #[serde(default, skip_serializing_if = "Value::is_null")]
     app_source: Value,
+    /// Server-side external database mappings for local apps. Never project
+    /// these declarations into the browser catalog because they contain
+    /// connection metadata and executable, administrator-reviewed SQL.
+    #[serde(default, skip_serializing)]
+    external_data_sources: Vec<Value>,
+    #[serde(default, skip_serializing)]
+    external_data_sources_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9785,6 +9792,58 @@ fn load_module_manifests(
         _ => a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)),
     });
     Ok(manifests)
+}
+
+/// Load server-only external data-source declarations from operator-owned
+/// local Business OS apps. Packaged and marketplace apps cannot supply
+/// executable SQL mappings.
+pub(crate) fn local_external_data_source_declarations(root: &Path) -> anyhow::Result<Vec<Value>> {
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let manifests = load_local_module_manifests(&installed_app_root)?;
+    let mut declarations = Vec::new();
+    for manifest in manifests {
+        let mut source_values = manifest.external_data_sources;
+        if !manifest.external_data_sources_file.trim().is_empty() {
+            let relative = Path::new(manifest.external_data_sources_file.trim());
+            anyhow::ensure!(
+                !relative.is_absolute()
+                    && relative
+                        .components()
+                        .all(|component| matches!(component, std::path::Component::Normal(_))),
+                "external_data_sources_file must stay inside the local module"
+            );
+            let manifest_path = Path::new(&manifest.local_manifest_path);
+            let module_dir = manifest_path
+                .parent()
+                .context("local module manifest has no parent directory")?;
+            let mapping_path = module_dir.join(relative);
+            let raw = fs::read_to_string(&mapping_path).with_context(|| {
+                format!(
+                    "failed to read external SQL mapping {}",
+                    mapping_path.display()
+                )
+            })?;
+            let value: Value = serde_json::from_str(&raw).with_context(|| {
+                format!(
+                    "failed to parse external SQL mapping {}",
+                    mapping_path.display()
+                )
+            })?;
+            match value {
+                Value::Array(values) => source_values.extend(values),
+                Value::Object(_) => source_values.push(value),
+                _ => anyhow::bail!("external SQL mapping file must contain an object or array"),
+            }
+        }
+        for mut declaration in source_values {
+            let object = declaration
+                .as_object_mut()
+                .context("external_data_sources entries must be objects")?;
+            object.insert("module_id".to_string(), Value::String(manifest.id.clone()));
+            declarations.push(declaration);
+        }
+    }
+    Ok(declarations)
 }
 
 fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
@@ -19107,6 +19166,38 @@ impl RxdbProjectionWriterCache {
     }
 }
 
+pub(crate) struct BusinessProjectionWriter {
+    conn: Connection,
+    rxdb_writers: RxdbProjectionWriterCache,
+}
+
+impl BusinessProjectionWriter {
+    pub(crate) fn open(root: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            conn: open_store(root)?,
+            rxdb_writers: RxdbProjectionWriterCache::new(root),
+        })
+    }
+
+    pub(crate) fn upsert(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        upsert_business_record(
+            &self.conn,
+            collection,
+            record_id,
+            updated_at_ms,
+            payload.clone(),
+        )?;
+        self.rxdb_writers
+            .upsert(collection, record_id, updated_at_ms, payload)
+    }
+}
+
 struct RxdbCollectionWriter {
     conn: Connection,
     table: String,
@@ -20305,6 +20396,7 @@ fn is_rxdb_control_command_type(command_type: &str) -> bool {
     exact_types.contains(command_type)
         || crate::coding_agents::is_coding_agent_command(command_type)
         || is_customers_active_command(command_type)
+        || super::external_sql_sync::is_external_sql_command(command_type)
         || is_outbound_active_command(command_type)
         || is_iot_active_command(command_type)
         || is_ats_active_command(command_type)
@@ -21331,6 +21423,44 @@ pub fn accept_rxdb_business_command_with_origin(
                         &command,
                         "failed",
                         None,
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        command_type if super::external_sql_sync::is_external_sql_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                super::external_sql_sync::data_write_permission(),
+                &command.module,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            match super::external_sql_sync::handle_business_command(root, &command) {
+                Ok(outcome) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        command.record_id.as_deref(),
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
                         Some("failed"),
                         serde_json::json!({
                             "ok": false,
@@ -27775,6 +27905,11 @@ pub(super) fn ensure_legacy_collection_grants(
     root: &Path,
     collections: &[String],
 ) -> anyhow::Result<()> {
+    // Loading local module mappings may hash app assets. Resolve ownership
+    // once before opening the SQLite write transaction to avoid startup lock
+    // contention during capability issuance.
+    let server_owned_collections =
+        super::external_sql_sync::server_owned_projection_collections(root)?;
     let mut conn = open_store(root)?;
     let tx = conn.transaction()?;
     let now = now_ms() as i64;
@@ -27792,7 +27927,8 @@ pub(super) fn ensure_legacy_collection_grants(
                 BusinessOsPermission::DataWrite,
             ] {
                 if permission == BusinessOsPermission::DataWrite
-                    && super::threads::is_threads_owned_collection(collection)
+                    && (super::threads::is_threads_owned_collection(collection)
+                        || server_owned_collections.contains(collection))
                 {
                     continue;
                 }
@@ -42529,6 +42665,61 @@ mod tests {
             "customers",
             BusinessOsPermission::DataRead
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_grants_keep_external_sql_projections_server_owned() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_dir = root.path().join("business-os/local-modules/inventory");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "external_data_sources": [{
+                    "id": "erp",
+                    "connection": {
+                        "server": "sql.example.test",
+                        "database": "erp",
+                        "user": "sync",
+                        "password_secret": "ERP_SQL_PASSWORD"
+                    },
+                    "status_collection": "inventory_sync_status",
+                    "projections": [{
+                        "id": "items",
+                        "collection": "inventory_items",
+                        "record_id_field": "item_id",
+                        "query": "SELECT item_id FROM dbo.items ORDER BY item_id OFFSET @P1 ROWS FETCH NEXT @P2 ROWS ONLY"
+                    }]
+                }]
+            }))?,
+        )?;
+        seed_business_user(root.path(), "user1", "user")?;
+        ensure_legacy_collection_grants(
+            root.path(),
+            &[
+                "inventory_items".to_string(),
+                "inventory_sync_status".to_string(),
+            ],
+        )?;
+        let (token, _) = issue_business_os_capability_token(root.path(), "user1", now_ms() as i64)?;
+
+        for collection in ["inventory_items", "inventory_sync_status"] {
+            assert!(capability_allows_collection_permission(
+                root.path(),
+                &token,
+                collection,
+                BusinessOsPermission::DataRead
+            ));
+            assert!(!capability_allows_collection_permission(
+                root.path(),
+                &token,
+                collection,
+                BusinessOsPermission::DataWrite
+            ));
+        }
         Ok(())
     }
 

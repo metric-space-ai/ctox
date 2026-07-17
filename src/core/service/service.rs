@@ -1297,6 +1297,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
     start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
+    crate::business_os::start_background_sync(root);
     start_channel_syncer(root.to_path_buf());
     start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
