@@ -824,14 +824,19 @@ fn run_command_with_env(
     envs: &[(&str, &Path)],
     error_message: &str,
 ) -> Result<()> {
-    let mut command = Command::new(program);
+    let resolved_program = find_command_on_path(program)
+        .with_context(|| format!("{error_message}: `{program}` was not found on PATH"))?;
+    let mut command = Command::new(&resolved_program);
     command.current_dir(cwd).args(args);
     for (key, value) in envs {
         command.env(key, value);
     }
-    let output = command
-        .output()
-        .with_context(|| format!("{error_message}: failed to launch `{program}`"))?;
+    let output = command.output().with_context(|| {
+        format!(
+            "{error_message}: failed to launch `{}`",
+            resolved_program.display()
+        )
+    })?;
     if output.status.success() {
         return Ok(());
     }
