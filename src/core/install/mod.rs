@@ -24,6 +24,7 @@ use crate::service;
 
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
+const MAINTENANCE_STORE_FILE_NAME: &str = "ctox-maintenance.sqlite3";
 const MAINTENANCE_STATE_ID: &str = "business-os-upgrade";
 const MAINTENANCE_SCHEMA_VERSION: u32 = 1;
 const MAINTENANCE_LEASE_TTL_MS: i64 = 90_000;
@@ -62,6 +63,7 @@ const UPGRADE_SECRET_INVARIANT_KEYS: &[&str] = &[
 ];
 static UPGRADE_PROGRESS_STEP: AtomicUsize = AtomicUsize::new(0);
 static UPGRADE_PROGRESS_STARTED: Mutex<Option<Instant>> = Mutex::new(None);
+static MAINTENANCE_STORE_MIGRATION: Mutex<()> = Mutex::new(());
 
 fn progress_reset() {
     UPGRADE_PROGRESS_STEP.store(0, Ordering::SeqCst);
@@ -553,7 +555,7 @@ pub fn business_os_platform_status(root: &Path) -> Result<serde_json::Value> {
 
 fn open_maintenance_store(state_root: &Path) -> Result<rusqlite::Connection> {
     ensure_dir(state_root)?;
-    let connection = rusqlite::Connection::open(state_root.join("ctox.sqlite3"))?;
+    let connection = rusqlite::Connection::open(state_root.join(MAINTENANCE_STORE_FILE_NAME))?;
     connection.busy_timeout(Duration::from_secs(10))?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS ctox_maintenance_state (
@@ -562,7 +564,69 @@ fn open_maintenance_store(state_root: &Path) -> Result<rusqlite::Connection> {
             updated_at_ms INTEGER NOT NULL
         );",
     )?;
+    migrate_legacy_maintenance_state(state_root, &connection)?;
     Ok(connection)
+}
+
+fn migrate_legacy_maintenance_state(
+    state_root: &Path,
+    connection: &rusqlite::Connection,
+) -> Result<()> {
+    use rusqlite::OptionalExtension;
+
+    let _migration = MAINTENANCE_STORE_MIGRATION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version >= 1 {
+        return Ok(());
+    }
+
+    let has_state = connection
+        .query_row(
+            "SELECT 1 FROM ctox_maintenance_state WHERE state_id = ?1",
+            [MAINTENANCE_STATE_ID],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let legacy_path = state_root.join("ctox.sqlite3");
+    if !has_state && legacy_path.is_file() {
+        let legacy = rusqlite::Connection::open_with_flags(
+            &legacy_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        legacy.busy_timeout(Duration::from_secs(10))?;
+        let legacy_table_exists = legacy.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = 'ctox_maintenance_state'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if legacy_table_exists {
+            let legacy_state = legacy
+                .query_row(
+                    "SELECT state_json, updated_at_ms
+                     FROM ctox_maintenance_state
+                     WHERE state_id = ?1",
+                    [MAINTENANCE_STATE_ID],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            if let Some((state_json, updated_at_ms)) = legacy_state {
+                connection.execute(
+                    "INSERT OR IGNORE INTO ctox_maintenance_state
+                     (state_id, state_json, updated_at_ms)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![MAINTENANCE_STATE_ID, state_json, updated_at_ms],
+                )?;
+            }
+        }
+    }
+    connection.pragma_update(None, "user_version", 1)?;
+    Ok(())
 }
 
 fn load_maintenance_state_from_root(state_root: &Path) -> Result<Option<MaintenanceState>> {
@@ -4266,6 +4330,50 @@ mod tests {
         assert!(completed.replication_up);
         assert!(completed.initial_replication_complete);
         assert_eq!(completed.client_readiness.len(), 1);
+    }
+
+    #[test]
+    fn maintenance_state_migrates_once_from_the_legacy_core_database() {
+        let temp = tempdir().unwrap();
+        let layout = maintenance_test_layout(temp.path());
+        let started = begin_maintenance(&layout, "branch:main").unwrap();
+        fs::remove_file(layout.state_root.join(MAINTENANCE_STORE_FILE_NAME)).unwrap();
+
+        let legacy = rusqlite::Connection::open(layout.state_root.join("ctox.sqlite3")).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE ctox_maintenance_state (
+                    state_id TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO ctox_maintenance_state
+                 (state_id, state_json, updated_at_ms)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    MAINTENANCE_STATE_ID,
+                    serde_json::to_string(&started).unwrap(),
+                    123_i64
+                ],
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(migrated.lease_id, started.lease_id);
+        let dedicated =
+            rusqlite::Connection::open(layout.state_root.join(MAINTENANCE_STORE_FILE_NAME))
+                .unwrap();
+        let version: i64 = dedicated
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
     }
 
     #[test]
