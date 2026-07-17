@@ -908,14 +908,40 @@ fn ensure_node_runtime_compatible() -> Result<()> {
 }
 
 pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
-    if program.contains('/') {
-        let path = PathBuf::from(program);
-        return path.is_file().then_some(path);
+    let command_names = command_file_names(program);
+    if program.contains('/') || program.contains('\\') {
+        return command_names
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|candidate| candidate.is_file());
     }
     let path_env = std::env::var_os("PATH")?;
     std::env::split_paths(&path_env)
-        .map(|dir| dir.join(program))
+        .flat_map(|dir| command_names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+fn command_file_names(program: &str) -> Vec<String> {
+    let names = vec![program.to_string()];
+    #[cfg(windows)]
+    {
+        if Path::new(program).extension().is_some() {
+            return names;
+        }
+        let mut names = names;
+        let path_extensions =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        names.extend(
+            path_extensions
+                .split(';')
+                .map(str::trim)
+                .filter(|extension| !extension.is_empty())
+                .map(|extension| format!("{program}{extension}")),
+        );
+        names
+    }
+    #[cfg(not(windows))]
+    names
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
