@@ -11,14 +11,16 @@
     "ctox-pi-sidecar": "./dist/ctox-pi-sidecar.mjs"
   },
   "scripts": {
-    "build": "esbuild src/index.mjs --bundle --platform=node --format=esm --target=node20 --outfile=dist/ctox-pi-sidecar.mjs --banner:js=\"// CTOX pi-coding sidecar. Self-contained bundle; upstream Pi v0.80.2.\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/ctox-pi-sidecar.mjs --banner:js=\"import { createRequire as __ctoxCreateRequire } from 'module'; const require = __ctoxCreateRequire(import.meta.url); // CTOX pi-coding sidecar; self-contained; upstream Pi v0.80.2\"",
+    "smoke": "node test/turn-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.2",
     "@earendil-works/pi-ai": "0.80.2",
     "@earendil-works/pi-coding-agent": "0.80.2",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "virtualfs": "2.2.0"
   },
   "devDependencies": {
     "esbuild": "0.28.0",
