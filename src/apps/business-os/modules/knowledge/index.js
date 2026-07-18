@@ -197,9 +197,7 @@ function documentTemplate() {
               <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
               <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
             </div>
-            <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon knowledge-head-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
-            </div>
+            <div class="ctox-pane-actions"></div>
           </div>
         </header>
         <!-- Row 3: view switcher (its own band below the header, never top-right). -->
@@ -211,6 +209,7 @@ function documentTemplate() {
           </div>
         </div>
         <div class="knowledge-tab-panel" data-panel="skill">
+          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           <div class="ctox-toolbar knowledge-edit-bar" data-skill-toolbar>
             <div class="knowledge-edit-actions">
               <button class="ctox-button" type="button" data-action="edit-markdown">Bearbeiten</button>
@@ -223,6 +222,7 @@ function documentTemplate() {
           <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
         </div>
         <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
+          <button class="ctox-pane-icon knowledge-content-edit" type="button" data-action="edit-active" aria-label="Bearbeiten" title="Bearbeiten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
           <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
           <div class="ctox-toolbar knowledge-edit-bar" data-runbook-toolbar>
             <div class="knowledge-edit-actions">

@@ -919,3 +919,21 @@
 .knowledge-module .knowledge-left .knowledge-filterbar,
 .knowledge-module .knowledge-left .knowledge-scope-switch { background: transparent; }
 .knowledge-module .knowledge-left .ctox-pane-kicker { color: var(--knowledge-accent); }
+
+/* Content element = an element too → its own edit pencil, top-right of the
+   content panel (not up in the pane header). Hidden while actually editing. */
+.knowledge-module .knowledge-tab-panel { position: relative; }
+.knowledge-module .knowledge-content-edit {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 3;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.knowledge-module .knowledge-content-edit:hover,
+.knowledge-module .knowledge-content-edit:focus-visible { opacity: 1; }
+.knowledge-module .knowledge-tab-panel:has([data-markdown-editor]:not([hidden])) .knowledge-content-edit,
+.knowledge-module .knowledge-tab-panel:has([data-runbook-form]:not([hidden])) .knowledge-content-edit {
+  display: none;
+}
