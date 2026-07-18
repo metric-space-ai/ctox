@@ -74,6 +74,42 @@ test('prefers persisted graph rows and preserves source provenance', () => {
   assert.equal(projection.links[0].provenance.method, 'evidence_grounded');
 });
 
+test('all layer preserves the complete small persisted graph at standard and deep detail', () => {
+  const provenance = JSON.stringify({ source_id: 'enola', evidence_ids: ['receipt-enola'] });
+  const kinds = ['topic', 'source', 'evidence', 'concept', 'measurement', 'measurement', 'measurement', 'concept', 'concept'];
+  const graphNodeRows = kinds.map((kind, index) => ({
+    node_id: `node:${index}`,
+    label: `Verified node ${index}`,
+    kind,
+    confidence: 1,
+    provenance_json: provenance,
+    source_ids_json: '["enola"]',
+  }));
+  const graphEdgeRows = Array.from({ length: 8 }, (_, index) => ({
+    edge_id: `edge:${index}`,
+    source_id: `node:${index}`,
+    target_id: `node:${index + 1}`,
+    relation_type: 'supports',
+    label: 'Supports',
+    weight: 1,
+    confidence: 1,
+    provenance_json: provenance,
+    source_ids_json: '["enola"]',
+  }));
+  for (const detailLevel of ['standard', 'deep']) {
+    const projection = buildResearchGraphProjection({
+      graphNodeRows,
+      graphEdgeRows,
+      graphLayer: 'all',
+      detailLevel,
+      verifiedSourceIds: ['enola'],
+    });
+    assert.equal(projection.origin, 'persisted');
+    assert.equal(projection.nodes.length, 9);
+    assert.equal(projection.links.length, 8);
+  }
+});
+
 test('rejects persisted graph rows with invalid relation, provenance, or source binding', () => {
   const projection = buildResearchGraphProjection({
     graphNodeRows: [{ node_id: 'concept:bad', label: 'Bad concept', kind: 'concept', confidence: 0.8, source_ids_json: '["unverified"]' }],
@@ -91,6 +127,7 @@ test('derived graph excludes task prompt concepts and marks fallback relations e
     task: { id: 'task-prompt', title: 'Unsubstantiated Roadmap Hypothesis', prompt: 'Secret roadmap token must never rank.' },
     sourceModels: [{ id: 'source_verified', evidenceEligible: true, title: 'Governance evidence study', score: 88, row: { summary: 'Governance evidence supports audit controls.' } }],
     verifiedSourceIds: ['source_verified'],
+    graphLayer: 'concepts',
     visibleLimit: 36,
   });
   assert.doesNotMatch(projection.nodes.map((node) => node.label).join(' '), /Unsubstantiated|roadmap|secret/i);
@@ -124,6 +161,33 @@ test('adds source and evidence layers without exceeding graph limits', () => {
   assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
   const nodeIds = new Set(projection.nodes.map((node) => node.id));
   assert.ok(projection.links.every((link) => nodeIds.has(link.source) && nodeIds.has(link.target)));
+});
+
+test('all layer reserves source and evidence nodes and deduplicates repeated evidence ids', () => {
+  const sourceModels = Array.from({ length: 20 }, (_, index) => ({
+    id: `source_${index}`,
+    title: `Ranked bearing concept source ${index}`,
+    note: `propeller bearing torque thrust vibration concept ${index}`,
+    score: 100 - index,
+    row: { summary: `Measured bearing concept ${index}` },
+  }));
+  const repeatedEvidence = {
+    source_id: 'source_0',
+    evidence_id: 'receipt-0',
+    fact_label: 'Measured thrust',
+    quote: 'The measured thrust value is source-backed.',
+  };
+  const projection = buildResearchGraphProjection({
+    sourceModels,
+    measurementRows: [repeatedEvidence, { ...repeatedEvidence }],
+    graphLayer: 'all',
+    visibleLimit: 12,
+  });
+
+  assert.ok(projection.nodes.some((node) => node.kind === 'source'));
+  assert.ok(projection.nodes.some((node) => node.kind === 'evidence'));
+  assert.equal(new Set(projection.nodes.map((node) => node.id)).size, projection.nodes.length);
+  assert.equal(new Set(projection.links.map((link) => link.id)).size, projection.links.length);
 });
 
 test('does not turn technical metadata keys into research concepts', () => {

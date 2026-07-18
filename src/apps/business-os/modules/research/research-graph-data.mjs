@@ -79,7 +79,7 @@ export function buildResearchGraphProjection(input = {}) {
   }, detailLevel, visibleLimit, input.graphLayer);
 }
 
-export function sliceResearchGraphProjection(projection, detailLevel = 'standard', visibleLimit, graphLayer = 'concepts') {
+export function sliceResearchGraphProjection(projection, detailLevel = 'standard', visibleLimit, graphLayer = 'all') {
   const layoutNodes = Array.isArray(projection?.layoutNodes) ? projection.layoutNodes : (projection?.nodes || []);
   const layoutLinks = Array.isArray(projection?.layoutLinks) ? projection.layoutLinks : (projection?.links || []);
   const nodes = selectVisibleNodes(layoutNodes, graphLayer, Number(visibleLimit) || GRAPH_DETAIL_LEVELS[detailLevel] || GRAPH_DETAIL_LEVELS.standard);
@@ -327,8 +327,8 @@ function documentConcepts(document) {
   return result.slice(0, 160);
 }
 
-function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibleLimit = GRAPH_DETAIL_LEVELS.standard) {
-  if (layer !== 'sources' && layer !== 'evidence') return { nodes, links };
+function addRequestedLayers(nodes, links, documents, layer = 'all', _visibleLimit = GRAPH_DETAIL_LEVELS.standard) {
+  if (!['all', 'sources', 'evidence'].includes(layer)) return { nodes, links };
   const bySource = new Map();
   for (const node of nodes) {
     for (const sourceId of node.sourceIds || []) {
@@ -340,10 +340,11 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
   const extraLinks = [];
   // Build one stable deep projection, then take nested slices for each detail
   // level. Otherwise changing detail also changes the force topology.
-  const sourceBudget = layer === 'evidence'
+  const includesEvidence = layer === 'all' || layer === 'evidence';
+  const sourceBudget = includesEvidence
     ? Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.2)
     : Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.34);
-  const evidenceBudget = layer === 'evidence' ? Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.3) : 0;
+  const evidenceBudget = includesEvidence ? Math.floor(GRAPH_DETAIL_LEVELS.deep * 0.3) : 0;
   const rankedDocuments = documents
     .filter((item) => item.sourceId)
     .sort((left, right) => right.score - left.score || left.sourceId.localeCompare(right.sourceId))
@@ -377,23 +378,25 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
         provenance: { kind: 'derived', method: 'source_concept_binding' },
       });
     }
-    if (layer === 'evidence') {
+    if (includesEvidence) {
       const evidenceForSource = document.evidence.slice(0, Math.min(3, remainingEvidence));
       for (const [index, evidence] of evidenceForSource.entries()) {
         const evidenceRecordId = firstString(evidence, ['evidence_id', 'claim_id', 'id']);
         const evidenceId = `evidence:${document.sourceId}:${evidenceRecordId || index}`;
-        extraNodes.push({
-          id: evidenceId,
-          label: shortLabel(firstString(evidence, ['fact_label', 'title', 'name']) || `Beleg ${index + 1}`, 48),
-          kind: 'evidence',
-          description: firstString(evidence, ['quote', 'summary', 'description']),
-          occurrences: 1,
-          documentCount: 1,
-          rawScore: 2,
-          sourceIds: [document.sourceId],
-          confidence: normalizedUnit(evidence.confidence) || 0.5,
-          provenance: { kind: 'derived', method: 'evidence_points', evidenceId: evidenceRecordId },
-        });
+        if (!nodes.some((node) => node.id === evidenceId) && !extraNodes.some((node) => node.id === evidenceId)) {
+          extraNodes.push({
+            id: evidenceId,
+            label: shortLabel(firstString(evidence, ['fact_label', 'title', 'name']) || `Beleg ${index + 1}`, 48),
+            kind: 'evidence',
+            description: firstString(evidence, ['quote', 'summary', 'description']),
+            occurrences: 1,
+            documentCount: 1,
+            rawScore: 2,
+            sourceIds: [document.sourceId],
+            confidence: normalizedUnit(evidence.confidence) || 0.5,
+            provenance: { kind: 'derived', method: 'evidence_points', evidenceId: evidenceRecordId },
+          });
+        }
         extraLinks.push({
           id: `edge:${stableHash(`${sourceNodeId}\u0000${evidenceId}`).toString(36)}`,
           source: sourceNodeId,
@@ -409,9 +412,12 @@ function addRequestedLayers(nodes, links, documents, layer = 'concepts', _visibl
       remainingEvidence -= evidenceForSource.length;
     }
   }
+  const mergedNodes = [...nodes.slice(0, Math.max(12, MAX_GRAPH_NODES - extraNodes.length)), ...extraNodes];
+  const uniqueNodes = [...new Map(mergedNodes.map((node) => [node.id, node])).values()];
+  const uniqueLinks = [...new Map([...links, ...extraLinks].map((link) => [link.id, link])).values()];
   return {
-    nodes: [...nodes.slice(0, Math.max(12, MAX_GRAPH_NODES - extraNodes.length)), ...extraNodes].slice(0, MAX_GRAPH_NODES),
-    links: [...links, ...extraLinks].slice(0, MAX_GRAPH_LINKS),
+    nodes: uniqueNodes.slice(0, MAX_GRAPH_NODES),
+    links: uniqueLinks.slice(0, MAX_GRAPH_LINKS),
   };
 }
 
@@ -421,7 +427,17 @@ function selectVisibleNodes(nodes, layer, visibleLimit) {
   const evidence = nodes.filter((node) => node.kind === 'evidence' || node.kind === 'measurement');
   const concepts = nodes.filter((node) => !sources.includes(node) && !evidence.includes(node));
   let selected;
-  if (layer === 'sources') {
+  if (layer === 'all') {
+    const sourceCount = Math.min(sources.length, Math.max(1, Math.floor(visibleLimit * 0.2)));
+    const evidenceCount = Math.min(evidence.length, Math.max(1, Math.floor(visibleLimit * 0.25)));
+    selected = [
+      ...take(sources, sourceCount),
+      ...take(evidence, evidenceCount),
+      ...take(concepts, visibleLimit - sourceCount - evidenceCount),
+    ];
+    const selectedIds = new Set(selected.map((node) => node.id));
+    selected.push(...take(nodes.filter((node) => !selectedIds.has(node.id)), visibleLimit - selected.length));
+  } else if (layer === 'sources') {
     const sourceCount = Math.min(sources.length, Math.max(8, Math.floor(visibleLimit * 0.34)));
     selected = [...take(sources, sourceCount), ...take(concepts, visibleLimit - sourceCount)];
   } else if (layer === 'evidence') {

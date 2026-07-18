@@ -366,7 +366,7 @@ const state = {
     dimensions: 3,
     detailLevel: 'standard',
     visibleLimit: GRAPH_DETAIL_LEVELS.standard,
-    layer: 'concepts',
+    layer: 'all',
     panel: 'topics',
     query: '',
     autoRotate: false,
@@ -585,7 +585,7 @@ function bindEvents(root) {
     } else if (action === 'graph-command') {
       handleGraphCommand(target.dataset.graphCommand || '');
     } else if (action === 'graph-layer') {
-      state.graph.layer = target.dataset.graphLayer || 'concepts';
+      state.graph.layer = target.dataset.graphLayer || 'all';
       refreshGraphProjectionInPlace();
     } else if (action === 'graph-detail') {
       state.graph.detailLevel = target.dataset.graphDetail || 'standard';
@@ -1943,6 +1943,7 @@ function renderSemanticGraph(task, projection) {
           <button type="button" data-action="graph-command" data-graph-command="fit" class="research-graph-tool" aria-label="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}" title="${escapeHtml(state.t('fitGraph', 'Graph einpassen'))}">${iconSvg('focus')}</button>
         </div>
         <div class="research-graph-layer-switch" role="group" aria-label="${escapeHtml(state.t('graphLayer', 'Graph-Ebene'))}">
+          ${graphLayerButton('all', state.t('all', 'Alle'))}
           ${graphLayerButton('concepts', state.t('concepts', 'Themen'))}
           ${graphLayerButton('sources', state.t('sources', 'Quellen'))}
           ${graphLayerButton('evidence', state.t('evidence', 'Belege'))}
@@ -1967,7 +1968,10 @@ function graphDetailButton(id, label) {
 }
 
 function graphSummary(metrics = {}) {
-  return `${metrics.nodeCount || 0} ${escapeHtml(state.t('concepts', 'Themen'))} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Verknüpfungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Themenfelder'))}`;
+  const nodeLabel = state.graph.layer === 'concepts'
+    ? state.t('concepts', 'Themen')
+    : state.t('nodes', 'Elemente');
+  return `${metrics.nodeCount || 0} ${escapeHtml(nodeLabel)} · ${metrics.linkCount || 0} ${escapeHtml(state.t('relations', 'Verknüpfungen'))} · ${metrics.clusterCount || 0} ${escapeHtml(state.t('clusters', 'Themenfelder'))}`;
 }
 
 function renderGraphInsights(projection) {

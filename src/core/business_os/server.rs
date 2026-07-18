@@ -2320,7 +2320,7 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     let mut items = Vec::new();
     let mut runbooks = Vec::new();
     let mut tables = Vec::new();
@@ -2425,6 +2425,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
                 let updated_at: String = row.get(6)?;
                 let runbook = serde_json::json!({
                     "id": format!("runbook:{id}"),
+                    "kind": "runbook",
                     "runbook_id": id,
                     "skillbook_id": skillbook_id,
                     "title": title,
@@ -2447,6 +2448,42 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
                     "has_table": false
                 }));
                 runbooks.push(runbook);
+            }
+        }
+
+        if sqlite_table_exists(&conn, "knowledge_resources")? {
+            let mut stmt = conn.prepare(
+                "SELECT resource_id, skillbook_id, title, kind, role, canonical_url,
+                        evidence_eligible, updated_at
+                   FROM knowledge_resources
+                  ORDER BY updated_at DESC, title
+                  LIMIT 320",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let skillbook_id: String = row.get(1)?;
+                let title: String = row.get(2)?;
+                let kind: String = row.get(3)?;
+                let role: String = row.get(4)?;
+                let canonical_url: String = row.get(5)?;
+                let evidence_eligible: bool = row.get(6)?;
+                let updated_at: String = row.get(7)?;
+                items.push(serde_json::json!({
+                    "id": format!("resource:{id}"),
+                    "resource_id": id,
+                    "skillbook_id": skillbook_id,
+                    "kind": "resource",
+                    "resource_kind": kind,
+                    "title": title,
+                    "subtitle": format!("Resource · {role}"),
+                    "summary": canonical_url,
+                    "canonical_url": canonical_url,
+                    "evidence_eligible": evidence_eligible,
+                    "updated_at": updated_at,
+                    "file_count": 1,
+                    "has_table": false
+                }));
             }
         }
 
@@ -2538,6 +2575,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     if runbooks.is_empty() {
         let runbook = serde_json::json!({
             "id": "runbook:knowledge-runtime-maintenance",
+            "kind": "runbook",
             "runbook_id": "knowledge-runtime-maintenance",
             "skillbook_id": "native-business-os-knowledge",
             "title": "Knowledge Runtime Maintenance",
@@ -2580,6 +2618,8 @@ fn knowledge_document_payload(root: &Path, id: &str) -> anyhow::Result<Value> {
         skillbook_markdown(root, skillbook_id)?
     } else if let Some(runbook_id) = id.strip_prefix("runbook:") {
         runbook_markdown(root, runbook_id)?
+    } else if let Some(resource_id) = id.strip_prefix("resource:") {
+        knowledge_resource_markdown(root, resource_id)?
     } else if id.starts_with("table:") || id.starts_with("parquet:") {
         let table = resolve_parquet_table(root, id)?;
         format!(
@@ -2721,6 +2761,32 @@ fn runbook_markdown(root: &Path, runbook_id: &str) -> anyhow::Result<String> {
         ));
     }
     Ok(text)
+}
+
+fn knowledge_resource_markdown(root: &Path, resource_id: &str) -> anyhow::Result<String> {
+    let conn = open_ctox_sqlite(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT title, kind, role, canonical_url, snapshot_hash, evidence_eligible,
+                linked_runbook_items_json, metadata_json, updated_at
+           FROM knowledge_resources WHERE resource_id = ?1",
+    )?;
+    let row = stmt.query_row([resource_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, bool>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    Ok(format!(
+        "# {}\n\n- Art: `{}`\n- Rolle: `{}`\n- Evidenzfähig: `{}`\n- Quelle: {}\n- Snapshot SHA-256: `{}`\n- Verknüpfte Runbook-Items: `{}`\n- Aktualisiert: `{}`\n\n## Receipt\n\n```json\n{}\n```",
+        row.0, row.1, row.2, row.5, row.3, row.4, row.6, row.8, row.7
+    ))
 }
 
 #[derive(Debug, Clone)]

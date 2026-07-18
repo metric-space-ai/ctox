@@ -7571,6 +7571,116 @@ async fn knowledge_tables_source_stamp(
     .context("join native knowledge tables source stamp")?
 }
 
+async fn sync_knowledge_catalog_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let root = root.to_path_buf();
+    let payload =
+        tokio::task::spawn_blocking(move || super::server::knowledge_index_payload(&root))
+            .await
+            .context("join native procedural knowledge projection load")??;
+    let item_documents = payload
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|document| document.get("kind").and_then(Value::as_str) != Some("dataframe"))
+        .collect::<Vec<_>>();
+    let runbook_documents = payload
+        .get("runbooks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    let mut count = 0usize;
+    count += sync_knowledge_catalog_collection(database, "knowledge_items", item_documents).await?;
+    count += sync_knowledge_catalog_collection(database, "knowledge_runbooks", runbook_documents)
+        .await?;
+    Ok(count)
+}
+
+async fn sync_knowledge_catalog_collection(
+    database: &Arc<RxDatabase>,
+    collection_name: &str,
+    documents: Vec<Value>,
+) -> anyhow::Result<usize> {
+    let collection = database
+        .collection(collection_name)
+        .with_context(|| format!("{collection_name} collection is not registered"))?;
+    let mut count = 0usize;
+    let mut current_ids = HashSet::new();
+    for mut document in documents {
+        let Some(id) = document
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        current_ids.insert(id);
+        if let Some(object) = document.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+            object.insert("_deleted".to_string(), Value::Bool(false));
+            object.insert("is_deleted".to_string(), Value::Bool(false));
+            let updated_at_ms = object
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+                .map(|timestamp| timestamp.timestamp_millis())
+                .unwrap_or(0);
+            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+        }
+        if incremental_upsert_projection_if_changed(&collection, document, "procedural knowledge")
+            .await?
+        {
+            count += 1;
+        }
+    }
+
+    let existing = collection
+        .find(Some(MangoQuery {
+            limit: Some(100_000),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query stale {collection_name} projections: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec stale {collection_name} projection query: {err}"))?;
+    for mut stale in existing.as_array().cloned().unwrap_or_default() {
+        let Some(id) = stale.get("id").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+        let managed_id = match collection_name {
+            "knowledge_items" => {
+                id.starts_with("skill:")
+                    || id.starts_with("skillbook:")
+                    || id.starts_with("runbook:")
+                    || id.starts_with("resource:")
+            }
+            "knowledge_runbooks" => id.starts_with("runbook:"),
+            _ => false,
+        };
+        if !managed_id || current_ids.contains(&id) {
+            continue;
+        }
+        if let Some(object) = stale.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+        }
+        upsert_business_record_projection_tombstone(&collection, stale)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("tombstone stale {collection_name} projection: {err}")
+            })?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 async fn sync_business_record_projections_with_database_if_changed(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -7601,12 +7711,14 @@ async fn business_record_projection_source_stamp(
 ) -> anyhow::Result<BusinessRecordProjectionSourceStamp> {
     let queue_stamp_root = root.to_path_buf();
     let store_stamp_root = root.to_path_buf();
+    let knowledge_stamp_root = root.to_path_buf();
     let collections = business_record_projection_collections();
     let queue_chat_repair = queue_chat_repair_projection_stamp_async(&queue_stamp_root).await?;
-    let (records, communication) = tokio::task::spawn_blocking(move || {
+    let (records, communication, knowledge) = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>((
             store::business_records_projection_stamp(&store_stamp_root, &collections)?,
             channels::communication_intake_source_stamp(&store_stamp_root)?,
+            knowledge_catalog_projection_stamp(&knowledge_stamp_root)?,
         ))
     })
     .await
@@ -7615,7 +7727,58 @@ async fn business_record_projection_source_stamp(
         records,
         communication,
         queue_chat_repair,
+        knowledge,
     })
+}
+
+fn knowledge_catalog_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<KnowledgeCatalogProjectionStamp> {
+    let database_path = root.join("runtime").join("ctox.sqlite3");
+    if !database_path.is_file() {
+        return Ok(KnowledgeCatalogProjectionStamp::default());
+    }
+    let conn = Connection::open_with_flags(
+        database_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    let mut stamp = KnowledgeCatalogProjectionStamp::default();
+    for (table, count, updated_at) in [
+        (
+            "knowledge_main_skills",
+            &mut stamp.main_skill_count,
+            &mut stamp.main_skill_updated_at,
+        ),
+        (
+            "knowledge_skillbooks",
+            &mut stamp.skillbook_count,
+            &mut stamp.skillbook_updated_at,
+        ),
+        (
+            "knowledge_runbooks",
+            &mut stamp.runbook_count,
+            &mut stamp.runbook_updated_at,
+        ),
+        (
+            "knowledge_resources",
+            &mut stamp.resource_count,
+            &mut stamp.resource_updated_at,
+        ),
+    ] {
+        let exists = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [table],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if !exists {
+            continue;
+        }
+        let sql = format!("SELECT COUNT(*), COALESCE(MAX(updated_at), '') FROM {table}");
+        (*count, *updated_at) = conn.query_row(&sql, [], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    }
+    Ok(stamp)
 }
 
 fn threads_app_relevance_cursor_key(collection: &str) -> String {
@@ -7629,6 +7792,7 @@ async fn sync_business_record_projections_with_database(
     since_by_collection: &mut HashMap<String, i64>,
     queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
 ) -> anyhow::Result<usize> {
+    let mut count = sync_knowledge_catalog_with_database(root, database).await?;
     let support_intake_root = root.to_path_buf();
     let support_intake_since_ms = *since_by_collection
         .get(SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY)
@@ -7689,7 +7853,7 @@ async fn sync_business_record_projections_with_database(
     .await
     .context("join native threads app relevance projection")??;
 
-    let mut count = support_intake_count.changed_count
+    count += support_intake_count.changed_count
         + threads_relevance.changed_count
         + threads_app_relevance.changed_count;
     for collection_name in collections {
@@ -9190,6 +9354,19 @@ struct BusinessRecordProjectionSourceStamp {
     records: store::BusinessRecordsProjectionStamp,
     communication: channels::CommunicationIntakeSourceStamp,
     queue_chat_repair: QueueChatRepairProjectionStamp,
+    knowledge: KnowledgeCatalogProjectionStamp,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct KnowledgeCatalogProjectionStamp {
+    main_skill_count: i64,
+    main_skill_updated_at: String,
+    skillbook_count: i64,
+    skillbook_updated_at: String,
+    runbook_count: i64,
+    runbook_updated_at: String,
+    resource_count: i64,
+    resource_updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18063,6 +18240,122 @@ mod tests {
             )
             .expect("projected version count");
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn sync_business_record_projections_materializes_procedural_knowledge() {
+        let root = tempfile::tempdir().expect("temp root");
+        crate::mission::tickets::create_or_update_main_skill(
+            root.path(),
+            "projection.main.v1",
+            "Projection main skill",
+            "research",
+            "resolve",
+            None,
+            None,
+            vec!["load evidence".to_string()],
+            vec!["persist knowledge".to_string()],
+            vec!["projection.skillbook.v1".to_string()],
+            vec!["projection.runbook.v1".to_string()],
+        )
+        .expect("create main skill");
+        crate::mission::tickets::create_or_update_skillbook(
+            root.path(),
+            "projection.skillbook.v1",
+            "Projection skillbook",
+            "v1",
+            "Project source-backed knowledge into Business OS.",
+            "Fail closed when evidence is missing.",
+            "Return cited facts only.",
+            vec!["Cite every factual claim.".to_string()],
+            vec!["load".to_string(), "verify".to_string()],
+            vec!["research".to_string()],
+            vec!["projection.runbook.v1".to_string()],
+        )
+        .expect("create skillbook");
+        crate::mission::tickets::create_or_update_runbook(
+            root.path(),
+            "projection.runbook.v1",
+            "projection.skillbook.v1",
+            "Projection runbook",
+            "v1",
+            "active",
+            "research",
+            vec!["VERIFY".to_string()],
+        )
+        .expect("create runbook");
+
+        let synced = sync_business_record_projections(root.path())
+            .expect("sync procedural knowledge projections");
+        assert!(synced >= 3);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let skillbook_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__knowledge_items__v0 WHERE id = 'skillbook:projection.skillbook.v1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected skillbook row");
+        let skillbook: Value =
+            serde_json::from_str(&skillbook_json).expect("projected skillbook json");
+        assert_eq!(
+            skillbook.get("title").and_then(Value::as_str),
+            Some("Projection skillbook")
+        );
+        assert_eq!(
+            skillbook.get("kind").and_then(Value::as_str),
+            Some("skillbook")
+        );
+
+        let runbook_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__knowledge_runbooks__v0 WHERE id = 'runbook:projection.runbook.v1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected runbook row");
+        let runbook: Value = serde_json::from_str(&runbook_json).expect("projected runbook json");
+        assert_eq!(
+            runbook.get("title").and_then(Value::as_str),
+            Some("Projection runbook")
+        );
+        assert_eq!(
+            runbook.get("skillbook_id").and_then(Value::as_str),
+            Some("projection.skillbook.v1")
+        );
+    }
+
+    #[test]
+    fn business_record_projection_stamp_tracks_procedural_knowledge_database() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let before = runtime
+            .block_on(business_record_projection_source_stamp(root.path()))
+            .expect("initial projection stamp");
+
+        crate::mission::tickets::create_or_update_main_skill(
+            root.path(),
+            "stamp.main.v1",
+            "Stamp main skill",
+            "research",
+            "resolve",
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("create main skill");
+
+        let after = runtime
+            .block_on(business_record_projection_source_stamp(root.path()))
+            .expect("updated projection stamp");
+        assert_ne!(before.knowledge, after.knowledge);
     }
 
     #[test]
