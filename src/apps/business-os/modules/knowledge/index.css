@@ -979,3 +979,79 @@
 }
 .knowledge-module .kb-count b { color: var(--knowledge-text); font-weight: 600; }
 .knowledge-module .kb-count.kb-empty { background: transparent; padding-left: 0; opacity: 0.5; }
+
+/* ============================================================================
+   Second-level switchers = the first level's language, one size smaller
+   (differentiated by typography, not shape) — never round pills, and they
+   scale/scroll when there are many.
+   ========================================================================== */
+.knowledge-module .table-switcher,
+.knowledge-module .knowledge-secondary-switcher {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+}
+.knowledge-module .table-switcher .ctox-chip,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip {
+  flex: 1 1 0;
+  min-width: 64px;
+  max-width: 280px;
+  border: 0;
+  border-radius: var(--knowledge-control-radius);
+  background: transparent;
+  color: var(--knowledge-muted);
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  line-height: 1.5;
+  padding: 4px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.knowledge-module .table-switcher .ctox-chip:hover,
+.knowledge-module .knowledge-secondary-switcher .ctox-chip:hover { background: var(--kit-hover); }
+.knowledge-module .table-switcher .ctox-chip.is-active,
+.knowledge-module .table-switcher .ctox-chip[aria-current="true"],
+.knowledge-module .knowledge-secondary-switcher .ctox-chip.is-active {
+  background: var(--kit-fill-strong);
+  color: var(--knowledge-text);
+  font-weight: 600;
+}
+/* the sort sub-tabs inside the filter panel are also one level down */
+.knowledge-module .knowledge-subtabs .ctox-pane-tab { font-size: var(--fs-meta); }
+
+/* Advanced filter contents */
+.knowledge-module .knowledge-filter-group { display: grid; gap: 5px; margin-bottom: 9px; }
+.knowledge-module .knowledge-filter-group:last-child { margin-bottom: 0; }
+.knowledge-module .knowledge-filter-label {
+  font-size: var(--fs-micro);
+  color: var(--knowledge-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.knowledge-module .knowledge-filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.knowledge-module .knowledge-filter-chips .ctox-chip { cursor: pointer; font-size: var(--fs-meta); }
+.knowledge-module .knowledge-filter-chips .ctox-chip[aria-pressed="true"] {
+  background: var(--knowledge-accent);
+  color: var(--knowledge-surface);
+  border-color: var(--knowledge-accent);
+}
+
+/* App floor — a status footer spanning the whole module, like the Files app. */
+.knowledge-module { grid-template-rows: minmax(0, 1fr) auto; }
+.knowledge-module .knowledge-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface);
+  color: var(--knowledge-muted);
+  font-size: var(--fs-micro);
+}

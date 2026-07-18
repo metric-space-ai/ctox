@@ -71,6 +71,8 @@ const state = {
   tableLimit: 120,
   editing: false,
   sourceScope: 'all',
+  sortMode: 'recent',
+  flagFilters: new Set(),
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
@@ -174,7 +176,22 @@ function documentTemplate() {
           <button class="ctox-pane-icon knowledge-filter-toggle" type="button" data-action="toggle-filters" aria-expanded="false" aria-label="Erweiterte Filter" title="Erweiterte Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="10" cy="8" r="2.2" fill="var(--knowledge-surface)"/><circle cx="15" cy="16" r="2.2" fill="var(--knowledge-surface)"/></svg></button>
         </div>
         <div class="knowledge-filter-advanced" data-filter-advanced hidden>
-          <p class="knowledge-filter-hint">Erweiterte Filter</p>
+          <div class="knowledge-filter-group">
+            <span class="knowledge-filter-label">Sortieren</span>
+            <div class="ctox-pane-tabs knowledge-subtabs" role="tablist" aria-label="Sortierung">
+              <button type="button" class="ctox-pane-tab" data-sort="recent" aria-selected="true">Zuletzt</button>
+              <button type="button" class="ctox-pane-tab" data-sort="edited" aria-selected="false">Bearbeitet</button>
+              <button type="button" class="ctox-pane-tab" data-sort="name" aria-selected="false">Name</button>
+            </div>
+          </div>
+          <div class="knowledge-filter-group">
+            <span class="knowledge-filter-label">Nur mit Inhalt</span>
+            <div class="knowledge-filter-chips">
+              <button type="button" class="ctox-chip" data-flag="skillbooks" aria-pressed="false">Skillbooks</button>
+              <button type="button" class="ctox-chip" data-flag="runbooks" aria-pressed="false">Runbooks</button>
+              <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
+            </div>
+          </div>
         </div>
         <!-- Row 3: main switcher (source scope). -->
         <div class="knowledge-scope-switch">
@@ -244,14 +261,17 @@ function documentTemplate() {
           <div class="dataframe-bar">
             <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
             <div class="table-pager">
-              <button class="ctox-button" type="button" data-action="export-table-csv">CSV</button>
-              <button class="ctox-button" type="button" data-action="prev-rows">Zurück</button>
-              <button class="ctox-button" type="button" data-action="next-rows">Weiter</button>
+              <button class="ctox-pane-icon" type="button" data-action="export-table-csv" aria-label="Als CSV exportieren" title="Als CSV exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 14l-4-4M12 14l4-4M5 20h14"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="prev-rows" aria-label="Vorherige Zeilen" title="Vorherige Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+              <button class="ctox-pane-icon" type="button" data-action="next-rows" aria-label="Nächste Zeilen" title="Nächste Zeilen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
             </div>
           </div>
           <div class="dataframe-host" data-dataframe-host></div>
         </div>
       </section>
+      <footer class="knowledge-footer" data-knowledge-footer>
+        <span data-knowledge-footer-count>—</span>
+      </footer>
     </main>
   `;
 }
@@ -303,6 +323,23 @@ function wireEvents() {
     const open = panel.hasAttribute('hidden');
     if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
     btn.setAttribute('aria-expanded', String(open));
+  });
+  // Advanced-filter controls: sort mode + kind flags, both re-render the list.
+  state.ctx.host.querySelectorAll('[data-filter-advanced] [data-sort]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      state.sortMode = tab.dataset.sort;
+      state.ctx.host.querySelectorAll('[data-filter-advanced] [data-sort]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+      renderKnowledgeList();
+    });
+  });
+  state.ctx.host.querySelectorAll('[data-filter-advanced] [data-flag]').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const flag = chip.dataset.flag;
+      if (state.flagFilters.has(flag)) state.flagFilters.delete(flag);
+      else state.flagFilters.add(flag);
+      chip.setAttribute('aria-pressed', String(state.flagFilters.has(flag)));
+      renderKnowledgeList();
+    });
   });
   // Fractal header edit: the pencil in the pane header edits whatever the
   // active tab shows — it just triggers that panel's own edit control.
@@ -1067,7 +1104,7 @@ async function selectSkillbook(group, skillbook) {
 function renderKnowledgeList() {
   const copy = state.messages || labels[state.lang];
   const term = els.search.value.trim().toLowerCase();
-  const visibleGroups = state.groups
+  let visibleGroups = state.groups
     .map((group) => ({
       ...group,
       entries: group.entries.filter((entry) => {
@@ -1079,11 +1116,34 @@ function renderKnowledgeList() {
       if (!term) return true;
       return `${group.title} ${group.summary || ''} ${group.domain || ''} ${group.entries.map((entry) => `${entry.title} ${entry.subtitle || ''} ${entry.summary || ''}`).join(' ')}`.toLowerCase().includes(term);
     });
+  // Advanced filters: only groups that carry the selected kinds.
+  if (state.flagFilters && state.flagFilters.size) {
+    visibleGroups = visibleGroups.filter((group) => {
+      const has = {
+        skillbooks: skillbooksForGroup(group).length > 0,
+        runbooks: group.runbookIds.length > 0,
+        tables: group.tableIds.length > 0,
+      };
+      return [...state.flagFilters].every((flag) => has[flag]);
+    });
+  }
+  // Advanced sort.
+  if (state.sortMode === 'name') {
+    visibleGroups.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'de'));
+  } else if (state.sortMode === 'edited') {
+    visibleGroups.sort((a, b) => groupRecency(b) - groupRecency(a));
+  }
   if (!visibleGroups.length) {
     els.list.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
     return;
   }
   els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
+  const footer = state.ctx.host.querySelector('[data-knowledge-footer-count]');
+  if (footer) {
+    const n = visibleGroups.length;
+    const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
+    footer.textContent = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
+  }
 }
 
 function knowledgeEmptyStateMessage(copy, term = '') {
@@ -1097,6 +1157,16 @@ function sourceScopeFor(entry) {
   const source = String(entry?.source_path || entry?.source_system || entry?.subtitle || '').toLowerCase();
   if (source.startsWith('embedded:skills/system') || source.includes('ctox_core')) return 'system';
   return 'user';
+}
+
+// Newest entry timestamp in a group, for the "Bearbeitet" sort.
+function groupRecency(group) {
+  let max = 0;
+  for (const entry of group.entries || []) {
+    const t = Number(entry.updated_at_ms || entry.updated_at || entry.payload?.updated_at_ms || 0) || 0;
+    if (t > max) max = t;
+  }
+  return max;
 }
 
 // Scannable count badges (Research-style numbers) — only non-zero kinds show,
