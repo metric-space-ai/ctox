@@ -1,5 +1,4 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const REPORTS_REFRESH_DEBOUNCE_MS = 80;
 const REPORTS_SYNC_RESTART_TIMEOUT_MS = 6000;
@@ -76,51 +75,17 @@ export async function mount(ctx) {
     console.warn('[reports] initial load failed', error);
   });
 
-  const resizeCleanup = setupResizers(ctx.host);
-
+  // Column resizing is owned by the shell-global resizer (setupModuleResizers
+  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handle inside the `[data-resize-frame]` root — no module JS needed.
   window.addEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
   return () => {
     state.cleanup?.();
     state.contextMenuCleanup?.();
     state.contextMenu?.remove();
     state.contextMenu = null;
-    resizeCleanup?.();
     window.removeEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
     if (state.renderTimer) window.clearTimeout(state.renderTimer);
-  };
-}
-
-function setupResizers(host) {
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
-  // handle inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
-  // avoid double-binding the handle; call sites keep their no-op teardown ref.
-  return () => {};
-  // eslint-disable-next-line no-unreachable
-  const leftResizer = host.querySelector('[data-resizer="left"]');
-  const containerEl = host.querySelector('[data-reports-root]') || host;
-
-  const cleanups = [];
-
-  if (leftResizer) {
-    const resizerL = new CtoxResizer({
-      resizerEl: leftResizer,
-      containerEl,
-      cssVar: '--reports-left-width',
-      side: 'left',
-      minWidth: 260,
-      maxWidth: 500,
-      onResize: (width) => localStorage.setItem('ctox.reports.layout.leftWidth', width)
-    });
-    cleanups.push(() => resizerL.destroy());
-  }
-
-  // Set initial width from localStorage
-  const leftWidth = localStorage.getItem('ctox.reports.layout.leftWidth') || '320';
-  containerEl.style.setProperty('--reports-left-width', `${leftWidth}px`);
-
-  return () => {
-    cleanups.forEach(c => c());
   };
 }
 
@@ -347,12 +312,12 @@ function renderDiagnostics() {
 
 function renderListEmptyState(allItems) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="reports-empty"><strong>${escapeHtml(state.t('reportsListUnavailable', 'Noch keine Einträge'))}</strong><span>${escapeHtml(state.t('reportsListUnavailableDetail', 'Wird automatisch gefüllt.'))}</span></div>`;
+    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsListUnavailable', 'Noch keine Einträge'))}</strong><span>${escapeHtml(state.t('reportsListUnavailableDetail', 'Wird automatisch gefüllt.'))}</span></div>`;
   }
   if (allItems.length) {
-    return `<p class="reports-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
+    return `<p class="ctox-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
   }
-  return `<p class="reports-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Einträge.')))}</p>`;
+  return `<p class="ctox-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Einträge.')))}</p>`;
 }
 
 function renderDetailEmptyState({ normalized, filtered }) {
@@ -396,12 +361,12 @@ function renderList() {
     return;
   }
   list.innerHTML = items.map((report) => `
-    <button type="button" class="report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
-      <div class="reports-badges">
+    <button type="button" class="ctox-list-item report-row ${report.id === state.selectedId ? 'is-selected' : ''}" data-report-id="${escapeAttr(report.id)}" data-context-record-id="${escapeAttr(report.id)}" data-context-record-type="business_report" data-context-label="${escapeAttr(report.title || report.id)}">
+      <span class="reports-badges">
         <span class="ctox-badge ${report.kind === 'bug' ? 'is-danger' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
         <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
         <span class="ctox-badge">${escapeHtml(report.severity || 'medium')}</span>
-      </div>
+      </span>
       <strong>${escapeHtml(report.title)}</strong>
       <small>${escapeHtml(report.moduleId)} · ${escapeHtml(formatDate(report.updatedAt || report.createdAt))}</small>
     </button>
@@ -444,50 +409,62 @@ function renderDetail() {
         </div>
       </div>
     </header>
-    <div class="reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
-      <section class="reports-section">
-        <h3>${escapeHtml(state.t('report', 'Eintrag'))}</h3>
-        <dl class="ctox-fields">
-          ${fact(state.t('module', 'Modul'), report.moduleId)}
-          ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
-          ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
-          ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
-          ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
-          ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
-        </dl>
+    <div class="ctox-pane-scroll reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('report', 'Eintrag'))}</header>
+        <div class="ctox-card-body">
+          <dl class="ctox-fields">
+            ${fact(state.t('module', 'Modul'), report.moduleId)}
+            ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
+            ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
+            ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
+            ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
+            ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
+          </dl>
+        </div>
       </section>
-      <section class="reports-section">
-        <h3>${escapeHtml(state.t('description', 'Beschreibung'))}</h3>
-        <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('description', 'Beschreibung'))}</header>
+        <div class="ctox-card-body">
+          <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
+        </div>
       </section>
-      <section class="reports-section">
-        <h3>${escapeHtml(state.t('expectation', 'Erwartung'))}</h3>
-        <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('expectation', 'Erwartung'))}</header>
+        <div class="ctox-card-body">
+          <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
+        </div>
       </section>
-      <section class="reports-section">
-        <h3>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</h3>
-        <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</header>
+        <div class="ctox-card-body">
+          <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
+        </div>
       </section>
       ${attachment ? `
-        <section class="reports-section">
-          <h3>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</h3>
-          <div class="reports-attachment">
-            <span class="reports-attachment-meta">${escapeHtml(attachment.capture_mode || 'capture')}</span>
-            <img src="${escapeAttr(attachment.data_url)}" alt="Report Screenshot" />
+        <section class="ctox-card">
+          <header>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</header>
+          <div class="ctox-card-body">
+            <div class="reports-attachment">
+              <span class="reports-attachment-meta">${escapeHtml(attachment.capture_mode || 'capture')}</span>
+              <img src="${escapeAttr(attachment.data_url)}" alt="Report Screenshot" />
+            </div>
           </div>
         </section>
       ` : ''}
-      <section class="reports-section">
-        <h3>${escapeHtml(state.t('rollback', 'Rollback'))}</h3>
-        <div class="reports-rollback">
-          <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
-          <div class="reports-rollback-actions">
-            <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
-              ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
-            </select>
-            <button type="button" class="ctox-button is-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('rollback', 'Rollback'))}</header>
+        <div class="ctox-card-body">
+          <div class="reports-rollback">
+            <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
+            <div class="reports-rollback-actions">
+              <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
+                ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
+              </select>
+              <button type="button" class="ctox-button is-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
+            </div>
+            <small class="reports-rollback-status" data-rollback-status></small>
           </div>
-          <small data-rollback-status></small>
         </div>
       </section>
     </div>

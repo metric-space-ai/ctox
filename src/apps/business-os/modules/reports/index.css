@@ -1,45 +1,39 @@
+/* reports/index.css — module-specific styling on top of shared/base.css.
+   Kit classes (.ctox-workspace, .ctox-pane, .ctox-pane-*, .ctox-column-resizer,
+   .ctox-list, .ctox-list-item, .ctox-badge, .ctox-button, .ctox-select,
+   .ctox-fields, .ctox-card, .ctox-empty) come from the shell; only genuinely
+   reports-specific layout lives here. The narrow-viewport collapse is owned
+   by the kit container query in shared/base.css. */
+
+/* Module special: "feature" badge role on top of the shared .ctox-badge —
+   the shell has no matching semantic token (dark value below). */
 .reports-module {
-  --reports-line: color-mix(in srgb, var(--line) 30%, transparent);
-  --reports-muted: var(--muted);
-  --reports-surface: var(--surface);
-  --reports-surface-2: var(--surface-2);
-  /* Module special: "feature" badge blue (no shell role); dark value below. */
   --reports-feature: #1d6fa8;
-  display: grid;
-  grid-template-columns: var(--reports-left-width, 320px) 12px minmax(0, 1fr);
-  gap: 0;
-  padding: 8px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  box-sizing: border-box;
-}
-
-.reports-rail,
-.reports-detail {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.reports-rail {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  background: var(--reports-surface);
-  border: 1px solid var(--reports-line);
-  border-radius: var(--surface-radius);
 }
 
 :root[data-theme="dark"] .reports-module {
   --reports-feature: #8dc4f0;
 }
 
+.reports-module .ctox-badge.is-feature {
+  color: var(--reports-feature);
+  background: color-mix(in srgb, var(--reports-feature) 10%, transparent);
+  border-color: color-mix(in srgb, var(--reports-feature) 30%, transparent);
+}
+
+/* Refresh icon spins while a reload is in flight. */
 .reports-module .reports-refresh-button[aria-busy="true"] svg {
   animation: reports-refresh-spin 0.9s linear infinite;
 }
 
-/* Module-specific tools layout: search on its own row, both filters below. */
+@keyframes reports-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* custom: tools layout — this pane carries two filter selects, so the search
+   spans the full row and both selects share the row below. */
 .reports-module .ctox-pane-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -48,71 +42,25 @@
 
 .reports-module .ctox-pane-search {
   grid-column: 1 / -1;
-  min-width: 0;
 }
 
-.reports-section,
-.reports-rollback {
-  padding: 12px;
-}
-
-.reports-section h3 {
-  color: var(--reports-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.reports-rollback select {
-  width: 100%;
-}
-
-.reports-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 6px 0;
-}
-
-.report-row {
-  width: calc(100% - 8px);
-  margin: 2px 4px;
+/* custom: record-row content — badge row, title and meta line stacked inside
+   the standard .ctox-list-item button. */
+.reports-module .report-row {
   display: grid;
   gap: 4px;
-  padding: 9px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--surface-radius);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  position: relative;
-  box-sizing: border-box;
-  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
-.report-row:hover {
-  background: var(--reports-surface-2);
-  border-color: var(--reports-line);
-}
-
-.report-row.is-selected {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-.report-row strong {
+.reports-module .report-row strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.report-row small,
-.report-row span,
-.reports-empty,
-.reports-section p,
-.reports-attachment-meta {
-  color: var(--reports-muted);
+.reports-module .report-row small,
+.reports-attachment-meta,
+.reports-rollback-status {
+  color: var(--muted);
 }
 
 .reports-badges {
@@ -122,41 +70,30 @@
   align-items: center;
 }
 
-/* Module special: "feature" badge role on top of the shared .ctox-badge —
-   the shell has no matching semantic token (see --reports-feature above). */
-.reports-module .ctox-badge.is-feature {
-  color: var(--reports-feature);
-  background: color-mix(in srgb, var(--reports-feature) 10%, transparent);
-  border-color: color-mix(in srgb, var(--reports-feature) 30%, transparent);
-}
-
-.reports-detail {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  background: var(--reports-surface);
-  border: 1px solid var(--reports-line);
-  border-radius: var(--surface-radius);
-}
-
+/* custom: padded card stack — kit .ctox-pane-scroll is intentionally unpadded
+   so panes choose their own content rhythm. */
 .reports-detail-scroll {
-  min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
 }
 
-.reports-section {
-  border-bottom: 1px solid var(--reports-line);
+/* custom: the detail empty state renders without a pane header, so it spans
+   both grid rows of the .ctox-pane. */
+.reports-detail > .ctox-empty:only-child {
+  grid-row: 1 / -1;
 }
 
-.reports-section h3 {
-  margin: 0 0 8px;
-}
-
-.reports-section p {
+/* Long report texts keep a readable measure. */
+.reports-detail-scroll .ctox-card-body p {
   margin: 0;
   max-width: 76ch;
   line-height: 1.45;
 }
 
+/* custom: screenshot/markup attachment preview — the kit has no image
+   preview component. */
 .reports-attachment {
   display: grid;
   gap: 8px;
@@ -167,11 +104,12 @@
   max-width: 100%;
   max-height: 440px;
   object-fit: contain;
-  border: 1px solid var(--reports-line);
-  border-radius: var(--surface-radius);
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
   background: var(--bg);
 }
 
+/* custom: rollback form — version select next to the primary action. */
 .reports-rollback {
   display: grid;
   gap: 8px;
@@ -184,13 +122,7 @@
   gap: 8px;
 }
 
-.reports-empty {
-  display: grid;
-  gap: 4px;
-  padding: 14px 12px;
-  line-height: 1.4;
-}
-
+/* Accessibility helper: spoken label inside the icon-only refresh button. */
 .reports-sr-only {
   position: absolute;
   width: 1px;
@@ -202,32 +134,3 @@
   white-space: nowrap;
   border: 0;
 }
-
-@keyframes reports-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@container business-app-window (max-width: 880px) {
-  .reports-module {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(320px, 1fr);
-    overflow-y: auto;
-    gap: 8px;
-  }
-
-  .reports-rail {
-    border-right: 0;
-  }
-
-  .reports-module .ctox-pane-tools {
-    grid-template-columns: 1fr;
-  }
-
-  .reports-module [data-resizer] {
-    display: none !important;
-  }
-}
-
-/* Column resizer styling handled by global [data-resizer] in app.css */
