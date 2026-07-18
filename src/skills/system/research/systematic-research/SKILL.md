@@ -110,13 +110,17 @@ the same regardless of which output mode you pick.
 2. **External source mining**: do NOT default to plain `ctox web search`.
    That ranks SEO-optimized consumer/marketing pages above primary research
    data. Use the source-class priority below.
-3. **Source-catalog table**: open a `source_catalog` table in
-   `ctox knowledge data` (one row per candidate source, with provenance,
-   source-class tag, verification state, snapshot hash, directness status, and a
-   one-line note on what it contributes). Candidate rows are discovery
-   receipts, not evidence. Library and decision-report mode may read only
-   rows whose `evidence_eligible` field is `true`. Build and verify the catalog
-   before drafting the actual library schema or report blueprint.
+3. **Candidate and verified-source tables**: open a `source_candidates`
+   table in `ctox knowledge data` for every discovered source, including
+   rejected and unresolved rows with provenance, source-class tag,
+   verification state, snapshot hash, directness status, and a one-line note
+   on what it contributes. Candidate rows are discovery receipts, not
+   evidence. Open `source_catalog` as a separate verified-source registry and
+   copy a source there only after `scripts/evidence_guard.py` passes for its
+   current original-content snapshot. Library and decision-report mode may
+   read evidence only from `source_catalog`; a row remaining solely in
+   `source_candidates` is never citable. Build and verify both tables before
+   drafting the actual library schema or report blueprint.
    For a Business OS research command, copy the exact `Research Run ID` and
    `Research Command ID` from the task into `research_run_id` and
    `research_command_id` on every row created or updated in `source_catalog`,
@@ -206,11 +210,14 @@ catalog has its first entries.
    exhaustive --max-sources 40` when the catalog needs to be
    near-complete. The output JSON carries one entry per source with
    `url`, `title`, `source_type`, `source_tier`, `verification_status`,
-   `canonical_url`, `transport_verified`, `content_extracted`, `evidence_eligible`,
-   `evidence_rejection_reason`, `http_status`, and `snapshot_hash`. Feed
-   those directly into the candidate source catalog. Do not invent URLs
-   from training-data memory; only record what this call (or the follow-up
-   reads) returned.
+   `canonical_url`, `transport_verified`, `content_extracted`,
+   `evidence_eligible`, `evidence_rejection_reason`, `http_status`, and
+   `snapshot_hash`. Feed `source_candidates` directly into the
+   `source_candidates` table. Feed `sources` into `source_catalog` only after
+   the full manifest passes `scripts/evidence_guard.py`; the tool-level
+   eligibility flag alone does not replace claim, data, and independent-review
+   validation. Do not invent URLs from training-data memory; only record what
+   this call (or the follow-up reads) returned.
 
    Always use a unique writable folder inside the current task workspace for
    shell invocations. The typed `ctox_deep_research` tool supplies such a
