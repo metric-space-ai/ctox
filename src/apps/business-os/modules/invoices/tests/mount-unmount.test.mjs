@@ -298,13 +298,16 @@ test('rendered shell stamps data-context-* attributes on root, list, and center 
     assert.equal(root.dataset.contextModule, 'invoices');
     assert.equal(root.dataset.contextSubmodule, 'shell');
     assert.equal(root.dataset.contextSkill, 'product_engineering/business-os-app-module-development');
-    // First-level pane children carry context too.
+    // First-level pane children carry context too. The standard kit frame
+    // (.ctox-workspace) interleaves .ctox-column-resizer handles between the
+    // panes, so locate panes by their context attributes, not child index.
     const grid = root.children[0];
-    const listPane = grid.children[0];
-    const centerPane = grid.children[1];
-    assert.equal(listPane.dataset.contextSubmodule, 'list');
+    const listPane = grid.children.find((c) => c.dataset?.contextSubmodule === 'list');
+    const centerPane = grid.children.find((c) => c.dataset?.contextSubmodule === 'center');
+    assert.ok(listPane, 'list pane must exist');
+    assert.ok(centerPane, 'center pane must exist');
     assert.equal(listPane.dataset.contextRecordType, 'accounting_invoices');
-    assert.equal(centerPane.dataset.contextSubmodule, 'center');
+    assert.equal(centerPane.dataset.contextRecordType, 'accounting_invoices');
     unmount();
   } finally {
     if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;

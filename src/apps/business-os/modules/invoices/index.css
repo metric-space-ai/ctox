@@ -1,111 +1,45 @@
 /* invoices/index.css — module-specific styling on top of shared/base.css.
-   Kit classes (.ctox-pane-*, .ctox-list, .ctox-chip, .ctox-table, .ctox-badge,
-   .ctox-button, .ctox-fields, .ctox-empty) come from the shell; only genuinely
-   invoice-specific layout lives here. Shell-token aliases only — no raw hex. */
+   Kit classes (.ctox-workspace, .ctox-pane-*, .ctox-column-resizer, .ctox-list,
+   .ctox-chip, .ctox-table, .ctox-badge, .ctox-button, .ctox-fields, .ctox-card,
+   .ctox-empty, .ctox-callout, .ctox-pre, .ctox-compact-field) come from the
+   shell; only genuinely invoice-specific layout lives here. */
 
+/* Root: the kit workspace fills the module window; an optional module-global
+   error strip sits in the second row (toggled via [hidden]). */
 .invoices-shell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
-  background: var(--bg);
-  color: var(--text);
 }
 
-.invoices-loading {
-  padding: 24px;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.invoices-grid {
-  display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(260px, 320px);
-  gap: 1px;
-  background: var(--line);
-  flex: 1;
-  min-height: 0;
-}
-
-.invoices-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--surface);
-}
-
-/* Scrollable pane body under a .ctox-pane-band header. Flex column instead of
-   fixed-height calc() so header-padding changes never break the scroll area. */
-.invoices-pane-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 14px;
-}
-
+/* Filter chips may wrap onto a second row in narrow left columns. */
 .invoices-filter-row {
   flex-wrap: wrap;
 }
 
-/* Left list: kit rows on a plain <ul>. */
-.invoices-list-items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  flex: 1 1 auto;
+/* custom: padded content body — kit .ctox-pane-scroll is intentionally
+   unpadded so panes can choose their own content rhythm. */
+.invoices-pane-scroll {
+  padding: 14px;
 }
 
-.invoices-list-item strong {
-  display: block;
-  font-size: 13px;
-}
-
-.invoices-list-item span {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.invoices-list-item em {
-  font-style: normal;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-/* Editor */
-.invoices-editor,
-.invoices-detail {
+/* Vertical content stack for editor / detail / inspector bodies. */
+.invoices-stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
 }
 
-.invoices-editor h3,
-.invoices-detail h3 {
-  margin: 4px 0 0;
-  font-size: 13px;
-}
-
-.invoices-editor-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.invoices-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/* List row typography: invoice number line plus two muted meta lines. */
+.invoices-list-item small {
+  display: block;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
+/* custom: dense inline-editing grid — cell inputs sit tighter than
+   standalone kit inputs so a full invoice line fits the center pane. */
 .invoices-lines-table .ctox-input {
   min-height: 28px;
   font-size: 12.5px;
@@ -116,12 +50,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* custom: totals strip under the editable lines grid. The class is also a
+   JS hook: totals are recomputed in place via
+   document.querySelector('.invoices-totals') without a full re-render. */
 .invoices-totals {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  font-size: 13px;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .invoices-totals strong {
@@ -129,6 +66,7 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Editor action row (save draft / delete draft / post). */
 .invoices-actions {
   display: flex;
   flex-wrap: wrap;
@@ -136,67 +74,37 @@
   gap: 8px;
 }
 
-.invoices-issues {
-  width: 100%;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--danger);
-  font-size: 12px;
+/* The validation callout takes its own row under the action buttons. */
+.invoices-actions .ctox-callout {
+  flex-basis: 100%;
 }
 
-/* Detail tabs content */
+/* Validation-issue bullets inside the .ctox-callout.is-danger box. */
+.invoices-issues {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* Detail tab panels (journal / XRechnung / payments / dunning). */
 .invoices-tab {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  font-size: 13px;
-}
-
-.invoices-tab h4,
-.invoices-inspector h4 {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .invoices-tab .ctox-table-wrap,
+.invoices-tab .ctox-pre,
 .invoices-detail .ctox-table-wrap {
   align-self: stretch;
   width: 100%;
 }
 
-.invoices-xrechnung-preview {
-  margin: 0;
-  max-width: 100%;
-  max-height: 320px;
-  overflow: auto;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
+/* Payment allocation form. */
 .invoices-payment-form {
   display: grid;
   gap: 8px;
   max-width: 320px;
-}
-
-.invoices-payment-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .invoices-hint {
@@ -205,79 +113,24 @@
   font-size: 12px;
 }
 
-/* Inspector */
-.invoices-inspector h4 {
-  margin-top: 14px;
-}
-
-.invoices-inspector-open .ctox-fields {
-  margin-top: 6px;
-}
-
+/* custom: party identity block inside the inspector customer card. */
 .invoices-inspector-party h3 {
   margin: 0 0 4px;
   font-size: 14px;
 }
 
-.invoices-inspector-party p,
-.invoices-inspector-open p,
-.invoices-inspector-actions {
+.invoices-inspector-party p {
   margin: 0 0 4px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.invoices-inspector .muted {
-  color: var(--muted);
-}
-
-/* Blocker / error surfaces */
-.invoices-blocker,
-.invoices-error {
-  padding: 24px;
-  font-size: 13px;
-}
-
-.invoices-blocker h2 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
+/* custom: module-global command-error strip pinned under the workspace —
+   not tied to one pane, so the kit's pane-level surfaces do not apply. */
 .invoices-error-banner {
-  flex: 0 0 auto;
   padding: 8px 14px;
   border-top: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12px;
-}
-
-/* A 640px floating window cannot preserve three useful columns. Keep every
-   pane reachable by switching to a single scrollable workbench stack instead
-   of silently collapsing the center or inspector to zero width. */
-@container business-app-window (max-width: 760px) {
-  .invoices-grid {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(320px, 1fr) auto;
-    gap: 1px;
-    overflow: auto;
-  }
-
-  .invoices-list {
-    min-height: 150px;
-    max-height: 220px;
-  }
-
-  .invoices-center {
-    min-height: 320px;
-  }
-
-  .invoices-inspector {
-    min-height: 150px;
-    max-height: 240px;
-  }
-
-  .invoices-pane-scroll {
-    padding: 8px;
-  }
 }

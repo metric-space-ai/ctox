@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260706-kit1';
+const MOD_BUILD = '20260718-kit2';
 const MODULE_ID = 'intake';
 const PRIMARY = 'applications';
 const TITLE = 'intake';
@@ -36,9 +36,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
 
+  // Gate callout → kit .ctox-callout variants (base.css).
+  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
     gateEl.innerHTML = html || '';
   }
 

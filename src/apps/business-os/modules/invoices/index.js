@@ -49,7 +49,7 @@ const COPY = {
     openItems: 'Offene Posten', actions: 'Aktionen', actionsHint: 'Verfügbare Aktionen erscheinen hier, sobald sie in der Befehls-Schiene freigeschaltet sind.',
     dependencyTitle: 'Rechnungen benötigt weitere Module', dependencyNote: 'Bitte installiere „buchhaltung“ (FIBU/Journal) und „customers“ (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.',
     reload: 'Neu laden', missingDb: 'Invoices-Modul kann nicht starten: ctx.db fehlt.', noCustomer: 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im „customers“-Modul an, dann erstelle die Rechnung hier.',
-    deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden',
+    deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden', resizeColumn: 'Spaltenbreite anpassen',
     stateDraft: 'Entwurf', statePosted: 'Gebucht', statePartiallyPaid: 'Teilweise bezahlt', statePaid: 'Bezahlt', stateOverdue: 'Überfällig', stateCancelled: 'Storniert', stateCredited: 'Gutgeschrieben',
     pos: 'Pos', quantity: 'Menge (‰)', unit: 'Einheit', unitPrice: 'Einzelpreis (Cent)',
   },
@@ -67,7 +67,7 @@ const COPY = {
     openItems: 'Open items', actions: 'Actions', actionsHint: 'Available actions appear here when enabled on the command channel.',
     dependencyTitle: 'Invoices requires additional modules', dependencyNote: 'Install “buchhaltung” (ledger/journal) and “customers” (party master data) from the App Store, then reload Invoices.',
     reload: 'Reload', missingDb: 'Invoices cannot start: ctx.db is missing.', noCustomer: 'No customer exists in CRM. Create a customer in “customers” before creating an invoice.',
-    deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted',
+    deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted', resizeColumn: 'Adjust column width',
     stateDraft: 'Draft', statePosted: 'Posted', statePartiallyPaid: 'Partially paid', statePaid: 'Paid', stateOverdue: 'Overdue', stateCancelled: 'Cancelled', stateCredited: 'Credited',
     pos: 'Pos', quantity: 'Quantity (‰)', unit: 'Unit', unitPrice: 'Unit price (cents)',
   },
@@ -144,6 +144,7 @@ const STATE = {
   busy: false,
   lastError: null,
   locale: 'de',
+  frame: null,
 };
 
 const REQUIRED_MODULES = ['buchhaltung', 'customers'];
@@ -223,6 +224,7 @@ function resetState(ctx) {
   STATE.busy = false;
   STATE.lastError = null;
   STATE.locale = String(ctx.locale || globalThis.document?.documentElement?.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+  STATE.frame = null;
 }
 
 function isReady() {
@@ -238,9 +240,10 @@ function renderDependencyBlocker() {
   const root = moduleRoot();
   if (!root) return;
   root.innerHTML = '';
+  STATE.frame = null;
   const card = document.createElement('div');
-  card.className = 'invoices-blocker';
-  const title = document.createElement('h2');
+  card.className = 'ctox-empty';
+  const title = document.createElement('strong');
   title.textContent = t('dependencyTitle');
   card.appendChild(title);
   const list = document.createElement('ul');
@@ -272,8 +275,9 @@ function renderError(message) {
   const root = moduleRoot();
   if (!root) return;
   root.innerHTML = '';
+  STATE.frame = null;
   const div = document.createElement('div');
-  div.className = 'invoices-error';
+  div.className = 'ctox-empty';
   div.textContent = message;
   root.appendChild(div);
 }
@@ -325,64 +329,113 @@ function reportError(err) {
 function render() {
   const root = moduleRoot();
   if (!root) return;
-  root.innerHTML = '';
   root.classList.add('invoices-shell');
   root.dataset.contextModule = MODULE_ID;
   root.dataset.contextSubmodule = 'shell';
   root.dataset.contextSkill = SKILL_TAG;
-  const shell = document.createElement('div');
-  shell.className = 'invoices-grid';
-  shell.appendChild(renderList());
-  shell.appendChild(renderCenter());
-  shell.appendChild(renderInspector());
-  root.appendChild(shell);
-  if (STATE.lastError) {
-    const banner = document.createElement('div');
-    banner.className = 'invoices-error-banner';
-    banner.textContent = STATE.lastError;
-    root.appendChild(banner);
-  }
+  const frame = ensureFrame(root);
+  renderListInto(frame.leftPane);
+  renderCenterInto(frame.centerPane);
+  renderInspectorInto(frame.rightPane);
+  frame.banner.hidden = !STATE.lastError;
+  frame.banner.textContent = STATE.lastError || '';
 }
 
-function renderList() {
-  const pane = document.createElement('aside');
-  pane.className = 'invoices-pane invoices-list';
-  pane.dataset.leftContent = '';
-  pane.dataset.contextModule = MODULE_ID;
-  pane.dataset.contextSubmodule = 'list';
-  pane.dataset.contextRecordType = 'accounting_invoices';
+// The standard 3-pane frame (.ctox-workspace + .ctox-pane columns +
+// declarative .ctox-column-resizer handles) is built once per mount and kept
+// alive across re-renders: the shell wires the resizer handles exactly once
+// (setupModuleResizers in app.js), so recreating them on every render would
+// silently kill column resizing.
+function ensureFrame(root) {
+  if (STATE.frame) return STATE.frame;
+  const workspace = document.createElement('main');
+  workspace.className = 'ctox-workspace';
+  workspace.dataset.resizeFrame = '';
 
+  const leftPane = document.createElement('aside');
+  leftPane.className = 'ctox-pane';
+  leftPane.dataset.leftContent = '';
+  leftPane.dataset.contextModule = MODULE_ID;
+  leftPane.dataset.contextSubmodule = 'list';
+  leftPane.dataset.contextRecordType = 'accounting_invoices';
+
+  const centerPane = document.createElement('section');
+  centerPane.className = 'ctox-pane';
+  centerPane.dataset.contextModule = MODULE_ID;
+  centerPane.dataset.contextSubmodule = 'center';
+  centerPane.dataset.contextRecordType = 'accounting_invoices';
+
+  const rightPane = document.createElement('aside');
+  rightPane.className = 'ctox-pane';
+  rightPane.dataset.rightContent = '';
+
+  workspace.appendChild(leftPane);
+  workspace.appendChild(buildColumnResizer('left', '--ctox-left-width'));
+  workspace.appendChild(centerPane);
+  workspace.appendChild(buildColumnResizer('right', '--ctox-right-width'));
+  workspace.appendChild(rightPane);
+
+  const banner = document.createElement('div');
+  banner.className = 'invoices-error-banner';
+  banner.hidden = true;
+
+  // innerHTML='' + appendChild (not replaceChildren) so the fake-DOM test
+  // shims — whose replaceChildren drops its arguments — still see the frame.
+  root.innerHTML = '';
+  root.appendChild(workspace);
+  root.appendChild(banner);
+  STATE.frame = { leftPane, centerPane, rightPane, banner };
+  return STATE.frame;
+}
+
+function buildColumnResizer(side, cssVar) {
+  const handle = document.createElement('button');
+  handle.type = 'button';
+  handle.className = 'ctox-column-resizer';
+  handle.dataset.resizer = side;
+  handle.dataset.resizerVar = cssVar;
+  handle.setAttribute('aria-label', t('resizeColumn'));
+  return handle;
+}
+
+// Canonical kit pane header (kicker + title row, optional icon actions).
+function buildPaneHeader(kickerText, titleText, actionsEl) {
   const header = document.createElement('header');
   header.className = 'ctox-pane-header ctox-pane-band';
-
   const titleRow = document.createElement('div');
   titleRow.className = 'ctox-pane-title-row';
   const titles = document.createElement('div');
   titles.className = 'ctox-pane-titles';
   const kicker = document.createElement('span');
   kicker.className = 'ctox-pane-kicker';
-  kicker.textContent = t('invoices');
+  kicker.textContent = kickerText;
   titles.appendChild(kicker);
   const title = document.createElement('h2');
   title.className = 'ctox-pane-title';
-  const activeFilter = FILTERS.find((f) => f.id === STATE.filter) || FILTERS[0];
-  title.textContent = `${t(activeFilter.labelKey)} (${visibleInvoices().length})`;
+  title.textContent = titleText;
   titles.appendChild(title);
   titleRow.appendChild(titles);
+  if (actionsEl) titleRow.appendChild(actionsEl);
+  header.appendChild(titleRow);
+  return header;
+}
+
+function renderListInto(pane) {
+  const activeFilter = FILTERS.find((f) => f.id === STATE.filter) || FILTERS[0];
 
   const actions = document.createElement('div');
   actions.className = 'ctox-pane-actions';
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
-  createBtn.className = 'ctox-pane-icon invoices-create-button';
+  createBtn.className = 'ctox-pane-icon';
   createBtn.innerHTML = actionIcon('add');
   createBtn.setAttribute('aria-label', t('newInvoice'));
   createBtn.title = t('newInvoice');
   createBtn.disabled = STATE.busy;
   createBtn.addEventListener('click', () => createDraft());
   actions.appendChild(createBtn);
-  titleRow.appendChild(actions);
-  header.appendChild(titleRow);
+
+  const header = buildPaneHeader(t('invoices'), `${t(activeFilter.labelKey)} (${visibleInvoices().length})`, actions);
 
   const filterRow = document.createElement('div');
   filterRow.className = 'ctox-pane-tools invoices-filter-row';
@@ -401,10 +454,9 @@ function renderList() {
     filterRow.appendChild(btn);
   }
   header.appendChild(filterRow);
-  pane.appendChild(header);
 
   const list = document.createElement('ul');
-  list.className = 'ctox-list invoices-list-items';
+  list.className = 'ctox-list';
   for (const inv of visibleInvoices()) {
     const item = document.createElement('li');
     item.className = 'ctox-list-item invoices-list-item';
@@ -418,8 +470,8 @@ function renderList() {
     const stateLabel = invoiceStateLabel(inv.state);
     item.innerHTML = `
       <strong>${escapeHtml(inv.invoice_number || t('newShort'))}</strong>
-      <span>${escapeHtml(partyName(inv.party_id))}</span>
-      <em>${escapeHtml(stateLabel)}</em>`;
+      <small>${escapeHtml(partyName(inv.party_id))}</small>
+      <small>${escapeHtml(stateLabel)}</small>`;
     item.addEventListener('click', () => {
       STATE.selectedInvoiceId = inv.id;
       STATE.lineDraft = null;
@@ -427,8 +479,7 @@ function renderList() {
     });
     list.appendChild(item);
   }
-  pane.appendChild(list);
-  return pane;
+  pane.replaceChildren(header, list);
 }
 
 function visibleInvoices() {
@@ -443,71 +494,61 @@ function visibleInvoices() {
   return [...list].sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
 }
 
-function renderCenter() {
-  const pane = document.createElement('main');
-  pane.className = 'invoices-pane invoices-center';
-  pane.dataset.contextModule = MODULE_ID;
-  pane.dataset.contextSubmodule = 'center';
-  pane.dataset.contextRecordType = 'accounting_invoices';
+function renderCenterInto(pane) {
   const inv = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
+  pane.replaceChildren();
+  delete pane.dataset.contextRecordId;
+  delete pane.dataset.contextLabel;
   if (!inv) {
+    pane.appendChild(buildPaneHeader(t('invoices'), t('invoice')));
+    const body = document.createElement('div');
+    body.className = 'ctox-pane-body';
     const empty = document.createElement('div');
-    empty.className = 'ctox-empty invoices-empty';
+    empty.className = 'ctox-empty';
     empty.textContent = t('emptyHint');
-    pane.appendChild(empty);
-    return pane;
+    body.appendChild(empty);
+    pane.appendChild(body);
+    return;
   }
   pane.dataset.contextRecordId = inv.id;
   pane.dataset.contextLabel = inv.invoice_number || inv.id;
 
-  const header = document.createElement('header');
-  header.className = 'ctox-pane-header ctox-pane-band';
-  const titleRow = document.createElement('div');
-  titleRow.className = 'ctox-pane-title-row';
-  const titles = document.createElement('div');
-  titles.className = 'ctox-pane-titles';
-  const kicker = document.createElement('span');
-  kicker.className = 'ctox-pane-kicker';
-  kicker.textContent = t('invoice');
-  titles.appendChild(kicker);
-  const title = document.createElement('h2');
-  title.className = 'ctox-pane-title';
-  title.textContent = inv.invoice_number
-    ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
-    : `${t('draft')} · ${partyName(inv.party_id)}`;
-  titles.appendChild(title);
-  titleRow.appendChild(titles);
   const headerActions = document.createElement('div');
   headerActions.className = 'ctox-pane-actions';
-  const stateChip = document.createElement('span');
-  stateChip.className = ['ctox-badge', stateBadgeClass(inv.state), 'invoices-state-chip']
+  // Lifecycle state is a status display, not a control — kit badge, never a chip.
+  const stateBadge = document.createElement('span');
+  stateBadge.className = ['ctox-badge', stateBadgeClass(inv.state)]
     .filter(Boolean).join(' ');
-  stateChip.dataset.state = inv.state;
-  stateChip.textContent = invoiceStateLabel(inv.state);
-  headerActions.appendChild(stateChip);
-  titleRow.appendChild(headerActions);
-  header.appendChild(titleRow);
-  pane.appendChild(header);
+  stateBadge.dataset.state = inv.state;
+  stateBadge.textContent = invoiceStateLabel(inv.state);
+  headerActions.appendChild(stateBadge);
+
+  pane.appendChild(buildPaneHeader(
+    t('invoice'),
+    inv.invoice_number
+      ? `${inv.invoice_number} · ${partyName(inv.party_id)}`
+      : `${t('draft')} · ${partyName(inv.party_id)}`,
+    headerActions
+  ));
 
   const body = document.createElement('div');
-  body.className = 'invoices-pane-scroll';
+  body.className = 'ctox-pane-scroll invoices-pane-scroll';
   if (inv.state === 'draft') {
     body.appendChild(renderEditor(inv));
   } else {
     body.appendChild(renderDetail(inv));
   }
   pane.appendChild(body);
-  return pane;
 }
 
 function renderEditor(inv) {
   const wrap = document.createElement('section');
-  wrap.className = 'invoices-editor';
+  wrap.className = 'invoices-editor invoices-stack';
 
   const meta = document.createElement('div');
-  meta.className = 'invoices-editor-meta';
+  meta.className = 'ctox-compact-form__fields';
   const partyLabel = document.createElement('label');
-  partyLabel.className = 'invoices-field';
+  partyLabel.className = 'ctox-compact-field';
   partyLabel.textContent = t('customer');
   const partySelect = document.createElement('select');
   partySelect.className = 'ctox-select';
@@ -535,7 +576,7 @@ function renderEditor(inv) {
   meta.appendChild(partyLabel);
 
   const dateLabel = document.createElement('label');
-  dateLabel.className = 'invoices-field';
+  dateLabel.className = 'ctox-compact-field';
   dateLabel.textContent = t('invoiceDate');
   const dateInput = document.createElement('input');
   dateInput.className = 'ctox-input';
@@ -552,7 +593,7 @@ function renderEditor(inv) {
   meta.appendChild(dateLabel);
 
   const typeLabel = document.createElement('label');
-  typeLabel.className = 'invoices-field';
+  typeLabel.className = 'ctox-compact-field';
   typeLabel.textContent = t('type');
   const typeSelect = document.createElement('select');
   typeSelect.className = 'ctox-select';
@@ -571,7 +612,8 @@ function renderEditor(inv) {
 
   wrap.appendChild(meta);
 
-  const linesHeader = document.createElement('h3');
+  const linesHeader = document.createElement('span');
+  linesHeader.className = 'ctox-field-label';
   linesHeader.textContent = t('lines');
   wrap.appendChild(linesHeader);
 
@@ -639,7 +681,7 @@ function renderEditor(inv) {
 
   const postBtn = document.createElement('button');
   postBtn.type = 'button';
-  postBtn.className = 'ctox-button is-primary invoices-action-primary';
+  postBtn.className = 'ctox-button is-primary';
   postBtn.textContent = t('post');
   const issues = computeValidationIssues(inv);
   const postDisabled = STATE.busy || !issues.canPost;
@@ -651,13 +693,16 @@ function renderEditor(inv) {
   actions.appendChild(postBtn);
 
   if (issues.errors.length > 0) {
-    const issuesBox = document.createElement('ul');
-    issuesBox.className = 'invoices-issues';
+    const issuesBox = document.createElement('div');
+    issuesBox.className = 'ctox-callout is-danger';
+    const issuesList = document.createElement('ul');
+    issuesList.className = 'invoices-issues';
     for (const issue of issues.errors) {
       const li = document.createElement('li');
       li.textContent = issue.message;
-      issuesBox.appendChild(li);
+      issuesList.appendChild(li);
     }
+    issuesBox.appendChild(issuesList);
     actions.appendChild(issuesBox);
   }
 
@@ -766,10 +811,10 @@ function computeLineNetCents(line) {
 
 function renderDetail(inv) {
   const wrap = document.createElement('section');
-  wrap.className = 'invoices-detail';
+  wrap.className = 'invoices-detail invoices-stack';
 
   const summary = document.createElement('dl');
-  summary.className = 'ctox-fields invoices-detail-summary';
+  summary.className = 'ctox-fields';
   summary.innerHTML = `
     <dt>${escapeHtml(t('invoiceNumber'))}</dt><dd>${escapeHtml(inv.invoice_number || '—')}</dd>
     <dt>${escapeHtml(t('customer'))}</dt><dd>${escapeHtml(partyName(inv.party_id))}</dd>
@@ -783,13 +828,14 @@ function renderDetail(inv) {
   `;
   wrap.appendChild(summary);
 
-  const linesHeader = document.createElement('h3');
+  const linesHeader = document.createElement('span');
+  linesHeader.className = 'ctox-field-label';
   linesHeader.textContent = t('lines');
   wrap.appendChild(linesHeader);
   const tableWrap = document.createElement('div');
   tableWrap.className = 'ctox-table-wrap';
   const linesTable = document.createElement('table');
-  linesTable.className = 'ctox-table invoices-lines-table invoices-lines-readonly';
+  linesTable.className = 'ctox-table';
   linesTable.appendChild(renderLineHeader());
   const linesBody = document.createElement('tbody');
   for (const line of inv.lines || []) {
@@ -818,7 +864,7 @@ function renderDetail(inv) {
   wrap.appendChild(tableWrap);
 
   const tabs = document.createElement('div');
-  tabs.className = 'ctox-pane-tabs invoices-tabs';
+  tabs.className = 'ctox-pane-tabs';
   const tabButtons = [
     { id: 'journal', label: t('journal') },
     { id: 'xrechnung', label: 'XRechnung' },
@@ -874,9 +920,9 @@ function renderJournalTab(inv) {
     `;
   }).join('');
   wrap.innerHTML = `
-    <h4>Journal ${escapeHtml(inv.post_journal_entry_id)}</h4>
+    <span class="ctox-field-label">Journal ${escapeHtml(inv.post_journal_entry_id)}</span>
     <div class="ctox-table-wrap">
-      <table class="ctox-table invoices-journal-table">
+      <table class="ctox-table">
         <thead><tr><th>${escapeHtml(t('account'))}</th><th>${escapeHtml(t('description'))}</th><th class="is-num">${escapeHtml(t('debit'))}</th><th class="is-num">${escapeHtml(t('credit'))}</th><th class="is-num">${escapeHtml(t('tax'))}</th></tr></thead>
         <tbody>${lines}</tbody>
       </table>
@@ -891,7 +937,7 @@ function renderXRechnungTab(inv) {
   try {
     const xml = buildXRechnungXml(inv, STATE.parties[inv.party_id] || {}, { name: 'CTOX' });
     const pre = document.createElement('pre');
-    pre.className = 'invoices-xrechnung-preview';
+    pre.className = 'ctox-pre';
     pre.textContent = xml;
     wrap.appendChild(pre);
     const download = document.createElement('button');
@@ -921,9 +967,9 @@ function renderPaymentsTab(inv) {
   wrap.innerHTML = `
     <p>${escapeHtml(t('open'))}: <strong>${formatCents(openCents)}</strong></p>
     <form class="invoices-payment-form">
-      <label>${escapeHtml(t('amountCents'))}<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
-      <label>${escapeHtml(t('discountCents'))}<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
-      <label>${escapeHtml(t('paymentId'))}<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
+      <label class="ctox-compact-field">${escapeHtml(t('amountCents'))}<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
+      <label class="ctox-compact-field">${escapeHtml(t('discountCents'))}<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
+      <label class="ctox-compact-field">${escapeHtml(t('paymentId'))}<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
       <button class="ctox-button is-primary" type="submit" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('allocate'))}</button>
     </form>
     <p class="invoices-hint">${escapeHtml(t('discountHint'))}</p>
@@ -959,7 +1005,7 @@ function renderDunningTab(inv) {
   }
   wrap.innerHTML = `
     <p>${escapeHtml(t('dunningHint'))}</p>
-    <button type="button" class="ctox-button is-primary invoices-action-primary" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('dunningRun'))}</button>
+    <button type="button" class="ctox-button is-primary" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('dunningRun'))}</button>
   `;
   const btn = wrap.querySelector('button');
   btn.addEventListener('click', async () => {
@@ -977,64 +1023,63 @@ function renderDunningTab(inv) {
   return wrap;
 }
 
-function renderInspector() {
-  const pane = document.createElement('aside');
-  pane.className = 'invoices-pane invoices-inspector';
-  pane.dataset.rightContent = '';
+function renderInspectorInto(pane) {
   const inv = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
+  pane.replaceChildren();
+  pane.appendChild(buildPaneHeader(t('invoices'), t('inspector')));
   if (!inv) {
+    const body = document.createElement('div');
+    body.className = 'ctox-pane-body';
     const empty = document.createElement('div');
     empty.className = 'ctox-empty';
     empty.textContent = t('inspectorEmpty');
-    pane.appendChild(empty);
-    return pane;
+    body.appendChild(empty);
+    pane.appendChild(body);
+    return;
   }
-  const header = document.createElement('header');
-  header.className = 'ctox-pane-header ctox-pane-band';
-  header.innerHTML = `
-    <div class="ctox-pane-title-row">
-      <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker">${escapeHtml(t('invoices'))}</span>
-        <h2 class="ctox-pane-title">${escapeHtml(t('inspector'))}</h2>
+
+  const body = document.createElement('div');
+  body.className = 'ctox-pane-scroll invoices-pane-scroll invoices-stack';
+
+  const party = STATE.parties[inv.party_id] || {};
+  const partyCard = document.createElement('div');
+  partyCard.className = 'ctox-card';
+  partyCard.innerHTML = `
+    <header>${escapeHtml(t('customer'))}</header>
+    <div class="ctox-card-body">
+      <div class="invoices-inspector-party">
+        <h3>${escapeHtml(party.name || inv.party_id)}</h3>
+        <p>${escapeHtml(party.address || t('noAddress'))}</p>
+        <p>${escapeHtml(party.email || '')}</p>
       </div>
     </div>
   `;
-  pane.appendChild(header);
+  body.appendChild(partyCard);
 
-  const body = document.createElement('div');
-  body.className = 'invoices-pane-scroll';
-
-  const party = STATE.parties[inv.party_id] || {};
-  const partyDiv = document.createElement('div');
-  partyDiv.className = 'invoices-inspector-party';
-  partyDiv.innerHTML = `
-    <h3>${escapeHtml(party.name || inv.party_id)}</h3>
-    <p>${escapeHtml(party.address || t('noAddress'))}</p>
-    <p class="muted">${escapeHtml(party.email || '')}</p>
-  `;
-  body.appendChild(partyDiv);
-
-  const openDiv = document.createElement('div');
-  openDiv.className = 'invoices-inspector-open';
   const openCents = inv.open_cents ?? Math.max(0, (inv.total_cents || 0) - (inv.paid_cents || 0));
-  openDiv.innerHTML = `
-    <h4>${escapeHtml(t('openItems'))}</h4>
-    <dl class="ctox-fields">
-      <dt>${escapeHtml(t('open'))}</dt><dd><strong>${formatCents(openCents)}</strong></dd>
-      <dt>${escapeHtml(t('paid'))}</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
-    </dl>
+  const openCard = document.createElement('div');
+  openCard.className = 'ctox-card';
+  openCard.innerHTML = `
+    <header>${escapeHtml(t('openItems'))}</header>
+    <div class="ctox-card-body">
+      <dl class="ctox-fields">
+        <dt>${escapeHtml(t('open'))}</dt><dd><strong>${formatCents(openCents)}</strong></dd>
+        <dt>${escapeHtml(t('paid'))}</dt><dd>${formatCents(inv.paid_cents || 0)}</dd>
+      </dl>
+    </div>
   `;
-  body.appendChild(openDiv);
+  body.appendChild(openCard);
 
-  const actionsHeader = document.createElement('h4');
-  actionsHeader.textContent = t('actions');
-  body.appendChild(actionsHeader);
-  const actionsList = document.createElement('div');
-  actionsList.className = 'invoices-inspector-actions';
-  actionsList.textContent = t('actionsHint');
-  body.appendChild(actionsList);
+  const actionsCard = document.createElement('div');
+  actionsCard.className = 'ctox-card';
+  actionsCard.innerHTML = `
+    <header>${escapeHtml(t('actions'))}</header>
+    <div class="ctox-card-body">
+      <p class="invoices-hint">${escapeHtml(t('actionsHint'))}</p>
+    </div>
+  `;
+  body.appendChild(actionsCard);
   pane.appendChild(body);
-  return pane;
 }
 
 async function createDraft() {
