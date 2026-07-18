@@ -102,11 +102,11 @@ function applyStaticLabels(host, t) {
   const root = host.querySelector('[data-reports-root]');
   if (!root) return;
 
-  // Refresh button
+  // Refresh button keeps the static SVG markup in index.html — only the
+  // tooltip / aria-label are translated.
   const refreshBtn = root.querySelector('[data-refresh-reports]');
   if (refreshBtn) {
     const label = t('refresh', 'Aktualisieren');
-    refreshBtn.innerHTML = `${actionIcon('refresh')}<span class="reports-sr-only">${escapeHtml(label)}</span>`;
     refreshBtn.title = label;
     refreshBtn.setAttribute('aria-label', label);
   }
@@ -118,18 +118,8 @@ function applyStaticLabels(host, t) {
     searchInput.setAttribute('aria-label', t('searchLabel', 'Bugs und Features suchen'));
   }
 
-  // Kind select options
-  const kindSelect = root.querySelector('[data-report-kind]');
-  if (kindSelect) {
-    kindSelect.setAttribute('aria-label', t('kindFilterLabel', 'Typ filtern'));
-    kindSelect.innerHTML = `
-      <option value="all">${escapeHtml(t('allTypes', 'Alle Typen'))}</option>
-      <option value="bug">${escapeHtml(t('bugs', 'Bugs'))}</option>
-      <option value="feature">${escapeHtml(t('features', 'Features'))}</option>
-    `;
-  }
-
-  // Status select options
+  // Status select options (kind is now chips in markup; status stays as the
+  // single primary filter, with values translatable so en/de stay readable).
   const statusSelect = root.querySelector('[data-report-status]');
   if (statusSelect) {
     statusSelect.setAttribute('aria-label', t('statusFilterLabel', 'Status filtern'));
@@ -140,6 +130,32 @@ function applyStaticLabels(host, t) {
       <option value="completed">${escapeHtml(t('completed', 'Erledigt'))}</option>
       <option value="blocked">${escapeHtml(t('blocked', 'Blockiert'))}</option>
     `;
+  }
+
+  // Type chip strip labels (aria-label on the strip; option text is static).
+  const kindChips = root.querySelector('[data-report-kind-chips]');
+  if (kindChips) {
+    kindChips.setAttribute('aria-label', t('kindFilterLabel', 'Typ filtern'));
+  }
+
+  // Right-pane actions toggle — title and aria label swap depending on state.
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.dataset.showLabel = t('showActions', 'Aktionen einblenden');
+    toggleActions.dataset.hideLabel = t('hideActions', 'Aktionen ausblenden');
+    updateToggleActionsAria(root);
+  }
+}
+
+function updateToggleActionsAria(root) {
+  const toggle = root?.querySelector('[data-toggle-actions]');
+  if (!toggle) return;
+  const hidden = root.classList.contains('is-actions-hidden');
+  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  const label = hidden ? toggle.dataset.showLabel : toggle.dataset.hideLabel;
+  if (label) {
+    toggle.setAttribute('aria-label', label);
+    toggle.setAttribute('title', label);
   }
 }
 
@@ -152,15 +168,49 @@ function wireUi() {
     syncSelectionToVisibleItems();
     render();
   });
-  root.querySelector('[data-report-kind]')?.addEventListener('change', (event) => {
-    state.kind = event.target.value || 'all';
-    syncSelectionToVisibleItems();
-    render();
-  });
   root.querySelector('[data-report-status]')?.addEventListener('change', (event) => {
     state.status = event.target.value || 'all';
     syncSelectionToVisibleItems();
     render();
+  });
+  // Kind chips live in static markup; toggle the .is-active state instead of
+  // rewriting the strip on every render so the focus ring survives.
+  root.querySelectorAll('[data-report-kind-chips] [data-report-kind]').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const next = chip.getAttribute('data-report-kind') || 'all';
+      if (next === state.kind) return;
+      state.kind = next;
+      root.querySelectorAll('[data-report-kind-chips] [data-report-kind]').forEach((node) => {
+        node.classList.toggle('is-active', node === chip);
+      });
+      syncSelectionToVisibleItems();
+      render();
+    });
+  });
+  // Right actions column is collapsible — same toggle pattern threads/tickets
+  // use. The toggle stays in the detail header so the actions pane never has
+  // to render its own chrome.
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.addEventListener('click', () => {
+      root.classList.toggle('is-actions-hidden');
+      updateToggleActionsAria(root);
+    });
+  }
+  // Event delegation on the actions pane covers the focus-task and rollback
+  // controls without re-binding listeners on every renderActions() rewrite.
+  const actionsPane = root.querySelector('[data-reports-actions]');
+  actionsPane?.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[data-focus-task]')) {
+      const report = currentReportForActions();
+      if (report) focusCtoxTask(report);
+      return;
+    }
+    if (target?.closest('[data-rollback-module]')) {
+      const report = currentReportForActions();
+      if (report) rollbackSelectedRelease(report);
+    }
   });
   // Use event delegation on the list container so the click handler survives
   // every renderList() innerHTML rewrite. Previously the per-button listeners
@@ -178,6 +228,7 @@ function wireUi() {
       // refresh race — selecting the already-selected item should not be a no-op.
       state.selectedId = reportId;
       renderDetail();
+      renderActions();
       return;
     }
     state.selectedId = reportId;
@@ -296,6 +347,7 @@ function buildRenderKey(collections) {
 function render() {
   renderList();
   renderDetail();
+  renderActions();
   renderDiagnostics();
 }
 
@@ -387,98 +439,138 @@ function renderDetail() {
   const normalized = normalizedReports();
   const filtered = filteredReports();
   const report = filtered.find((item) => item.id === state.selectedId) || null;
+  const kindLabelNode = detail.querySelector('[data-report-kind-label]');
+  const titleNode = detail.querySelector('[data-report-title]');
   if (!report) {
     state.renderedDetailId = '';
-    detail.innerHTML = renderDetailEmptyState({ normalized, filtered });
+    if (kindLabelNode) kindLabelNode.textContent = '';
+    if (titleNode) titleNode.textContent = state.t('selectReportTitle', 'Eintrag auswählen');
+    let scroller = detail.querySelector('[data-reports-detail-scroll]');
+    if (!scroller) {
+      scroller = document.createElement('div');
+      scroller.className = 'ctox-pane-scroll reports-detail-scroll';
+      scroller.setAttribute('data-reports-detail-scroll', '');
+      detail.append(scroller);
+    }
+    scroller.innerHTML = renderDetailEmptyState({ normalized, filtered });
     return;
   }
   const previousRenderedId = state.renderedDetailId;
   state.renderedDetailId = report.id;
-  const releases = releasesForModule(report.moduleId);
+  if (kindLabelNode) kindLabelNode.textContent = `${report.kindLabel} · ${displayStatus(report.status)}`;
+  if (titleNode) titleNode.textContent = report.title;
   const attachment = report.attachment;
-  const hasCtoxTask = Boolean(report.commandId || report.taskId);
-  detail.innerHTML = `
-    <header class="ctox-pane-header ctox-pane-band">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(report.kindLabel)} · ${escapeHtml(displayStatus(report.status))}</span>
-          <h1 class="ctox-pane-title">${escapeHtml(report.title)}</h1>
+  let scroller = detail.querySelector('[data-reports-detail-scroll]');
+  if (!scroller) {
+    scroller = document.createElement('div');
+    scroller.className = 'ctox-pane-scroll reports-detail-scroll';
+    scroller.setAttribute('data-reports-detail-scroll', '');
+    detail.append(scroller);
+  }
+  scroller.innerHTML = `
+    <section class="ctox-card">
+      <header>${escapeHtml(state.t('report', 'Eintrag'))}</header>
+      <div class="ctox-card-body">
+        <dl class="ctox-fields">
+          ${fact(state.t('module', 'Modul'), report.moduleId)}
+          ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
+          ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
+          ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
+          ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
+          ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
+        </dl>
+      </div>
+    </section>
+    <section class="ctox-card">
+      <header>${escapeHtml(state.t('description', 'Beschreibung'))}</header>
+      <div class="ctox-card-body">
+        <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
+      </div>
+    </section>
+    <section class="ctox-card">
+      <header>${escapeHtml(state.t('expectation', 'Erwartung'))}</header>
+      <div class="ctox-card-body">
+        <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
+      </div>
+    </section>
+    <section class="ctox-card">
+      <header>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</header>
+      <div class="ctox-card-body">
+        <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
+      </div>
+    </section>
+    ${attachment ? `
+      <section class="ctox-card">
+        <header>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</header>
+        <div class="ctox-card-body">
+          <div class="reports-attachment">
+            <span class="reports-attachment-meta">${escapeHtml(attachment.capture_mode || 'capture')}</span>
+            <img src="${escapeAttr(attachment.data_url)}" alt="Report Screenshot" />
+          </div>
         </div>
-        <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-focus-task title="${escapeAttr(state.t('showCtoxTask', 'CTOX Task zeigen'))}" aria-label="${escapeAttr(state.t('showCtoxTask', 'CTOX Task zeigen'))}" ${hasCtoxTask ? '' : 'disabled'}>${actionIcon('open')}</button>
+      </section>
+    ` : ''}
+  `;
+  const shouldRestore = previousRenderedId === report.id || Object.prototype.hasOwnProperty.call(state.detailScrollByReport, report.id);
+  restoreDetailScroll(scroller, report.id, shouldRestore);
+  scroller.addEventListener('scroll', () => {
+    state.detailScrollByReport[report.id] = scroller.scrollTop;
+  }, { passive: true });
+}
+
+// Right-pane actions: show CTOX task + Rollback form. Hidden by default via
+// .is-actions-hidden on the module root; toggled from the detail header so
+// the most-common case (just reading a report) keeps the full detail width.
+function renderActions() {
+  const actions = state.ctx.host?.querySelector('[data-reports-actions]');
+  if (!actions) return;
+  const filtered = filteredReports();
+  const report = filtered.find((item) => item.id === state.selectedId) || null;
+  if (!report) {
+    actions.innerHTML = `
+      <div class="ctox-pane-scroll reports-actions-scroll">
+        <div class="ctox-empty">
+          <span>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</span>
         </div>
       </div>
-    </header>
-    <div class="ctox-pane-scroll reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
+    `;
+    return;
+  }
+  const releases = releasesForModule(report.moduleId);
+  const hasCtoxTask = Boolean(report.commandId || report.taskId);
+  actions.innerHTML = `
+    <div class="ctox-pane-scroll reports-actions-scroll">
       <section class="ctox-card">
-        <header>${escapeHtml(state.t('report', 'Eintrag'))}</header>
+        <header>${escapeHtml(state.t('actionsTitle', 'Aktionen'))}</header>
         <div class="ctox-card-body">
-          <dl class="ctox-fields">
-            ${fact(state.t('module', 'Modul'), report.moduleId)}
-            ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
-            ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
-            ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
-            ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
-            ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
-          </dl>
+          <button type="button" class="ctox-button is-primary reports-actions-task" data-focus-task ${hasCtoxTask ? '' : 'disabled'}>
+            ${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}
+          </button>
         </div>
       </section>
-      <section class="ctox-card">
-        <header>${escapeHtml(state.t('description', 'Beschreibung'))}</header>
-        <div class="ctox-card-body">
-          <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
-        </div>
-      </section>
-      <section class="ctox-card">
-        <header>${escapeHtml(state.t('expectation', 'Erwartung'))}</header>
-        <div class="ctox-card-body">
-          <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
-        </div>
-      </section>
-      <section class="ctox-card">
-        <header>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</header>
-        <div class="ctox-card-body">
-          <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
-        </div>
-      </section>
-      ${attachment ? `
-        <section class="ctox-card">
-          <header>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</header>
-          <div class="ctox-card-body">
-            <div class="reports-attachment">
-              <span class="reports-attachment-meta">${escapeHtml(attachment.capture_mode || 'capture')}</span>
-              <img src="${escapeAttr(attachment.data_url)}" alt="Report Screenshot" />
-            </div>
-          </div>
-        </section>
-      ` : ''}
       <section class="ctox-card">
         <header>${escapeHtml(state.t('rollback', 'Rollback'))}</header>
         <div class="ctox-card-body">
           <div class="reports-rollback">
-            <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
-            <div class="reports-rollback-actions">
-              <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
-                ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
-              </select>
-              <button type="button" class="ctox-button is-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
-            </div>
+            <p class="reports-rollback-prompt">${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
+            <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
+              ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
+            </select>
+            <button type="button" class="ctox-button is-primary reports-rollback-action" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
             <small class="reports-rollback-status" data-rollback-status></small>
           </div>
         </div>
       </section>
     </div>
   `;
-  detail.querySelector('[data-focus-task]')?.addEventListener('click', () => focusCtoxTask(report));
-  detail.querySelector('[data-rollback-module]')?.addEventListener('click', () => rollbackSelectedRelease(report));
-  const scroller = detail.querySelector('[data-reports-detail-scroll]');
-  if (scroller) {
-    const shouldRestore = previousRenderedId === report.id || Object.prototype.hasOwnProperty.call(state.detailScrollByReport, report.id);
-    restoreDetailScroll(scroller, report.id, shouldRestore);
-    scroller.addEventListener('scroll', () => {
-      state.detailScrollByReport[report.id] = scroller.scrollTop;
-    }, { passive: true });
-  }
+}
+
+// Click delegation looks up the currently selected report. Centralising the
+// lookup keeps the actions handlers free of stale report references across
+// re-renders.
+function currentReportForActions() {
+  const filtered = filteredReports();
+  return filtered.find((item) => item.id === state.selectedId) || null;
 }
 
 function restoreDetailScroll(scroller, reportId, shouldRestore) {
@@ -716,11 +808,12 @@ function focusCtoxTask(report) {
 }
 
 async function rollbackSelectedRelease(report) {
-  const detail = state.ctx.host.querySelector('[data-reports-detail]');
-  const status = detail.querySelector('[data-rollback-status]');
-  const versionId = detail.querySelector('[data-rollback-version]')?.value || report.rollbackVersionId || '';
+  const actions = state.ctx.host.querySelector('[data-reports-actions]');
+  if (!actions) return;
+  const status = actions.querySelector('[data-rollback-status]');
+  const versionId = actions.querySelector('[data-rollback-version]')?.value || report.rollbackVersionId || '';
   if (!versionId) return;
-  status.textContent = state.t('rollbackRunning', 'Rollback läuft...');
+  if (status) status.textContent = state.t('rollbackRunning', 'Rollback läuft...');
   try {
     await dispatchModuleCommand({
       commandType: 'ctox.module.rollback',
@@ -729,10 +822,10 @@ async function rollbackSelectedRelease(report) {
       payload: { module_id: report.moduleId, version_id: versionId },
       source: 'business-os-reports',
     });
-    status.textContent = state.t('rollbackExecuted', 'Rollback ausgeführt.');
+    if (status) status.textContent = state.t('rollbackExecuted', 'Rollback ausgeführt.');
     await refreshReports();
   } catch (error) {
-    status.textContent = error.message || String(error);
+    if (status) status.textContent = error.message || String(error);
   }
 }
 
@@ -768,10 +861,6 @@ async function dispatchModuleCommand({
 
 function fact(label, value) {
   return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd>`;
-}
-
-function actionIcon(name) {
-  return state.ctx?.getActionIcon?.(name) || '';
 }
 
 function statusBadgeClass(status) {

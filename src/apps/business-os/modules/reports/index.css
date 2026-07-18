@@ -1,9 +1,42 @@
 /* reports/index.css — module-specific styling on top of shared/base.css.
    Kit classes (.ctox-workspace, .ctox-pane, .ctox-pane-*, .ctox-column-resizer,
    .ctox-list, .ctox-list-item, .ctox-badge, .ctox-button, .ctox-select,
-   .ctox-fields, .ctox-card, .ctox-empty) come from the shell; only genuinely
-   reports-specific layout lives here. The narrow-viewport collapse is owned
-   by the kit container query in shared/base.css. */
+   .ctox-fields, .ctox-card, .ctox-empty, .ctox-chip) come from the shell;
+   this file only keeps what is genuinely reports-specific: the kind chip
+   strip, the badge feature color token, the detail/actions scrollers, the
+   attachment preview, the rollback form, the collapsible actions column,
+   and the stacked narrow-viewport layout. */
+
+/* Standard width defaults for the declarative resizers — the shell writes
+   inline --ctox-*-width onto the frame element while dragging. */
+.reports-module {
+  --ctox-left-width: 320px;
+  --ctox-right-width: 340px;
+}
+
+/* Right "Aktionen" column is collapsible and hidden by default so the
+   primary detail column keeps the width; the detail-header toggle
+   re-reveals it on demand. Mirrors the threads/tickets module pattern. */
+.reports-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+}
+
+.reports-module.is-actions-hidden .reports-actions,
+.reports-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.reports-module > [data-toggle-actions][aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Empty/loading states injected as a pane's only child: span both pane grid
+   rows so .ctox-empty fills the whole column. */
+.reports-detail > .ctox-empty:only-child,
+.reports-actions > .ctox-empty:only-child {
+  grid-row: 1 / -1;
+}
 
 /* Module special: "feature" badge role on top of the shared .ctox-badge —
    the shell has no matching semantic token (dark value below). */
@@ -32,16 +65,15 @@
   }
 }
 
-/* custom: tools layout — this pane carries two filter selects, so the search
-   spans the full row and both selects share the row below. */
-.reports-module .ctox-pane-tools {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+/* custom: kind chip strip — kit .ctox-chip pills in a flat horizontal row
+   that replaces the old `<select data-report-kind>` (one less always-visible
+   control next to the search). */
+.reports-module .reports-kind-chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-}
-
-.reports-module .ctox-pane-search {
-  grid-column: 1 / -1;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 /* custom: record-row content — badge row, title and meta line stacked inside
@@ -70,19 +102,14 @@
   align-items: center;
 }
 
-/* custom: padded card stack — kit .ctox-pane-scroll is intentionally unpadded
-   so panes choose their own content rhythm. */
-.reports-detail-scroll {
+/* custom: detail/actions scroller rhythm — kit .ctox-pane-scroll is
+   intentionally unpadded so panes choose their own content rhythm. */
+.reports-detail-scroll,
+.reports-actions-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-}
-
-/* custom: the detail empty state renders without a pane header, so it spans
-   both grid rows of the .ctox-pane. */
-.reports-detail > .ctox-empty:only-child {
-  grid-row: 1 / -1;
 }
 
 /* Long report texts keep a readable measure. */
@@ -109,28 +136,58 @@
   background: var(--bg);
 }
 
-/* custom: rollback form — version select next to the primary action. */
+/* custom: rollback form — version select stacked above the primary action,
+   no inline grid (the right pane is narrow and stacked reads better). */
 .reports-rollback {
   display: grid;
   gap: 8px;
   max-width: 520px;
 }
 
-.reports-rollback-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+.reports-rollback-prompt {
+  margin: 0;
 }
 
-/* Accessibility helper: spoken label inside the icon-only refresh button. */
-.reports-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+.reports-rollback-action {
+  justify-self: start;
+}
+
+/* custom: narrow windows stack the three panes vertically so the detail
+   keeps a readable width without horizontal squeezing. */
+@container business-app-window (max-width: 1180px) {
+  .reports-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(200px, 34vh) minmax(380px, 1fr) minmax(220px, 36vh);
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+  }
+
+  .reports-module > [data-resizer] {
+    display: none !important;
+  }
+
+  .reports-detail,
+  .reports-actions {
+    min-height: 220px;
+  }
+
+  /* The actions pane is hidden by default; below the narrow breakpoint the
+     detail stays visible and the actions column drops out unless explicitly
+     re-revealed by the toggle (mobile uses the same column). */
+  .reports-module:not(.is-actions-hidden) .reports-detail {
+    display: none;
+  }
+
+  .reports-module:not(.is-actions-hidden) .reports-actions {
+    display: grid;
+    min-width: 0;
+  }
+}
+
+@container business-app-window (max-width: 760px) {
+  .reports-module {
+    grid-template-rows: minmax(220px, 38vh) minmax(420px, 1fr) minmax(260px, 42vh);
+  }
 }
