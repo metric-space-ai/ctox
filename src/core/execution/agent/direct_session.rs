@@ -105,9 +105,13 @@ fn configure_worker_tool_stack(
     if disable_active_tools {
         return;
     }
-    const WEB_STACK_KEY: &str = "tools.ctox_web";
-    cli_overrides.retain(|(key, _)| key != WEB_STACK_KEY);
-    cli_overrides.push((WEB_STACK_KEY.to_string(), toml::Value::Boolean(true)));
+    const REQUIRED_WORKER_OVERRIDES: &[&str] = &["tools.ctox_web", "features.multi_agent"];
+    cli_overrides.retain(|(key, _)| !REQUIRED_WORKER_OVERRIDES.contains(&key.as_str()));
+    cli_overrides.extend(
+        REQUIRED_WORKER_OVERRIDES
+            .iter()
+            .map(|key| ((*key).to_string(), toml::Value::Boolean(true))),
+    );
 }
 
 fn persistent_worker_thread_name(root: &Path) -> String {
@@ -1878,19 +1882,31 @@ mod tests {
     }
 
     #[test]
-    fn worker_sessions_enable_typed_ctox_web_stack() {
-        let mut overrides = vec![("tools.ctox_web".to_string(), toml::Value::Boolean(false))];
+    fn worker_sessions_enable_typed_ctox_web_stack_and_subagents() {
+        let mut overrides = vec![
+            ("tools.ctox_web".to_string(), toml::Value::Boolean(false)),
+            (
+                "features.multi_agent".to_string(),
+                toml::Value::Boolean(false),
+            ),
+        ];
 
         configure_worker_tool_stack(&mut overrides, false);
 
         assert_eq!(
             overrides,
-            vec![("tools.ctox_web".to_string(), toml::Value::Boolean(true),)]
+            vec![
+                ("tools.ctox_web".to_string(), toml::Value::Boolean(true)),
+                (
+                    "features.multi_agent".to_string(),
+                    toml::Value::Boolean(true),
+                ),
+            ]
         );
     }
 
     #[test]
-    fn tool_disabled_review_sessions_do_not_enable_ctox_web_stack() {
+    fn tool_disabled_review_sessions_do_not_enable_worker_tools() {
         let mut overrides = Vec::new();
 
         configure_worker_tool_stack(&mut overrides, true);
