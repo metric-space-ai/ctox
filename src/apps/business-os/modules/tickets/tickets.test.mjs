@@ -25,7 +25,10 @@ assert.doesNotMatch(presentationSource, forbiddenSurfacePattern);
 assert.doesNotMatch(presentationSource, /border-(?:left|right)\s*:\s*(?:[2-9]|[0-9]{2,})px/);
 assert.doesNotMatch(presentationSource, /border-radius:\s*(?:8|10|12|14|16|18|20|24)px/);
 assert.doesNotMatch(presentationSource, /box-shadow:\s*(?:0|inset|rgba|color-mix)/);
-assert.match(html, /class="ctox-workspace tickets-module"/);
+assert.match(html, /class="ctox-workspace tickets-module[^"]*"/);
+// Actions/context column collapses on demand (hidden by default).
+assert.match(html, /is-actions-hidden/);
+assert.match(html, /data-toggle-actions/);
 assert.match(html, /class="ctox-pane tickets-pane tickets-left"/);
 assert.match(css, /--ctox-left-width: 340px/);
 assert.match(css, /--ctox-right-width: 360px/);

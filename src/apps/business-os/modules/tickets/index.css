@@ -7,7 +7,25 @@
    (.ctox-button) and empty states (.ctox-empty) all come from shared/base.css
    + app.css. This file only keeps what is tickets-specific: row/card content
    composition, the event timeline, prose bodies, the action row layout, the
-   command status line, and the stacked narrow-viewport layout. */
+   command status line, the collapsible controls column, and the stacked
+   narrow-viewport layout. */
+
+/* Controls/context column is collapsible and hidden by default so the ticket
+   timeline gets the full width; the left-pane header toggle re-reveals it on
+   demand. Mirrors the threads module's pattern. */
+.tickets-module.is-actions-hidden {
+  grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(0, 1fr);
+}
+
+.tickets-module.is-actions-hidden .tickets-right,
+.tickets-module.is-actions-hidden > [data-resizer="right"] {
+  display: none;
+}
+
+.tickets-module > [data-toggle-actions][aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 /* Standard width defaults for the declarative resizers — the shell writes
    inline --ctox-*-width onto the frame element while dragging. */

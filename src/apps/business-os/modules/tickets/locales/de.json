@@ -6,6 +6,8 @@
   "pending": "Pending",
   "blocked": "Blockiert",
   "closed": "Geschlossen",
+  "showControls": "Kontrollen einblenden",
+  "hideControls": "Kontrollen ausblenden",
   "loadingTickets": "Tickets werden geladen...",
   "loadingTicketsDetail": "Die Ticket-Projektionen werden vorbereitet.",
   "syncingTickets": "Tickets werden synchronisiert.",

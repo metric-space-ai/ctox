@@ -16,6 +16,8 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blockiert',
     closed: 'Geschlossen',
+    showControls: 'Kontrollen einblenden',
+    hideControls: 'Kontrollen ausblenden',
     loadingTickets: 'Tickets werden geladen...',
     loadingTicketsDetail: 'Die Ticket-Projektionen werden vorbereitet.',
     syncingTickets: 'Tickets werden synchronisiert.',
@@ -71,6 +73,8 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blocked',
     closed: 'Closed',
+    showControls: 'Show controls',
+    hideControls: 'Hide controls',
     loadingTickets: 'Loading tickets...',
     loadingTicketsDetail: 'Ticket projections are being prepared.',
     syncingTickets: 'Syncing tickets.',
@@ -189,6 +193,12 @@ function applyStaticLabels() {
   const createLabel = state.t('createTicket', 'Ticket anlegen');
   createButton.setAttribute('aria-label', createLabel);
   createButton.setAttribute('title', createLabel);
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.dataset.showLabel = state.t('showControls', 'Kontrollen einblenden');
+    toggleActions.dataset.hideLabel = state.t('hideControls', 'Kontrollen ausblenden');
+    updateToggleActionsAria(root);
+  }
   root.querySelector('[data-ticket-search]').placeholder = state.t('search', 'Suchen...');
   root.querySelector('[data-ticket-state]').innerHTML = `
     <option value="all">${escapeHtml(state.t('allStatus', 'Alle Status'))}</option>
@@ -197,6 +207,18 @@ function applyStaticLabels() {
     <option value="blocked">${escapeHtml(state.t('blocked', 'Blockiert'))}</option>
     <option value="closed">${escapeHtml(state.t('closed', 'Geschlossen'))}</option>
   `;
+}
+
+function updateToggleActionsAria(root) {
+  const toggle = root.querySelector('[data-toggle-actions]');
+  if (!toggle) return;
+  const hidden = root.classList.contains('is-actions-hidden');
+  toggle.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  const label = hidden ? toggle.dataset.showLabel : toggle.dataset.hideLabel;
+  if (label) {
+    toggle.setAttribute('aria-label', label);
+    toggle.setAttribute('title', label);
+  }
 }
 
 function wireUi() {
@@ -219,6 +241,13 @@ function wireUi() {
   root.querySelector('[data-ticket-create-local]')?.addEventListener('click', () => {
     createLocalTicket().catch((error) => setCommandStatus(error?.message || String(error), true));
   });
+  const toggleActions = root.querySelector('[data-toggle-actions]');
+  if (toggleActions) {
+    toggleActions.addEventListener('click', () => {
+      root.classList.toggle('is-actions-hidden');
+      updateToggleActionsAria(root);
+    });
+  }
   root.querySelector('[data-ticket-context]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const clarificationAction = target?.closest('[data-clarification-action]');
@@ -433,7 +462,6 @@ function renderDetail() {
     </header>
     <div class="ctox-pane-scroll tickets-detail-scroll os-scrollbar">
       <section class="ctox-card">
-        <header>Ticket</header>
         <div class="ctox-card-body">
           <dl class="ctox-fields">
             ${fact(state.t('source', 'Quelle'), ticket.source_system)}
