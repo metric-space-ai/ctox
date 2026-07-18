@@ -11137,10 +11137,32 @@ fn validate_systematic_research_web_receipts(
             .get("http_status")
             .and_then(Value::as_u64)
             .with_context(|| format!("evidence {evidence_id} has no http_status"))?;
+        let content_kind = item
+            .get("content_kind")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no content_kind"))?;
+        let content_scope = item
+            .get("content_scope")
+            .and_then(Value::as_str)
+            .with_context(|| format!("evidence {evidence_id} has no content_scope"))?;
+        let relevance_score = item
+            .get("relevance_score")
+            .and_then(Value::as_i64)
+            .with_context(|| format!("evidence {evidence_id} has no relevance_score"))?;
 
         let matching_entry = entries.values().find(|entry| {
             let doc = entry.get("doc").unwrap_or(&Value::Null);
             let receipt = doc.get("response_receipt").unwrap_or(&Value::Null);
+            let response_kind = receipt
+                .get("content_kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let response_is_data = response_kind.starts_with("data_");
+            let manifest_kind_matches = if response_is_data {
+                content_kind == "data_file"
+            } else {
+                content_kind != "data_file" && content_scope == "full_text"
+            };
             let url_matches = ["original_url", "final_url", "canonical_url"]
                 .into_iter()
                 .any(|field| entry.get(field).and_then(Value::as_str) == Some(canonical_url))
@@ -11165,6 +11187,12 @@ fn validate_systematic_research_web_receipts(
                 && now.saturating_sub(created_at) <= MAX_WEB_RECEIPT_AGE_SECS
                 && entry.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
                 && doc.get("evidence_eligible").and_then(Value::as_bool) == Some(true)
+                && manifest_kind_matches
+                && relevance_score >= 8
+                && entry
+                    .get("evidence_relevance_score")
+                    .and_then(Value::as_i64)
+                    == Some(relevance_score)
                 && entry.get("http_status").and_then(Value::as_u64) == Some(http_status)
                 && sha256_matches(
                     entry.get("snapshot_hash").and_then(Value::as_str),
@@ -24541,7 +24569,7 @@ mod tests {
         std::fs::write(
             &cache_path,
             format!(
-                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"http_status":200,"snapshot_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}}}}}}}"#,
+                r#"{{"entries":{{"https://example.edu/paper":{{"created_at_epoch":{},"checked_at":{},"original_url":"https://example.edu/paper","final_url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"evidence_relevance_score":16,"http_status":200,"snapshot_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","doc":{{"url":"https://example.edu/paper","canonical_url":"https://example.edu/paper","evidence_eligible":true,"response_receipt":{{"requested_url":"https://example.edu/paper","final_url":"https://example.edu/paper","status":200,"sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_kind":"html"}}}}}}}}}}"#,
                 current_epoch_secs(),
                 current_epoch_secs()
             ),
@@ -24552,7 +24580,10 @@ mod tests {
                 "evidence_id": "ev-1",
                 "canonical_url": "https://example.edu/paper",
                 "http_status": 200,
-                "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content_kind": "article",
+                "content_scope": "full_text",
+                "relevance_score": 16
             }]
         });
         let attempt_started_at = current_epoch_secs().saturating_sub(1);
@@ -24560,6 +24591,16 @@ mod tests {
         manifest["evidence"][0]["snapshot_sha256"] = Value::String(
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         );
+        let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not bound to a matching admitted"));
+
+        manifest["evidence"][0]["snapshot_sha256"] = Value::String(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        );
+        manifest["evidence"][0]["relevance_score"] = Value::from(99);
         let error = validate_systematic_research_web_receipts(&root, &manifest, attempt_started_at)
             .unwrap_err();
         assert!(error
@@ -24590,6 +24631,7 @@ mod tests {
                         "final_url": "https://example.edu/data.zip",
                         "canonical_url": "https://example.edu/data.zip",
                         "evidence_eligible": true,
+                        "evidence_relevance_score": 16,
                         "http_status": 200,
                         "snapshot_hash": format!("sha256:{digest}"),
                         "doc": {
@@ -24617,7 +24659,10 @@ mod tests {
                 "evidence_id": "data-1",
                 "canonical_url": "https://example.edu/data.zip",
                 "http_status": 200,
-                "snapshot_sha256": digest
+                "snapshot_sha256": digest,
+                "content_kind": "data_file",
+                "content_scope": "full_text",
+                "relevance_score": 16
             }]
         });
         let attempt_started_at = current_epoch_secs().saturating_sub(1);

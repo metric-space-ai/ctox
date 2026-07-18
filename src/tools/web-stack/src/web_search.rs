@@ -637,6 +637,8 @@ struct PageCacheEntry {
     source_tier: Option<String>,
     #[serde(default)]
     evidence_eligible: bool,
+    #[serde(default)]
+    evidence_relevance_score: Option<i64>,
     doc: EvidenceDoc,
 }
 
@@ -836,7 +838,7 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         .map(|receipt| receipt.final_url.as_str())
         .unwrap_or(doc.canonical_url.as_str());
     let mut session = WebSearchSession::new(root, &config)?;
-    session.store_page_doc(&url, final_url, content_type, &doc);
+    session.store_page_doc(&url, final_url, content_type, &doc, &read_query);
     session.persist_page_cache()?;
 
     Ok(render_direct_web_read_payload(
@@ -950,6 +952,7 @@ fn render_direct_web_read_payload(
         "response_artifact_path": doc.response_artifact_path,
         "source_tier": doc.source_tier,
         "evidence_eligible": evidence_doc_is_admitted_for_read(&doc),
+        "evidence_relevance_score": score_evidence_doc_relevance(&doc, read_query),
         "evidence_content_kind": evidence_content_kind(&doc),
         "dataset_content_extracted": evidence_doc_has_meaningful_content(&doc)
             && evidence_content_kind(&doc) == "page_content",
@@ -976,6 +979,27 @@ fn evidence_doc_is_admitted(doc: &EvidenceDoc, hit: &SearchHit) -> bool {
 fn evidence_doc_is_admitted_for_read(doc: &EvidenceDoc) -> bool {
     doc.evidence_eligible
         && (evidence_doc_has_meaningful_content(doc) || evidence_doc_is_data_file(doc))
+}
+
+fn score_evidence_doc_relevance(doc: &EvidenceDoc, query: &str) -> Option<i64> {
+    if !evidence_doc_is_admitted_for_read(doc) {
+        return None;
+    }
+    let evidence_text = if evidence_doc_is_data_file(doc) {
+        format!("{} {} {}", doc.title, doc.url, doc.canonical_url)
+    } else {
+        doc.page_text.clone()
+    };
+    let body = evidence_text.to_ascii_lowercase();
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return None;
+    }
+    let matched_terms = terms
+        .iter()
+        .filter(|term| body.contains(term.as_str()))
+        .count();
+    Some((matched_terms as i64) * 16)
 }
 
 fn evidence_doc_is_data_file(doc: &EvidenceDoc) -> bool {
@@ -1789,14 +1813,14 @@ impl<'a> WebSearchSession<'a> {
                 Ok((doc, content_type)) => {
                     let canonical_url = doc.canonical_url.clone();
                     self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                    self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                    self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                     resolved[index] = Some(doc);
                 }
                 Err(err) => {
                     if let Some((doc, content_type)) = failed_http_evidence_doc(hit, &err) {
                         let canonical_url = doc.canonical_url.clone();
                         self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                        self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                        self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                         resolved[index] = Some(doc);
                     }
                 }
@@ -1825,7 +1849,7 @@ impl<'a> WebSearchSession<'a> {
             Ok((doc, content_type)) => {
                 let canonical_url = doc.canonical_url.clone();
                 self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                 Ok(doc)
             }
             Err(err) => {
@@ -1834,7 +1858,7 @@ impl<'a> WebSearchSession<'a> {
                 };
                 let canonical_url = doc.canonical_url.clone();
                 self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
-                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc, query);
                 Ok(doc)
             }
         }
@@ -1918,6 +1942,7 @@ impl<'a> WebSearchSession<'a> {
         final_url: &str,
         content_type: Option<String>,
         doc: &EvidenceDoc,
+        query: &str,
     ) {
         let entry = PageCacheEntry {
             created_at_epoch: unix_ts(),
@@ -1931,6 +1956,7 @@ impl<'a> WebSearchSession<'a> {
             snapshot_hash: doc.snapshot_hash.clone(),
             source_tier: doc.source_tier.clone(),
             evidence_eligible: doc.evidence_eligible,
+            evidence_relevance_score: score_evidence_doc_relevance(doc, query),
             doc: doc.clone(),
         };
 
@@ -8329,6 +8355,11 @@ mod tests {
             .get(&normalize_url_cache_key("https://example.com/mock-result"))
             .expect("direct read cache entry");
         assert!(entry.evidence_eligible);
+        assert_eq!(
+            entry.evidence_relevance_score,
+            payload["evidence_relevance_score"].as_i64()
+        );
+        assert!(entry.evidence_relevance_score.is_some_and(|score| score >= 8));
         assert_eq!(entry.http_status, Some(200));
         assert_eq!(
             entry.snapshot_hash,
@@ -8362,6 +8393,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(payload["evidence_eligible"], true);
+        assert!(payload["evidence_relevance_score"]
+            .as_i64()
+            .is_some_and(|score| score >= 8));
         assert_eq!(payload["evidence_content_kind"], "data_file");
         assert_eq!(payload["response_content_kind"], "data_zip");
         assert!(payload["page_text_excerpt"].as_str().unwrap().is_empty());
@@ -10164,6 +10198,7 @@ mod tests {
                     snapshot_hash: Some(body_hash.clone()),
                     source_tier: Some("primary".to_string()),
                     evidence_eligible: true,
+                    evidence_relevance_score: Some(16),
                     doc,
                 },
             );
@@ -10195,7 +10230,13 @@ mod tests {
         };
         let (doc, content_type) = failed_evidence_doc(&hit, 404);
         let mut session = WebSearchSession::new(&root, &config).expect("session");
-        session.store_page_doc(&hit.url, &doc.canonical_url, content_type, &doc);
+        session.store_page_doc(
+            &hit.url,
+            &doc.canonical_url,
+            content_type,
+            &doc,
+            "source content",
+        );
         session.persist_page_cache().expect("persist cache");
 
         let raw = fs::read_to_string(page_cache_path(&root)).expect("cache file");

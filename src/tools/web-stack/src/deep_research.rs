@@ -242,8 +242,12 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                             .and_then(Value::as_bool)
                             .unwrap_or(false);
                         let content_extracted = read_has_meaningful_evidence(&read_payload);
-                        let evidence_relevance_score =
-                            score_read_evidence_relevance(&read_payload, &search_query);
+                        let evidence_relevance_score = read_payload
+                            .get("evidence_relevance_score")
+                            .and_then(Value::as_i64)
+                            .or_else(|| {
+                                score_read_evidence_relevance(&read_payload, &search_query)
+                            });
                         let actual_full_text_or_data =
                             read_has_actual_full_text_or_data(&source, &read_payload);
                         source["canonical_url"] = read_payload
