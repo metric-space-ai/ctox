@@ -317,6 +317,8 @@ const BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS: u64 = 30 * 60;
 const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
+const DESKTOP_FILE_SCAN_MAX_DIRECTORIES: usize = 4_096;
+const DESKTOP_FILE_SCAN_BUDGET: Duration = Duration::from_millis(250);
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
 const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS: u64 = 10 * 60;
@@ -372,11 +374,10 @@ const BUSINESS_RECORD_PROJECTION_CURSOR_VERSION: u32 = 2;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
 // Browser-originated commands are user-visible control-plane work. Same-process
-// RxDB writes wake this loop through table notifiers, but replicated browser
-// writes can arrive through SQLite without tripping that notifier reliably on
-// every platform. Keep a short safety poll even when idle so pending commands
-// cannot sit in `pending_sync` until a standby reconcile.
-const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = BUSINESS_COMMAND_ACTIVE_POLL_SECS;
+// RxDB writes wake this loop through table notifiers. The storage-wide
+// `data_version` watcher covers writes from other SQLite connections, while
+// this slower poll remains as a bounded recovery path for a lost notification.
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 30;
 const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY: &str =
@@ -418,10 +419,10 @@ const NATIVE_PEER_MIN_WORKER_THREADS: usize = 4;
 /// dedicated heartbeat thread has died/stalled, the watchdog shuts the peer
 /// down cleanly so the OS process lock is released for a fresh start.
 const NATIVE_PEER_WATCHDOG_INTERVAL_SECS: u64 = 15;
-/// Runtime-installed app schemas are an activation input, not a health probe.
-/// Detect them promptly so a client-only app does not sit behind the general
-/// 15-second watchdog cadence before its collections become native-visible.
-const NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS: u64 = 1;
+/// Runtime-installed app schemas are activation input, not a health probe.
+/// The watch compares cheap directory/file metadata and only reads schema
+/// contents after that metadata changes.
+const NATIVE_PEER_RUNTIME_SCHEMA_WATCH_INTERVAL_SECS: u64 = 5;
 /// Reconfiguration must not wait forever for a stale WebRTC transport or
 /// SQLite close. Runtime-installed apps can add collections, so a wedged
 /// shutdown here otherwise leaves the newly installed app absent from the
@@ -2682,7 +2683,7 @@ async fn run_native_peer(
         return Ok(NativePeerExit::LockHeldElsewhere);
     };
     let configured_signaling_urls = signaling_urls.clone();
-    let runtime_schema_fingerprint = runtime_installed_module_schema_fingerprint(&root)?;
+    let mut runtime_schema_state = runtime_installed_module_schema_state(&root)?;
     let signaling_base_url = signaling_urls
         .into_iter()
         .find(|url| !url.trim().is_empty())
@@ -3155,7 +3156,7 @@ async fn run_native_peer(
             _ = runtime_schema_watch.tick() => {
                 match native_peer_runtime_installed_schemas_changed(
                     &root,
-                    &runtime_schema_fingerprint,
+                    &mut runtime_schema_state,
                 ) {
                     Ok(true) => {
                         eprintln!(
@@ -3259,12 +3260,40 @@ fn native_peer_sync_config_changed(
 
 fn native_peer_runtime_installed_schemas_changed(
     root: &Path,
-    active_fingerprint: &str,
+    active_state: &mut RuntimeInstalledModuleSchemaState,
 ) -> anyhow::Result<bool> {
-    Ok(runtime_installed_module_schema_fingerprint(root)? != active_fingerprint)
+    let metadata_fingerprint = runtime_installed_module_schema_metadata_fingerprint(root)?;
+    if metadata_fingerprint == active_state.metadata_fingerprint {
+        return Ok(false);
+    }
+
+    let content_fingerprint = runtime_installed_module_schema_fingerprint(root)?;
+    active_state.metadata_fingerprint = metadata_fingerprint;
+    if content_fingerprint == active_state.content_fingerprint {
+        return Ok(false);
+    }
+    active_state.content_fingerprint = content_fingerprint;
+    Ok(true)
 }
 
-fn runtime_installed_module_schema_fingerprint(root: &Path) -> anyhow::Result<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInstalledModuleSchemaState {
+    metadata_fingerprint: String,
+    content_fingerprint: String,
+}
+
+fn runtime_installed_module_schema_state(
+    root: &Path,
+) -> anyhow::Result<RuntimeInstalledModuleSchemaState> {
+    Ok(RuntimeInstalledModuleSchemaState {
+        metadata_fingerprint: runtime_installed_module_schema_metadata_fingerprint(root)?,
+        content_fingerprint: runtime_installed_module_schema_fingerprint(root)?,
+    })
+}
+
+fn runtime_installed_module_schema_files(
+    root: &Path,
+) -> anyhow::Result<(PathBuf, BTreeSet<PathBuf>)> {
     let modules_root =
         resolve_business_os_installed_app_root_for_native_peer(root).join("installed-modules");
     let mut files = BTreeSet::new();
@@ -3288,7 +3317,34 @@ fn runtime_installed_module_schema_fingerprint(root: &Path) -> anyhow::Result<St
             }
         }
     }
+    Ok((modules_root, files))
+}
 
+fn runtime_installed_module_schema_metadata_fingerprint(root: &Path) -> anyhow::Result<String> {
+    let (modules_root, files) = runtime_installed_module_schema_files(root)?;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-runtime-installed-module-schema-metadata-v1");
+    for path in files {
+        let rel = path.strip_prefix(&modules_root).unwrap_or(&path);
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let metadata = fs::metadata(&path)
+            .with_context(|| format!("inspect runtime app schema {}", path.display()))?;
+        hasher.update(metadata.len().to_le_bytes());
+        let modified_ns = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        hasher.update(modified_ns.to_le_bytes());
+        hasher.update([0xff]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn runtime_installed_module_schema_fingerprint(root: &Path) -> anyhow::Result<String> {
+    let (modules_root, files) = runtime_installed_module_schema_files(root)?;
     let mut hasher = sha2::Sha256::new();
     hasher.update(b"ctox-runtime-installed-module-schemas-v1");
     for path in files {
@@ -3733,6 +3789,41 @@ struct DesktopFileIndexScan {
     scan_roots: Vec<DesktopFileScanRoot>,
     candidates: Vec<DesktopFileIndexCandidate>,
     stamp: DesktopFileIndexProjectionStamp,
+}
+
+struct DesktopFileScanBudget {
+    started: Instant,
+    visited_directories: usize,
+    exhausted: bool,
+}
+
+impl DesktopFileScanBudget {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            visited_directories: 0,
+            exhausted: false,
+        }
+    }
+
+    fn can_visit_directory(&mut self) -> bool {
+        if self.visited_directories >= DESKTOP_FILE_SCAN_MAX_DIRECTORIES
+            || self.started.elapsed() >= DESKTOP_FILE_SCAN_BUDGET
+        {
+            self.exhausted = true;
+            return false;
+        }
+        self.visited_directories = self.visited_directories.saturating_add(1);
+        true
+    }
+
+    fn has_time_remaining(&mut self) -> bool {
+        if self.started.elapsed() >= DESKTOP_FILE_SCAN_BUDGET {
+            self.exhausted = true;
+            return false;
+        }
+        true
+    }
 }
 
 struct DesktopFileIndexWatch {
@@ -12289,7 +12380,7 @@ async fn sync_desktop_file_scan_with_database(
     database: &Arc<RxDatabase>,
     scan: DesktopFileIndexScan,
 ) -> anyhow::Result<usize> {
-    let candidate_count = scan.candidates.len();
+    let may_mark_missing = desktop_file_scan_may_mark_missing(&scan);
     let mut seen_file_ids = HashSet::with_capacity(scan.candidates.len());
     let mut indexed = 0usize;
 
@@ -12330,11 +12421,15 @@ async fn sync_desktop_file_scan_with_database(
         seen_file_ids.insert(file_id);
         indexed += 1;
     }
-    if candidate_count < DESKTOP_FILE_SCAN_MAX_FILES {
+    if may_mark_missing {
         mark_missing_scanned_desktop_files(root, database, &scan.scan_roots, &seen_file_ids)
             .await?;
     }
     Ok(indexed)
+}
+
+fn desktop_file_scan_may_mark_missing(scan: &DesktopFileIndexScan) -> bool {
+    !scan.stamp.truncated
 }
 
 #[derive(Debug, Default)]
@@ -13248,21 +13343,31 @@ fn maintenance_revision(previous: Option<&str>) -> String {
 
 fn collect_desktop_file_index_candidates(
     scan_roots: &[DesktopFileScanRoot],
-) -> Vec<DesktopFileIndexCandidate> {
+) -> (Vec<DesktopFileIndexCandidate>, bool) {
     let mut candidates = Vec::new();
+    let mut budget = DesktopFileScanBudget::new();
     for scan_root in scan_roots {
+        if candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES || !budget.has_time_remaining() {
+            break;
+        }
         let mut paths = Vec::new();
-        collect_files_bounded(&scan_root.path, &mut paths);
+        collect_files_bounded(
+            &scan_root.path,
+            &mut paths,
+            DESKTOP_FILE_SCAN_MAX_FILES.saturating_sub(candidates.len()),
+            &mut budget,
+        );
         candidates.extend(paths.into_iter().map(|path| DesktopFileIndexCandidate {
             path,
             scan_root: scan_root.clone(),
         }));
-        if candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES {
+        if candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES || budget.exhausted {
             break;
         }
     }
     candidates.truncate(DESKTOP_FILE_SCAN_MAX_FILES);
-    candidates
+    let truncated = candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES || budget.exhausted;
+    (candidates, truncated)
 }
 
 async fn collect_desktop_file_index_scan(
@@ -13277,13 +13382,12 @@ fn collect_desktop_file_index_scan_sync(
     mut scan_roots: Vec<DesktopFileScanRoot>,
 ) -> DesktopFileIndexScan {
     normalize_desktop_file_scan_roots(&mut scan_roots);
-    let mut candidates = collect_desktop_file_index_candidates(&scan_roots);
+    let (mut candidates, truncated) = collect_desktop_file_index_candidates(&scan_roots);
     candidates.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then(left.scan_root.path.cmp(&right.scan_root.path))
     });
-    let truncated = candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES;
     let stamp = desktop_file_index_projection_stamp(&scan_roots, &candidates, truncated);
     DesktopFileIndexScan {
         scan_roots,
@@ -13572,17 +13676,25 @@ fn is_ctox_internal_desktop_scan_root(path: &Path, home: &Path) -> bool {
         || path.starts_with(home.join(".local/state/ctox"))
 }
 
-fn collect_files_bounded(root: &Path, out: &mut Vec<PathBuf>) {
+fn collect_files_bounded(
+    root: &Path,
+    out: &mut Vec<PathBuf>,
+    max_files: usize,
+    budget: &mut DesktopFileScanBudget,
+) {
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
-        if out.len() >= DESKTOP_FILE_SCAN_MAX_FILES || depth > DESKTOP_FILE_SCAN_MAX_DEPTH {
+        if out.len() >= max_files || depth > DESKTOP_FILE_SCAN_MAX_DEPTH {
+            break;
+        }
+        if !budget.can_visit_directory() {
             break;
         }
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            if out.len() >= DESKTOP_FILE_SCAN_MAX_FILES {
+            if out.len() >= max_files || !budget.has_time_remaining() {
                 break;
             }
             let path = entry.path();
@@ -15192,12 +15304,13 @@ mod tests {
         );
         assert_eq!(
             business_command_poll_sleep_secs(1),
-            BUSINESS_COMMAND_ACTIVE_POLL_SECS
+            BUSINESS_COMMAND_IDLE_POLL_SECS
         );
         assert_eq!(
             business_command_poll_sleep_secs(u32::MAX),
-            BUSINESS_COMMAND_ACTIVE_POLL_SECS
+            BUSINESS_COMMAND_IDLE_POLL_SECS
         );
+        assert!(BUSINESS_COMMAND_IDLE_POLL_SECS > BUSINESS_COMMAND_ACTIVE_POLL_SECS);
     }
 
     #[test]
@@ -15513,9 +15626,9 @@ mod tests {
             }))?,
         )?;
 
-        let first = runtime_installed_module_schema_fingerprint(temp.path())?;
+        let mut state = runtime_installed_module_schema_state(temp.path())?;
         assert!(
-            !native_peer_runtime_installed_schemas_changed(temp.path(), &first)?,
+            !native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
             "unchanged runtime app schemas must not force a respawn"
         );
         fs::write(
@@ -15536,10 +15649,54 @@ mod tests {
             }))?,
         )?;
         assert!(
-            native_peer_runtime_installed_schemas_changed(temp.path(), &first)?,
+            native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
             "runtime app schema edits must force a native peer respawn"
         );
         Ok(())
+    }
+
+    #[test]
+    fn desktop_file_scan_budget_stops_before_unbounded_directory_walk() {
+        let root = tempfile::tempdir().expect("temp root");
+        fs::write(root.path().join("visible.md"), b"bounded").expect("write candidate");
+
+        let mut directory_budget = DesktopFileScanBudget::new();
+        directory_budget.visited_directories = DESKTOP_FILE_SCAN_MAX_DIRECTORIES;
+        let mut candidates = Vec::new();
+        collect_files_bounded(
+            root.path(),
+            &mut candidates,
+            DESKTOP_FILE_SCAN_MAX_FILES,
+            &mut directory_budget,
+        );
+        assert!(candidates.is_empty());
+        assert!(directory_budget.exhausted);
+
+        let mut time_budget = DesktopFileScanBudget::new();
+        time_budget.started = Instant::now() - DESKTOP_FILE_SCAN_BUDGET;
+        collect_files_bounded(
+            root.path(),
+            &mut candidates,
+            DESKTOP_FILE_SCAN_MAX_FILES,
+            &mut time_budget,
+        );
+        assert!(candidates.is_empty());
+        assert!(time_budget.exhausted);
+    }
+
+    #[test]
+    fn truncated_desktop_file_scan_never_marks_unseen_files_missing() {
+        let scan = DesktopFileIndexScan {
+            scan_roots: Vec::new(),
+            candidates: Vec::new(),
+            stamp: DesktopFileIndexProjectionStamp {
+                scan_root_count: 1,
+                candidate_count: 0,
+                truncated: true,
+                content_hash: "budget-exhausted".to_string(),
+            },
+        };
+        assert!(!desktop_file_scan_may_mark_missing(&scan));
     }
 
     #[tokio::test]
