@@ -6264,12 +6264,16 @@ fn start_prompt_worker(
                 );
                 CompletionReviewDisposition::None
             } else if let Some(feedback) = research_validation_failure {
-                CompletionReviewDisposition::FeedbackRetry {
-                    feedback_prompt: format!(
-                        "{feedback}\n\nRepair the existing research workspace in place. Do not claim completion until the server-side evidence guard passes."
-                    ),
-                    review_summary: feedback,
-                    persist_on_leased_queue: true,
+                match systematic_research_validation_feedback_disposition(
+                    &root, &job, &feedback,
+                ) {
+                    Ok(disposition) => disposition,
+                    Err(error) => CompletionReviewDisposition::Hold {
+                        reason: review::HoldReason::MissingReviewEvidence,
+                        summary: format!(
+                            "{feedback}\n\nCTOX could not persist the required systematic-research validation checkpoint through the core state machine: {error}"
+                        ),
+                    },
                 }
             } else if completion_review_should_skip_feedback_turn(&root, &job) {
                 push_event(
@@ -13697,6 +13701,117 @@ fn enforce_queue_review_checkpoint_feedback_transition(
         },
     )?;
     Ok(proof.proof_id)
+}
+
+fn systematic_research_validation_audit_key(
+    message_key: &str,
+    feedback: &str,
+    attempt: usize,
+) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-systematic-research-validation-checkpoint-v1");
+    hasher.update(message_key.as_bytes());
+    hasher.update(feedback.as_bytes());
+    hasher.update(attempt.to_string().as_bytes());
+    format!(
+        "systematic-research-validation-checkpoint-{:x}",
+        hasher.finalize()
+    )
+}
+
+fn enforce_systematic_research_validation_feedback_transition(
+    root: &Path,
+    message_key: &str,
+    feedback: &str,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_checkpoint".to_string(), "true".to_string());
+    metadata.insert(
+        "validation_gate".to_string(),
+        "systematic_research_evidence".to_string(),
+    );
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert("review_verdict".to_string(), "fail".to_string());
+    metadata.insert("review_checkpoint_attempt".to_string(), attempt.to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-systematic-research-validator".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(systematic_research_validation_audit_key(
+                    message_key,
+                    feedback,
+                    attempt,
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn systematic_research_validation_feedback_disposition(
+    root: &Path,
+    job: &QueuedPrompt,
+    feedback: &str,
+) -> Result<CompletionReviewDisposition> {
+    let threshold = review_checkpoint_requeue_block_threshold(root);
+    let mut exhausted = Vec::new();
+    let mut proof_ids = Vec::new();
+    for message_key in &job.leased_message_keys {
+        let attempt = queue_review_budget_attempt_count(root, job, message_key)?.saturating_add(1);
+        let proof_id = enforce_systematic_research_validation_feedback_transition(
+            root,
+            message_key,
+            feedback,
+            attempt,
+        )?;
+        proof_ids.push(proof_id);
+        if attempt >= threshold {
+            exhausted.push((message_key.clone(), attempt));
+        }
+    }
+    if !exhausted.is_empty() {
+        let attempts = exhausted
+            .iter()
+            .map(|(message_key, attempt)| format!("{message_key}:{attempt}/{threshold}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(CompletionReviewDisposition::TerminalQueueFailure {
+            summary: format!(
+                "{feedback}\n\nFinite systematic-research validation budget exhausted for queue item(s) {attempts}. Core validation checkpoint proof(s): {}.",
+                proof_ids.join(", ")
+            ),
+        });
+    }
+    Ok(CompletionReviewDisposition::FeedbackRetry {
+        feedback_prompt: format!(
+            "{feedback}\n\nRepair the existing research workspace in place. Re-fetch rejected evidence through the typed CTOX Web Stack in this attempt and rebuild every dependent receipt, review, Knowledge artifact, and report. Do not claim completion until the server-side evidence guard passes."
+        ),
+        review_summary: feedback.to_string(),
+        persist_on_leased_queue: !job.leased_message_keys.is_empty(),
+    })
 }
 
 fn enforce_queue_review_requeue_same_main_work_transition(
@@ -23928,6 +24043,74 @@ mod tests {
         assert!(error
             .to_string()
             .contains("not bound to a matching admitted"));
+    }
+
+    #[test]
+    fn systematic_research_validation_failure_requeues_through_core_review_path() {
+        let root = temp_root("research-validation-rework");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Research evidence validation".to_string(),
+                prompt: "research.systematic.run".to_string(),
+                thread_key: "queue/research-validation-rework".to_string(),
+                workspace_root: Some(workspace.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("systematic-research".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .unwrap();
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test").unwrap();
+        let mut job = systematic_research_test_job(&workspace);
+        job.leased_message_keys = vec![task.message_key.clone()];
+
+        let disposition = systematic_research_validation_feedback_disposition(
+            &root,
+            &job,
+            "evidence ev-1 is not bound to the CTOX Web Stack",
+        )
+        .unwrap();
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::FeedbackRetry {
+                persist_on_leased_queue: true,
+                ..
+            }
+        ));
+
+        channels::ack_leased_messages(
+            &root,
+            std::slice::from_ref(&task.message_key),
+            "review_rework",
+        )
+        .unwrap();
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "review_rework"
+        );
+        assert_eq!(
+            queue_review_budget_attempt_count(&root, &job, &task.message_key).unwrap(),
+            1
+        );
+        enforce_queue_review_requeue_same_main_work_transition(&root, &task.message_key, 1)
+            .unwrap();
+        assert!(
+            channels::set_queue_task_route_status(&root, &task.message_key, "pending").unwrap()
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
     }
 
     #[test]
