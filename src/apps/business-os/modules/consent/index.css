@@ -4,6 +4,13 @@
    from the kit; this file only keeps the rich consent rows (per-record
    Auskunft/Löschen actions) and the compact blocker list in the callout. */
 
+/* Betroffenenrechte (Art. 15/17) is a rare, partly destructive action group:
+   hidden by default, revealed on demand via the header toggle
+   [data-toggle-rights] (threads' data-toggle-actions / is-actions-hidden
+   pattern). The form keeps all its hooks; only visibility changes. */
+.ats-consent.is-rights-hidden [data-ats-subject-form] { display: none; }
+.ats-consent [data-toggle-rights][aria-pressed="true"] { color: var(--accent); }
+
 /* The kit callout has no :empty collapse; the gate starts empty and is
    cleared between runs, so hide it until JS fills it. */
 .ats-consent .ctox-callout:empty { display: none; }

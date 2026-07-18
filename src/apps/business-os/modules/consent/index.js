@@ -1,5 +1,5 @@
 
-const MOD_BUILD = '20260717-kit2';
+const MOD_BUILD = '20260718-reduce';
 const MODULE_ID = 'consent';
 const PRIMARY = 'business_consents';
 const TITLE = 'consent';
@@ -9,7 +9,7 @@ const ERASE_COMMAND = 'ats.subject.erase';
 const COPY = {
   de: {
     title: 'Einwilligungen', subjectLabel: 'Subjekt', purposeLabel: 'Zweck', rightsLabel: 'Betroffenenrechte', subjectPlaceholder: 'Subjekt-ID', purposePlaceholder: 'Zweck (optional — leer = nur Existenz)',
-    checkConsent: 'Einwilligung prüfen', rightsSubjectPlaceholder: 'Subjekt-ID für Betroffenenrechte',
+    checkConsent: 'Einwilligung prüfen', rightsSubjectPlaceholder: 'Subjekt-ID',
     exportArticle15: 'Auskunft (Art. 15)', eraseArticle17: 'Löschen (Art. 17)',
     exportTitle: 'Recht auf Auskunft (DSGVO Art. 15)', eraseTitle: 'Recht auf Löschung (DSGVO Art. 17)',
     entries: 'Einträge', entriesEmpty: 'Noch keine Einträge.', commandOffline: 'Offline: Befehlsdienst nicht verfügbar.',
@@ -23,7 +23,7 @@ const COPY = {
   },
   en: {
     title: 'Consent', subjectLabel: 'Subject', purposeLabel: 'Purpose', rightsLabel: 'Data-subject rights', subjectPlaceholder: 'Subject ID', purposePlaceholder: 'Purpose (optional — blank checks existence only)',
-    checkConsent: 'Check consent', rightsSubjectPlaceholder: 'Subject ID for data-subject rights',
+    checkConsent: 'Check consent', rightsSubjectPlaceholder: 'Subject ID',
     exportArticle15: 'Access request (Art. 15)', eraseArticle17: 'Erase (Art. 17)',
     exportTitle: 'Right of access (GDPR Art. 15)', eraseTitle: 'Right to erasure (GDPR Art. 17)',
     entries: 'entries', entriesEmpty: 'No entries yet.', commandOffline: 'Offline: command service unavailable.',
@@ -55,6 +55,7 @@ export async function mount(ctx) {
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
   const subjectFormEl = root?.querySelector('[data-ats-subject-form]');
+  const toggleRightsEl = root?.querySelector('[data-toggle-rights]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
@@ -192,6 +193,14 @@ export async function mount(ctx) {
   }
   listEl?.addEventListener('click', onListClick);
 
+  // Betroffenenrechte form is hidden by default (is-rights-hidden on root);
+  // the header toggle reveals it on demand, threads' data-toggle-actions idiom.
+  function onToggleRights() {
+    const hidden = root?.classList.toggle('is-rights-hidden');
+    toggleRightsEl?.setAttribute('aria-pressed', hidden ? 'false' : 'true');
+  }
+  toggleRightsEl?.addEventListener('click', onToggleRights);
+
   let sub = null;
   const col = collection();
   if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { render().catch(() => {}); }); } catch {} }
@@ -201,6 +210,7 @@ export async function mount(ctx) {
     try { sub?.unsubscribe?.(); } catch {}
     formEl?.removeEventListener('submit', onCheckSubmit);
     subjectFormEl?.removeEventListener('submit', onSubjectSubmit);
+    toggleRightsEl?.removeEventListener('click', onToggleRights);
     listEl?.removeEventListener('click', onListClick);
     ctx.host.replaceChildren();
     delete ctx.host.dataset.atsModule;
