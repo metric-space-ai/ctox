@@ -48765,6 +48765,84 @@ mod tests {
     }
 
     #[test]
+    fn sealed_module_versions_project_content_addressed_commit_chain() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+
+        // Two sealed boundaries => two immutable commits with a parent chain.
+        record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
+            .expect("first sealed version");
+        fs::write(
+            app_root.join("modules/widget/index.js"),
+            "export const v = 2;\n",
+        )?;
+        record_module_version(root, &app_root, "widget", "manual_release", "Release 2", "tester")?
+            .expect("second sealed version");
+
+        let conn = open_store(root)?;
+        let read_commits = |conn: &Connection| -> anyhow::Result<Vec<Value>> {
+            let mut stmt = conn.prepare(
+                "SELECT payload_json FROM business_records
+                 WHERE collection = 'business_module_commits' AND deleted = 0",
+            )?;
+            let mut commits: Vec<Value> = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .filter_map(|json| serde_json::from_str::<Value>(&json).ok())
+                .collect();
+            commits.sort_by_key(|c| c.get("seq").and_then(Value::as_i64).unwrap_or(0));
+            Ok(commits)
+        };
+
+        let commits = read_commits(&conn)?;
+        assert_eq!(commits.len(), 2, "each sealed version projects one commit");
+        let (first, second) = (&commits[0], &commits[1]);
+
+        assert!(
+            first
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.starts_with("commit_"))
+                .unwrap_or(false),
+            "commit id is content-addressed"
+        );
+        assert_eq!(first.get("module_id").and_then(Value::as_str), Some("widget"));
+        assert_eq!(first.get("sealed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            first.get("parent_id").and_then(Value::as_str),
+            Some(""),
+            "root commit has no parent"
+        );
+        assert_eq!(
+            second.get("parent_id").and_then(Value::as_str),
+            first.get("id").and_then(Value::as_str),
+            "second commit links to the first"
+        );
+        assert!(
+            second
+                .get("file_manifest")
+                .and_then(Value::as_array)
+                .map(|manifest| !manifest.is_empty())
+                .unwrap_or(false),
+            "commit carries a non-empty file manifest"
+        );
+
+        // Re-projecting the ledger must not duplicate commits (content-addressed).
+        sync_module_version_records(&conn, "widget", now_ms() as i64)?;
+        assert_eq!(
+            read_commits(&conn)?.len(),
+            2,
+            "commit projection is idempotent"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn module_list_versions_requires_source_release_or_rollback_rights() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
