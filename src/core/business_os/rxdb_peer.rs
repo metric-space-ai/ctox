@@ -1635,10 +1635,15 @@ pub fn spawn_native_peer(
                 let started_at = std::time::Instant::now();
                 let result = runtime.block_on(run_native_peer(root.clone(), room, urls, password));
                 NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
-                // Drop the runtime before sleeping so tasks leaked by a
-                // wedged run cannot hold sockets/filehandles across the
-                // backoff window.
-                drop(runtime);
+                // A plain Runtime::drop waits indefinitely for spawned
+                // blocking work. Runtime-installed app schemas intentionally
+                // end a healthy run so the supervisor can register the new
+                // collections; one stuck cleanup task must not strand that
+                // reconfiguration with a stale heartbeat forever.
+                shutdown_native_peer_runtime(
+                    runtime,
+                    Duration::from_secs(NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS),
+                );
                 if let Err(error) = &result {
                     let message = format!("{error:#}");
                     let failure = classify_native_peer_failure(&message);
@@ -1735,6 +1740,10 @@ fn sleep_native_peer_supervisor(duration: Duration) {
                 .min(Duration::from_millis(250)),
         );
     }
+}
+
+fn shutdown_native_peer_runtime(runtime: tokio::runtime::Runtime, max_wait: Duration) {
+    runtime.shutdown_timeout(max_wait);
 }
 
 pub fn sync_desktop_file_from_path(root: &Path, path: &Path) -> anyhow::Result<()> {
@@ -15723,6 +15732,23 @@ mod tests {
             )
             .await,
             "stalled cleanup must return at its deadline so supervision can respawn"
+        );
+    }
+
+    #[test]
+    fn native_peer_runtime_shutdown_does_not_block_supervisor_reconfiguration() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(1)
+            .build()
+            .expect("runtime");
+        runtime.spawn_blocking(|| std::thread::sleep(Duration::from_secs(2)));
+
+        let started = Instant::now();
+        shutdown_native_peer_runtime(runtime, Duration::from_millis(20));
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "runtime shutdown must honor the supervisor deadline"
         );
     }
 

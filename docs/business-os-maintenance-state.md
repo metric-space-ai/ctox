@@ -6,7 +6,8 @@ release identifiers, phase, progress, liveness timestamps and readiness flags,
 but never Business OS records or collection payloads.
 
 The canonical record lives in the singleton `ctox_maintenance_state` table in
-the state-root `ctox.sqlite3`. It is created before `ctox upgrade` resolves or
+the dedicated state-root maintenance store. Legacy records are migrated once
+from `ctox.sqlite3`. The record is created before `ctox upgrade` resolves or
 downloads a release, so a browser can distinguish an intentional restart from
 lost or deleted data.
 
@@ -39,6 +40,10 @@ stateDiagram-v2
 3. the browser has observed initial replication for every non-demand-only
    collection required by the apps that are currently open.
 
+Once post-switch service verification succeeds, `current_release` already
+identifies the target release; it must not continue to advertise the previous
+manifest value while the replication gates are still pending.
+
 The browser sends the third acknowledgement as the typed
 `ctox.maintenance.client_ready` Business Command. It therefore travels through
 the existing RxDB/WebRTC data plane and native policy/command router. There is
@@ -58,6 +63,12 @@ The shell remembers the lease across the service restart. A temporary
 connection failure therefore cannot make the maintenance UI disappear. Stale
 and failed leases stay visible with retry guidance; a successful rollback
 reports that the previous release was restored.
+
+Installing an app can add runtime collection schemas. The native peer then
+ends its current run and the supervisor immediately starts a fresh run with the
+new collection registry. Runtime shutdown is bounded so a stuck transport or
+blocking cleanup task cannot strand the peer, expire the maintenance lease or
+leave subsequent App Store commands without an authenticated WebRTC peer.
 
 ## Desktop recovery
 

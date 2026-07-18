@@ -831,6 +831,11 @@ fn mark_maintenance_service_active(state_root: &Path, lease_id: &str) -> Result<
         state.phase = "waiting_replication".to_string();
         state.status = "active".to_string();
         state.service_active = true;
+        // The new service is verified only after the active symlink switch.
+        // Reflect that release immediately in the instance-scoped maintenance
+        // projection instead of leaving the old manifest value visible until
+        // the browser acknowledgement completes.
+        state.current_release = Some(state.target_release.clone());
         state.progress = MaintenanceProgress {
             percent: 92,
             message: "CTOX-Dienst aktiv · Replikation wird verbunden".to_string(),
@@ -4352,6 +4357,13 @@ mod tests {
         );
 
         mark_maintenance_service_active(&layout.state_root, &started.lease_id).unwrap();
+        let service_active = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            service_active.current_release.as_deref(),
+            Some("branch:main")
+        );
         update_maintenance(&layout.state_root, &started.lease_id, |state| {
             state.replication_up = true;
             state.phase = "waiting_collections".to_string();
