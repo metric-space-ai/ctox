@@ -10979,16 +10979,34 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                         observed_depths.push(format!("{} (invalid output)", depth.as_str()));
                         continue;
                     };
-                    let research_workspace = output
-                        .get("research_workspace")
-                        .and_then(Value::as_str)
+                    let research_workspace = output.get("research_workspace");
+                    let research_workspace_path = research_workspace
+                        .and_then(|receipt| {
+                            receipt
+                                .as_str()
+                                .or_else(|| receipt.get("path").and_then(Value::as_str))
+                        })
                         .map(PathBuf::from);
-                    let persisted_workspace = research_workspace
+                    let persisted_workspace = research_workspace_path
                         .as_deref()
                         .and_then(|path| path.canonicalize().ok())
                         .is_some_and(|path| path.starts_with(&workspace));
+                    let persisted_receipt_artifacts = research_workspace
+                        .filter(|receipt| receipt.is_object())
+                        .is_none_or(|receipt| {
+                            ["manifest", "evidence_bundle"].into_iter().all(|field| {
+                                receipt
+                                    .get(field)
+                                    .and_then(Value::as_str)
+                                    .map(Path::new)
+                                    .filter(|path| path.is_file())
+                                    .and_then(|path| path.canonicalize().ok())
+                                    .is_some_and(|path| path.starts_with(&workspace))
+                            })
+                        });
                     if output.get("ok").and_then(Value::as_bool) != Some(true)
                         || !persisted_workspace
+                        || !persisted_receipt_artifacts
                     {
                         observed_depths.push(format!("{} (not persisted)", depth.as_str()));
                         continue;
@@ -11002,7 +11020,7 @@ fn validate_systematic_research_deep_research_receipt_from_conn(
                             "thread_id": thread_id,
                             "call_id": call_id,
                             "called_at_epoch": called_at,
-                            "research_workspace": research_workspace,
+                            "research_workspace": research_workspace.cloned(),
                             "rollout_path": rollout_path,
                         }));
                     }
@@ -24303,6 +24321,8 @@ mod tests {
         let workspace = temp_root("research-depth-workspace");
         let research_workspace = workspace.join("research/deep-research/call-1");
         std::fs::create_dir_all(&research_workspace).unwrap();
+        std::fs::write(research_workspace.join("manifest.json"), "{}").unwrap();
+        std::fs::write(research_workspace.join("evidence_bundle.json"), "{}").unwrap();
         let codex_home = temp_root("research-depth-codex-home");
         let rollout = codex_home.join("sessions/rollout-parent.jsonl");
         std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
@@ -24335,7 +24355,11 @@ mod tests {
                 let output = serde_json::json!({
                     "ok": true,
                     "depth": depth,
-                    "research_workspace": research_workspace,
+                    "research_workspace": {
+                        "path": research_workspace,
+                        "manifest": research_workspace.join("manifest.json"),
+                        "evidence_bundle": research_workspace.join("evidence_bundle.json"),
+                    },
                 });
                 std::fs::write(
                     &rollout,
@@ -24472,6 +24496,25 @@ mod tests {
         assert_eq!(receipt["depth"], "exhaustive");
         assert_eq!(receipt["required_depth"], "exhaustive");
         assert_eq!(receipt["thread_id"], "parent-thread");
+        assert_eq!(
+            receipt["research_workspace"]["path"],
+            research_workspace.to_string_lossy().as_ref()
+        );
+
+        std::fs::remove_file(research_workspace.join("manifest.json")).unwrap();
+        let missing_persisted_artifact =
+            validate_systematic_research_deep_research_receipt_from_conn(
+                &conn,
+                &codex_home,
+                &workspace,
+                expected_attempt_id,
+                attempt_started_at,
+                SystematicResearchDepth::Exhaustive,
+            )
+            .unwrap_err();
+        assert!(missing_persisted_artifact
+            .to_string()
+            .contains("exhaustive (not persisted)"));
     }
 
     #[test]
