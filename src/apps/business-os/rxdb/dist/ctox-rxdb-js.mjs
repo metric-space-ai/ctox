@@ -81,7 +81,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   appsec_artifacts: "96e48a95be0e013773561dd52b5be8170d13aa0409488d5569e7060654eb22e1",
   appsec_assessments: "d3de37068175a449d2a17e5f63aa296265faf050e03900781c8cfaf8e4bf3e3f",
   appsec_coverage: "6fb9caf08dcf52ab1e7a669950bdb62159aec0b37112fb89aed0f93de475dde1",
-  appsec_findings: "1c16a6500dc1dfbb3401ca83208338f2d8371c5abe88e8f5dfd21d4b3a73fbec",
+  appsec_findings: "96a6e32a3838227464ce88f2b5674c6fed0ba1fb2b136880e27ce6cd421cc83c",
   appsec_investigations: "fd4aea13736e18cc279d7829417cffe44b5068dbc99aaca8743a64d9598ec12e",
   appsec_pipeline_stages: "fd99085c9659da98841542afe627873bbfe19a892d0af52092686d5fd81c5d87",
   appsec_runs: "815d0931042bedab1356e27a22b3172b8e62e6c3eff983e7e2f74be89f30b326",

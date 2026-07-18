@@ -39542,12 +39542,21 @@ fn project_appsec_runs(
     Ok(())
 }
 
-fn project_appsec_artifacts(
+#[derive(Clone)]
+struct AppsecProjectedArtifact {
+    artifact_path: String,
+    kind: String,
+    version: Option<String>,
+    sha256: String,
+    size_bytes: i64,
+    metadata: Value,
+    updated_at: String,
+}
+
+fn load_appsec_projected_artifacts(
     core: &Connection,
-    business: &Connection,
     state: &str,
-    pairs: &mut Vec<(&'static str, String)>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<AppsecProjectedArtifact>> {
     let mut stmt = core.prepare(
         "SELECT artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at
          FROM appsec_artifacts
@@ -39555,35 +39564,123 @@ fn project_appsec_artifacts(
          ORDER BY CAST(updated_at AS INTEGER) ASC, artifact_path ASC",
     )?;
     let rows = stmt.query_map(params![state], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, String>(6)?,
-        ))
+        Ok(AppsecProjectedArtifact {
+            artifact_path: row.get(0)?,
+            kind: row.get(1)?,
+            version: row.get(2)?,
+            sha256: row.get(3)?,
+            size_bytes: row.get(4)?,
+            metadata: sanitize_appsec_projection_json(parse_json_value(&row.get::<_, String>(5)?)),
+            updated_at: row.get(6)?,
+        })
     })?;
-    for row in rows {
-        let (artifact_path, kind, version, sha256, size_bytes, metadata_json, updated_at) = row?;
-        let id = stable_record_id("appsec_artifact", &artifact_path);
-        let metadata = sanitize_appsec_projection_json(parse_json_value(&metadata_json));
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn appsec_evidence_artifact_rank(artifact: &AppsecProjectedArtifact) -> u8 {
+    let path = format!(
+        "{} {}",
+        artifact.artifact_path,
+        artifact
+            .metadata
+            .get("relative_path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    )
+    .to_ascii_lowercase();
+    if path.contains("reproduce.py") {
+        0
+    } else if path.contains("latest-verification") {
+        1
+    } else if path.contains("http-proof") || path.contains("source-proof") {
+        2
+    } else if path.contains("verification-") && path.ends_with(".json") {
+        3
+    } else if path.contains("evidence-manifest") {
+        4
+    } else if path.contains("github-issue") {
+        5
+    } else {
+        10
+    }
+}
+
+fn appsec_finding_evidence_summary(
+    state: &str,
+    finding_id: &str,
+    evidence_artifact: Option<&str>,
+    artifacts: &[AppsecProjectedArtifact],
+) -> Vec<Value> {
+    let finding_marker = format!("{}-", finding_id.to_ascii_lowercase());
+    let explicit = evidence_artifact.unwrap_or("").to_ascii_lowercase();
+    let mut matching = artifacts
+        .iter()
+        .filter(|artifact| {
+            let path = format!(
+                "{} {} {}",
+                artifact.artifact_path,
+                artifact
+                    .metadata
+                    .get("relative_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                artifact.kind
+            )
+            .to_ascii_lowercase();
+            (!explicit.is_empty() && path.contains(&explicit))
+                || (!finding_marker.is_empty() && path.contains(&finding_marker))
+        })
+        .collect::<Vec<_>>();
+    matching.sort_by(|left, right| {
+        appsec_evidence_artifact_rank(left)
+            .cmp(&appsec_evidence_artifact_rank(right))
+            .then_with(|| left.artifact_path.cmp(&right.artifact_path))
+    });
+    matching
+        .into_iter()
+        .take(5)
+        .map(|artifact| {
+            serde_json::json!({
+                "artifact_id": stable_record_id("appsec_artifact", &artifact.artifact_path),
+                "artifact_path": artifact.artifact_path,
+                "state_dir": state,
+                "kind": artifact.kind,
+                "version": artifact.version,
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+                "metadata": artifact.metadata,
+                "content_available": false,
+                "content_policy": "metadata-only; use redacted AppSec report/finding tools for detail reads",
+                "updated_at": artifact.updated_at,
+                "source": "ctox-appsec-core-projection",
+            })
+        })
+        .collect()
+}
+
+fn project_appsec_artifacts(
+    core: &Connection,
+    business: &Connection,
+    state: &str,
+    pairs: &mut Vec<(&'static str, String)>,
+) -> anyhow::Result<()> {
+    for artifact in load_appsec_projected_artifacts(core, state)? {
+        let id = stable_record_id("appsec_artifact", &artifact.artifact_path);
+        let updated_at_ms = appsec_updated_at_ms(&artifact.updated_at);
         let record = serde_json::json!({
             "artifact_id": id,
-            "artifact_path": artifact_path,
+            "artifact_path": artifact.artifact_path,
             "state_dir": state,
-            "kind": kind,
-            "version": version,
-            "sha256": sha256,
-            "size_bytes": size_bytes,
-            "metadata": metadata,
+            "kind": artifact.kind,
+            "version": artifact.version,
+            "sha256": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+            "metadata": artifact.metadata,
             "content_available": false,
             "content_policy": "metadata-only; use redacted AppSec report/finding tools for detail reads",
-            "updated_at": updated_at,
+            "updated_at": artifact.updated_at,
             "source": "ctox-appsec-core-projection",
         });
-        let updated_at_ms = appsec_updated_at_ms(&updated_at);
         upsert_business_record(business, "appsec_artifacts", &id, updated_at_ms, record)?;
         pairs.push(("appsec_artifacts", id));
     }
@@ -39596,6 +39693,7 @@ fn project_appsec_findings(
     state: &str,
     pairs: &mut Vec<(&'static str, String)>,
 ) -> anyhow::Result<()> {
+    let artifacts = load_appsec_projected_artifacts(core, state)?;
     let mut stmt = core.prepare(
         "SELECT finding_id, title, severity, category, status, target, evidence_artifact, payload_json, updated_at
          FROM appsec_findings
@@ -39628,6 +39726,8 @@ fn project_appsec_findings(
             updated_at,
         ) = row?;
         let payload = parse_json_value(&payload_json);
+        let evidence_artifacts =
+            appsec_finding_evidence_summary(state, &id, evidence_artifact.as_deref(), &artifacts);
         let record = serde_json::json!({
             "finding_id": id,
             "state_dir": state,
@@ -39637,6 +39737,7 @@ fn project_appsec_findings(
             "status": status,
             "target": target,
             "evidence_artifact": evidence_artifact,
+            "evidence_artifacts": evidence_artifacts,
             "source_tool": payload.get("source_tool").cloned().unwrap_or(Value::Null),
             "signal": payload.get("signal").cloned().unwrap_or(Value::Null),
             "validation_state": payload.get("validation_state").cloned().unwrap_or(Value::Null),
@@ -40888,6 +40989,128 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn appsec_findings_embed_bounded_state_scoped_evidence() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let core = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE appsec_artifacts (
+                artifact_path TEXT PRIMARY KEY,
+                state_dir TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                version TEXT,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             CREATE TABLE appsec_findings (
+                finding_id TEXT PRIMARY KEY,
+                state_dir TEXT NOT NULL,
+                title TEXT,
+                severity TEXT,
+                category TEXT,
+                status TEXT NOT NULL,
+                target TEXT,
+                evidence_artifact TEXT,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );",
+        )?;
+        core.execute(
+            "INSERT INTO appsec_findings
+             (finding_id, state_dir, title, severity, category, status, target, evidence_artifact, payload_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)",
+            params![
+                "F-001",
+                "/workspace/a",
+                "Cross-account access",
+                "high",
+                "idor",
+                "validated",
+                "https://example.test/api/profiles/other",
+                r#"{"source_tool":"browser","validation_state":"reproduced"}"#,
+                "1000",
+            ],
+        )?;
+        for (index, name) in [
+            "notes.json",
+            "github-issue.md",
+            "evidence-manifest.json",
+            "verification-result.json",
+            "source-proof.json",
+            "latest-verification.json",
+            "reproduce.py",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = format!("/workspace/a/reports/f-001-proof/{name}");
+            core.execute(
+                "INSERT INTO appsec_artifacts
+                 (artifact_path, state_dir, kind, version, sha256, size_bytes, metadata_json, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
+                params![
+                    path,
+                    "/workspace/a",
+                    "evidence",
+                    format!("{index:064x}"),
+                    100 + index as i64,
+                    serde_json::json!({
+                        "relative_path": format!("reports/f-001-proof/{name}")
+                    })
+                    .to_string(),
+                    (1000 + index).to_string(),
+                ],
+            )?;
+        }
+        core.execute(
+            "INSERT INTO appsec_artifacts
+             (artifact_path, state_dir, kind, version, sha256, size_bytes, metadata_json, updated_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
+            params![
+                "/workspace/b/reports/f-001-proof/reproduce.py",
+                "/workspace/b",
+                "evidence",
+                "f".repeat(64),
+                999,
+                r#"{"relative_path":"reports/f-001-proof/reproduce.py"}"#,
+                "2000",
+            ],
+        )?;
+
+        let business = open_store(root.path())?;
+        let mut pairs = Vec::new();
+        project_appsec_findings(&core, &business, "/workspace/a", &mut pairs)?;
+        let payload_json: String = business.query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'appsec_findings' AND record_id = 'F-001'",
+            [],
+            |row| row.get(0),
+        )?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        let evidence = payload["evidence_artifacts"]
+            .as_array()
+            .context("finding evidence summary")?;
+        assert_eq!(evidence.len(), 5, "finding summaries stay bounded");
+        let paths = evidence
+            .iter()
+            .filter_map(|item| item["artifact_path"].as_str())
+            .collect::<Vec<_>>();
+        assert!(paths[0].ends_with("reproduce.py"));
+        assert!(paths[1].ends_with("latest-verification.json"));
+        assert!(paths[2].ends_with("source-proof.json"));
+        assert!(paths[3].ends_with("verification-result.json"));
+        assert!(paths[4].ends_with("evidence-manifest.json"));
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item["state_dir"] == "/workspace/a"),
+            "embedded evidence must not cross assessment state"
+        );
+        Ok(())
+    }
 
     #[test]
     fn marketplace_buchhaltung_uses_catalog_installed_validation() -> anyhow::Result<()> {

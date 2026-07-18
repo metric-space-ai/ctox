@@ -1496,6 +1496,13 @@
       "evidence_artifact": {
         "type": "string"
       },
+      "evidence_artifacts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
       "source_tool": {},
       "signal": {},
       "validation_state": {},
