@@ -8,6 +8,10 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
+// Layout preference for the right (runbook/AI) pane. The right pane is
+// situational — the spreadsheet workbench gets the full width until the
+// operator explicitly opens the AI planner from the center header toggle.
+const RIGHT_PANE_LAYOUT_KEY = 'ctox.spreadsheets.layout.actionsHidden';
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -100,9 +104,14 @@ export async function mount(ctx) {
     openFilePromise: Promise.resolve(),
     contextMenu: null,
     contextMenuCleanup: null,
+    rightPaneEl: stateRightPane(ctx),
+    rightPaneHidden: initialRightPaneHidden(ctx),
+    toggleActions: null,
     t,
     lang: ctx.locale === 'en' ? 'en' : 'de',
   };
+
+  applyRightPaneState(state);
 
   // Wire event handlers and load libs
   wireModule(state);
@@ -149,7 +158,28 @@ export async function mount(ctx) {
       state.editorHandle.destroy?.();
     }
     state.editorHandle = null;
+    // Restore the right pane to the default visible state so the next module
+    // mounts into a clean shell. We only flip what we owned (the hidden attr).
+    if (state.rightPaneEl) state.rightPaneEl.hidden = false;
   };
+}
+
+// Right pane (runbook/AI planner) lives in the shell's [data-right-pane] slot.
+// The module only owns the visibility flag — toggling its `hidden` attribute
+// collapses the shell's 3-column workspace grid automatically.
+function stateRightPane(ctx) {
+  return ctx?.right?.closest?.('[data-right-pane]') || null;
+}
+
+function initialRightPaneHidden(ctx) {
+  const saved = ctx?.storageScope?.get?.(RIGHT_PANE_LAYOUT_KEY);
+  // Default = hidden (situation panel); explicit "false" restores it.
+  return saved !== 'false';
+}
+
+function applyRightPaneState(state) {
+  if (!state.rightPaneEl) return;
+  state.rightPaneEl.hidden = state.rightPaneHidden;
 }
 
 function enqueueSpreadsheetOpenFile(state, input) {
@@ -880,6 +910,9 @@ async function renderCenter(state) {
           </span>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-add-row aria-label="${escapeHtml(addRowLabel)}" title="${escapeHtml(addRowLabel)}">${actionIcon(state, 'addRow')}</button>
           <button class="ctox-pane-icon" type="button" data-spreadsheets-add-col aria-label="${escapeHtml(addColumnLabel)}" title="${escapeHtml(addColumnLabel)}">${actionIcon(state, 'addColumn')}</button>
+          <button class="ctox-pane-icon" type="button" data-spreadsheets-toggle-actions aria-pressed="${state.rightPaneHidden ? 'false' : 'true'}" aria-label="${escapeHtml(state.t('toggleRunbooks', 'Runbooks & Prompt einblenden'))}" title="${escapeHtml(state.t('toggleRunbooks', 'Runbooks & Prompt einblenden'))}">
+            ${rightPaneToggleIconSvg()}
+          </button>
         </div>
       </div>
     </header>
@@ -897,6 +930,12 @@ async function renderCenter(state) {
   shell.querySelector('[data-spreadsheets-add-col]').addEventListener('click', () => {
     state.editorHandle?.insertColumn();
   });
+  const toggle = shell.querySelector('[data-spreadsheets-toggle-actions]');
+  if (toggle) {
+    state.toggleActions = toggle;
+    syncRightPaneToggleUi(state);
+    toggle.addEventListener('click', () => toggleRightPane(state));
+  }
 
   const canvas = shell.querySelector('[data-spreadsheets-canvas]');
   shell.querySelector('[data-spreadsheets-add-row]').hidden = true;
@@ -1122,6 +1161,31 @@ function relinquishSpreadsheetGridFocus(state) {
   if (active && state.ctx.host.contains(active) && active.closest?.('[data-spreadsheets-canvas]')) {
     active.blur?.();
   }
+}
+
+function toggleRightPane(state) {
+  state.rightPaneHidden = !state.rightPaneHidden;
+  applyRightPaneState(state);
+  syncRightPaneToggleUi(state);
+  try { state.ctx?.storageScope?.set?.(RIGHT_PANE_LAYOUT_KEY, String(state.rightPaneHidden)); } catch {}
+}
+
+function syncRightPaneToggleUi(state) {
+  const toggle = state.toggleActions;
+  if (!toggle) return;
+  const visible = !state.rightPaneHidden;
+  toggle.setAttribute('aria-pressed', String(visible));
+  const label = visible
+    ? state.t('toggleRunbooksHide', 'Runbooks & Prompt ausblenden')
+    : state.t('toggleRunbooks', 'Runbooks & Prompt einblenden');
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+}
+
+function rightPaneToggleIconSvg() {
+  // Mirrors the threads/invoices sidebar-toggle glyph: rectangle + divider,
+  // matching the kit's 1.8-stroke action-icon stroke style.
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>';
 }
 
 async function dispatchSpreadsheetRunbook(state, input) {

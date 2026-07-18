@@ -75,5 +75,7 @@
   "untagged": "Ohne Tags",
   "documentLoadFailed": "Tabelle konnte nicht geladen werden:",
   "addRowLabel": "Zeile hinzufügen",
-  "addColumnLabel": "Spalte hinzufügen"
+  "addColumnLabel": "Spalte hinzufügen",
+  "toggleRunbooks": "Runbooks & Prompt einblenden",
+  "toggleRunbooksHide": "Runbooks & Prompt ausblenden"
 }
